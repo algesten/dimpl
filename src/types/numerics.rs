@@ -1,8 +1,88 @@
-use crate::codec::{CheckedSlice, Codec};
+use crate::codec::Codec;
 use crate::DimplError;
+use core::mem;
+use core::ops::Deref;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Epoch(u16);
+trait NumericByteOffsets {
+    fn offset() -> usize;
+}
+
+// ident - name
+// numer - the numeric types to store the value in internally
+// bytes - number of bytes to encode/decode into
+// max   - max allowed value
+macro_rules! numeric {
+    ($name:ident, $numer:ty, $bytes:expr, $max:expr) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct $name($numer);
+
+        impl $name {
+            #[inline(always)]
+            fn assert(n: u64) -> Result<(), DimplError> {
+                let n: u64 = n.into();
+
+                if n > $max {
+                    Err(DimplError::TooBigDtlsSeq(n))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        impl NumericByteOffsets for $name {
+            fn offset() -> usize {
+                mem::size_of::<$numer>() - Self::encoded_length()
+            }
+        }
+
+        impl Codec for $name {
+            fn encoded_length() -> usize {
+                $bytes
+            }
+
+            fn encode(&self, out: &mut [u8]) -> Result<(), DimplError> {
+                let src = self.0.to_be_bytes();
+                let dst = &mut out[..Self::encoded_length()];
+                for (i, d) in dst.iter_mut().enumerate() {
+                    *d = src[i + Self::offset()];
+                }
+                Ok(())
+            }
+
+            fn decode(bytes: &[u8]) -> Result<Self, DimplError> {
+                let src = &bytes[..Self::encoded_length()];
+                let x: $numer = 0;
+                let mut a = x.to_be_bytes();
+                for (i, d) in src.iter().enumerate() {
+                    a[Self::offset() + i] = *d;
+                }
+                let n = <$numer>::from_be_bytes(a);
+                Self::assert(n as u64)?;
+                Ok(Self(n))
+            }
+        }
+
+        impl Deref for $name {
+            type Target = $numer;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl TryFrom<usize> for $name {
+            type Error = DimplError;
+
+            fn try_from(value: usize) -> Result<Self, Self::Error> {
+                Self::assert(value as u64)?;
+                Ok(Self(value as $numer))
+            }
+        }
+    };
+}
+
+// uint16
+numeric!(Epoch, u16, 2, u16::MAX as u64);
 
 impl Epoch {
     /// Increase the epoch by one and error if it wraps.
@@ -18,31 +98,13 @@ impl Epoch {
     }
 }
 
-impl Codec for Epoch {
-    fn encode_length(&self) -> usize {
-        2
-    }
+// uint48
+numeric!(SequenceNumber, u64, 6, 2_u64.pow(48));
 
-    fn encode(&self, out: &mut [u8]) -> Result<(), DimplError> {
-        (&mut out[..self.encode_length()]).copy_from_slice(&self.0.to_be_bytes());
-        Ok(())
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, DimplError> {
-        Ok(Self(u16::from_be_bytes(bytes.checked_arr()?)))
-    }
-}
-
-/// Dtls sequence number u48.
-///
-/// Stored as big endian.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct DtlsSeq(u64); // u48
-
-impl DtlsSeq {
+impl SequenceNumber {
     /// Attempt increase the DtlsSeq. If this returns None, we must either
     /// abandon or rehandshake.
-    pub fn maybe_increase(&self) -> Option<DtlsSeq> {
+    pub fn maybe_increase(&self) -> Option<SequenceNumber> {
         // As in TLS, implementations MUST either abandon an association or
         // rehandshake prior to allowing the sequence number to wrap.
         let m = self.0 + 1;
@@ -50,76 +112,21 @@ impl DtlsSeq {
         if Self::assert(m).is_err() {
             None
         } else {
-            Some(DtlsSeq(m))
-        }
-    }
-
-    #[inline(always)]
-    fn assert(n: u64) -> Result<(), DimplError> {
-        // 2^48
-        const U48MAX: u64 = 2_u64.pow(48);
-
-        if n > U48MAX {
-            Err(DimplError::TooBigDtlsSeq(n))
-        } else {
-            Ok(())
+            Some(SequenceNumber(m))
         }
     }
 }
 
-impl Codec for DtlsSeq {
-    fn encode_length(&self) -> usize {
-        6
-    }
+// uint16
+//
+// https://datatracker.ietf.org/doc/html/rfc5246#section-6.2.1
+//
+// The length (in bytes) of the following TLSPlaintext.fragment.  The
+// length MUST NOT exceed 2^14.
+numeric!(Length16, u16, 2, 16_384);
 
-    fn encode(&self, out: &mut [u8]) -> Result<(), DimplError> {
-        (&mut out[..self.encode_length()]).copy_from_slice(&self.0.to_be_bytes()[2..]);
-        Ok(())
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, DimplError> {
-        let b = bytes.checked_get(..6)?;
-        let x = [0, 0, b[0], b[1], b[2], b[3], b[4], b[5]];
-        let n = u64::from_be_bytes(x);
-        Self::assert(n)?;
-        Ok(Self(n))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Length(u16);
-
-impl Length {
-    #[inline(always)]
-    fn assert(n: u16) -> Result<(), DimplError> {
-        // https://datatracker.ietf.org/doc/html/rfc5246#section-6.2.1
-        //
-        // The length (in bytes) of the following TLSPlaintext.fragment.  The
-        // length MUST NOT exceed 2^14.
-        if n > 16_384 {
-            Err(DimplError::TooBigLength(n))
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl Codec for Length {
-    fn encode_length(&self) -> usize {
-        2
-    }
-
-    fn encode(&self, out: &mut [u8]) -> Result<(), DimplError> {
-        (&mut out[..self.encode_length()]).copy_from_slice(&self.0.to_be_bytes());
-        Ok(())
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, DimplError> {
-        let n = u16::from_be_bytes(bytes.checked_arr()?);
-        Self::assert(n)?;
-        Ok(Self(n))
-    }
-}
+// uint24
+numeric!(Length24, u32, 3, 2_u64.pow(24));
 
 #[cfg(test)]
 mod test {
@@ -127,9 +134,8 @@ mod test {
 
     #[test]
     fn len_allowed() {
-        let x = &[0, 1, 2];
         let bytes = 16_384_u16.to_be_bytes();
-        let r = Length::decode(&bytes);
+        let r = Length16::decode(&bytes);
         assert!(r.is_ok());
     }
 

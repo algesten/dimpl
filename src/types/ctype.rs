@@ -1,3 +1,5 @@
+use core::fmt;
+
 use crate::codec::Codec;
 use crate::DimplError;
 
@@ -10,7 +12,7 @@ pub enum ContentType {
 }
 
 impl Codec for ContentType {
-    fn encode_length(&self) -> usize {
+    fn encoded_length() -> usize {
         1
     }
 
@@ -49,5 +51,21 @@ impl TryFrom<u8> for ContentType {
             _ => return Err(DimplError::InvalidContentType(value)),
         };
         Ok(t)
+    }
+}
+
+impl fmt::Display for ContentType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use ContentType::*;
+        write!(
+            f,
+            "{}",
+            match self {
+                ChangeCipherSpec => "ChangeCipherSpec",
+                Alert => "Abort",
+                Handshake => "Handshake",
+                ApplicationData => "ApplicationData",
+            }
+        )
     }
 }

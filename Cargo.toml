@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-thiserror = "1.0.56"
+thiserror = { version = "1.0.56", no-default-features = true }

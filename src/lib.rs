@@ -11,4 +11,7 @@ pub use error::DimplError;
 
 mod codec;
 
-mod types;
+pub mod types;
+
+mod record;
+pub use record::DtlsPlainText;
