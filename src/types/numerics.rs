@@ -128,6 +128,18 @@ numeric!(Length16, u16, 2, 16_384);
 // uint24
 numeric!(Length24, u32, 3, 2_u64.pow(24));
 
+// uint16
+numeric!(MessageSeq, u16, 2, u16::MAX as u64);
+
+// uint24
+numeric!(FragmentOffset, u32, 3, 2_u64.pow(24));
+
+// uint24
+numeric!(FragmentLength, u32, 3, 2_u64.pow(24));
+
+// uint32
+numeric!(GmtUnixTime, u32, 4, u32::MAX as u64);
+
 #[cfg(test)]
 mod test {
     use super::*;

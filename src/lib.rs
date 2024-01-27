@@ -11,7 +11,7 @@ pub use error::DimplError;
 
 mod codec;
 
-pub mod types;
+pub(crate) mod types;
 
 mod record;
 pub use record::DtlsPlainText;

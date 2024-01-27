@@ -1,8 +1,9 @@
 use thiserror::Error;
 
-use crate::types::{ContentType, ProtocolVersion};
+use crate::types::ctype::ContentType;
+use crate::types::version::ProtocolVersion;
 
-#[derive(Debug, Clone, Copy, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum DimplError {
     #[error("Too short")]
     TooShort,
@@ -27,4 +28,10 @@ pub enum DimplError {
 
     #[error("Expected protocol version {0} but got: {1}")]
     BadProtocolVersion(ProtocolVersion, ProtocolVersion),
+
+    #[error("Variable vector length must be even multiple of element")]
+    IncorrectVariableVecLength,
+
+    #[error("Incorrect number of elements in variable vector")]
+    BadVariableVecSize,
 }

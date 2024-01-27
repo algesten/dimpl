@@ -1,8 +1,8 @@
-use crate::codec::{CheckedSlice, Codec, CodecVariable};
-use crate::types::{ContentType, HandshakeType, ProtocolVersion};
+use crate::codec::CodecVariable;
+use crate::types::ctype::ContentType;
+use crate::types::version::ProtocolVersion;
 use crate::DimplError;
 
-use super::client_hello::ClientHello;
 use super::handshake::{Handshake, HandshakeVariant};
 
 #[derive(Debug, Clone)]
@@ -61,31 +61,11 @@ impl CodecVariable<ContentType> for DtlsFragment {
     }
 
     fn decode(bytes: &[u8], content_type: ContentType) -> Result<Self, DimplError> {
-        use ContentType::*;
         Ok(match content_type {
-            Handshake => {
-                // Figure out which handshake message to decode.
-                let (checked, _) = bytes.checked_get(..1)?;
-                let handshake_type = HandshakeType::decode(checked)?;
-
-                // Delegate handshake decoding
-                match handshake_type {
-                    HandshakeType::HelloRequest => todo!(),
-                    HandshakeType::ClientHello => ClientHello::decode(bytes, ())?.into(),
-                    HandshakeType::ServerHello => todo!(),
-                    HandshakeType::HelloVerifyRequest => todo!(),
-                    HandshakeType::Certificate => todo!(),
-                    HandshakeType::ServerKeyExchange => todo!(),
-                    HandshakeType::CertificateRequest => todo!(),
-                    HandshakeType::ServerHelloDone => todo!(),
-                    HandshakeType::CertificateVerify => todo!(),
-                    HandshakeType::ClientKeyExchange => todo!(),
-                    HandshakeType::Finished => todo!(),
-                }
-            }
-            ChangeCipherSpec => todo!(),
-            ApplicationData => todo!(),
-            Alert => todo!(),
+            ContentType::Handshake => Self::Handshake(Handshake::decode(bytes, ())?),
+            ContentType::ChangeCipherSpec => todo!(),
+            ContentType::ApplicationData => todo!(),
+            ContentType::Alert => todo!(),
         })
     }
 }

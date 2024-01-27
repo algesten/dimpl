@@ -1,7 +1,9 @@
 use core::fmt;
 
-use crate::codec::{CheckedSlice, Codec, CodecVariable};
-use crate::types::{ContentType, Epoch, Length16, ProtocolVersion, SequenceNumber};
+use crate::codec::{Codec, CodecVariable};
+use crate::types::ctype::ContentType;
+use crate::types::numerics::{Epoch, Length16, SequenceNumber};
+use crate::types::version::ProtocolVersion;
 use crate::DimplError;
 
 use super::fragment::DtlsFragment;
@@ -61,7 +63,7 @@ impl DtlsPlainText {
 //     uint16 length;
 //     opaque fragment[DTLSPlaintext.length];
 //   } DTLSPlaintext;
-impl CodecVariable<()> for DtlsPlainText {
+impl CodecVariable for DtlsPlainText {
     fn encoded_length(&self) -> usize {
         ContentType::encoded_length()
             + ProtocolVersion::encoded_length()
@@ -72,54 +74,26 @@ impl CodecVariable<()> for DtlsPlainText {
     }
 
     fn encode(&self, out: &mut [u8]) -> Result<(), DimplError> {
-        let out = {
-            self.content_type().encode(out)?;
-            &mut out[ContentType::encoded_length()..]
-        };
+        let out = self.content_type().encode_fixed(out)?;
+        let out = self.protocol_version().encode_fixed(out)?;
+        let out = self.epoch().encode_fixed(out)?;
+        let out = self.sequence_number().encode_fixed(out)?;
+        let len: Length16 = self.fragment_length().try_into()?;
+        let out = len.encode_fixed(out)?;
 
-        let out = {
-            self.protocol_version().encode(out)?;
-            &mut out[ProtocolVersion::encoded_length()..]
-        };
+        self.fragment().encode_variable(out)?;
 
-        let out = {
-            self.epoch().encode(out)?;
-            &mut out[Epoch::encoded_length()..]
-        };
-
-        let out = {
-            self.sequence_number().encode(out)?;
-            &mut out[SequenceNumber::encoded_length()..]
-        };
-
-        let out = {
-            let len: Length16 = self.fragment_length().try_into()?;
-            len.encode(out)?;
-            &mut out[Length16::encoded_length()..]
-        };
-
-        self.fragment().encode(out)
+        Ok(())
     }
 
     fn decode(bytes: &[u8], _: ()) -> Result<Self, DimplError> {
-        let (checked, bytes) = bytes.checked_get(..ContentType::encoded_length())?;
-        let content_type = ContentType::decode(checked)?;
+        let (content_type, bytes) = ContentType::decode_fixed(bytes)?;
+        let (protocol_version, bytes) = ProtocolVersion::decode_fixed(bytes)?;
+        let (epoch, bytes) = Epoch::decode_fixed(bytes)?;
+        let (sequence_number, bytes) = SequenceNumber::decode_fixed(bytes)?;
+        let (length, bytes) = Length16::decode_fixed(bytes)?;
 
-        let (checked, bytes) = bytes.checked_get(..ProtocolVersion::encoded_length())?;
-        let protocol_version = ProtocolVersion::decode(checked)?;
-
-        let (checked, bytes) = bytes.checked_get(..Epoch::encoded_length())?;
-        let epoch = Epoch::decode(checked)?;
-
-        let (checked, bytes) = bytes.checked_get(..SequenceNumber::encoded_length())?;
-        let sequence_number = SequenceNumber::decode(checked)?;
-
-        let (checked, bytes) = bytes.checked_get(..Length16::encoded_length())?;
-        let length = Length16::decode(checked)?;
-
-        let (checked, _) = bytes.checked_get(..(*length as usize))?;
-
-        let fragment = DtlsFragment::decode(checked, content_type)?;
+        let (fragment, _) = DtlsFragment::decode_variable(bytes, *length as usize, content_type)?;
 
         // Ensure decoded values equal that of what's expected by the fragment type.
         fragment.assert_decoded(content_type, protocol_version)?;

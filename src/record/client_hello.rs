@@ -1,14 +1,18 @@
 use crate::codec::CodecVariable;
-use crate::types::HandshakeType;
+use crate::types::random::Random;
+use crate::types::varvec::SessionId;
+use crate::types::version::ProtocolVersion;
 
 use super::fragment::DtlsFragment;
 
 #[derive(Debug, Clone)]
 pub struct ClientHello {
-    pub handshake_type: HandshakeType,
+    pub client_version: ProtocolVersion,
+    pub random: Random,
+    pub session_id: SessionId,
 }
 
-impl CodecVariable<()> for ClientHello {
+impl CodecVariable for ClientHello {
     fn encoded_length(&self) -> usize {
         todo!()
     }
