@@ -1,5 +1,5 @@
-use crate::codec::Codec;
-use crate::DimplError;
+use crate::codec::{Checked, CheckedMut, Codec};
+use crate::Error;
 use core::mem;
 use core::ops::Deref;
 
@@ -18,11 +18,11 @@ macro_rules! numeric {
 
         impl $name {
             #[inline(always)]
-            fn assert(n: u64) -> Result<(), DimplError> {
+            fn assert(n: u64) -> Result<(), Error> {
                 let n: u64 = n.into();
 
                 if n > $max {
-                    Err(DimplError::TooBigDtlsSeq(n))
+                    Err(Error::TooBigLength(n))
                 } else {
                     Ok(())
                 }
@@ -40,7 +40,7 @@ macro_rules! numeric {
                 $bytes
             }
 
-            fn encode(&self, out: &mut [u8]) -> Result<(), DimplError> {
+            fn encode(&self, mut out: CheckedMut<'_, u8>) -> Result<(), Error> {
                 let src = self.0.to_be_bytes();
                 let dst = &mut out[..Self::encoded_length()];
                 for (i, d) in dst.iter_mut().enumerate() {
@@ -49,7 +49,7 @@ macro_rules! numeric {
                 Ok(())
             }
 
-            fn decode(bytes: &[u8]) -> Result<Self, DimplError> {
+            fn decode(bytes: Checked<u8>) -> Result<Self, Error> {
                 let src = &bytes[..Self::encoded_length()];
                 let x: $numer = 0;
                 let mut a = x.to_be_bytes();
@@ -71,7 +71,7 @@ macro_rules! numeric {
         }
 
         impl TryFrom<usize> for $name {
-            type Error = DimplError;
+            type Error = Error;
 
             fn try_from(value: usize) -> Result<Self, Self::Error> {
                 Self::assert(value as u64)?;
@@ -86,14 +86,14 @@ numeric!(Epoch, u16, 2, u16::MAX as u64);
 
 impl Epoch {
     /// Increase the epoch by one and error if it wraps.
-    pub fn increase(&self) -> Result<Epoch, DimplError> {
+    pub fn increase(&self) -> Result<Epoch, Error> {
         // https://datatracker.ietf.org/doc/html/rfc6347#section-4.1
         //
         // Similarly, implementations MUST NOT allow the epoch to wrap, but
         // instead MUST establish a new association
         match self.0.checked_add(1) {
             Some(v) => Ok(Epoch(v)),
-            None => Err(DimplError::WrappedEpoch),
+            None => Err(Error::WrappedEpoch),
         }
     }
 }
@@ -142,19 +142,23 @@ numeric!(GmtUnixTime, u32, 4, u32::MAX as u64);
 
 #[cfg(test)]
 mod test {
+    use crate::codec::SliceCheck;
+
     use super::*;
 
     #[test]
     fn len_allowed() {
         let bytes = 16_384_u16.to_be_bytes();
-        let r = Length16::decode(&bytes);
+        let (checked, _) = bytes.checked_split(2).unwrap();
+        let r = Length16::decode(checked);
         assert!(r.is_ok());
     }
 
     #[test]
     fn len_disallowed() {
-        // let bytes = 16_385_u16.to_be_bytes();
-        // let r = Length::decode(&bytes);
-        // assert_eq!(r.unwrap_err(), DimplError::TooBigLength(16385));
+        let bytes = 16_385_u16.to_be_bytes();
+        let (checked, _) = bytes.checked_split(2).unwrap();
+        let r = Length16::decode(checked);
+        assert_eq!(r.unwrap_err(), Error::TooBigLength(16385));
     }
 }

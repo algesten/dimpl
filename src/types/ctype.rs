@@ -1,7 +1,7 @@
 use core::fmt;
 
-use crate::codec::Codec;
-use crate::DimplError;
+use crate::codec::{Checked, CheckedMut, Codec};
+use crate::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentType {
@@ -16,12 +16,12 @@ impl Codec for ContentType {
         1
     }
 
-    fn encode(&self, out: &mut [u8]) -> Result<(), DimplError> {
+    fn encode(&self, mut out: CheckedMut<'_, u8>) -> Result<(), Error> {
         out[0] = (*self).into();
         Ok(())
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, DimplError> {
+    fn decode(bytes: Checked<u8>) -> Result<Self, Error> {
         Self::try_from(bytes[0])
     }
 }
@@ -39,7 +39,7 @@ impl From<ContentType> for u8 {
 }
 
 impl TryFrom<u8> for ContentType {
-    type Error = DimplError;
+    type Error = Error;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         use ContentType::*;
@@ -48,7 +48,7 @@ impl TryFrom<u8> for ContentType {
             21 => Alert,
             22 => Handshake,
             23 => ApplicationData,
-            _ => return Err(DimplError::InvalidContentType(value)),
+            _ => return Err(Error::InvalidContentType(value)),
         };
         Ok(t)
     }

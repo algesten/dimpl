@@ -3,8 +3,8 @@ use thiserror::Error;
 use crate::types::ctype::ContentType;
 use crate::types::version::ProtocolVersion;
 
-#[derive(Debug, Clone, Error)]
-pub enum DimplError {
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum Error {
     #[error("Too short")]
     TooShort,
 
@@ -14,11 +14,8 @@ pub enum DimplError {
     #[error("Epoch is not allowed to wrap")]
     WrappedEpoch,
 
-    #[error("Too big length field (> 16_384) {0}")]
-    TooBigLength(usize),
-
-    #[error("Too big dtls sequene field (max 48 bits) {0}")]
-    TooBigDtlsSeq(u64),
+    #[error("Too big length field {0}")]
+    TooBigLength(u64),
 
     #[error("Unsupported TLS version {0}, {1}")]
     UnsupportedTlsVersion(u8, u8),

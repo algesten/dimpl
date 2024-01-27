@@ -7,7 +7,7 @@
 //! [tls] : https://datatracker.ietf.org/doc/html/rfc5246
 
 mod error;
-pub use error::DimplError;
+pub use error::Error;
 
 mod codec;
 

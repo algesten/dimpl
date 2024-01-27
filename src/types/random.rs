@@ -1,5 +1,6 @@
-use crate::codec::CheckedSlice;
-use crate::codec::Codec;
+use crate::codec::{Checked, SliceCheck};
+use crate::codec::{CheckedMut, Codec};
+use crate::Error;
 
 use super::numerics::GmtUnixTime;
 
@@ -16,17 +17,17 @@ impl Codec for Random {
         GmtUnixTime::encoded_length() + RANDOM_BYTES
     }
 
-    fn encode(&self, out: &mut [u8]) -> Result<(), crate::DimplError> {
-        let out = self.gmt_unix_time.encode_fixed(out)?;
-        let (dst, _) = out.checked_split_mut(RANDOM_BYTES)?;
+    fn encode(&self, mut out: CheckedMut<'_, u8>) -> Result<(), Error> {
+        let out = self.gmt_unix_time.encode_fixed(&mut *out)?;
+        let (mut dst, _) = out.checked_split_mut(RANDOM_BYTES)?;
         dst.copy_from_slice(&self.random_bytes);
         Ok(())
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, crate::DimplError> {
-        let (gmt_unix_time, bytes) = GmtUnixTime::decode_fixed(bytes)?;
-        let (checked, _) = bytes.checked_get(RANDOM_BYTES)?;
-        let random_bytes: [u8; RANDOM_BYTES] = checked.try_into().unwrap();
+    fn decode(bytes: Checked<u8>) -> Result<Self, Error> {
+        let (gmt_unix_time, bytes) = GmtUnixTime::decode_fixed(&*bytes)?;
+        let (checked, _) = bytes.checked_split(RANDOM_BYTES)?;
+        let random_bytes: [u8; RANDOM_BYTES] = (&*checked).try_into().unwrap();
         Ok(Self {
             gmt_unix_time,
             random_bytes,

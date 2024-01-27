@@ -1,10 +1,10 @@
 use core::fmt;
 
-use crate::codec::{Codec, CodecVariable};
+use crate::codec::{Checked, CheckedMut, Codec, CodecVar, CodecVarLen};
 use crate::types::ctype::ContentType;
 use crate::types::numerics::{Epoch, Length16, SequenceNumber};
 use crate::types::version::ProtocolVersion;
-use crate::DimplError;
+use crate::Error;
 
 use super::fragment::DtlsFragment;
 
@@ -63,18 +63,13 @@ impl DtlsPlainText {
 //     uint16 length;
 //     opaque fragment[DTLSPlaintext.length];
 //   } DTLSPlaintext;
-impl CodecVariable for DtlsPlainText {
+impl CodecVar for DtlsPlainText {
     fn encoded_length(&self) -> usize {
-        ContentType::encoded_length()
-            + ProtocolVersion::encoded_length()
-            + Epoch::encoded_length()
-            + SequenceNumber::encoded_length()
-            + Length16::encoded_length()
-            + self.fragment.encoded_length()
+        Self::min_needed_length() + self.fragment.encoded_length()
     }
 
-    fn encode(&self, out: &mut [u8]) -> Result<(), DimplError> {
-        let out = self.content_type().encode_fixed(out)?;
+    fn encode(&self, mut out: CheckedMut<'_, u8>) -> Result<(), Error> {
+        let out = self.content_type().encode_fixed(&mut *out)?;
         let out = self.protocol_version().encode_fixed(out)?;
         let out = self.epoch().encode_fixed(out)?;
         let out = self.sequence_number().encode_fixed(out)?;
@@ -86,8 +81,8 @@ impl CodecVariable for DtlsPlainText {
         Ok(())
     }
 
-    fn decode(bytes: &[u8], _: ()) -> Result<Self, DimplError> {
-        let (content_type, bytes) = ContentType::decode_fixed(bytes)?;
+    fn decode(bytes: Checked<u8>, _: ()) -> Result<Self, Error> {
+        let (content_type, bytes) = ContentType::decode_fixed(&bytes)?;
         let (protocol_version, bytes) = ProtocolVersion::decode_fixed(bytes)?;
         let (epoch, bytes) = Epoch::decode_fixed(bytes)?;
         let (sequence_number, bytes) = SequenceNumber::decode_fixed(bytes)?;
@@ -103,6 +98,23 @@ impl CodecVariable for DtlsPlainText {
             sequence_number,
             fragment,
         })
+    }
+}
+
+impl CodecVarLen for DtlsPlainText {
+    fn min_needed_length() -> usize {
+        ContentType::encoded_length()
+            + ProtocolVersion::encoded_length()
+            + Epoch::encoded_length()
+            + SequenceNumber::encoded_length()
+            + Length16::encoded_length()
+    }
+
+    fn read_internal_length(bytes: Checked<u8>) -> Result<usize, Error> {
+        let offset = Self::min_needed_length() - Length16::encoded_length();
+        let (length, _) = Length16::decode_fixed(&bytes[offset..])?;
+        let total = Self::min_needed_length() + *length as usize;
+        Ok(total)
     }
 }
 

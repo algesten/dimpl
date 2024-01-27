@@ -1,5 +1,5 @@
-use crate::codec::Codec;
-use crate::DimplError;
+use crate::codec::{Checked, CheckedMut, Codec};
+use crate::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandshakeType {
@@ -17,7 +17,7 @@ pub enum HandshakeType {
 }
 
 impl TryFrom<u8> for HandshakeType {
-    type Error = DimplError;
+    type Error = Error;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         use HandshakeType::*;
@@ -33,7 +33,7 @@ impl TryFrom<u8> for HandshakeType {
             15 => CertificateVerify,
             16 => ClientKeyExchange,
             20 => Finished,
-            _ => return Err(DimplError::TooShort),
+            _ => return Err(Error::TooShort),
         })
     }
 }
@@ -62,12 +62,12 @@ impl Codec for HandshakeType {
         1
     }
 
-    fn encode(&self, out: &mut [u8]) -> Result<(), DimplError> {
+    fn encode(&self, mut out: CheckedMut<'_, u8>) -> Result<(), Error> {
         out[0] = (*self).into();
         Ok(())
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, DimplError> {
+    fn decode(bytes: Checked<u8>) -> Result<Self, Error> {
         Ok(bytes[0].try_into()?)
     }
 }

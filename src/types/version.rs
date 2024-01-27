@@ -1,7 +1,7 @@
 use core::fmt;
 
-use crate::codec::Codec;
-use crate::DimplError;
+use crate::codec::{Checked, CheckedMut, Codec};
+use crate::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolVersion {
@@ -14,7 +14,7 @@ impl Codec for ProtocolVersion {
         2
     }
 
-    fn encode(&self, out: &mut [u8]) -> Result<(), crate::DimplError> {
+    fn encode(&self, mut out: CheckedMut<'_, u8>) -> Result<(), Error> {
         use ProtocolVersion::*;
         // DTLS versions are using 1-complement.
         match self {
@@ -30,12 +30,12 @@ impl Codec for ProtocolVersion {
         Ok(())
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, crate::DimplError> {
+    fn decode(bytes: Checked<u8>) -> Result<Self, Error> {
         use ProtocolVersion::*;
         match (bytes[0], bytes[1]) {
             (0xfe, 0xff) => Ok(Dtls1_0),
             (0xfe, 0xfd) => Ok(Dtls1_2),
-            _ => Err(DimplError::UnsupportedTlsVersion(bytes[0], bytes[1])),
+            _ => Err(Error::UnsupportedTlsVersion(bytes[0], bytes[1])),
         }
     }
 }

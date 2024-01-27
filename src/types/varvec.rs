@@ -5,8 +5,8 @@ use core::ops::Range;
 
 use arrayvec::ArrayVec;
 
-use crate::codec::{Codec, CodecVariable};
-use crate::DimplError;
+use crate::codec::{Checked, CheckedMut, Codec, CodecVar, CodecVarLen, SliceCheck};
+use crate::Error;
 
 // name - name of variable vector type
 // t    - type held in the vector
@@ -30,11 +30,11 @@ macro_rules! varvec {
                 $r
             }
 
-            fn assert_size(&self) -> Result<(), DimplError> {
+            fn assert_size(&self) -> Result<(), Error> {
                 let range = Self::required_range();
                 let len = self.len();
                 if !range.contains(&len) {
-                    return Err(DimplError::BadVariableVecSize);
+                    return Err(Error::BadVariableVecSize);
                 }
                 Ok(())
             }
@@ -59,7 +59,7 @@ macro_rules! varvec {
             }
         }
 
-        impl CodecVariable for $name
+        impl CodecVar for $name
         where
             $t: Codec,
         {
@@ -78,16 +78,16 @@ macro_rules! varvec {
                 }
             }
 
-            fn encode(&self, out: &mut [u8]) -> Result<(), DimplError> {
+            fn encode(&self, mut out: CheckedMut<'_, u8>) -> Result<(), Error> {
                 self.assert_size()?;
 
                 // Encode the length and return the positioned out
                 let mut out = if $n < u8::MAX as usize {
                     // Encode byte length as 1 byte.
-                    (self.element_byte_length() as u8).encode_fixed(out)?
+                    (self.element_byte_length() as u8).encode_fixed(&mut *out)?
                 } else if $n < u16::MAX as usize {
                     // Encode byte length as 2 bytes
-                    (self.element_byte_length() as u16).encode_fixed(out)?
+                    (self.element_byte_length() as u16).encode_fixed(&mut *out)?
                 } else {
                     unreachable!("Too large N")
                 };
@@ -99,24 +99,18 @@ macro_rules! varvec {
                 Ok(())
             }
 
-            fn decode(bytes: &[u8], _: ()) -> Result<Self, DimplError> {
-                let (byte_length, bytes) = if $n < u8::MAX as usize {
-                    // Read length a 1 byte
-                    let (l, bytes) = u8::decode_fixed(bytes)?;
-                    (l as usize, bytes)
+            fn decode(bytes: Checked<u8>, _: ()) -> Result<Self, Error> {
+                // Skip the length field
+                let bytes = if $n < u8::MAX as usize {
+                    bytes.skip(1)?
                 } else if $n < u16::MAX as usize {
-                    // Read length as 2 bytes
-                    let (l, bytes) = u16::decode_fixed(bytes)?;
-                    (l as usize, bytes)
+                    bytes.skip(2)?
                 } else {
                     unreachable!("Too large N")
                 };
 
-                // Cap read length since .chunks() below will not know when to stop
-                let bytes = &bytes[..byte_length];
-
                 // Expected number of elements in array.
-                let length = byte_length / <$t>::encoded_length();
+                let length = bytes.len() / <$t>::encoded_length();
 
                 let mut inner = ArrayVec::<$t, $n>::new();
 
@@ -127,8 +121,9 @@ macro_rules! varvec {
                         //
                         // The length of an encoded vector must be an even multiple of the length
                         // of a single element (for example, a 17-byte vector of uint16 would be illegal).
-                        return Err(DimplError::IncorrectVariableVecLength);
+                        return Err(Error::IncorrectVariableVecLength);
                     }
+                    let (chunk, _) = chunk.checked_split(<$t>::encoded_length())?;
                     let t = <$t>::decode(chunk)?;
                     inner.push(t);
                 }
@@ -142,6 +137,34 @@ macro_rules! varvec {
                 ret.assert_size()?;
 
                 Ok(ret)
+            }
+        }
+
+        impl CodecVarLen for SessionId {
+            fn min_needed_length() -> usize {
+                if $n < u8::MAX as usize {
+                    1
+                } else if $n < u16::MAX as usize {
+                    2
+                } else {
+                    unreachable!("Too large N")
+                }
+            }
+
+            fn read_internal_length(bytes: Checked<u8>) -> Result<usize, Error> {
+                let length = if $n < u8::MAX as usize {
+                    // Read length a 1 byte
+                    let (l, _) = u8::decode_fixed(&*bytes)?;
+                    l as usize + 1
+                } else if $n < u16::MAX as usize {
+                    // Read length as 2 bytes
+                    let (l, _) = u16::decode_fixed(&*bytes)?;
+                    l as usize + 2
+                } else {
+                    unreachable!("Too large N")
+                };
+
+                Ok(length)
             }
         }
 
@@ -178,7 +201,7 @@ mod test {
     fn decode_var_vec() {
         let bytes: &[u8] = &[2, 42, 43, 0];
 
-        let (x, _) = SessionId::decode_variable(&bytes, 3, ()).unwrap();
+        let (x, _) = SessionId::decode_variable_internal_length(&bytes, ()).unwrap();
 
         const CMP: &[u8] = &[42, 43];
         assert_eq!(&*x, CMP);

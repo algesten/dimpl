@@ -1,6 +1,7 @@
-use crate::codec::{Codec, CodecVariable};
+use crate::codec::{Checked, CheckedMut, Codec, CodecVar};
 use crate::types::handshake::HandshakeType;
 use crate::types::numerics::{FragmentLength, FragmentOffset, Length24, MessageSeq};
+use crate::Error;
 
 use super::client_hello::ClientHello;
 
@@ -14,7 +15,7 @@ pub struct Handshake {
     pub body: HandshakeVariant,
 }
 
-impl CodecVariable for Handshake {
+impl CodecVar for Handshake {
     fn encoded_length(&self) -> usize {
         HandshakeType::encoded_length()
             + Length24::encoded_length()
@@ -24,8 +25,8 @@ impl CodecVariable for Handshake {
             + self.body.encoded_length()
     }
 
-    fn encode(&self, out: &mut [u8]) -> Result<(), crate::DimplError> {
-        let out = self.handshake_type.encode_fixed(out)?;
+    fn encode(&self, mut out: CheckedMut<'_, u8>) -> Result<(), Error> {
+        let out = self.handshake_type.encode_fixed(&mut *out)?;
         let out = self.length.encode_fixed(out)?;
         let out = self.message_seq.encode_fixed(out)?;
         let out = self.fragment_offset.encode_fixed(out)?;
@@ -34,8 +35,8 @@ impl CodecVariable for Handshake {
         Ok(())
     }
 
-    fn decode(bytes: &[u8], _: ()) -> Result<Self, crate::DimplError> {
-        let (handshake_type, bytes) = HandshakeType::decode_fixed(bytes)?;
+    fn decode(bytes: Checked<u8>, _: ()) -> Result<Self, Error> {
+        let (handshake_type, bytes) = HandshakeType::decode_fixed(&bytes)?;
         let (length, bytes) = Length24::decode_fixed(bytes)?;
         let (message_seq, bytes) = MessageSeq::decode_fixed(bytes)?;
         let (fragment_offset, bytes) = FragmentOffset::decode_fixed(bytes)?;
@@ -60,20 +61,20 @@ pub enum HandshakeVariant {
     ClientHello(ClientHello),
 }
 
-impl CodecVariable<HandshakeType> for HandshakeVariant {
+impl CodecVar<HandshakeType> for HandshakeVariant {
     fn encoded_length(&self) -> usize {
         match self {
             HandshakeVariant::ClientHello(i) => i.encoded_length(),
         }
     }
 
-    fn encode(&self, out: &mut [u8]) -> Result<(), crate::DimplError> {
+    fn encode(&self, out: CheckedMut<'_, u8>) -> Result<(), Error> {
         match self {
             HandshakeVariant::ClientHello(i) => i.encode(out),
         }
     }
 
-    fn decode(bytes: &[u8], handshake_type: HandshakeType) -> Result<Self, crate::DimplError> {
+    fn decode(bytes: Checked<u8>, handshake_type: HandshakeType) -> Result<Self, Error> {
         Ok(match handshake_type {
             HandshakeType::HelloRequest => todo!(),
             HandshakeType::ClientHello => Self::ClientHello(ClientHello::decode(bytes, ())?),

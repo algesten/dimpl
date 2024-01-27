@@ -1,7 +1,7 @@
-use crate::codec::CodecVariable;
+use crate::codec::{Checked, CheckedMut, CodecVar};
 use crate::types::ctype::ContentType;
 use crate::types::version::ProtocolVersion;
-use crate::DimplError;
+use crate::Error;
 
 use super::handshake::{Handshake, HandshakeVariant};
 
@@ -15,7 +15,7 @@ impl DtlsFragment {
         &self,
         content_type: ContentType,
         protocol_version: ProtocolVersion,
-    ) -> Result<(), DimplError> {
+    ) -> Result<(), Error> {
         match self {
             DtlsFragment::Handshake(h) => match &h.body {
                 HandshakeVariant::ClientHello(_) => {
@@ -28,9 +28,9 @@ impl DtlsFragment {
     }
 }
 
-fn ensure_content_type(expected: ContentType, decoded: ContentType) -> Result<(), DimplError> {
+fn ensure_content_type(expected: ContentType, decoded: ContentType) -> Result<(), Error> {
     if expected != decoded {
-        Err(DimplError::BadContentType(expected, decoded))
+        Err(Error::BadContentType(expected, decoded))
     } else {
         Ok(())
     }
@@ -39,28 +39,28 @@ fn ensure_content_type(expected: ContentType, decoded: ContentType) -> Result<()
 fn ensure_protocol_version(
     expected: ProtocolVersion,
     decoded: ProtocolVersion,
-) -> Result<(), DimplError> {
+) -> Result<(), Error> {
     if expected != decoded {
-        Err(DimplError::BadProtocolVersion(expected, decoded))
+        Err(Error::BadProtocolVersion(expected, decoded))
     } else {
         Ok(())
     }
 }
 
-impl CodecVariable<ContentType> for DtlsFragment {
+impl CodecVar<ContentType> for DtlsFragment {
     fn encoded_length(&self) -> usize {
         match self {
             DtlsFragment::Handshake(i) => i.encoded_length(),
         }
     }
 
-    fn encode(&self, out: &mut [u8]) -> Result<(), DimplError> {
+    fn encode(&self, out: CheckedMut<'_, u8>) -> Result<(), Error> {
         match self {
             DtlsFragment::Handshake(i) => i.encode(out),
         }
     }
 
-    fn decode(bytes: &[u8], content_type: ContentType) -> Result<Self, DimplError> {
+    fn decode(bytes: Checked<u8>, content_type: ContentType) -> Result<Self, Error> {
         Ok(match content_type {
             ContentType::Handshake => Self::Handshake(Handshake::decode(bytes, ())?),
             ContentType::ChangeCipherSpec => todo!(),

@@ -1,7 +1,8 @@
-use crate::codec::CodecVariable;
+use crate::codec::{Checked, CheckedMut, CodecVar};
 use crate::types::random::Random;
 use crate::types::varvec::SessionId;
 use crate::types::version::ProtocolVersion;
+use crate::Error;
 
 use super::fragment::DtlsFragment;
 
@@ -12,16 +13,16 @@ pub struct ClientHello {
     pub session_id: SessionId,
 }
 
-impl CodecVariable for ClientHello {
+impl CodecVar for ClientHello {
     fn encoded_length(&self) -> usize {
         todo!()
     }
 
-    fn encode(&self, out: &mut [u8]) -> Result<(), crate::DimplError> {
+    fn encode(&self, mut out: CheckedMut<'_, u8>) -> Result<(), Error> {
         todo!()
     }
 
-    fn decode(bytes: &[u8], _: ()) -> Result<Self, crate::DimplError> {
+    fn decode(bytes: Checked<u8>, _: ()) -> Result<Self, Error> {
         todo!()
     }
 }
