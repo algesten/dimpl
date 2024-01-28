@@ -1,4 +1,7 @@
+pub(crate) mod cipher_suite;
+pub(crate) mod comp_meth;
 pub(crate) mod ctype;
+pub(crate) mod ext;
 pub(crate) mod handshake;
 pub(crate) mod numerics;
 pub(crate) mod random;

@@ -29,6 +29,9 @@ pub enum Error {
     #[error("Variable vector length must be even multiple of element")]
     IncorrectVariableVecLength,
 
-    #[error("Incorrect number of elements in variable vector")]
-    BadVariableVecSize,
+    #[error("Incorrect number of elements in variable vector: {0}")]
+    BadVariableVecSize(&'static str),
+
+    #[error("An incoming extension is malformed")]
+    BadIncomingExtension,
 }

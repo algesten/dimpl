@@ -1,6 +1,6 @@
 use crate::codec::{Checked, CheckedMut, CodecVar};
 use crate::types::random::Random;
-use crate::types::varvec::SessionId;
+use crate::types::varvec::{CipherSuites, CompressionMethods, SessionId};
 use crate::types::version::ProtocolVersion;
 use crate::Error;
 
@@ -11,6 +11,8 @@ pub struct ClientHello {
     pub client_version: ProtocolVersion,
     pub random: Random,
     pub session_id: SessionId,
+    pub cipher_suites: CipherSuites,
+    pub compression_methods: CompressionMethods,
 }
 
 impl CodecVar for ClientHello {

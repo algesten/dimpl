@@ -78,10 +78,15 @@ pub trait CodecVarLen<Context = ()>: CodecVar<Context> {
     /// The returned length should contain the internal length.
     fn read_internal_length(bytes: Checked<u8>) -> Result<usize, Error>;
 
+    /// Read the internal length by first checking the bytes.
+    fn do_read_internal_length(bytes: &[u8]) -> Result<usize, Error> {
+        let (checked, _) = bytes.checked_split(Self::min_needed_length())?;
+        Self::read_internal_length(checked)
+    }
+
     /// Helper to decode a variable value when the length is internal to the read.
     fn decode_variable_internal_length(bytes: &[u8], ctx: Context) -> Result<(Self, &[u8]), Error> {
-        let (checked, _) = bytes.checked_split(Self::min_needed_length())?;
-        let length = Self::read_internal_length(checked)?;
+        let length = Self::do_read_internal_length(bytes)?;
         Self::decode_variable(bytes, length, ctx)
     }
 }
@@ -138,7 +143,7 @@ pub struct CheckedMut<'a, T: Sized>(&'a mut [T]);
 
 impl<'a, T> Checked<'a, T> {
     pub fn skip(self, n: usize) -> Result<Checked<'a, T>, Error> {
-        if n < self.0.len() {
+        if n <= self.0.len() {
             Ok(Checked(&self.0[n..]))
         } else {
             Err(Error::TooShort)

@@ -6,7 +6,12 @@ use core::ops::Range;
 use arrayvec::ArrayVec;
 
 use crate::codec::{Checked, CheckedMut, Codec, CodecVar, CodecVarLen, SliceCheck};
+use crate::types::ext::SrtpProtectionProfile;
 use crate::Error;
+
+use super::cipher_suite::CipherSuite;
+use super::comp_meth::CompressionMethod;
+use super::ext::EcPointFormat;
 
 // name - name of variable vector type
 // t    - type held in the vector
@@ -34,7 +39,7 @@ macro_rules! varvec {
                 let range = Self::required_range();
                 let len = self.len();
                 if !range.contains(&len) {
-                    return Err(Error::BadVariableVecSize);
+                    return Err(Error::BadVariableVecSize(stringify!($name)));
                 }
                 Ok(())
             }
@@ -109,21 +114,23 @@ macro_rules! varvec {
                     unreachable!("Too large N")
                 };
 
+                let enc_len = <$t>::encoded_length();
+
                 // Expected number of elements in array.
-                let length = bytes.len() / <$t>::encoded_length();
+                let length = bytes.len() / enc_len;
 
                 let mut inner = ArrayVec::<$t, $n>::new();
 
-                for chunk in bytes.chunks(<$t>::encoded_length()) {
+                for chunk in bytes.chunks(enc_len) {
                     // Last chunk might contain fewer elements.
-                    if chunk.len() != <$t>::encoded_length() {
+                    if chunk.len() != enc_len {
                         // https://datatracker.ietf.org/doc/html/rfc5246#section-4.3
                         //
                         // The length of an encoded vector must be an even multiple of the length
                         // of a single element (for example, a 17-byte vector of uint16 would be illegal).
                         return Err(Error::IncorrectVariableVecLength);
                     }
-                    let (chunk, _) = chunk.checked_split(<$t>::encoded_length())?;
+                    let (chunk, _) = chunk.checked_split(enc_len)?;
                     let t = <$t>::decode(chunk)?;
                     inner.push(t);
                 }
@@ -140,7 +147,7 @@ macro_rules! varvec {
             }
         }
 
-        impl CodecVarLen for SessionId {
+        impl CodecVarLen for $name {
             fn min_needed_length() -> usize {
                 if $n < u8::MAX as usize {
                     1
@@ -170,15 +177,37 @@ macro_rules! varvec {
 
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.debug_struct(stringify!($name))
-                    .field("{}", &self.inner)
-                    .finish()
+                f.debug_list().entries(self.inner.iter()).finish()
             }
         }
     };
 }
 
 varvec!(SessionId, u8, 32, 0..32);
+
+// The spec says up to 2^16 - 2 bytes for the suites. That would give
+// us 32767 suites, which seems rather crazy. Cap arbitrarily at 100.
+// This makes a fixed vector of 100 bytes in memory.
+//  CipherSuite cipher_suites<2..2^16-2>;
+varvec!(CipherSuites, CipherSuite, 100, 2..10);
+
+// Unclear if there are any compression methods beyond NULL.
+varvec!(CompressionMethods, CompressionMethod, 10, 1..10);
+
+// struct {
+//    opaque renegotiated_connection<0..255>;
+// } RenegotiationInfo;
+varvec!(RenegotiatedConnection, u8, 255, 0..255);
+
+// ECPointFormat ec_point_format_list<1..2^8-1>
+varvec!(EcPointFormatList, EcPointFormat, 7, 1..7);
+
+// SRTPProtectionProfile SRTPProtectionProfiles<2..2^16-1>;
+// Allow max 20 profiles
+varvec!(SrtpProtectionProfiles, SrtpProtectionProfile, 20, 1..20);
+
+// opaque srtp_mki<0..255>;
+varvec!(SrtpMki, u8, 255, 0..255);
 
 #[cfg(test)]
 mod test {
