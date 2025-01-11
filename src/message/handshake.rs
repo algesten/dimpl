@@ -1,5 +1,5 @@
 use super::Message;
-use super::{ApplicationData, Certificate, CertificateVerify, ChangeCipherSpec, ClientHello};
+use super::{Certificate, CertificateVerify, ChangeCipherSpec, ClientHello};
 use super::{ClientKeyExchange, Finished, NewSessionTicket, ServerHello, ServerKeyExchange};
 
 #[derive(Debug)]
@@ -65,10 +65,6 @@ impl Handshake {
                 let (consumed, msg) = NewSessionTicket::parse(data)?;
                 (consumed, Message::NewSessionTicket(msg))
             }
-            0x17 => {
-                let (consumed, msg) = ApplicationData::parse(data)?;
-                (consumed, Message::ApplicationData(msg))
-            }
             _ => return None,
         };
 
@@ -85,47 +81,33 @@ impl Handshake {
     }
 
     pub fn serialize(&self, data: &mut Vec<u8>) {
+        data.push(match &self.message {
+            Message::ClientHello(_) => 0x01,
+            Message::ServerHello(_) => 0x02,
+            Message::Certificate(_) => 0x0B,
+            Message::ServerKeyExchange(_) => 0x0C,
+            Message::CertificateVerify(_) => 0x0F,
+            Message::ClientKeyExchange(_) => 0x10,
+            Message::Finished(_) => 0x14,
+            Message::ChangeCipherSpec(_) => 0x15,
+            Message::NewSessionTicket(_) => 0x16,
+        });
+
+        data.extend_from_slice(&self.length.to_be_bytes()[1..]);
+        data.extend_from_slice(&self.message_seq.to_be_bytes());
+        data.extend_from_slice(&self.fragment_offset.to_be_bytes()[1..]);
+        data.extend_from_slice(&self.fragment_length.to_be_bytes()[1..]);
+
         match &self.message {
-            Message::ClientHello(msg) => {
-                data.push(0x01);
-                msg.serialize(data);
-            }
-            Message::ServerHello(msg) => {
-                data.push(0x02);
-                msg.serialize(data);
-            }
-            Message::Certificate(msg) => {
-                data.push(0x0B);
-                msg.serialize(data);
-            }
-            Message::ServerKeyExchange(msg) => {
-                data.push(0x0C);
-                msg.serialize(data);
-            }
-            Message::CertificateVerify(msg) => {
-                data.push(0x0F);
-                msg.serialize(data);
-            }
-            Message::ClientKeyExchange(msg) => {
-                data.push(0x10);
-                msg.serialize(data);
-            }
-            Message::Finished(msg) => {
-                data.push(0x14);
-                msg.serialize(data);
-            }
-            Message::ChangeCipherSpec(msg) => {
-                data.push(0x15);
-                msg.serialize(data);
-            }
-            Message::NewSessionTicket(msg) => {
-                data.push(0x16);
-                msg.serialize(data);
-            }
-            Message::ApplicationData(msg) => {
-                data.push(0x17);
-                msg.serialize(data);
-            }
+            Message::ClientHello(msg) => msg.serialize(data),
+            Message::ServerHello(msg) => msg.serialize(data),
+            Message::Certificate(msg) => msg.serialize(data),
+            Message::ServerKeyExchange(msg) => msg.serialize(data),
+            Message::CertificateVerify(msg) => msg.serialize(data),
+            Message::ClientKeyExchange(msg) => msg.serialize(data),
+            Message::Finished(msg) => msg.serialize(data),
+            Message::ChangeCipherSpec(msg) => msg.serialize(data),
+            Message::NewSessionTicket(msg) => msg.serialize(data),
         }
     }
 }

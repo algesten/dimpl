@@ -25,8 +25,7 @@ pub use change_cipher_spec::ChangeCipherSpec;
 mod new_session_ticket;
 pub use new_session_ticket::NewSessionTicket;
 
-mod application_data;
-pub use application_data::ApplicationData;
+mod fragment;
 
 mod handshake;
 pub use handshake::Handshake;
@@ -42,7 +41,6 @@ pub enum Message {
     Finished(Finished),
     ChangeCipherSpec(ChangeCipherSpec),
     NewSessionTicket(NewSessionTicket),
-    ApplicationData(ApplicationData),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
