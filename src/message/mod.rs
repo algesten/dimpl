@@ -25,8 +25,6 @@ pub use change_cipher_spec::ChangeCipherSpec;
 mod new_session_ticket;
 pub use new_session_ticket::NewSessionTicket;
 
-mod fragment;
-
 mod handshake;
 pub use handshake::Handshake;
 
@@ -41,6 +39,24 @@ pub enum Message {
     Finished(Finished),
     ChangeCipherSpec(ChangeCipherSpec),
     NewSessionTicket(NewSessionTicket),
+    Fragment(Vec<u8>),
+}
+
+impl Message {
+    pub fn serialize(&self, data: &mut Vec<u8>) {
+        match self {
+            Message::ClientHello(msg) => msg.serialize(data),
+            Message::ServerHello(msg) => msg.serialize(data),
+            Message::Certificate(msg) => msg.serialize(data),
+            Message::ServerKeyExchange(msg) => msg.serialize(data),
+            Message::CertificateVerify(msg) => msg.serialize(data),
+            Message::ClientKeyExchange(msg) => msg.serialize(data),
+            Message::Finished(msg) => msg.serialize(data),
+            Message::ChangeCipherSpec(msg) => msg.serialize(data),
+            Message::NewSessionTicket(msg) => msg.serialize(data),
+            Message::Fragment(_) => unreachable!(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

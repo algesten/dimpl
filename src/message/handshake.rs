@@ -4,11 +4,12 @@ use super::{ClientKeyExchange, Finished, NewSessionTicket, ServerHello, ServerKe
 
 #[derive(Debug)]
 pub struct Handshake {
-    pub message: Message,
+    pub message_type: u8,
     pub length: u32,
     pub message_seq: u16,
     pub fragment_offset: u32,
     pub fragment_length: u32,
+    pub message: Message,
 }
 
 impl Handshake {
@@ -23,6 +24,20 @@ impl Handshake {
         let fragment_offset = u32::from_be_bytes([0, data[6], data[7], data[8]]);
         let fragment_length = u32::from_be_bytes([0, data[9], data[10], data[11]]);
         let data = &data[12..];
+
+        if fragment_offset > 0 || (fragment_offset == 0 && fragment_length < length) {
+            return Some((
+                12 + data.len(),
+                Handshake {
+                    message_type,
+                    length,
+                    message_seq,
+                    fragment_offset,
+                    fragment_length,
+                    message: Message::Fragment(data.to_vec()),
+                },
+            ));
+        }
 
         if data.len() < fragment_length as usize {
             return None;
@@ -71,6 +86,7 @@ impl Handshake {
         Some((
             12 + consumed,
             Handshake {
+                message_type,
                 message,
                 length,
                 message_seq,
@@ -80,18 +96,12 @@ impl Handshake {
         ))
     }
 
+    pub fn is_fragment(&self) -> bool {
+        matches!(self.message, Message::Fragment(_))
+    }
+
     pub fn serialize(&self, data: &mut Vec<u8>) {
-        data.push(match &self.message {
-            Message::ClientHello(_) => 0x01,
-            Message::ServerHello(_) => 0x02,
-            Message::Certificate(_) => 0x0B,
-            Message::ServerKeyExchange(_) => 0x0C,
-            Message::CertificateVerify(_) => 0x0F,
-            Message::ClientKeyExchange(_) => 0x10,
-            Message::Finished(_) => 0x14,
-            Message::ChangeCipherSpec(_) => 0x15,
-            Message::NewSessionTicket(_) => 0x16,
-        });
+        data.push(self.message_type);
 
         data.extend_from_slice(&self.length.to_be_bytes()[1..]);
         data.extend_from_slice(&self.message_seq.to_be_bytes());
@@ -108,6 +118,78 @@ impl Handshake {
             Message::Finished(msg) => msg.serialize(data),
             Message::ChangeCipherSpec(msg) => msg.serialize(data),
             Message::NewSessionTicket(msg) => msg.serialize(data),
+            Message::Fragment(_) => unreachable!(),
         }
+    }
+
+    pub fn defragment(fragments: &[Handshake]) -> Option<Handshake> {
+        if fragments.is_empty() {
+            return None;
+        }
+
+        let message_seq = fragments[0].message_seq;
+        let length = fragments[0].length;
+        let message_type = fragments[0].message_type;
+
+        // Verify that all fragments have the same message_seq, length, and message_type
+        for fragment in fragments {
+            if fragment.message_seq != message_seq
+                || fragment.length != length
+                || fragment.message_type != message_type
+            {
+                return None;
+            }
+        }
+
+        // Combine data
+        let mut merged = vec![0; 12 + length as usize];
+        merged[0] = message_type;
+        merged[1..4].copy_from_slice(&length.to_be_bytes()[1..]);
+        merged[4..6].copy_from_slice(&message_seq.to_be_bytes());
+        merged[6..9].copy_from_slice(&fragments[0].fragment_offset.to_be_bytes()[1..]);
+        merged[9..12].copy_from_slice(&fragments[0].fragment_length.to_be_bytes()[1..]);
+
+        for fragment in fragments {
+            let start = 12 + fragment.fragment_offset as usize;
+            let end = start + fragment.fragment_length as usize;
+            if let Message::Fragment(ref data) = fragment.message {
+                merged[start..end].copy_from_slice(data);
+            } else {
+                return None;
+            }
+        }
+
+        // Parse combined data
+        Handshake::parse(&merged).map(|(_, handshake)| handshake)
+    }
+
+    pub fn fragment(&self, max: usize) -> Vec<Handshake> {
+        if let Message::Fragment(_) = self.message {
+            panic!("Cannot fragment a Fragment message");
+        }
+
+        let mut fragments = Vec::new();
+        let mut offset = 0;
+        let mut serialized = vec![];
+        self.serialize(&mut serialized);
+        let data = &serialized[12..];
+
+        while offset < data.len() {
+            let fragment_length = max.min(data.len() - offset);
+            let fragment_data = data[offset..offset + fragment_length].to_vec();
+
+            fragments.push(Handshake {
+                message_type: self.message_type,
+                length: self.length,
+                message_seq: self.message_seq,
+                fragment_offset: offset as u32,
+                fragment_length: fragment_length as u32,
+                message: Message::Fragment(fragment_data),
+            });
+
+            offset += fragment_length;
+        }
+
+        fragments
     }
 }
