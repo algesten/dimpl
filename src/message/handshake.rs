@@ -1,6 +1,6 @@
 use super::Message;
 use super::{Certificate, CertificateVerify, ChangeCipherSpec, ClientHello};
-use super::{ClientKeyExchange, Finished, NewSessionTicket, ServerHello, ServerKeyExchange};
+use super::{ClientKeyExchange, Finished, ServerHello, ServerKeyExchange};
 
 #[derive(Debug)]
 pub struct Handshake {
@@ -76,10 +76,6 @@ impl Handshake {
                 let (consumed, msg) = ChangeCipherSpec::parse(data)?;
                 (consumed, Message::ChangeCipherSpec(msg))
             }
-            0x16 => {
-                let (consumed, msg) = NewSessionTicket::parse(data)?;
-                (consumed, Message::NewSessionTicket(msg))
-            }
             _ => return None,
         };
 
@@ -108,18 +104,7 @@ impl Handshake {
         data.extend_from_slice(&self.fragment_offset.to_be_bytes()[1..]);
         data.extend_from_slice(&self.fragment_length.to_be_bytes()[1..]);
 
-        match &self.message {
-            Message::ClientHello(msg) => msg.serialize(data),
-            Message::ServerHello(msg) => msg.serialize(data),
-            Message::Certificate(msg) => msg.serialize(data),
-            Message::ServerKeyExchange(msg) => msg.serialize(data),
-            Message::CertificateVerify(msg) => msg.serialize(data),
-            Message::ClientKeyExchange(msg) => msg.serialize(data),
-            Message::Finished(msg) => msg.serialize(data),
-            Message::ChangeCipherSpec(msg) => msg.serialize(data),
-            Message::NewSessionTicket(msg) => msg.serialize(data),
-            Message::Fragment(_) => unreachable!(),
-        }
+        self.message.serialize(data);
     }
 
     pub fn defragment(fragments: &[Handshake]) -> Option<Handshake> {

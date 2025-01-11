@@ -1,8 +1,6 @@
-use smallvec::SmallVec;
-
 #[derive(Debug)]
 pub struct CertificateVerify {
-    pub signature: SmallVec<[u8; 256]>,
+    pub signature: Vec<u8>,
 }
 
 impl CertificateVerify {
@@ -18,7 +16,7 @@ impl CertificateVerify {
             return None;
         }
 
-        let signature = SmallVec::from_slice(&data[..sig_len]);
+        let signature = data[..sig_len].to_vec();
 
         Some((2 + sig_len, CertificateVerify { signature }))
     }
@@ -41,7 +39,7 @@ mod tests {
         ];
 
         let certificate_verify = CertificateVerify::parse(&data).unwrap();
-        assert_eq!(certificate_verify.1.signature.as_ref(), &[0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(certificate_verify.1.signature, &[0x01, 0x02, 0x03, 0x04]);
     }
 
     #[test]

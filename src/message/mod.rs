@@ -22,9 +22,6 @@ pub use finished::Finished;
 mod change_cipher_spec;
 pub use change_cipher_spec::ChangeCipherSpec;
 
-mod new_session_ticket;
-pub use new_session_ticket::NewSessionTicket;
-
 mod handshake;
 pub use handshake::Handshake;
 
@@ -38,7 +35,6 @@ pub enum Message {
     ClientKeyExchange(ClientKeyExchange),
     Finished(Finished),
     ChangeCipherSpec(ChangeCipherSpec),
-    NewSessionTicket(NewSessionTicket),
     Fragment(Vec<u8>),
 }
 
@@ -53,7 +49,6 @@ impl Message {
             Message::ClientKeyExchange(msg) => msg.serialize(data),
             Message::Finished(msg) => msg.serialize(data),
             Message::ChangeCipherSpec(msg) => msg.serialize(data),
-            Message::NewSessionTicket(msg) => msg.serialize(data),
             Message::Fragment(_) => unreachable!(),
         }
     }
