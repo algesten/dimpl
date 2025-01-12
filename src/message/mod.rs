@@ -247,6 +247,11 @@ impl ClientCertificateType {
             ClientCertificateType::Unknown(value) => *value,
         }
     }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], ClientCertificateType> {
+        let (input, value) = be_u8(input)?;
+        Ok((input, ClientCertificateType::from_u8(value)))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

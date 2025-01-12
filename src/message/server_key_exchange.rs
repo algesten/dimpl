@@ -60,10 +60,19 @@ impl<'a> ServerDhParams<'a> {
 
     pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], ServerDhParams<'a>> {
         let (input, p_len) = be_u16(input)?;
+        if p_len < 1 {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
         let (input, p) = take(p_len)(input)?;
         let (input, g_len) = be_u16(input)?;
+        if g_len < 1 {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
         let (input, g) = take(g_len)(input)?;
         let (input, ys_len) = be_u16(input)?;
+        if ys_len < 1 {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
         let (input, ys) = take(ys_len)(input)?;
 
         Ok((input, ServerDhParams { p, g, ys }))

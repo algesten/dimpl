@@ -1,5 +1,8 @@
+use super::util::{many0, many1};
 use super::{ClientCertificateType, DistinguishedName, SignatureAndHashAlgorithm};
+use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u16, be_u8};
+use nom::Err;
 use nom::{bytes::complete::take, IResult};
 use smallvec::SmallVec;
 
@@ -25,31 +28,25 @@ impl<'a> CertificateRequest<'a> {
 
     pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], CertificateRequest<'a>> {
         let (input, cert_types_len) = be_u8(input)?;
-        let (input, cert_types_data) = take(cert_types_len)(input)?;
-        let certificate_types = cert_types_data
-            .iter()
-            .map(|&b| ClientCertificateType::from_u8(b))
-            .collect();
+        let (input, input_type) = take(cert_types_len)(input)?;
+        let (rest, certificate_types) = many1(ClientCertificateType::parse)(input_type)?;
+        if !rest.is_empty() {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
+        }
 
         let (input, sig_algs_len) = be_u16(input)?;
-        let (input, sig_algs_data) = take(sig_algs_len)(input)?;
-        let supported_signature_algorithms = sig_algs_data
-            .chunks(2)
-            .map(|chunk| {
-                SignatureAndHashAlgorithm::from_u16(u16::from_be_bytes([chunk[0], chunk[1]]))
-            })
-            .collect();
+        let (input, input_sigs) = take(sig_algs_len)(input)?;
+        let (rest, supported_signature_algorithms) =
+            many0(SignatureAndHashAlgorithm::parse)(input_sigs)?;
+        if !rest.is_empty() {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
+        }
 
         let (input, cert_auths_len) = be_u16(input)?;
-        let (mut input, mut remaining_len) = (input, cert_auths_len as usize);
-        let mut certificate_authorities = SmallVec::new();
-
-        while remaining_len > 0 {
-            let (rest, name_len) = be_u16(input)?;
-            let (rest, name_data) = take(name_len as usize)(rest)?;
-            certificate_authorities.push(DistinguishedName(name_data));
-            input = rest;
-            remaining_len -= 2 + name_len as usize;
+        let (input, input_auths) = take(cert_auths_len)(input)?;
+        let (rest, certificate_authorities) = many0(DistinguishedName::parse)(input_auths)?;
+        if !rest.is_empty() {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
 
         Ok((
