@@ -1,4 +1,4 @@
-use crate::message::{CurveType, KeyExchangeAlgorithm, NamedCurve};
+use super::{CurveType, KeyExchangeAlgorithm, NamedCurve};
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u16, be_u8};
 use nom::Err;

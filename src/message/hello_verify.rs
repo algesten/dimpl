@@ -1,5 +1,5 @@
-use crate::message::id::Cookie;
-use crate::message::ProtocolVersion;
+use super::id::Cookie;
+use super::ProtocolVersion;
 use nom::IResult;
 
 #[derive(Debug, PartialEq, Eq)]

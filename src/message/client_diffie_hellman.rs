@@ -1,4 +1,4 @@
-use crate::message::PublicValueEncoding;
+use super::PublicValueEncoding;
 use nom::number::complete::be_u16;
 use nom::{
     bytes::complete::take,

@@ -1,4 +1,4 @@
-use crate::message::Asn1Cert;
+use super::Asn1Cert;
 use nom::{bytes::complete::take, number::complete::be_u24, IResult};
 use smallvec::SmallVec;
 

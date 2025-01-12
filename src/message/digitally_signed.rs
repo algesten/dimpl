@@ -1,4 +1,4 @@
-use crate::message::SignatureAndHashAlgorithm;
+use super::SignatureAndHashAlgorithm;
 use nom::number::complete::be_u16;
 use nom::{bytes::complete::take, IResult};
 

@@ -1,4 +1,4 @@
-use crate::message::DigitallySigned;
+use super::DigitallySigned;
 use nom::IResult;
 
 #[derive(Debug, PartialEq, Eq)]

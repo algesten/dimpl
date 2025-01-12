@@ -1,4 +1,4 @@
-use crate::message::{ClientCertificateType, DistinguishedName, SignatureAndHashAlgorithm};
+use super::{ClientCertificateType, DistinguishedName, SignatureAndHashAlgorithm};
 use nom::number::complete::{be_u16, be_u8};
 use nom::{bytes::complete::take, IResult};
 use smallvec::SmallVec;
@@ -89,8 +89,9 @@ impl<'a> CertificateRequest<'a> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use crate::message::{HashAlgorithm, SignatureAlgorithm};
+
+    use super::*;
     use smallvec::smallvec;
 
     const MESSAGE: &[u8] = &[

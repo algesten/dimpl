@@ -3,6 +3,7 @@ mod certificate_request;
 mod certificate_verify;
 mod client_diffie_hellman;
 mod client_hello;
+mod client_key_exchange;
 mod digitally_signed;
 mod extension;
 mod hello_verify;
@@ -13,6 +14,7 @@ mod server_key_exchange;
 mod util;
 mod wrapped;
 
+pub use client_diffie_hellman::ClientDiffieHellmanPublic;
 pub use digitally_signed::DigitallySigned;
 pub use extension::{Extension, ExtensionType};
 pub use named_curve::{CurveType, NamedCurve};

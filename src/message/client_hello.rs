@@ -1,5 +1,5 @@
-use crate::message::id::{Cookie, Random, SessionId};
-use crate::message::{CipherSuite, CompressionMethod, ProtocolVersion};
+use super::id::{Cookie, Random, SessionId};
+use super::{CipherSuite, CompressionMethod, ProtocolVersion};
 use nom::{
     bytes::complete::take,
     number::complete::{be_u16, be_u8},
