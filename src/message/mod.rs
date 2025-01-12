@@ -1,6 +1,8 @@
 mod certificate;
 mod certificate_request;
+mod certificate_verify;
 mod client_hello;
+mod digitally_signed;
 mod error;
 mod hello_verify_request;
 mod id;
@@ -127,14 +129,14 @@ pub enum MessageType {
 impl MessageType {
     pub fn from_u8(value: u8) -> Self {
         match value {
-            0 => MessageType::HelloRequest,
+            0 => MessageType::HelloRequest, // empty
             1 => MessageType::ClientHello,
             3 => MessageType::HelloVerifyRequest,
             2 => MessageType::ServerHello,
             11 => MessageType::Certificate,
             12 => MessageType::ServerKeyExchange,
             13 => MessageType::CertificateRequest,
-            14 => MessageType::ServerHelloDone,
+            14 => MessageType::ServerHelloDone, // empty
             15 => MessageType::CertificateVerify,
             16 => MessageType::ClientKeyExchange,
             20 => MessageType::Finished,

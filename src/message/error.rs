@@ -20,6 +20,10 @@ where
     pub fn kind(&self) -> T {
         self.kind
     }
+
+    pub fn position(&self) -> usize {
+        self.position
+    }
 }
 
 impl<T> fmt::Display for ParseError<T>
