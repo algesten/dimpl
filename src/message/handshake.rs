@@ -116,6 +116,39 @@ impl<'a> Handshake<'a> {
             body: Message::Fragment(buffer),
         })
     }
+
+    fn do_clone<'b>(&self) -> Handshake<'b> {
+        Handshake {
+            msg_type: self.msg_type,
+            length: self.length,
+            message_seq: self.message_seq,
+            fragment_offset: self.fragment_offset,
+            fragment_length: self.fragment_length,
+            body: Message::HelloRequest, // Placeholder
+        }
+    }
+
+    pub fn fragment<'b>(
+        self,
+        max: usize,
+        buffer: &'b mut Vec<u8>,
+    ) -> impl Iterator<Item = Handshake<'b>> {
+        self.body.serialize(buffer);
+
+        let to_clone = self.do_clone();
+
+        buffer.chunks(max).enumerate().map(move |(i, chunk)| {
+            let fragment_length = chunk.len() as u32;
+            let fragment_body = chunk;
+
+            let mut fragment = to_clone.do_clone();
+            fragment.fragment_offset = (i * max) as u32;
+            fragment.fragment_length = fragment_length;
+            fragment.body = Message::Fragment(fragment_body);
+
+            fragment
+        })
+    }
 }
 
 #[cfg(test)]
