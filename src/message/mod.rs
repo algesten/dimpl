@@ -1,58 +1,8 @@
-mod client_hello;
 pub use client_hello::ClientHello;
 
-mod server_hello;
-pub use server_hello::ServerHello;
-
-mod certificate;
-pub use certificate::Certificate;
-
-mod server_key_exchange;
-pub use server_key_exchange::ServerKeyExchange;
-
-mod certificate_verify;
-pub use certificate_verify::CertificateVerify;
-
-mod client_key_exchange;
-pub use client_key_exchange::ClientKeyExchange;
-
-mod finished;
-pub use finished::Finished;
-
-mod change_cipher_spec;
-pub use change_cipher_spec::ChangeCipherSpec;
-
-mod handshake;
-pub use handshake::Handshake;
-
-#[derive(Debug)]
-pub enum Message {
-    ClientHello(ClientHello),
-    ServerHello(ServerHello),
-    Certificate(Certificate),
-    ServerKeyExchange(ServerKeyExchange),
-    CertificateVerify(CertificateVerify),
-    ClientKeyExchange(ClientKeyExchange),
-    Finished(Finished),
-    ChangeCipherSpec(ChangeCipherSpec),
-    Fragment(Vec<u8>),
-}
-
-impl Message {
-    pub fn serialize(&self, data: &mut Vec<u8>) {
-        match self {
-            Message::ClientHello(msg) => msg.serialize(data),
-            Message::ServerHello(msg) => msg.serialize(data),
-            Message::Certificate(msg) => msg.serialize(data),
-            Message::ServerKeyExchange(msg) => msg.serialize(data),
-            Message::CertificateVerify(msg) => msg.serialize(data),
-            Message::ClientKeyExchange(msg) => msg.serialize(data),
-            Message::Finished(msg) => msg.serialize(data),
-            Message::ChangeCipherSpec(msg) => msg.serialize(data),
-            Message::Fragment(_) => unreachable!(),
-        }
-    }
-}
+mod client_hello;
+mod error;
+mod id;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CipherSuite {
@@ -81,6 +31,59 @@ impl CipherSuite {
             CipherSuite::AES256_EECDH => 0xC031,
             CipherSuite::AES256_EDH => 0xC032,
             CipherSuite::Unknown(value) => *value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionMethod {
+    Null,
+    Deflate,
+    Unknown(u8),
+}
+
+impl CompressionMethod {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            0x00 => CompressionMethod::Null,
+            0x01 => CompressionMethod::Deflate,
+            _ => CompressionMethod::Unknown(value),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            CompressionMethod::Null => 0x00,
+            CompressionMethod::Deflate => 0x01,
+            CompressionMethod::Unknown(value) => *value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolVersion {
+    V1_0,
+    V1_2,
+    V1_3,
+    Unknown(u16),
+}
+
+impl ProtocolVersion {
+    pub fn from_u16(value: u16) -> Self {
+        match value {
+            0xFEFF => ProtocolVersion::V1_0,
+            0xFEFD => ProtocolVersion::V1_2,
+            0xFEFC => ProtocolVersion::V1_3,
+            _ => ProtocolVersion::Unknown(value),
+        }
+    }
+
+    pub fn to_u16(&self) -> u16 {
+        match self {
+            ProtocolVersion::V1_0 => 0xFEFF,
+            ProtocolVersion::V1_2 => 0xFEFD,
+            ProtocolVersion::V1_3 => 0xFEFC,
+            ProtocolVersion::Unknown(value) => *value,
         }
     }
 }
