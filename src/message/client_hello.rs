@@ -3,6 +3,7 @@ use super::id::{Cookie, Random, SessionId};
 use super::{CipherSuite, CompressionMethod, ProtocolVersion};
 use smallvec::SmallVec;
 
+#[derive(Debug)]
 pub struct ClientHello {
     pub client_version: ProtocolVersion,
     pub random: Random,
@@ -188,23 +189,23 @@ pub enum ErrorKind {
 mod tests {
     use super::*;
 
+    const MESSAGE: &[u8] = &[
+        0xFE, 0xFD, // ProtocolVersion::V1_2
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34,
+        0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
+        0x30, 0x31, // Random
+        0x0A, // SessionId length
+        0x73, 0x65, 0x73, 0x73, 0x69, 0x6F, 0x6E, 0x31, 0x32, 0x33, // SessionId
+        0x09, // Cookie length
+        0x63, 0x6F, 0x6F, 0x6B, 0x69, 0x65, 0x34, 0x35, 0x36, // Cookie
+        0x00, 0x02, // CipherSuites length
+        0xC0, 0x2F, 0xC0, 0x30, // CipherSuites
+        0x02, // CompressionMethods length
+        0x00, 0x01, // CompressionMethods
+    ];
+
     #[test]
     fn roundtrip() {
-        const EXPECTED_SERIALIZED: &[u8] = &[
-            0xFE, 0xFD, // ProtocolVersion::V1_2
-            0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33,
-            0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
-            0x38, 0x39, 0x30, 0x31, // Random
-            0x0A, // SessionId length
-            0x73, 0x65, 0x73, 0x73, 0x69, 0x6F, 0x6E, 0x31, 0x32, 0x33, // SessionId
-            0x09, // Cookie length
-            0x63, 0x6F, 0x6F, 0x6B, 0x69, 0x65, 0x34, 0x35, 0x36, // Cookie
-            0x00, 0x02, // CipherSuites length
-            0xC0, 0x2F, 0xC0, 0x30, // CipherSuites
-            0x02, // CompressionMethods length
-            0x00, 0x01, // CompressionMethods
-        ];
-
         let original = ClientHello::new(
             ProtocolVersion::V1_2,
             "01234567890123456789012345678901".try_into().unwrap(),
@@ -217,7 +218,7 @@ mod tests {
         let mut serialized = Vec::new();
         original.serialize(&mut serialized);
 
-        assert_eq!(serialized, EXPECTED_SERIALIZED);
+        assert_eq!(serialized, MESSAGE);
 
         let parsed = ClientHello::parse(&serialized).unwrap();
 
@@ -227,5 +228,90 @@ mod tests {
         assert_eq!(parsed.cookie, original.cookie);
         assert_eq!(parsed.cipher_suites, original.cipher_suites);
         assert_eq!(parsed.compression_methods, original.compression_methods);
+    }
+
+    #[test]
+    fn parse_client_version_too_short() {
+        let error = ClientHello::parse(&MESSAGE[..1]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ClientVersionNotEnough);
+    }
+
+    #[test]
+    fn parse_random_too_short() {
+        let error = ClientHello::parse(&MESSAGE[..2]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::RandomNotEnough);
+    }
+
+    #[test]
+    fn parse_session_id_length() {
+        let error = ClientHello::parse(&MESSAGE[..34]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::SessionIdLength);
+    }
+
+    #[test]
+    fn parse_session_id_too_long() {
+        let mut data = MESSAGE.to_vec();
+        data[34] = 33; // SessionId length (33)
+        let error = ClientHello::parse(&data).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::SessionIdTooLong);
+    }
+
+    #[test]
+    fn parse_session_id_not_enough() {
+        let error = ClientHello::parse(&MESSAGE[..44]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::SessionIdNotEnough);
+    }
+
+    #[test]
+    fn parse_cookie_length() {
+        let error = ClientHello::parse(&MESSAGE[..45]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::CookieLength);
+    }
+
+    #[test]
+    fn parse_cookie_not_enough() {
+        let error = ClientHello::parse(&MESSAGE[..54]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::CookieNotEnough);
+    }
+
+    #[test]
+    fn parse_cipher_suites_length() {
+        let error = ClientHello::parse(&MESSAGE[..55]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::CipherSuitesLength);
+    }
+
+    #[test]
+    fn parse_cipher_suites_too_short() {
+        let mut data = MESSAGE.to_vec();
+        data[55] = 0x00;
+        data[56] = 0x01; // CipherSuites length (1)
+        let error = ClientHello::parse(&data).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::CipherSuitesTooShort);
+    }
+
+    #[test]
+    fn parse_cipher_suites_not_enough() {
+        let error = ClientHello::parse(&MESSAGE[..57]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::CipherSuitesNotEnough);
+    }
+
+    #[test]
+    fn parse_compression_methods_length() {
+        let error = ClientHello::parse(&MESSAGE[..61]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::CompressionMethodsLength);
+    }
+
+    #[test]
+    fn parse_compression_methods_too_short() {
+        let mut data = MESSAGE.to_vec();
+        data[61] = 0x00; // CompressionMethods length (0)
+        let error = ClientHello::parse(&data).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::CompressionMethodsTooShort);
+    }
+
+    #[test]
+    fn parse_compression_methods_not_enough() {
+        let error = ClientHello::parse(&MESSAGE[..62]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::CompressionMethodsNotEnough);
     }
 }
