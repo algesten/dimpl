@@ -1,5 +1,5 @@
 use crate::message::PublicValueEncoding;
-use nom::number::complete::{be_u16, be_u8};
+use nom::number::complete::be_u16;
 use nom::{
     bytes::complete::take,
     error::{Error, ErrorKind},
