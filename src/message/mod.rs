@@ -1,6 +1,7 @@
 mod certificate;
 mod certificate_request;
 mod certificate_verify;
+mod client_diffie_hellman_public;
 mod client_hello;
 mod digitally_signed;
 mod encrypted_pre_master_secret;
@@ -305,3 +306,31 @@ pub struct DistinguishedName<'a>(pub &'a [u8]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PublicKeyEncrypted<'a>(pub &'a [u8]);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreMasterSecret<'a>(pub &'a [u8]);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicValueEncoding {
+    Implicit,
+    Explicit,
+    Unknown(u8),
+}
+
+impl PublicValueEncoding {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            0 => PublicValueEncoding::Implicit,
+            1 => PublicValueEncoding::Explicit,
+            _ => PublicValueEncoding::Unknown(value),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            PublicValueEncoding::Implicit => 0,
+            PublicValueEncoding::Explicit => 1,
+            PublicValueEncoding::Unknown(value) => *value,
+        }
+    }
+}
