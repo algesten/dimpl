@@ -1,6 +1,7 @@
 mod certificate;
 mod certificate_request;
 mod certificate_verify;
+mod client_diffie_hellman;
 mod client_hello;
 mod digitally_signed;
 mod extension;
@@ -367,5 +368,10 @@ impl PublicValueEncoding {
             PublicValueEncoding::Explicit => 1,
             PublicValueEncoding::Unknown(value) => *value,
         }
+    }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], PublicValueEncoding> {
+        let (input, value) = be_u8(input)?;
+        Ok((input, PublicValueEncoding::from_u8(value)))
     }
 }
