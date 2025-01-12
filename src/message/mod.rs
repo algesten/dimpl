@@ -1,6 +1,7 @@
 mod certificate;
 mod certificate_request;
 mod client_hello;
+mod digitally_signed;
 mod extension;
 mod hello_verify;
 mod id;
@@ -10,6 +11,7 @@ mod server_key_exchange;
 mod util;
 mod wrapped;
 
+pub use digitally_signed::DigitallySigned;
 pub use extension::{Extension, ExtensionType};
 pub use named_curve::{CurveType, NamedCurve};
 pub use wrapped::{Asn1Cert, DistinguishedName, PublicKeyEncrypted};
@@ -19,14 +21,14 @@ use nom::IResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
-    HelloRequest,
+    HelloRequest, // empty
     ClientHello,
     HelloVerifyRequest,
     ServerHello,
     Certificate,
     ServerKeyExchange,
     CertificateRequest,
-    ServerHelloDone,
+    ServerHelloDone, // empty
     CertificateVerify,
     ClientKeyExchange,
     Finished,
@@ -263,6 +265,11 @@ impl SignatureAlgorithm {
             SignatureAlgorithm::Unknown(value) => *value,
         }
     }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAlgorithm> {
+        let (input, value) = be_u8(input)?;
+        Ok((input, SignatureAlgorithm::from_u8(value)))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,6 +310,11 @@ impl HashAlgorithm {
             HashAlgorithm::Unknown(value) => *value,
         }
     }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], HashAlgorithm> {
+        let (input, value) = be_u8(input)?;
+        Ok((input, HashAlgorithm::from_u8(value)))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,6 +336,11 @@ impl SignatureAndHashAlgorithm {
 
     pub fn to_u16(&self) -> u16 {
         ((self.hash.to_u8() as u16) << 8) | (self.signature.to_u8() as u16)
+    }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAndHashAlgorithm> {
+        let (input, value) = be_u16(input)?;
+        Ok((input, SignatureAndHashAlgorithm::from_u16(value)))
     }
 }
 
