@@ -1,132 +1,14 @@
 mod client_hello;
-mod error;
+mod extension;
+mod hello_verify;
 mod id;
+mod server_hello;
 mod util;
+
+pub use extension::*;
 
 use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CipherSuite {
-    EECDH_AESGCM,
-    EDH_AESGCM,
-    AES256_EECDH,
-    AES256_EDH,
-    Unknown(u16),
-}
-
-impl CipherSuite {
-    pub fn from_u16(value: u16) -> Self {
-        match value {
-            0xC02F => CipherSuite::EECDH_AESGCM,
-            0xC030 => CipherSuite::EDH_AESGCM,
-            0xC031 => CipherSuite::AES256_EECDH,
-            0xC032 => CipherSuite::AES256_EDH,
-            _ => CipherSuite::Unknown(value),
-        }
-    }
-
-    pub fn to_u16(&self) -> u16 {
-        match self {
-            CipherSuite::EECDH_AESGCM => 0xC02F,
-            CipherSuite::EDH_AESGCM => 0xC030,
-            CipherSuite::AES256_EECDH => 0xC031,
-            CipherSuite::AES256_EDH => 0xC032,
-            CipherSuite::Unknown(value) => *value,
-        }
-    }
-
-    pub fn parse(input: &[u8]) -> IResult<&[u8], CipherSuite> {
-        let (input, value) = be_u16(input)?;
-        Ok((input, CipherSuite::from_u16(value)))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyExchangeAlgorithm {
-    EECDH,
-    EDH,
-    Unknown,
-}
-
-impl KeyExchangeAlgorithm {
-    pub fn from_cipher_suite(cipher_suite: CipherSuite) -> Self {
-        match cipher_suite {
-            CipherSuite::EECDH_AESGCM | CipherSuite::AES256_EECDH => KeyExchangeAlgorithm::EECDH,
-            CipherSuite::EDH_AESGCM | CipherSuite::AES256_EDH => KeyExchangeAlgorithm::EDH,
-            _ => KeyExchangeAlgorithm::Unknown,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompressionMethod {
-    Null,
-    Deflate,
-    Unknown(u8),
-}
-
-impl CompressionMethod {
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0x00 => CompressionMethod::Null,
-            0x01 => CompressionMethod::Deflate,
-            _ => CompressionMethod::Unknown(value),
-        }
-    }
-
-    pub fn to_u8(&self) -> u8 {
-        match self {
-            CompressionMethod::Null => 0x00,
-            CompressionMethod::Deflate => 0x01,
-            CompressionMethod::Unknown(value) => *value,
-        }
-    }
-
-    pub fn parse(input: &[u8]) -> IResult<&[u8], CompressionMethod> {
-        let (input, value) = be_u8(input)?;
-        Ok((input, CompressionMethod::from_u8(value)))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProtocolVersion {
-    DTLS1_0,
-    DTLS1_2,
-    DTLS1_3,
-    Unknown(u16),
-}
-
-impl ProtocolVersion {
-    pub fn from_u16(value: u16) -> Self {
-        match value {
-            0xFEFF => ProtocolVersion::DTLS1_0,
-            0xFEFD => ProtocolVersion::DTLS1_2,
-            0xFEFC => ProtocolVersion::DTLS1_3,
-            _ => ProtocolVersion::Unknown(value),
-        }
-    }
-
-    pub fn to_u16(&self) -> u16 {
-        match self {
-            ProtocolVersion::DTLS1_0 => 0xFEFF,
-            ProtocolVersion::DTLS1_2 => 0xFEFD,
-            ProtocolVersion::DTLS1_3 => 0xFEFC,
-            ProtocolVersion::Unknown(value) => *value,
-        }
-    }
-
-    pub fn parse(input: &[u8]) -> IResult<&[u8], ProtocolVersion> {
-        let (input, version) = be_u16(input)?;
-        let protocol_version = match version {
-            0xFEFF => ProtocolVersion::DTLS1_0,
-            0xFEFD => ProtocolVersion::DTLS1_2,
-            0xFEFC => ProtocolVersion::DTLS1_3,
-            _ => ProtocolVersion::Unknown(version),
-        };
-        Ok((input, protocol_version))
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
@@ -176,6 +58,128 @@ impl MessageType {
             MessageType::ClientKeyExchange => 16,
             MessageType::Finished => 20,
             MessageType::Unknown(value) => *value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolVersion {
+    DTLS1_0,
+    DTLS1_2,
+    DTLS1_3,
+    Unknown(u16),
+}
+
+impl ProtocolVersion {
+    pub fn from_u16(value: u16) -> Self {
+        match value {
+            0xFEFF => ProtocolVersion::DTLS1_0,
+            0xFEFD => ProtocolVersion::DTLS1_2,
+            0xFEFC => ProtocolVersion::DTLS1_3,
+            _ => ProtocolVersion::Unknown(value),
+        }
+    }
+
+    pub fn to_u16(&self) -> u16 {
+        match self {
+            ProtocolVersion::DTLS1_0 => 0xFEFF,
+            ProtocolVersion::DTLS1_2 => 0xFEFD,
+            ProtocolVersion::DTLS1_3 => 0xFEFC,
+            ProtocolVersion::Unknown(value) => *value,
+        }
+    }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], ProtocolVersion> {
+        let (input, version) = be_u16(input)?;
+        let protocol_version = match version {
+            0xFEFF => ProtocolVersion::DTLS1_0,
+            0xFEFD => ProtocolVersion::DTLS1_2,
+            0xFEFC => ProtocolVersion::DTLS1_3,
+            _ => ProtocolVersion::Unknown(version),
+        };
+        Ok((input, protocol_version))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CipherSuite {
+    EECDH_AESGCM,
+    EDH_AESGCM,
+    AES256_EECDH,
+    AES256_EDH,
+    Unknown(u16),
+}
+
+impl CipherSuite {
+    pub fn from_u16(value: u16) -> Self {
+        match value {
+            0xC02F => CipherSuite::EECDH_AESGCM,
+            0xC030 => CipherSuite::EDH_AESGCM,
+            0xC031 => CipherSuite::AES256_EECDH,
+            0xC032 => CipherSuite::AES256_EDH,
+            _ => CipherSuite::Unknown(value),
+        }
+    }
+
+    pub fn to_u16(&self) -> u16 {
+        match self {
+            CipherSuite::EECDH_AESGCM => 0xC02F,
+            CipherSuite::EDH_AESGCM => 0xC030,
+            CipherSuite::AES256_EECDH => 0xC031,
+            CipherSuite::AES256_EDH => 0xC032,
+            CipherSuite::Unknown(value) => *value,
+        }
+    }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], CipherSuite> {
+        let (input, value) = be_u16(input)?;
+        Ok((input, CipherSuite::from_u16(value)))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionMethod {
+    Null,
+    Deflate,
+    Unknown(u8),
+}
+
+impl CompressionMethod {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            0x00 => CompressionMethod::Null,
+            0x01 => CompressionMethod::Deflate,
+            _ => CompressionMethod::Unknown(value),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            CompressionMethod::Null => 0x00,
+            CompressionMethod::Deflate => 0x01,
+            CompressionMethod::Unknown(value) => *value,
+        }
+    }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], CompressionMethod> {
+        let (input, value) = be_u8(input)?;
+        Ok((input, CompressionMethod::from_u8(value)))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyExchangeAlgorithm {
+    EECDH,
+    EDH,
+    Unknown,
+}
+
+impl KeyExchangeAlgorithm {
+    pub fn from_cipher_suite(cipher_suite: CipherSuite) -> Self {
+        match cipher_suite {
+            CipherSuite::EECDH_AESGCM | CipherSuite::AES256_EECDH => KeyExchangeAlgorithm::EECDH,
+            CipherSuite::EDH_AESGCM | CipherSuite::AES256_EDH => KeyExchangeAlgorithm::EDH,
+            _ => KeyExchangeAlgorithm::Unknown,
         }
     }
 }
