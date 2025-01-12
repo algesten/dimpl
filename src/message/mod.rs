@@ -1,5 +1,6 @@
 mod certificate;
 mod certificate_request;
+mod certificate_verify;
 mod client_hello;
 mod digitally_signed;
 mod extension;
