@@ -6,6 +6,7 @@ mod client_hello;
 mod client_key_exchange;
 mod digitally_signed;
 mod extension;
+mod finished;
 mod hello_verify;
 mod id;
 mod named_curve;
@@ -147,6 +148,14 @@ impl CipherSuite {
     pub fn parse(input: &[u8]) -> IResult<&[u8], CipherSuite> {
         let (input, value) = be_u16(input)?;
         Ok((input, CipherSuite::from_u16(value)))
+    }
+
+    pub fn verify_data_length(&self) -> usize {
+        match self {
+            CipherSuite::EECDH_AESGCM | CipherSuite::EDH_AESGCM => 12,
+            CipherSuite::AES256_EECDH | CipherSuite::AES256_EDH => 12,
+            CipherSuite::Unknown(_) => 12, // Default length for unknown cipher suites
+        }
     }
 }
 
