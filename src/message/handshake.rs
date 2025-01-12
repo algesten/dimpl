@@ -75,6 +75,47 @@ impl<'a> Handshake<'a> {
         output.extend_from_slice(&(self.fragment_length as u32).to_be_bytes()[1..]);
         self.body.serialize(output);
     }
+
+    pub fn defragment(fragments: &[&Handshake], buffer: &'a mut Vec<u8>) -> Option<Handshake<'a>> {
+        if fragments.is_empty() {
+            return None;
+        }
+
+        let first = fragments[0];
+
+        let mut expected_offset = 0;
+        let mut i = 0;
+
+        while i < fragments.len() {
+            let f = fragments[i];
+            if f.fragment_offset == expected_offset {
+                buffer.extend_from_slice(match &f.body {
+                    Message::Fragment(data) => data,
+                    _ => return None,
+                });
+                expected_offset += f.fragment_length;
+                i += 1;
+            } else {
+                // Start over if fragments are not in order
+                i = 0;
+            }
+        }
+
+        if expected_offset != first.length {
+            // We do not have the entire message.
+            return None;
+        }
+
+        // Create a new Handshake with the merged body
+        Some(Handshake {
+            msg_type: first.msg_type,
+            length: first.length,
+            message_seq: first.message_seq,
+            fragment_offset: 0,
+            fragment_length: first.length,
+            body: Message::Fragment(buffer),
+        })
+    }
 }
 
 #[cfg(test)]

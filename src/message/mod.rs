@@ -205,7 +205,9 @@ impl<'a> Message<'a> {
             Message::Unknown(value) => {
                 output.push(*value);
             }
-            Message::Fragment(_) => unreachable!(),
+            Message::Fragment(value) => {
+                output.extend_from_slice(value);
+            }
         }
     }
 }
