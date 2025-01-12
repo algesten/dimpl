@@ -1,11 +1,14 @@
+mod certificate;
 mod client_hello;
 mod extension;
 mod hello_verify;
 mod id;
 mod server_hello;
 mod util;
+mod wrapped;
 
-pub use extension::*;
+pub use extension::{Extension, ExtensionType};
+pub use wrapped::{Asn1Cert, DistinguishedName, PublicKeyEncrypted};
 
 use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
@@ -319,12 +322,6 @@ impl SignatureAndHashAlgorithm {
         ((self.hash.to_u8() as u16) << 8) | (self.signature.to_u8() as u16)
     }
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DistinguishedName<'a>(pub &'a [u8]);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PublicKeyEncrypted<'a>(pub &'a [u8]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublicValueEncoding {
