@@ -6,6 +6,7 @@ mod digitally_signed;
 mod error;
 mod hello_verify_request;
 mod id;
+mod pre_master_secret;
 mod server_hello;
 mod server_key_exchange;
 
@@ -300,3 +301,6 @@ impl SignatureAndHashAlgorithm {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DistinguishedName<'a>(pub &'a [u8]);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublicKeyEncrypted<'a>(pub &'a [u8]);
