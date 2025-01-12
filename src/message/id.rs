@@ -1,3 +1,7 @@
+use nom::bytes::complete::take;
+use nom::error::{Error, ErrorKind};
+use nom::number::complete::be_u8;
+use nom::{Err, IResult};
 use std::fmt;
 use std::ops::Deref;
 
@@ -8,6 +12,8 @@ impl fmt::Debug for InvalidLength {
         write!(f, "{}", self)
     }
 }
+
+impl std::error::Error for InvalidLength {}
 
 impl fmt::Display for InvalidLength {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -50,6 +56,17 @@ macro_rules! var_array {
                 let mut array = [0; $max];
                 array[..data.len()].copy_from_slice(data);
                 Ok($name(array, data.len()))
+            }
+
+            pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+                let (input, len) = be_u8(input)?;
+                if len < $min as u8 || len > $max as u8 {
+                    return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+                }
+                let (input, data) = take(len as usize)(input)?;
+                // unwrap() is ok because we check the size above.
+                let instance = Self::try_new(data).unwrap();
+                Ok((input, instance))
             }
         }
 
@@ -117,6 +134,16 @@ macro_rules! fixed_array {
                 array.copy_from_slice(data);
                 Ok($name(array))
             }
+
+            pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+                let (input, data) = take($size)(input)?;
+                if data.len() != $size {
+                    return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+                }
+                // unwrap() is ok because we check the size above.
+                let instance = Self::new(data).unwrap();
+                Ok((input, instance))
+            }
         }
 
         impl fmt::Debug for $name {
@@ -167,4 +194,4 @@ macro_rules! fixed_array {
 
 var_array!(SessionId, 0, 32);
 var_array!(Cookie, 0, 255);
-fixed_array!(Random, 32);
+fixed_array!(Random, 32_usize);

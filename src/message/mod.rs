@@ -1,5 +1,10 @@
+mod client_hello;
 mod error;
 mod id;
+mod util;
+
+use nom::number::complete::{be_u16, be_u8};
+use nom::IResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CipherSuite {
@@ -29,6 +34,11 @@ impl CipherSuite {
             CipherSuite::AES256_EDH => 0xC032,
             CipherSuite::Unknown(value) => *value,
         }
+    }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], CipherSuite> {
+        let (input, value) = be_u16(input)?;
+        Ok((input, CipherSuite::from_u16(value)))
     }
 }
 
@@ -72,33 +82,49 @@ impl CompressionMethod {
             CompressionMethod::Unknown(value) => *value,
         }
     }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], CompressionMethod> {
+        let (input, value) = be_u8(input)?;
+        Ok((input, CompressionMethod::from_u8(value)))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolVersion {
-    V1_0,
-    V1_2,
-    V1_3,
+    DTLS1_0,
+    DTLS1_2,
+    DTLS1_3,
     Unknown(u16),
 }
 
 impl ProtocolVersion {
     pub fn from_u16(value: u16) -> Self {
         match value {
-            0xFEFF => ProtocolVersion::V1_0,
-            0xFEFD => ProtocolVersion::V1_2,
-            0xFEFC => ProtocolVersion::V1_3,
+            0xFEFF => ProtocolVersion::DTLS1_0,
+            0xFEFD => ProtocolVersion::DTLS1_2,
+            0xFEFC => ProtocolVersion::DTLS1_3,
             _ => ProtocolVersion::Unknown(value),
         }
     }
 
     pub fn to_u16(&self) -> u16 {
         match self {
-            ProtocolVersion::V1_0 => 0xFEFF,
-            ProtocolVersion::V1_2 => 0xFEFD,
-            ProtocolVersion::V1_3 => 0xFEFC,
+            ProtocolVersion::DTLS1_0 => 0xFEFF,
+            ProtocolVersion::DTLS1_2 => 0xFEFD,
+            ProtocolVersion::DTLS1_3 => 0xFEFC,
             ProtocolVersion::Unknown(value) => *value,
         }
+    }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], ProtocolVersion> {
+        let (input, version) = be_u16(input)?;
+        let protocol_version = match version {
+            0xFEFF => ProtocolVersion::DTLS1_0,
+            0xFEFD => ProtocolVersion::DTLS1_2,
+            0xFEFC => ProtocolVersion::DTLS1_3,
+            _ => ProtocolVersion::Unknown(version),
+        };
+        Ok((input, protocol_version))
     }
 }
 
