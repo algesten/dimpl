@@ -1,4 +1,5 @@
 mod certificate;
+mod certificate_request;
 mod client_hello;
 mod error;
 mod hello_verify_request;
@@ -160,7 +161,140 @@ impl MessageType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorKind {
-    KeyExchangeAlgorithmNotEnough,
-    // ...existing code...
+pub enum ClientCertificateType {
+    RSA_SIGN,
+    DSS_SIGN,
+    RSA_FIXED_DH,
+    DSS_FIXED_DH,
+    RSA_EPHEMERAL_DH,
+    DSS_EPHEMERAL_DH,
+    FORTEZZA_DMS,
+    ECDSA_SIGN,
+    Unknown(u8),
 }
+
+impl ClientCertificateType {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            1 => ClientCertificateType::RSA_SIGN,
+            2 => ClientCertificateType::DSS_SIGN,
+            3 => ClientCertificateType::RSA_FIXED_DH,
+            4 => ClientCertificateType::DSS_FIXED_DH,
+            5 => ClientCertificateType::RSA_EPHEMERAL_DH,
+            6 => ClientCertificateType::DSS_EPHEMERAL_DH,
+            20 => ClientCertificateType::FORTEZZA_DMS,
+            64 => ClientCertificateType::ECDSA_SIGN,
+            _ => ClientCertificateType::Unknown(value),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            ClientCertificateType::RSA_SIGN => 1,
+            ClientCertificateType::DSS_SIGN => 2,
+            ClientCertificateType::RSA_FIXED_DH => 3,
+            ClientCertificateType::DSS_FIXED_DH => 4,
+            ClientCertificateType::RSA_EPHEMERAL_DH => 5,
+            ClientCertificateType::DSS_EPHEMERAL_DH => 6,
+            ClientCertificateType::FORTEZZA_DMS => 20,
+            ClientCertificateType::ECDSA_SIGN => 64,
+            ClientCertificateType::Unknown(value) => *value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureAlgorithm {
+    Anonymous,
+    RSA,
+    DSA,
+    ECDSA,
+    Unknown(u8),
+}
+
+impl SignatureAlgorithm {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            0 => SignatureAlgorithm::Anonymous,
+            1 => SignatureAlgorithm::RSA,
+            2 => SignatureAlgorithm::DSA,
+            3 => SignatureAlgorithm::ECDSA,
+            _ => SignatureAlgorithm::Unknown(value),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            SignatureAlgorithm::Anonymous => 0,
+            SignatureAlgorithm::RSA => 1,
+            SignatureAlgorithm::DSA => 2,
+            SignatureAlgorithm::ECDSA => 3,
+            SignatureAlgorithm::Unknown(value) => *value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashAlgorithm {
+    None,
+    MD5,
+    SHA1,
+    SHA224,
+    SHA256,
+    SHA384,
+    SHA512,
+    Unknown(u8),
+}
+
+impl HashAlgorithm {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            0 => HashAlgorithm::None,
+            1 => HashAlgorithm::MD5,
+            2 => HashAlgorithm::SHA1,
+            3 => HashAlgorithm::SHA224,
+            4 => HashAlgorithm::SHA256,
+            5 => HashAlgorithm::SHA384,
+            6 => HashAlgorithm::SHA512,
+            _ => HashAlgorithm::Unknown(value),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            HashAlgorithm::None => 0,
+            HashAlgorithm::MD5 => 1,
+            HashAlgorithm::SHA1 => 2,
+            HashAlgorithm::SHA224 => 3,
+            HashAlgorithm::SHA256 => 4,
+            HashAlgorithm::SHA384 => 5,
+            HashAlgorithm::SHA512 => 6,
+            HashAlgorithm::Unknown(value) => *value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignatureAndHashAlgorithm {
+    pub hash: HashAlgorithm,
+    pub signature: SignatureAlgorithm,
+}
+
+impl SignatureAndHashAlgorithm {
+    pub fn new(hash: HashAlgorithm, signature: SignatureAlgorithm) -> Self {
+        SignatureAndHashAlgorithm { hash, signature }
+    }
+
+    pub fn from_u16(value: u16) -> Self {
+        let hash = HashAlgorithm::from_u8((value >> 8) as u8);
+        let signature = SignatureAlgorithm::from_u8(value as u8);
+        SignatureAndHashAlgorithm { hash, signature }
+    }
+
+    pub fn to_u16(&self) -> u16 {
+        ((self.hash.to_u8() as u16) << 8) | (self.signature.to_u8() as u16)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DistinguishedName<'a>(pub &'a [u8]);

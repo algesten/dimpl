@@ -1,7 +1,6 @@
 use super::error::ParseError;
 use super::id::{Random, SessionId};
 use super::{CipherSuite, CompressionMethod, ProtocolVersion};
-use smallvec::SmallVec;
 
 #[derive(Debug)]
 pub struct ServerHello {
@@ -118,7 +117,7 @@ pub enum ErrorKind {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     const MESSAGE: &[u8] = &[

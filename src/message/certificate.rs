@@ -78,7 +78,7 @@ pub enum ErrorKind {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
 
     const MESSAGE: &[u8] = &[
