@@ -1,4 +1,5 @@
 use super::{CipherSuite, Message, MessageType};
+use nom::bytes::complete::take;
 use nom::{
     number::complete::{be_u16, be_u24},
     IResult,
@@ -33,13 +34,25 @@ impl<'a> Handshake<'a> {
         }
     }
 
+    pub fn is_fragment(&self) -> bool {
+        matches!(self.body, Message::Fragment(_))
+    }
+
     pub fn parse(input: &'a [u8], c: Option<CipherSuite>) -> IResult<&[u8], Handshake<'a>> {
         let (input, msg_type) = MessageType::parse(input)?;
         let (input, length) = be_u24(input)?;
         let (input, message_seq) = be_u16(input)?;
         let (input, fragment_offset) = be_u24(input)?;
         let (input, fragment_length) = be_u24(input)?;
-        let (input, body) = Message::parse(input, msg_type, c)?;
+
+        let is_fragment = fragment_offset > 0 || fragment_length < length;
+
+        let (input, body) = if is_fragment {
+            let (input, fragment) = take(fragment_length as usize)(input)?;
+            (input, Message::Fragment(fragment))
+        } else {
+            Message::parse(input, msg_type, c)?
+        };
 
         Ok((
             input,
