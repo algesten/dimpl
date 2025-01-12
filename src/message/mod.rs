@@ -4,6 +4,7 @@ mod error;
 mod hello_verify_request;
 mod id;
 mod server_hello;
+mod server_key_exchange;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CipherSuite {
@@ -32,6 +33,23 @@ impl CipherSuite {
             CipherSuite::AES256_EECDH => 0xC031,
             CipherSuite::AES256_EDH => 0xC032,
             CipherSuite::Unknown(value) => *value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyExchangeAlgorithm {
+    EECDH,
+    EDH,
+    Unknown,
+}
+
+impl KeyExchangeAlgorithm {
+    pub fn from_cipher_suite(cipher_suite: CipherSuite) -> Self {
+        match cipher_suite {
+            CipherSuite::EECDH_AESGCM | CipherSuite::AES256_EECDH => KeyExchangeAlgorithm::EECDH,
+            CipherSuite::EDH_AESGCM | CipherSuite::AES256_EDH => KeyExchangeAlgorithm::EDH,
+            _ => KeyExchangeAlgorithm::Unknown,
         }
     }
 }
@@ -87,4 +105,62 @@ impl ProtocolVersion {
             ProtocolVersion::Unknown(value) => *value,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageType {
+    HelloRequest,
+    ClientHello,
+    HelloVerifyRequest,
+    ServerHello,
+    Certificate,
+    ServerKeyExchange,
+    CertificateRequest,
+    ServerHelloDone,
+    CertificateVerify,
+    ClientKeyExchange,
+    Finished,
+    Unknown(u8),
+}
+
+impl MessageType {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            0 => MessageType::HelloRequest,
+            1 => MessageType::ClientHello,
+            3 => MessageType::HelloVerifyRequest,
+            2 => MessageType::ServerHello,
+            11 => MessageType::Certificate,
+            12 => MessageType::ServerKeyExchange,
+            13 => MessageType::CertificateRequest,
+            14 => MessageType::ServerHelloDone,
+            15 => MessageType::CertificateVerify,
+            16 => MessageType::ClientKeyExchange,
+            20 => MessageType::Finished,
+            _ => MessageType::Unknown(value),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            MessageType::HelloRequest => 0,
+            MessageType::ClientHello => 1,
+            MessageType::HelloVerifyRequest => 3,
+            MessageType::ServerHello => 2,
+            MessageType::Certificate => 11,
+            MessageType::ServerKeyExchange => 12,
+            MessageType::CertificateRequest => 13,
+            MessageType::ServerHelloDone => 14,
+            MessageType::CertificateVerify => 15,
+            MessageType::ClientKeyExchange => 16,
+            MessageType::Finished => 20,
+            MessageType::Unknown(value) => *value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    KeyExchangeAlgorithmNotEnough,
+    // ...existing code...
 }
