@@ -1,5 +1,7 @@
 use super::id::{Cookie, Random, SessionId};
 use super::{CipherSuite, CompressionMethod, ProtocolVersion};
+use nom::error::{Error, ErrorKind};
+use nom::Err;
 use nom::{
     bytes::complete::take,
     number::complete::{be_u16, be_u8},
@@ -45,10 +47,16 @@ impl ClientHello {
         let (input, cookie) = Cookie::parse(input)?;
         let (input, cipher_suites_len) = be_u16(input)?;
         let (input, input_cipher) = take(cipher_suites_len)(input)?;
-        let (_, cipher_suites) = many1(CipherSuite::parse)(input_cipher)?;
+        let (rest, cipher_suites) = many1(CipherSuite::parse)(input_cipher)?;
+        if !rest.is_empty() {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
+        }
         let (input, compression_methods_len) = be_u8(input)?;
         let (input, input_compression) = take(compression_methods_len)(input)?;
-        let (_, compression_methods) = many1(CompressionMethod::parse)(input_compression)?;
+        let (rest, compression_methods) = many1(CompressionMethod::parse)(input_compression)?;
+        if !rest.is_empty() {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
+        }
 
         Ok((
             input,

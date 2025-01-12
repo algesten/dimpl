@@ -1,5 +1,9 @@
+use super::util::many0;
 use super::Asn1Cert;
-use nom::{bytes::complete::take, number::complete::be_u24, IResult};
+use nom::bytes::complete::take;
+use nom::error::{Error, ErrorKind};
+use nom::Err;
+use nom::{number::complete::be_u24, IResult};
 use smallvec::SmallVec;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -14,15 +18,11 @@ impl<'a> Certificate<'a> {
 
     pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], Certificate<'a>> {
         let (input, total_len) = be_u24(input)?;
-        let (mut input, mut remaining_len) = (input, total_len as usize);
-        let mut certificate_list = SmallVec::new();
+        let (input, certs_data) = take(total_len)(input)?;
+        let (rest, certificate_list) = many0(Asn1Cert::parse)(certs_data)?;
 
-        while remaining_len > 0 {
-            let (rest, cert_len) = be_u24(input)?;
-            let (rest, cert_data) = take(cert_len as usize)(rest)?;
-            certificate_list.push(Asn1Cert(cert_data));
-            input = rest;
-            remaining_len -= 3 + cert_len as usize;
+        if !rest.is_empty() {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
 
         Ok((input, Certificate { certificate_list }))

@@ -1,5 +1,7 @@
 use super::id::{Random, SessionId};
 use super::{CipherSuite, CompressionMethod, Extension, ProtocolVersion};
+use nom::error::{Error, ErrorKind};
+use nom::Err;
 use nom::{
     bytes::complete::take,
     multi::many0,
@@ -46,7 +48,10 @@ impl<'a> ServerHello<'a> {
         let (input, extensions_present) = be_u8(input)?;
         let (input, extensions) = if extensions_present != 0 {
             let (input, extensions_len) = be_u16(input)?;
-            let (_, input_ext) = take(extensions_len)(input)?;
+            let (rest, input_ext) = take(extensions_len)(input)?;
+            if !rest.is_empty() {
+                return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
+            }
             let (input, extensions) = many0(Extension::parse)(input_ext)?;
             (input, Some(SmallVec::from_vec(extensions)))
         } else {
