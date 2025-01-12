@@ -15,10 +15,19 @@ mod server_key_exchange;
 mod util;
 mod wrapped;
 
+use certificate::Certificate;
+use certificate_request::CertificateRequest;
+use certificate_verify::CertificateVerify;
 pub use client_diffie_hellman::ClientDiffieHellmanPublic;
+use client_hello::ClientHello;
+use client_key_exchange::ClientKeyExchange;
 pub use digitally_signed::DigitallySigned;
 pub use extension::{Extension, ExtensionType};
+use finished::Finished;
+use hello_verify::HelloVerifyRequest;
 pub use named_curve::{CurveType, NamedCurve};
+use server_hello::ServerHello;
+use server_key_exchange::ServerKeyExchange;
 pub use wrapped::{Asn1Cert, DistinguishedName};
 
 use nom::number::complete::{be_u16, be_u8};
@@ -74,6 +83,22 @@ impl MessageType {
             MessageType::Unknown(value) => *value,
         }
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Message<'a> {
+    HelloRequest, // empty
+    ClientHello(ClientHello),
+    HelloVerifyRequest(HelloVerifyRequest),
+    ServerHello(ServerHello<'a>),
+    Certificate(Certificate<'a>),
+    ServerKeyExchange(ServerKeyExchange<'a>),
+    CertificateRequest(CertificateRequest<'a>),
+    ServerHelloDone, // empty
+    CertificateVerify(CertificateVerify<'a>),
+    ClientKeyExchange(ClientKeyExchange<'a>),
+    Finished(Finished<'a>),
+    Unknown(u8),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
