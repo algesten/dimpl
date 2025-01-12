@@ -3,6 +3,7 @@ mod certificate_request;
 mod certificate_verify;
 mod client_hello;
 mod digitally_signed;
+mod encrypted_pre_master_secret;
 mod error;
 mod hello_verify_request;
 mod id;
