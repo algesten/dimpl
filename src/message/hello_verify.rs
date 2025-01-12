@@ -1,5 +1,6 @@
 use super::id::Cookie;
 use super::ProtocolVersion;
+use nom::error::{Error, ErrorKind};
 use nom::IResult;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -19,6 +20,10 @@ impl HelloVerifyRequest {
     pub fn parse(input: &[u8]) -> IResult<&[u8], HelloVerifyRequest> {
         let (input, server_version) = ProtocolVersion::parse(input)?;
         let (input, cookie) = Cookie::parse(input)?;
+
+        if cookie.is_empty() {
+            return Err(nom::Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
 
         Ok((
             input,
@@ -62,6 +67,17 @@ mod tests {
         assert_eq!(parsed, hello_verify_request);
 
         assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn empty_cookie() {
+        let message: &[u8] = &[
+            0xFE, 0xFD, // ProtocolVersion::DTLS1_2
+            0x00, // Cookie length (0, which is empty)
+        ];
+
+        let result = HelloVerifyRequest::parse(message);
+        assert!(result.is_err());
     }
 
     #[test]

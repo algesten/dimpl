@@ -19,7 +19,7 @@ pub use client_diffie_hellman::ClientDiffieHellmanPublic;
 pub use digitally_signed::DigitallySigned;
 pub use extension::{Extension, ExtensionType};
 pub use named_curve::{CurveType, NamedCurve};
-pub use wrapped::{Asn1Cert, DistinguishedName, PublicKeyEncrypted};
+pub use wrapped::{Asn1Cert, DistinguishedName};
 
 use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;

@@ -2,6 +2,7 @@ use super::id::{Random, SessionId};
 use super::{CipherSuite, CompressionMethod, Extension, ProtocolVersion};
 use nom::{
     bytes::complete::take,
+    multi::many0,
     number::complete::{be_u16, be_u8},
     IResult,
 };
@@ -45,15 +46,9 @@ impl<'a> ServerHello<'a> {
         let (input, extensions_present) = be_u8(input)?;
         let (input, extensions) = if extensions_present != 0 {
             let (input, extensions_len) = be_u16(input)?;
-            let (input, extensions_data) = take(extensions_len)(input)?;
-            let mut extensions = SmallVec::new();
-            let mut ext_input = extensions_data;
-            while !ext_input.is_empty() {
-                let (rest, extension) = Extension::parse(ext_input)?;
-                extensions.push(extension);
-                ext_input = rest;
-            }
-            (input, Some(extensions))
+            let (_, input_ext) = take(extensions_len)(input)?;
+            let (input, extensions) = many0(Extension::parse)(input_ext)?;
+            (input, Some(SmallVec::from_vec(extensions)))
         } else {
             (input, None)
         };

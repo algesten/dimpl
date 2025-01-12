@@ -2,6 +2,34 @@ use nom::error::{ErrorKind, ParseError};
 use nom::{Err, IResult, InputLength, Parser};
 use smallvec::{Array, SmallVec};
 
+pub fn many0<I, O, E, F, A>(mut f: F) -> impl FnMut(I) -> IResult<I, SmallVec<A>, E>
+where
+    I: Clone + InputLength,
+    F: Parser<I, O, E>,
+    E: ParseError<I>,
+    A: Array<Item = O>,
+{
+    move |mut i: I| {
+        let mut acc = SmallVec::default();
+        loop {
+            let len = i.input_len();
+            match f.parse(i.clone()) {
+                Err(Err::Error(_)) => return Ok((i, acc)),
+                Err(e) => return Err(e),
+                Ok((i1, o)) => {
+                    // infinite loop check: the parser must always consume
+                    if i1.input_len() == len {
+                        return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many0)));
+                    }
+
+                    i = i1;
+                    acc.push(o);
+                }
+            }
+        }
+    }
+}
+
 pub fn many1<I, O, E, F, A>(mut f: F) -> impl FnMut(I) -> IResult<I, SmallVec<A>, E>
 where
     I: Clone + InputLength,
