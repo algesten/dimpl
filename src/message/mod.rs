@@ -7,6 +7,7 @@ mod client_key_exchange;
 mod digitally_signed;
 mod extension;
 mod finished;
+mod handshake;
 mod hello_verify;
 mod id;
 mod named_curve;
@@ -15,23 +16,25 @@ mod server_key_exchange;
 mod util;
 mod wrapped;
 
-use certificate::Certificate;
-use certificate_request::CertificateRequest;
-use certificate_verify::CertificateVerify;
+pub use certificate::Certificate;
+pub use certificate_request::CertificateRequest;
+pub use certificate_verify::CertificateVerify;
 pub use client_diffie_hellman::ClientDiffieHellmanPublic;
-use client_hello::ClientHello;
-use client_key_exchange::ClientKeyExchange;
+pub use client_hello::ClientHello;
+pub use client_key_exchange::ClientKeyExchange;
 pub use digitally_signed::DigitallySigned;
 pub use extension::{Extension, ExtensionType};
-use finished::Finished;
-use hello_verify::HelloVerifyRequest;
+pub use finished::Finished;
+pub use hello_verify::HelloVerifyRequest;
+pub use id::{Cookie, Random, SessionId};
 pub use named_curve::{CurveType, NamedCurve};
-use server_hello::ServerHello;
-use server_key_exchange::ServerKeyExchange;
+pub use nom::error::{Error, ErrorKind};
+pub use server_hello::ServerHello;
+pub use server_key_exchange::ServerKeyExchange;
 pub use wrapped::{Asn1Cert, DistinguishedName};
 
 use nom::number::complete::{be_u16, be_u8};
-use nom::IResult;
+use nom::{Err, IResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
@@ -83,6 +86,11 @@ impl MessageType {
             MessageType::Unknown(value) => *value,
         }
     }
+
+    pub fn parse(input: &[u8]) -> IResult<&[u8], MessageType> {
+        let (input, byte) = be_u8(input)?;
+        Ok((input, Self::from_u8(byte)))
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -99,6 +107,107 @@ pub enum Message<'a> {
     ClientKeyExchange(ClientKeyExchange<'a>),
     Finished(Finished<'a>),
     Unknown(u8),
+    Fragment(&'a [u8]),
+}
+
+impl<'a> Message<'a> {
+    pub fn parse(
+        input: &'a [u8],
+        m: MessageType,
+        c: Option<CipherSuite>,
+    ) -> IResult<&'a [u8], Message<'a>> {
+        match m {
+            MessageType::HelloRequest => Ok((input, Message::HelloRequest)),
+            MessageType::ClientHello => {
+                let (input, client_hello) = ClientHello::parse(input)?;
+                Ok((input, Message::ClientHello(client_hello)))
+            }
+            MessageType::HelloVerifyRequest => {
+                let (input, hello_verify_request) = HelloVerifyRequest::parse(input)?;
+                Ok((input, Message::HelloVerifyRequest(hello_verify_request)))
+            }
+            MessageType::ServerHello => {
+                let (input, server_hello) = ServerHello::parse(input)?;
+                Ok((input, Message::ServerHello(server_hello)))
+            }
+            MessageType::Certificate => {
+                let (input, certificate) = Certificate::parse(input)?;
+                Ok((input, Message::Certificate(certificate)))
+            }
+            MessageType::ServerKeyExchange => {
+                let cipher_suite =
+                    c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
+                let algo = cipher_suite.to_key_exchange_algorithm();
+                let (input, server_key_exchange) = ServerKeyExchange::parse(input, algo)?;
+                Ok((input, Message::ServerKeyExchange(server_key_exchange)))
+            }
+            MessageType::CertificateRequest => {
+                let (input, certificate_request) = CertificateRequest::parse(input)?;
+                Ok((input, Message::CertificateRequest(certificate_request)))
+            }
+            MessageType::ServerHelloDone => Ok((input, Message::ServerHelloDone)),
+            MessageType::CertificateVerify => {
+                let (input, certificate_verify) = CertificateVerify::parse(input)?;
+                Ok((input, Message::CertificateVerify(certificate_verify)))
+            }
+            MessageType::ClientKeyExchange => {
+                let cipher_suite =
+                    c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
+                let algo = cipher_suite.to_key_exchange_algorithm();
+                let (input, client_key_exchange) = ClientKeyExchange::parse(input, algo)?;
+                Ok((input, Message::ClientKeyExchange(client_key_exchange)))
+            }
+            MessageType::Finished => {
+                let cipher_suite =
+                    c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
+                let (input, finished) = Finished::parse(input, cipher_suite)?;
+                Ok((input, Message::Finished(finished)))
+            }
+            MessageType::Unknown(value) => Ok((input, Message::Unknown(value))),
+        }
+    }
+
+    pub fn serialize(&self, output: &mut Vec<u8>) {
+        match self {
+            Message::HelloRequest => {
+                // Serialize HelloRequest (empty)
+            }
+            Message::ClientHello(client_hello) => {
+                client_hello.serialize(output);
+            }
+            Message::HelloVerifyRequest(hello_verify_request) => {
+                hello_verify_request.serialize(output);
+            }
+            Message::ServerHello(server_hello) => {
+                server_hello.serialize(output);
+            }
+            Message::Certificate(certificate) => {
+                certificate.serialize(output);
+            }
+            Message::ServerKeyExchange(server_key_exchange) => {
+                server_key_exchange.serialize(output);
+            }
+            Message::CertificateRequest(certificate_request) => {
+                certificate_request.serialize(output);
+            }
+            Message::ServerHelloDone => {
+                // Serialize ServerHelloDone (empty)
+            }
+            Message::CertificateVerify(certificate_verify) => {
+                certificate_verify.serialize(output);
+            }
+            Message::ClientKeyExchange(client_key_exchange) => {
+                client_key_exchange.serialize(output);
+            }
+            Message::Finished(finished) => {
+                finished.serialize(output);
+            }
+            Message::Unknown(value) => {
+                output.push(*value);
+            }
+            Message::Fragment(_) => unreachable!(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +291,14 @@ impl CipherSuite {
             CipherSuite::Unknown(_) => 12, // Default length for unknown cipher suites
         }
     }
+
+    pub fn to_key_exchange_algorithm(&self) -> KeyExchangeAlgorithm {
+        match self {
+            CipherSuite::EECDH_AESGCM | CipherSuite::AES256_EECDH => KeyExchangeAlgorithm::EECDH,
+            CipherSuite::EDH_AESGCM | CipherSuite::AES256_EDH => KeyExchangeAlgorithm::EDH,
+            _ => KeyExchangeAlgorithm::Unknown,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,16 +336,6 @@ pub enum KeyExchangeAlgorithm {
     EECDH,
     EDH,
     Unknown,
-}
-
-impl KeyExchangeAlgorithm {
-    pub fn from_cipher_suite(cipher_suite: CipherSuite) -> Self {
-        match cipher_suite {
-            CipherSuite::EECDH_AESGCM | CipherSuite::AES256_EECDH => KeyExchangeAlgorithm::EECDH,
-            CipherSuite::EDH_AESGCM | CipherSuite::AES256_EDH => KeyExchangeAlgorithm::EDH,
-            _ => KeyExchangeAlgorithm::Unknown,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
