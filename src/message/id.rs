@@ -168,4 +168,3 @@ macro_rules! fixed_array {
 var_array!(SessionId, 0, 32);
 var_array!(Cookie, 0, 255);
 fixed_array!(Random, 32);
-fixed_array!(PreMasterSecretRandom, 46);
