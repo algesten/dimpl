@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_server_version_too_short() {
+    fn parse_server_version_not_enough() {
         let error = HelloVerifyRequest::parse(&MESSAGE[..1]).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::ServerVersionNotEnough);
     }

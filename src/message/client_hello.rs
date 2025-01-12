@@ -231,13 +231,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_client_version_too_short() {
+    fn parse_client_version_not_enough() {
         let error = ClientHello::parse(&MESSAGE[..1]).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::ClientVersionNotEnough);
     }
 
     #[test]
-    fn parse_random_too_short() {
+    fn parse_random_not_enough() {
         let error = ClientHello::parse(&MESSAGE[..2]).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::RandomNotEnough);
     }

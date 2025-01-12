@@ -1,3 +1,4 @@
+mod certificate;
 mod client_hello;
 mod error;
 mod hello_verify_request;
