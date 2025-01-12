@@ -57,7 +57,7 @@ mod tests {
     ];
 
     #[test]
-    fn test_certificate_roundtrip() {
+    fn roundtrip() {
         let mut serialized = Vec::new();
 
         let certificate_list = smallvec![Asn1Cert(&MESSAGE[6..10]), Asn1Cert(&MESSAGE[13..15])];

@@ -104,7 +104,7 @@ mod tests {
     ];
 
     #[test]
-    fn test_client_hello_roundtrip() {
+    fn roundtrip() {
         let random = Random::new(&MESSAGE[2..34]).unwrap();
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
@@ -133,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session_id_too_long() {
+    fn session_id_too_long() {
         let mut message = MESSAGE.to_vec();
         message[34] = 0x21; // SessionId length (33, which is too long)
 
@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cookie_too_long() {
+    fn cookie_too_long() {
         let mut message = MESSAGE.to_vec();
         message[36] = 0xFF; // Cookie length (255, which is too long)
 

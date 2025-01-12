@@ -181,7 +181,7 @@ mod tests {
     ];
 
     #[test]
-    fn test_extension_roundtrip() {
+    fn roundtrip() {
         let extension_data = &MESSAGE[4..];
         let extension = Extension::new(ExtensionType::SupportedGroups, extension_data);
 

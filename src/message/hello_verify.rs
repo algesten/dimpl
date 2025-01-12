@@ -47,7 +47,7 @@ mod tests {
     ];
 
     #[test]
-    fn test_hello_verify_request_roundtrip() {
+    fn roundtrip() {
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
 
         let hello_verify_request = HelloVerifyRequest::new(ProtocolVersion::DTLS1_2, cookie);
@@ -65,7 +65,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cookie_too_long() {
+    fn cookie_too_long() {
         let mut message = MESSAGE.to_vec();
         message[2] = 0xFF; // Cookie length (255, which is too long)
 

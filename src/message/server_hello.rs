@@ -98,7 +98,7 @@ impl<'a> ServerHello<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use crate::message::ExtensionType;
 
     use super::*;
@@ -123,7 +123,7 @@ mod tests {
     ];
 
     #[test]
-    fn test_server_hello_roundtrip() {
+    fn roundtrip() {
         let mut serialized = Vec::new();
 
         let random = Random::new(&MESSAGE[2..34]).unwrap();
@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session_id_too_long() {
+    fn session_id_too_long() {
         let mut message = MESSAGE.to_vec();
         message[34] = 0x21; // SessionId length (33, which is too long)
 
