@@ -414,7 +414,7 @@ mod tests {
     fn roundtrip() {
         let mut serialized = Vec::new();
 
-        let random = Random::new(&MESSAGE[14..46]).unwrap();
+        let random = Random::parse(&MESSAGE[14..46]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
         let cipher_suites = smallvec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];
@@ -454,7 +454,7 @@ mod tests {
         let mut serialized = Vec::new();
         let mut buffer = Vec::new();
 
-        let random = Random::new(&MESSAGE[14..46]).unwrap();
+        let random = Random::parse(&MESSAGE[14..46]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
         let cipher_suites = smallvec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];

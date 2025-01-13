@@ -2,8 +2,9 @@ use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
 use nom::{Err, IResult};
-use std::fmt;
+use rand::Rng;
 use std::ops::Deref;
+use std::{array, fmt};
 
 pub struct InvalidLength(&'static str, IdType, usize);
 
@@ -56,6 +57,17 @@ macro_rules! var_array {
                 let mut array = [0; $max];
                 array[..data.len()].copy_from_slice(data);
                 Ok($name(array, data.len()))
+            }
+
+            pub fn random(len: usize) -> $name {
+                let mut t = rand::thread_rng();
+                assert!(len >= $min);
+                assert!(len <= $max);
+                let mut arr = [0; $max];
+                for a in &mut arr[..len] {
+                    *a = t.gen();
+                }
+                Self(arr, len)
             }
 
             pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
@@ -116,82 +128,5 @@ macro_rules! var_array {
     };
 }
 
-macro_rules! fixed_array {
-    ($name:ident, $size:expr) => {
-        #[derive(Clone, Copy)]
-        pub struct $name([u8; $size]);
-
-        impl $name {
-            pub fn new(data: &[u8]) -> Result<Self, InvalidLength> {
-                if data.len() != $size {
-                    return Err(InvalidLength(
-                        stringify!($name),
-                        IdType::Fixed($size),
-                        data.len(),
-                    ));
-                }
-                let mut array = [0; $size];
-                array.copy_from_slice(data);
-                Ok($name(array))
-            }
-
-            pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-                let (input, data) = take($size)(input)?;
-                if data.len() != $size {
-                    return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
-                }
-                // unwrap() is ok because we check the size above.
-                let instance = Self::new(data).unwrap();
-                Ok((input, instance))
-            }
-        }
-
-        impl fmt::Debug for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{}", self)
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{}({:02x?})", stringify!($name), &self.0)
-            }
-        }
-
-        impl PartialEq for $name {
-            fn eq(&self, other: &Self) -> bool {
-                self.deref() == other.deref()
-            }
-        }
-
-        impl Eq for $name {}
-
-        impl Deref for $name {
-            type Target = [u8];
-
-            fn deref(&self) -> &Self::Target {
-                &self.0
-            }
-        }
-
-        impl<'a> TryFrom<&'a [u8]> for $name {
-            type Error = InvalidLength;
-
-            fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
-                Self::new(value)
-            }
-        }
-
-        impl<'a> TryFrom<&'a str> for $name {
-            type Error = InvalidLength;
-
-            fn try_from(value: &'a str) -> Result<Self, Self::Error> {
-                Self::try_from(value.as_bytes())
-            }
-        }
-    };
-}
-
 var_array!(SessionId, 0, 32);
 var_array!(Cookie, 0, 255);
-fixed_array!(Random, 32_usize);

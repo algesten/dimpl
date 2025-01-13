@@ -1,5 +1,4 @@
-use super::id::{Random, SessionId};
-use super::{CipherSuite, CompressionMethod, Extension, ProtocolVersion};
+use super::{CipherSuite, CompressionMethod, Extension, ProtocolVersion, Random, SessionId};
 use nom::error::{Error, ErrorKind};
 use nom::Err;
 use nom::{
@@ -73,7 +72,7 @@ impl<'a> ServerHello<'a> {
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
         output.extend_from_slice(&self.server_version.as_u16().to_be_bytes());
-        output.extend_from_slice(&self.random);
+        self.random.serialize(output);
         output.push(self.session_id.len() as u8);
         output.extend_from_slice(&self.session_id);
         output.extend_from_slice(&self.cipher_suite.as_u16().to_be_bytes());
@@ -126,7 +125,7 @@ mod test {
     fn roundtrip() {
         let mut serialized = Vec::new();
 
-        let random = Random::new(&MESSAGE[2..34]).unwrap();
+        let random = Random::parse(&MESSAGE[2..34]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cipher_suite = CipherSuite::EECDH_AESGCM;
         let compression_method = CompressionMethod::Null;

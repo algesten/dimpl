@@ -1,5 +1,5 @@
-use super::id::{Cookie, Random, SessionId};
 use super::{CipherSuite, CompressionMethod, ProtocolVersion};
+use super::{Cookie, Random, SessionId};
 use nom::error::{Error, ErrorKind};
 use nom::Err;
 use nom::{
@@ -73,7 +73,7 @@ impl ClientHello {
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
         output.extend_from_slice(&self.client_version.as_u16().to_be_bytes());
-        output.extend_from_slice(&self.random);
+        self.random.serialize(output);
         output.push(self.session_id.len() as u8);
         output.extend_from_slice(&self.session_id);
         output.push(self.cookie.len() as u8);
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let random = Random::new(&MESSAGE[2..34]).unwrap();
+        let random = Random::parse(&MESSAGE[2..34]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
         let cipher_suites = smallvec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];

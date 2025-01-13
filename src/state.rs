@@ -6,6 +6,7 @@ trait Private {}
 /// States in which a client sends and a server receives.
 pub mod client {
     pub struct CLIENT_HELLO;
+    pub struct CLIENT_HELLO_WITH_COOKIE;
     pub struct CERTIFICATE;
     pub struct CLIENT_KEY_EXCHANGE;
     pub struct CERTIFICATE_VERIFY;
@@ -16,6 +17,7 @@ pub mod client {
 
 /// States in which a server sends and a client receives.
 pub mod server {
+    pub struct HELLO_VERIFY_REQUEST;
     pub struct SERVER_HELLO;
     pub struct CERTIFICATE;
     pub struct SERVER_KEY_EXCHANGE;
@@ -50,6 +52,7 @@ macro_rules! impl_client_send {
 
 impl_client_send!(
     client::CLIENT_HELLO,
+    client::CLIENT_HELLO_WITH_COOKIE,
     client::CERTIFICATE,
     client::CLIENT_KEY_EXCHANGE,
     client::CERTIFICATE_VERIFY,
@@ -69,6 +72,7 @@ macro_rules! impl_server_send {
 }
 
 impl_server_send!(
+    server::HELLO_VERIFY_REQUEST,
     server::SERVER_HELLO,
     server::CERTIFICATE,
     server::SERVER_KEY_EXCHANGE,

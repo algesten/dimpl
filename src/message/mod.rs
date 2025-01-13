@@ -15,6 +15,7 @@ mod handshake;
 mod hello_verify;
 mod id;
 mod named_curve;
+mod random;
 mod server_hello;
 mod server_key_exchange;
 mod util;
@@ -31,15 +32,17 @@ pub use extension::{Extension, ExtensionType};
 pub use finished::Finished;
 pub use handshake::{Body, Handshake, MessageType};
 pub use hello_verify::HelloVerifyRequest;
-pub use id::{Cookie, Random, SessionId};
+pub use id::{Cookie, SessionId};
 pub use named_curve::{CurveType, NamedCurve};
 pub use nom::error::{Error, ErrorKind};
+pub use random::Random;
 pub use server_hello::ServerHello;
 pub use server_key_exchange::ServerKeyExchange;
 pub use wrapped::{Asn1Cert, DistinguishedName};
 
 use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
+use smallvec::smallvec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolVersion {
@@ -130,6 +133,11 @@ impl CipherSuite {
             CipherSuite::EDH_AESGCM | CipherSuite::AES256_EDH => KeyExchangeAlgorithm::EDH,
             _ => KeyExchangeAlgorithm::Unknown,
         }
+    }
+
+    pub(crate) fn all() -> smallvec::SmallVec<[CipherSuite; 32]> {
+        use CipherSuite::*;
+        smallvec![EECDH_AESGCM, EDH_AESGCM, AES256_EECDH, AES256_EDH,]
     }
 }
 
