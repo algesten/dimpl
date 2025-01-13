@@ -4,6 +4,7 @@ use nom::{
     number::complete::{be_u16, be_u24},
     IResult,
 };
+use smallvec::SmallVec;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Handshake<'a> {
@@ -76,34 +77,48 @@ impl<'a> Handshake<'a> {
         self.body.serialize(output);
     }
 
-    pub fn defragment(fragments: &[Handshake], buffer: &'a mut Vec<u8>) -> Option<Handshake<'a>> {
+    pub fn defragment<'b, 'c: 'b>(
+        fragments: impl IntoIterator<Item = &'b Handshake<'c>>,
+        buffer: &'a mut Vec<u8>,
+    ) -> Option<Handshake<'a>> {
+        let mut fragments: SmallVec<[&'b Handshake<'c>; 32]> = fragments.into_iter().collect();
+
         if fragments.is_empty() {
             return None;
         }
 
-        let first = &fragments[0];
+        fragments.sort_by_key(|f| f.message_seq);
+        let first = fragments[0];
 
-        let mut expected_offset = 0;
-        let mut i = 0;
+        let is_contiguous = fragments
+            .iter()
+            .enumerate()
+            // We don't have to worry about roll-over because the handshake starts at 0
+            // and finishes long before u16::MAX.
+            .all(|(i, f)| f.message_seq == first.message_seq + i as u16);
 
-        while i < fragments.len() {
-            let f = &fragments[i];
-            if f.fragment_offset == expected_offset {
-                buffer.extend_from_slice(match &f.body {
-                    Message::Fragment(data) => data,
-                    _ => return None,
-                });
-                expected_offset += f.fragment_length;
-                i += 1;
-            } else {
-                // Start over if fragments are not in order
-                i = 0;
-            }
+        let is_from_start = first.fragment_offset == 0;
+
+        // unwrap is ok because we check is_empty above.
+        let is_to_end = fragments
+            .last()
+            .map(|f| f.fragment_offset + f.fragment_length == f.length)
+            .unwrap();
+
+        if !is_contiguous || !is_from_start || !is_to_end {
+            return None;
         }
 
-        if expected_offset != first.length {
-            // We do not have the entire message.
-            return None;
+        for f in fragments {
+            let Message::Fragment(data) = f.body else {
+                // We must not call defragment() with any other body type.
+                unreachable!("Non-Fragment body in defragment()")
+            };
+
+            // parse() should make this impossible to break.
+            assert_eq!(data.len(), f.fragment_length as usize);
+
+            buffer.extend_from_slice(data);
         }
 
         // Create a new Handshake with the merged body
@@ -133,7 +148,13 @@ impl<'a> Handshake<'a> {
         max: usize,
         buffer: &'b mut Vec<u8>,
     ) -> impl Iterator<Item = Handshake<'b>> {
+        // Must be called with an empty buffer.
+        assert!(buffer.is_empty());
+
         self.body.serialize(buffer);
+
+        // If this is wrong, the serialize has not produced the same output as we parsed.
+        assert_eq!(buffer.len(), self.length as usize);
 
         let to_clone = self.do_clone();
 
@@ -144,6 +165,7 @@ impl<'a> Handshake<'a> {
             let mut fragment = to_clone.do_clone();
             fragment.fragment_offset = (i * max) as u32;
             fragment.fragment_length = fragment_length;
+            fragment.message_seq = to_clone.message_seq + i as u16;
             fragment.body = Message::Fragment(fragment_body);
 
             fragment
@@ -161,10 +183,10 @@ mod tests {
 
     const MESSAGE: &[u8] = &[
         0x01, // MessageType::ClientHello
-        0x00, 0x00, 0x3A, // length
+        0x00, 0x00, 0x2E, // length
         0x00, 0x00, // message_seq
         0x00, 0x00, 0x00, // fragment_offset
-        0x00, 0x00, 0x3A, // fragment_length
+        0x00, 0x00, 0x2E, // fragment_length
         // ClientHello
         0xFE, 0xFD, // ProtocolVersion::DTLS1_2
         // Random
@@ -203,10 +225,10 @@ mod tests {
 
         let handshake = Handshake::new(
             MessageType::ClientHello,
-            0x3A,
+            0x2E,
             0,
             0,
-            0x3A,
+            0x2E,
             Message::ClientHello(client_hello),
         );
 
@@ -243,10 +265,10 @@ mod tests {
 
         let handshake = Handshake::new(
             MessageType::ClientHello,
-            0x3A,
+            46,
             0,
             0,
-            0x3A,
+            46,
             Message::ClientHello(client_hello),
         );
 
@@ -256,7 +278,7 @@ mod tests {
         // Defragment the fragments
         let mut defragmented_buffer = Vec::new();
         let defragmented_handshake =
-            Handshake::defragment(fragments.as_slice(), &mut defragmented_buffer).unwrap();
+            Handshake::defragment(&fragments, &mut defragmented_buffer).unwrap();
 
         // Serialize and compare to MESSAGE
         defragmented_handshake.serialize(&mut serialized);
