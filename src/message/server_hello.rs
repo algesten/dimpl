@@ -72,12 +72,12 @@ impl<'a> ServerHello<'a> {
     }
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
-        output.extend_from_slice(&self.server_version.to_u16().to_be_bytes());
+        output.extend_from_slice(&self.server_version.as_u16().to_be_bytes());
         output.extend_from_slice(&self.random);
         output.push(self.session_id.len() as u8);
         output.extend_from_slice(&self.session_id);
-        output.extend_from_slice(&self.cipher_suite.to_u16().to_be_bytes());
-        output.push(self.compression_method.to_u8());
+        output.extend_from_slice(&self.cipher_suite.as_u16().to_be_bytes());
+        output.push(self.compression_method.as_u8());
         if let Some(extensions) = &self.extensions {
             output.push(1);
 

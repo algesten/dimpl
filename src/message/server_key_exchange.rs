@@ -121,8 +121,8 @@ impl<'a> ServerEcdhParams<'a> {
     }
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
-        output.push(self.curve_type.to_u8());
-        output.extend_from_slice(&self.named_curve.to_u16().to_be_bytes());
+        output.push(self.curve_type.as_u8());
+        output.extend_from_slice(&self.named_curve.as_u16().to_be_bytes());
         output.push(self.public_key.len() as u8);
         output.extend_from_slice(self.public_key);
     }

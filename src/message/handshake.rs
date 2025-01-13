@@ -90,7 +90,7 @@ impl<'a> Handshake<'a> {
     }
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
-        output.push(self.header.msg_type.to_u8());
+        output.push(self.header.msg_type.as_u8());
         output.extend_from_slice(&self.header.length.to_be_bytes()[1..]);
         output.extend_from_slice(&self.header.message_seq.to_be_bytes());
         output.extend_from_slice(&self.header.fragment_offset.to_be_bytes()[1..]);
@@ -232,7 +232,7 @@ impl MessageType {
         }
     }
 
-    pub fn to_u8(&self) -> u8 {
+    pub fn as_u8(&self) -> u8 {
         match self {
             MessageType::HelloRequest => 0,
             MessageType::ClientHello => 1,
@@ -256,6 +256,7 @@ impl MessageType {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Body<'a> {
     HelloRequest, // empty
     ClientHello(ClientHello),
@@ -303,7 +304,7 @@ impl<'a> Body<'a> {
             MessageType::ServerKeyExchange => {
                 let cipher_suite =
                     c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
-                let algo = cipher_suite.to_key_exchange_algorithm();
+                let algo = cipher_suite.as_key_exchange_algorithm();
                 let (input, server_key_exchange) = ServerKeyExchange::parse(input, algo)?;
                 Ok((input, Body::ServerKeyExchange(server_key_exchange)))
             }
@@ -319,7 +320,7 @@ impl<'a> Body<'a> {
             MessageType::ClientKeyExchange => {
                 let cipher_suite =
                     c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
-                let algo = cipher_suite.to_key_exchange_algorithm();
+                let algo = cipher_suite.as_key_exchange_algorithm();
                 let (input, client_key_exchange) = ClientKeyExchange::parse(input, algo)?;
                 Ok((input, Body::ClientKeyExchange(client_key_exchange)))
             }

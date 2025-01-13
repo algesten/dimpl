@@ -34,9 +34,7 @@ mod test {
 
     #[test]
     fn roundtrip() {
-        let verify_data = &MESSAGE[..];
-
-        let finished = Finished::new(verify_data);
+        let finished = Finished::new(MESSAGE);
 
         // Serialize and compare to MESSAGE
         let mut serialized = Vec::new();

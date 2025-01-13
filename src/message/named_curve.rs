@@ -67,7 +67,7 @@ impl NamedCurve {
         }
     }
 
-    pub fn to_u16(&self) -> u16 {
+    pub fn as_u16(&self) -> u16 {
         match self {
             NamedCurve::Sect163k1 => 1,
             NamedCurve::Sect163r1 => 2,
@@ -124,7 +124,7 @@ impl CurveType {
         }
     }
 
-    pub fn to_u8(&self) -> u8 {
+    pub fn as_u8(&self) -> u8 {
         match self {
             CurveType::ExplicitPrime => 1,
             CurveType::ExplicitChar2 => 2,

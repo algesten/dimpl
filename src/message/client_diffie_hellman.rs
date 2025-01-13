@@ -45,7 +45,7 @@ impl<'a> ClientDiffieHellmanPublic<'a> {
     }
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
-        output.push(self.encoding.to_u8());
+        output.push(self.encoding.as_u8());
         output.extend_from_slice(&(self.public_value.len() as u16).to_be_bytes());
         output.extend_from_slice(self.public_value);
     }

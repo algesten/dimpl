@@ -29,7 +29,7 @@ impl<'a> Extension<'a> {
     }
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
-        output.extend_from_slice(&self.extension_type.to_u16().to_be_bytes());
+        output.extend_from_slice(&self.extension_type.as_u16().to_be_bytes());
         output.extend_from_slice(&(self.extension_data.len() as u16).to_be_bytes());
         output.extend_from_slice(self.extension_data);
     }
@@ -121,7 +121,7 @@ impl ExtensionType {
         }
     }
 
-    pub fn to_u16(&self) -> u16 {
+    pub fn as_u16(&self) -> u16 {
         match self {
             ExtensionType::ServerName => 0x0000,
             ExtensionType::MaxFragmentLength => 0x0001,

@@ -62,13 +62,13 @@ impl<'a> CertificateRequest<'a> {
     pub fn serialize(&self, output: &mut Vec<u8>) {
         output.push(self.certificate_types.len() as u8);
         for cert_type in &self.certificate_types {
-            output.push(cert_type.to_u8());
+            output.push(cert_type.as_u8());
         }
 
         let sig_algs_len = (self.supported_signature_algorithms.len() * 2) as u16;
         output.extend_from_slice(&sig_algs_len.to_be_bytes());
         for sig_alg in &self.supported_signature_algorithms {
-            output.extend_from_slice(&sig_alg.to_u16().to_be_bytes());
+            output.extend_from_slice(&sig_alg.as_u16().to_be_bytes());
         }
 
         let cert_auths_len: usize = self

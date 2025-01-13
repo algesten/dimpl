@@ -72,7 +72,7 @@ impl ClientHello {
     }
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
-        output.extend_from_slice(&self.client_version.to_u16().to_be_bytes());
+        output.extend_from_slice(&self.client_version.as_u16().to_be_bytes());
         output.extend_from_slice(&self.random);
         output.push(self.session_id.len() as u8);
         output.extend_from_slice(&self.session_id);
@@ -80,11 +80,11 @@ impl ClientHello {
         output.extend_from_slice(&self.cookie);
         output.extend_from_slice(&(self.cipher_suites.len() as u16 * 2).to_be_bytes());
         for suite in &self.cipher_suites {
-            output.extend_from_slice(&suite.to_u16().to_be_bytes());
+            output.extend_from_slice(&suite.as_u16().to_be_bytes());
         }
         output.push(self.compression_methods.len() as u8);
         for method in &self.compression_methods {
-            output.push(method.to_u8());
+            output.push(method.as_u8());
         }
     }
 }

@@ -30,7 +30,7 @@ impl<'a> DigitallySigned<'a> {
     }
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
-        output.extend_from_slice(&self.algorithm.to_u16().to_be_bytes());
+        output.extend_from_slice(&self.algorithm.as_u16().to_be_bytes());
         output.extend_from_slice(&(self.signature.len() as u16).to_be_bytes());
         output.extend_from_slice(self.signature);
     }

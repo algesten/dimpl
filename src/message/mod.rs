@@ -59,7 +59,7 @@ impl ProtocolVersion {
         }
     }
 
-    pub fn to_u16(&self) -> u16 {
+    pub fn as_u16(&self) -> u16 {
         match self {
             ProtocolVersion::DTLS1_0 => 0xFEFF,
             ProtocolVersion::DTLS1_2 => 0xFEFD,
@@ -101,7 +101,7 @@ impl CipherSuite {
         }
     }
 
-    pub fn to_u16(&self) -> u16 {
+    pub fn as_u16(&self) -> u16 {
         match self {
             CipherSuite::EECDH_AESGCM => 0xC02F,
             CipherSuite::EDH_AESGCM => 0xC030,
@@ -124,7 +124,7 @@ impl CipherSuite {
         }
     }
 
-    pub fn to_key_exchange_algorithm(&self) -> KeyExchangeAlgorithm {
+    pub fn as_key_exchange_algorithm(&self) -> KeyExchangeAlgorithm {
         match self {
             CipherSuite::EECDH_AESGCM | CipherSuite::AES256_EECDH => KeyExchangeAlgorithm::EECDH,
             CipherSuite::EDH_AESGCM | CipherSuite::AES256_EDH => KeyExchangeAlgorithm::EDH,
@@ -149,7 +149,7 @@ impl CompressionMethod {
         }
     }
 
-    pub fn to_u8(&self) -> u8 {
+    pub fn as_u8(&self) -> u8 {
         match self {
             CompressionMethod::Null => 0x00,
             CompressionMethod::Deflate => 0x01,
@@ -164,6 +164,7 @@ impl CompressionMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum KeyExchangeAlgorithm {
     EECDH,
     EDH,
@@ -199,7 +200,7 @@ impl ClientCertificateType {
         }
     }
 
-    pub fn to_u8(&self) -> u8 {
+    pub fn as_u8(&self) -> u8 {
         match self {
             ClientCertificateType::RSA_SIGN => 1,
             ClientCertificateType::DSS_SIGN => 2,
@@ -220,6 +221,7 @@ impl ClientCertificateType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum SignatureAlgorithm {
     Anonymous,
     RSA,
@@ -239,7 +241,7 @@ impl SignatureAlgorithm {
         }
     }
 
-    pub fn to_u8(&self) -> u8 {
+    pub fn as_u8(&self) -> u8 {
         match self {
             SignatureAlgorithm::Anonymous => 0,
             SignatureAlgorithm::RSA => 1,
@@ -256,6 +258,7 @@ impl SignatureAlgorithm {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum HashAlgorithm {
     None,
     MD5,
@@ -281,7 +284,7 @@ impl HashAlgorithm {
         }
     }
 
-    pub fn to_u8(&self) -> u8 {
+    pub fn as_u8(&self) -> u8 {
         match self {
             HashAlgorithm::None => 0,
             HashAlgorithm::MD5 => 1,
@@ -317,8 +320,8 @@ impl SignatureAndHashAlgorithm {
         SignatureAndHashAlgorithm { hash, signature }
     }
 
-    pub fn to_u16(&self) -> u16 {
-        ((self.hash.to_u8() as u16) << 8) | (self.signature.to_u8() as u16)
+    pub fn as_u16(&self) -> u16 {
+        ((self.hash.as_u8() as u16) << 8) | (self.signature.as_u8() as u16)
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAndHashAlgorithm> {
@@ -343,7 +346,7 @@ impl PublicValueEncoding {
         }
     }
 
-    pub fn to_u8(&self) -> u8 {
+    pub fn as_u8(&self) -> u8 {
         match self {
             PublicValueEncoding::Implicit => 0,
             PublicValueEncoding::Explicit => 1,
