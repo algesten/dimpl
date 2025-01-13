@@ -7,4 +7,4 @@ pub mod state;
 mod client;
 pub use client::Client;
 
-mod message;
+pub(crate) mod message;
