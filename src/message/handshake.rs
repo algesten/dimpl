@@ -76,18 +76,18 @@ impl<'a> Handshake<'a> {
         self.body.serialize(output);
     }
 
-    pub fn defragment(fragments: &[&Handshake], buffer: &'a mut Vec<u8>) -> Option<Handshake<'a>> {
+    pub fn defragment(fragments: &[Handshake], buffer: &'a mut Vec<u8>) -> Option<Handshake<'a>> {
         if fragments.is_empty() {
             return None;
         }
 
-        let first = fragments[0];
+        let first = &fragments[0];
 
         let mut expected_offset = 0;
         let mut i = 0;
 
         while i < fragments.len() {
-            let f = fragments[i];
+            let f = &fragments[i];
             if f.fragment_offset == expected_offset {
                 buffer.extend_from_slice(match &f.body {
                     Message::Fragment(data) => data,
@@ -129,7 +129,7 @@ impl<'a> Handshake<'a> {
     }
 
     pub fn fragment<'b>(
-        self,
+        &self,
         max: usize,
         buffer: &'b mut Vec<u8>,
     ) -> impl Iterator<Item = Handshake<'b>> {
@@ -212,6 +212,54 @@ mod tests {
 
         // Serialize and compare to MESSAGE
         handshake.serialize(&mut serialized);
+        assert_eq!(serialized, MESSAGE);
+
+        // Parse and compare with original
+        let (rest, parsed) = Handshake::parse(&serialized, None).unwrap();
+        assert_eq!(parsed, handshake);
+
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn roundtrip_fragment() {
+        let mut serialized = Vec::new();
+        let mut buffer = Vec::new();
+
+        let random = Random::new(&MESSAGE[14..46]).unwrap();
+        let session_id = SessionId::try_new(&[0xAA]).unwrap();
+        let cookie = Cookie::try_new(&[0xBB]).unwrap();
+        let cipher_suites = smallvec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];
+        let compression_methods = smallvec![CompressionMethod::Null];
+
+        let client_hello = ClientHello::new(
+            ProtocolVersion::DTLS1_2,
+            random,
+            session_id,
+            cookie,
+            cipher_suites,
+            compression_methods,
+        );
+
+        let handshake = Handshake::new(
+            MessageType::ClientHello,
+            0x3A,
+            0,
+            0,
+            0x3A,
+            Message::ClientHello(client_hello),
+        );
+
+        // Fragment the handshake with size 10
+        let fragments: Vec<_> = handshake.fragment(10, &mut buffer).collect();
+
+        // Defragment the fragments
+        let mut defragmented_buffer = Vec::new();
+        let defragmented_handshake =
+            Handshake::defragment(fragments.as_slice(), &mut defragmented_buffer).unwrap();
+
+        // Serialize and compare to MESSAGE
+        defragmented_handshake.serialize(&mut serialized);
         assert_eq!(serialized, MESSAGE);
 
         // Parse and compare with original
