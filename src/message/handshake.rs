@@ -55,7 +55,7 @@ impl<'a> Handshake<'a> {
         self.body.is_fragment()
     }
 
-    pub fn parse_header(input: &'a [u8]) -> IResult<&[u8], Header> {
+    pub fn parse_header(input: &'a [u8]) -> IResult<&'a [u8], Header> {
         let (input, msg_type) = MessageType::parse(input)?;
         let (input, length) = be_u24(input)?;
         let (input, message_seq) = be_u16(input)?;
@@ -74,7 +74,7 @@ impl<'a> Handshake<'a> {
         ))
     }
 
-    pub fn parse(input: &'a [u8], c: Option<CipherSuite>) -> IResult<&[u8], Handshake<'a>> {
+    pub fn parse(input: &'a [u8], c: Option<CipherSuite>) -> IResult<&'a [u8], Handshake<'a>> {
         let (input, header) = Self::parse_header(input)?;
 
         let is_fragment = header.fragment_offset > 0 || header.fragment_length < header.length;
@@ -91,10 +91,10 @@ impl<'a> Handshake<'a> {
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
         output.push(self.header.msg_type.to_u8());
-        output.extend_from_slice(&(self.header.length as u32).to_be_bytes()[1..]);
+        output.extend_from_slice(&self.header.length.to_be_bytes()[1..]);
         output.extend_from_slice(&self.header.message_seq.to_be_bytes());
-        output.extend_from_slice(&(self.header.fragment_offset as u32).to_be_bytes()[1..]);
-        output.extend_from_slice(&(self.header.fragment_length as u32).to_be_bytes()[1..]);
+        output.extend_from_slice(&self.header.fragment_offset.to_be_bytes()[1..]);
+        output.extend_from_slice(&self.header.fragment_length.to_be_bytes()[1..]);
         self.body.serialize(output);
     }
 

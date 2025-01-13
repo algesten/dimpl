@@ -1,3 +1,7 @@
+// TODO(martin): remove these once we use all the parsers.
+#![allow(unused_imports)]
+#![allow(unused)]
+
 mod certificate;
 mod certificate_request;
 mod certificate_verify;
@@ -77,6 +81,7 @@ impl ProtocolVersion {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum CipherSuite {
     EECDH_AESGCM,
     EDH_AESGCM,
@@ -166,6 +171,7 @@ pub enum KeyExchangeAlgorithm {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum ClientCertificateType {
     RSA_SIGN,
     DSS_SIGN,
