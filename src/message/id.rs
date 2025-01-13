@@ -61,8 +61,11 @@ macro_rules! var_array {
 
             pub fn random(len: usize) -> $name {
                 let mut t = rand::thread_rng();
-                assert!(len >= $min);
-                assert!(len <= $max);
+                #[allow(unused_comparisons)]
+                {
+                    assert!(len >= $min);
+                    assert!(len <= $max);
+                }
                 let mut arr = [0; $max];
                 for a in &mut arr[..len] {
                     *a = t.gen();
