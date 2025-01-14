@@ -4,20 +4,20 @@ use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u16, be_u8};
 use nom::Err;
 use nom::{bytes::complete::take, IResult};
-use smallvec::SmallVec;
+use tinyvec::ArrayVec;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct CertificateRequest<'a> {
-    pub certificate_types: SmallVec<[ClientCertificateType; 8]>,
-    pub supported_signature_algorithms: SmallVec<[SignatureAndHashAlgorithm; 16]>,
-    pub certificate_authorities: SmallVec<[DistinguishedName<'a>; 16]>,
+    pub certificate_types: ArrayVec<[ClientCertificateType; 8]>,
+    pub supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 16]>,
+    pub certificate_authorities: ArrayVec<[DistinguishedName<'a>; 16]>,
 }
 
 impl<'a> CertificateRequest<'a> {
     pub fn new(
-        certificate_types: SmallVec<[ClientCertificateType; 8]>,
-        supported_signature_algorithms: SmallVec<[SignatureAndHashAlgorithm; 16]>,
-        certificate_authorities: SmallVec<[DistinguishedName<'a>; 16]>,
+        certificate_types: ArrayVec<[ClientCertificateType; 8]>,
+        supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 16]>,
+        certificate_authorities: ArrayVec<[DistinguishedName<'a>; 16]>,
     ) -> Self {
         CertificateRequest {
             certificate_types,
@@ -86,10 +86,11 @@ impl<'a> CertificateRequest<'a> {
 
 #[cfg(test)]
 mod test {
+    use tinyvec::array_vec;
+
     use crate::message::{HashAlgorithm, SignatureAlgorithm};
 
     use super::*;
-    use smallvec::smallvec;
 
     const MESSAGE: &[u8] = &[
         0x02, // Certificate types length
@@ -107,18 +108,17 @@ mod test {
     fn roundtrip() {
         let mut serialized = Vec::new();
 
-        let certificate_types = smallvec![
+        let certificate_types = array_vec![
             ClientCertificateType::RSA_SIGN,
             ClientCertificateType::DSS_SIGN
         ];
-        let supported_signature_algorithms = smallvec![
+        let supported_signature_algorithms = array_vec![
             SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA),
             SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::DSA)
         ];
-        let certificate_authorities = smallvec![
-            DistinguishedName(&MESSAGE[13..17]),
-            DistinguishedName(&MESSAGE[19..23])
-        ];
+        let d1 = &MESSAGE[13..17];
+        let d2 = &MESSAGE[19..23];
+        let certificate_authorities = array_vec![DistinguishedName(d1), DistinguishedName(d2)];
 
         let certificate_request = CertificateRequest::new(
             certificate_types,

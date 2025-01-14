@@ -1,3 +1,5 @@
+use std::hash::DefaultHasher;
+
 use super::{
     Certificate, CertificateRequest, CertificateVerify, CipherSuite, ClientHello,
     ClientKeyExchange, Finished, HelloVerifyRequest, ServerHello, ServerKeyExchange,
@@ -10,9 +12,9 @@ use nom::{
     number::complete::{be_u16, be_u24},
     IResult,
 };
-use smallvec::SmallVec;
+use tinyvec::ArrayVec;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct Header {
     pub msg_type: MessageType,
     pub length: u32,
@@ -21,7 +23,7 @@ pub struct Header {
     pub fragment_length: u32,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct Handshake<'a> {
     pub header: Header,
     pub body: Body<'a>,
@@ -102,7 +104,7 @@ impl<'a> Handshake<'a> {
         fragments: impl IntoIterator<Item = &'b Handshake<'c>>,
         buffer: &'a mut Vec<u8>,
     ) -> Option<Handshake<'a>> {
-        let mut fragments: SmallVec<[&'b Handshake<'c>; 32]> = fragments.into_iter().collect();
+        let mut fragments: Vec<&'b Handshake<'c>> = fragments.into_iter().collect();
 
         if fragments.is_empty() {
             return None;
@@ -214,6 +216,12 @@ pub enum MessageType {
     Unknown(u8),
 }
 
+impl Default for MessageType {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
+}
+
 impl MessageType {
     pub fn from_u8(value: u8) -> Self {
         match value {
@@ -271,6 +279,12 @@ pub enum Body<'a> {
     Finished(Finished<'a>),
     Unknown(u8),
     Fragment(&'a [u8]),
+}
+
+impl<'a> Default for Body<'a> {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
 }
 
 impl<'a> Body<'a> {
@@ -381,11 +395,12 @@ impl<'a> Body<'a> {
 
 #[cfg(test)]
 mod tests {
+    use tinyvec::array_vec;
+
     use super::*;
     use crate::message::{
         CipherSuite, ClientHello, CompressionMethod, Cookie, ProtocolVersion, Random, SessionId,
     };
-    use smallvec::smallvec;
 
     const MESSAGE: &[u8] = &[
         0x01, // MessageType::ClientHello
@@ -417,8 +432,8 @@ mod tests {
         let random = Random::parse(&MESSAGE[14..46]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
-        let cipher_suites = smallvec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];
-        let compression_methods = smallvec![CompressionMethod::Null];
+        let cipher_suites = array_vec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];
+        let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,
@@ -457,8 +472,8 @@ mod tests {
         let random = Random::parse(&MESSAGE[14..46]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
-        let cipher_suites = smallvec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];
-        let compression_methods = smallvec![CompressionMethod::Null];
+        let cipher_suites = array_vec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];
+        let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,

@@ -4,15 +4,15 @@ use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::Err;
 use nom::{number::complete::be_u24, IResult};
-use smallvec::SmallVec;
+use tinyvec::ArrayVec;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Certificate<'a> {
-    pub certificate_list: SmallVec<[Asn1Cert<'a>; 32]>,
+    pub certificate_list: ArrayVec<[Asn1Cert<'a>; 32]>,
 }
 
 impl<'a> Certificate<'a> {
-    pub fn new(certificate_list: SmallVec<[Asn1Cert<'a>; 32]>) -> Self {
+    pub fn new(certificate_list: ArrayVec<[Asn1Cert<'a>; 32]>) -> Self {
         Certificate { certificate_list }
     }
 
@@ -45,8 +45,9 @@ impl<'a> Certificate<'a> {
 
 #[cfg(test)]
 mod tests {
+    use tinyvec::array_vec;
+
     use super::*;
-    use smallvec::smallvec;
 
     const MESSAGE: &[u8] = &[
         0x00, 0x00, 0x0C, // Total length
@@ -60,7 +61,9 @@ mod tests {
     fn roundtrip() {
         let mut serialized = Vec::new();
 
-        let certificate_list = smallvec![Asn1Cert(&MESSAGE[6..10]), Asn1Cert(&MESSAGE[13..15])];
+        let c1 = &MESSAGE[6..10];
+        let c2 = &MESSAGE[13..15];
+        let certificate_list = array_vec![Asn1Cert(c1), Asn1Cert(c2)];
 
         let certificate = Certificate::new(certificate_list);
 

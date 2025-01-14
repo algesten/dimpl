@@ -1,13 +1,13 @@
+use super::util::many0;
 use super::{CipherSuite, CompressionMethod, Extension, ProtocolVersion, Random, SessionId};
 use nom::error::{Error, ErrorKind};
 use nom::Err;
 use nom::{
     bytes::complete::take,
-    multi::many0,
     number::complete::{be_u16, be_u8},
     IResult,
 };
-use smallvec::SmallVec;
+use tinyvec::ArrayVec;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ServerHello<'a> {
@@ -16,7 +16,7 @@ pub struct ServerHello<'a> {
     pub session_id: SessionId,
     pub cipher_suite: CipherSuite,
     pub compression_method: CompressionMethod,
-    pub extensions: Option<SmallVec<[Extension<'a>; 32]>>,
+    pub extensions: Option<ArrayVec<[Extension<'a>; 32]>>,
 }
 
 impl<'a> ServerHello<'a> {
@@ -26,7 +26,7 @@ impl<'a> ServerHello<'a> {
         session_id: SessionId,
         cipher_suite: CipherSuite,
         compression_method: CompressionMethod,
-        extensions: Option<SmallVec<[Extension<'a>; 32]>>,
+        extensions: Option<ArrayVec<[Extension<'a>; 32]>>,
     ) -> Self {
         ServerHello {
             server_version,
@@ -52,7 +52,7 @@ impl<'a> ServerHello<'a> {
                 return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
             }
             let (input, extensions) = many0(Extension::parse)(input_ext)?;
-            (input, Some(SmallVec::from_vec(extensions)))
+            (input, Some(extensions))
         } else {
             (input, None)
         };
@@ -98,10 +98,11 @@ impl<'a> ServerHello<'a> {
 
 #[cfg(test)]
 mod test {
+    use tinyvec::array_vec;
+
     use crate::message::ExtensionType;
 
     use super::*;
-    use smallvec::smallvec;
 
     const MESSAGE: &[u8] = &[
         0xFE, 0xFD, // ProtocolVersion::DTLS1_2
@@ -129,10 +130,10 @@ mod test {
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cipher_suite = CipherSuite::EECDH_AESGCM;
         let compression_method = CompressionMethod::Null;
-        let extensions = Some(smallvec![Extension::new(
+        let extensions = Some(array_vec!([Extension; 32] => Extension::new(
             ExtensionType::SupportedGroups,
-            &MESSAGE[46..]
-        )]);
+            &MESSAGE[46..],
+        )));
 
         let server_hello = ServerHello::new(
             ProtocolVersion::DTLS1_2,

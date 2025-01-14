@@ -1,13 +1,13 @@
 use nom::{bytes::complete::take, number::complete::be_u16, IResult};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct Extension<'a> {
     pub extension_type: ExtensionType,
     pub extension_data: &'a [u8],
 }
 
 impl<'a> Extension<'a> {
-    pub fn new(extension_type: ExtensionType, extension_data: &'a [u8]) -> Self {
+    pub const fn new(extension_type: ExtensionType, extension_data: &'a [u8]) -> Self {
         Extension {
             extension_type,
             extension_data,
@@ -75,6 +75,12 @@ pub enum ExtensionType {
     SignatureAlgorithmsCert,
     KeyShare,
     Unknown(u16),
+}
+
+impl Default for ExtensionType {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
 }
 
 impl ExtensionType {

@@ -7,7 +7,7 @@ use nom::{
     number::complete::{be_u16, be_u8},
     IResult,
 };
-use smallvec::SmallVec;
+use tinyvec::ArrayVec;
 
 use super::util::many1;
 
@@ -17,8 +17,8 @@ pub struct ClientHello {
     pub random: Random,
     pub session_id: SessionId,
     pub cookie: Cookie,
-    pub cipher_suites: SmallVec<[CipherSuite; 32]>,
-    pub compression_methods: SmallVec<[CompressionMethod; 4]>,
+    pub cipher_suites: ArrayVec<[CipherSuite; 32]>,
+    pub compression_methods: ArrayVec<[CompressionMethod; 4]>,
 }
 
 impl ClientHello {
@@ -27,8 +27,8 @@ impl ClientHello {
         random: Random,
         session_id: SessionId,
         cookie: Cookie,
-        cipher_suites: SmallVec<[CipherSuite; 32]>,
-        compression_methods: SmallVec<[CompressionMethod; 4]>,
+        cipher_suites: ArrayVec<[CipherSuite; 32]>,
+        compression_methods: ArrayVec<[CompressionMethod; 4]>,
     ) -> Self {
         ClientHello {
             client_version,
@@ -91,8 +91,9 @@ impl ClientHello {
 
 #[cfg(test)]
 mod tests {
+    use tinyvec::array_vec;
+
     use super::*;
-    use smallvec::smallvec;
 
     const MESSAGE: &[u8] = &[
         0xFE, 0xFD, // ProtocolVersion::DTLS1_2
@@ -116,8 +117,8 @@ mod tests {
         let random = Random::parse(&MESSAGE[2..34]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
-        let cipher_suites = smallvec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];
-        let compression_methods = smallvec![CompressionMethod::Null];
+        let cipher_suites = array_vec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];
+        let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,

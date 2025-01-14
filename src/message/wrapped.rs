@@ -7,7 +7,7 @@ use std::ops::Deref;
 
 macro_rules! wrapped_slice {
     ($name:ident, $length_parser:path, $min:expr) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
         pub struct $name<'a>(pub &'a [u8]);
 
         impl<'a> Deref for $name<'a> {

@@ -40,11 +40,11 @@ pub use random::Random;
 pub use record::{ContentType, DTLSRecord};
 pub use server_hello::ServerHello;
 pub use server_key_exchange::ServerKeyExchange;
+use tinyvec::{array_vec, ArrayVec};
 pub use wrapped::{Asn1Cert, DistinguishedName};
 
 use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
-use smallvec::smallvec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolVersion {
@@ -99,6 +99,12 @@ pub enum CipherSuite {
     Unknown(u16),
 }
 
+impl Default for CipherSuite {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
+}
+
 impl CipherSuite {
     pub fn from_u16(value: u16) -> Self {
         match value {
@@ -141,9 +147,9 @@ impl CipherSuite {
         }
     }
 
-    pub(crate) fn all() -> smallvec::SmallVec<[CipherSuite; 32]> {
+    pub(crate) fn all() -> ArrayVec<[CipherSuite; 32]> {
         use CipherSuite::*;
-        smallvec![EECDH_AESGCM, EDH_AESGCM, AES256_EECDH, AES256_EDH,]
+        array_vec![EECDH_AESGCM, EDH_AESGCM, AES256_EECDH, AES256_EDH]
     }
 }
 
@@ -152,6 +158,12 @@ pub enum CompressionMethod {
     Null,
     Deflate,
     Unknown(u8),
+}
+
+impl Default for CompressionMethod {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
 }
 
 impl CompressionMethod {
@@ -199,6 +211,12 @@ pub enum ClientCertificateType {
     Unknown(u8),
 }
 
+impl Default for ClientCertificateType {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
+}
+
 impl ClientCertificateType {
     pub fn from_u8(value: u8) -> Self {
         match value {
@@ -244,6 +262,12 @@ pub enum SignatureAlgorithm {
     Unknown(u8),
 }
 
+impl Default for SignatureAlgorithm {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
+}
+
 impl SignatureAlgorithm {
     pub fn from_u8(value: u8) -> Self {
         match value {
@@ -284,6 +308,12 @@ pub enum HashAlgorithm {
     Unknown(u8),
 }
 
+impl Default for HashAlgorithm {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
+}
+
 impl HashAlgorithm {
     pub fn from_u8(value: u8) -> Self {
         match value {
@@ -317,7 +347,7 @@ impl HashAlgorithm {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SignatureAndHashAlgorithm {
     pub hash: HashAlgorithm,
     pub signature: SignatureAlgorithm,

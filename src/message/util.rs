@@ -2,10 +2,10 @@ use std::ops::RangeFrom;
 
 use nom::error::{make_error, ErrorKind, ParseError};
 use nom::{Err, IResult, InputIter, InputLength, Parser, Slice};
-use smallvec::{Array, SmallVec};
+use tinyvec::{Array, ArrayVec};
 
 #[inline(always)]
-pub fn many0<I, O, E, F, A>(mut f: F) -> impl FnMut(I) -> IResult<I, SmallVec<A>, E>
+pub fn many0<I, O, E, F, A>(mut f: F) -> impl FnMut(I) -> IResult<I, ArrayVec<A>, E>
 where
     I: Clone + InputLength,
     F: Parser<I, O, E>,
@@ -13,7 +13,7 @@ where
     A: Array<Item = O>,
 {
     move |mut i: I| {
-        let mut acc = SmallVec::default();
+        let mut acc = ArrayVec::default();
         loop {
             let len = i.input_len();
             match f.parse(i.clone()) {
@@ -34,7 +34,7 @@ where
 }
 
 #[inline(always)]
-pub fn many1<I, O, E, F, A>(mut f: F) -> impl FnMut(I) -> IResult<I, SmallVec<A>, E>
+pub fn many1<I, O, E, F, A>(mut f: F) -> impl FnMut(I) -> IResult<I, ArrayVec<A>, E>
 where
     I: Clone + InputLength,
     F: Parser<I, O, E>,
@@ -45,7 +45,7 @@ where
         Err(Err::Error(err)) => Err(Err::Error(E::append(i, ErrorKind::Many1, err))),
         Err(e) => Err(e),
         Ok((i1, o)) => {
-            let mut acc = SmallVec::default();
+            let mut acc = ArrayVec::default();
             acc.push(o);
             i = i1;
 
