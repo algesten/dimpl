@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use std::time::Instant;
 
-use smallvec::{smallvec, SmallVec};
+use tinyvec::{array_vec, ArrayVec};
 
 use crate::message::{
     CipherSuite, ClientHello, CompressionMethod, Cookie, ProtocolVersion, Random, SessionId,
@@ -17,7 +17,7 @@ pub struct Client<State> {
     session_id: Option<SessionId>,
     /// Cookie is sent by the server in the HelloVerifyRequest.
     cookie: Option<Cookie>,
-    cipher_suites: SmallVec<[CipherSuite; 32]>,
+    cipher_suites: ArrayVec<[CipherSuite; 32]>,
     _ph: PhantomData<State>,
 }
 
@@ -28,7 +28,7 @@ impl Default for Client<CLIENT_HELLO> {
             random: Random::parse(&[0; 32]).unwrap().1, // placeholder
             session_id: None,
             cookie: None,
-            cipher_suites: smallvec![],
+            cipher_suites: array_vec![],
             _ph: PhantomData,
         }
     }
@@ -65,7 +65,7 @@ impl Client<CLIENT_HELLO> {
             session_id: SessionId::empty(),
             cookie: Cookie::empty(),
             cipher_suites: self.cipher_suites.clone(),
-            compression_methods: smallvec![CompressionMethod::Null],
+            compression_methods: array_vec!([CompressionMethod; 4] => CompressionMethod::Null),
         };
 
         (self.transition(), handshake)

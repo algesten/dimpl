@@ -1,11 +1,7 @@
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use self_cell::self_cell;
-use smallvec::SmallVec;
-
-use crate::message::{DTLSRecord, Handshake};
+use crate::incoming::Incoming;
 use crate::MAX_MTU;
 
 #[derive(Debug, Default)]
@@ -18,7 +14,7 @@ pub(crate) struct Engine {
 
     /// Counters for receiving DTLSRecord.
     ///
-    /// This is the max seen such.
+    /// This is the max seen.
     record_rx: RecordCounters,
 
     /// Queue of incoming packets.
@@ -39,30 +35,6 @@ struct RecordCounters {
     ///
     /// Increases for each new packet sent. Resends increases this counter.
     sequence_number: u64,
-}
-
-// self_cell!(
-//     struct Incoming {
-//         owner: Buffer,
-//         #[covariant]
-//         dependent: Records,
-//     }
-
-//     impl {Debug}
-// );
-
-#[derive(Debug)]
-struct Incoming;
-
-#[derive(Debug)]
-pub struct Records<'a> {
-    records: SmallVec<[Record<'a>; 32]>,
-}
-
-#[derive(Debug)]
-pub struct Record<'a> {
-    s: DTLSRecord<'a>,
-    t: Handshake<'a>,
 }
 
 #[derive(Debug)]
