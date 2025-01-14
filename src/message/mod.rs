@@ -16,6 +16,7 @@ mod hello_verify;
 mod id;
 mod named_curve;
 mod random;
+mod record;
 mod server_hello;
 mod server_key_exchange;
 mod util;
@@ -30,12 +31,13 @@ pub use client_key_exchange::ClientKeyExchange;
 pub use digitally_signed::DigitallySigned;
 pub use extension::{Extension, ExtensionType};
 pub use finished::Finished;
-pub use handshake::{Body, Handshake, MessageType};
+pub use handshake::{Body, Handshake, Header, MessageType};
 pub use hello_verify::HelloVerifyRequest;
 pub use id::{Cookie, SessionId};
 pub use named_curve::{CurveType, NamedCurve};
 pub use nom::error::{Error, ErrorKind};
 pub use random::Random;
+pub use record::{ContentType, DTLSRecord};
 pub use server_hello::ServerHello;
 pub use server_key_exchange::ServerKeyExchange;
 pub use wrapped::{Asn1Cert, DistinguishedName};
@@ -80,6 +82,10 @@ impl ProtocolVersion {
             _ => ProtocolVersion::Unknown(version),
         };
         Ok((input, protocol_version))
+    }
+
+    pub fn serialize(&self, output: &mut Vec<u8>) {
+        output.extend_from_slice(&self.as_u16().to_be_bytes());
     }
 }
 

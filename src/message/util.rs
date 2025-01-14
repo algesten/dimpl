@@ -1,7 +1,10 @@
-use nom::error::{ErrorKind, ParseError};
-use nom::{Err, IResult, InputLength, Parser};
+use std::ops::RangeFrom;
+
+use nom::error::{make_error, ErrorKind, ParseError};
+use nom::{Err, IResult, InputIter, InputLength, Parser, Slice};
 use smallvec::{Array, SmallVec};
 
+#[inline(always)]
 pub fn many0<I, O, E, F, A>(mut f: F) -> impl FnMut(I) -> IResult<I, SmallVec<A>, E>
 where
     I: Clone + InputLength,
@@ -30,6 +33,7 @@ where
     }
 }
 
+#[inline(always)]
 pub fn many1<I, O, E, F, A>(mut f: F) -> impl FnMut(I) -> IResult<I, SmallVec<A>, E>
 where
     I: Clone + InputLength,
@@ -62,5 +66,24 @@ where
                 }
             }
         }
+    }
+}
+
+pub fn be_u48<I, E: ParseError<I>>(input: I) -> IResult<I, u64, E>
+where
+    I: Slice<RangeFrom<usize>> + InputIter<Item = u8> + InputLength,
+{
+    let bound: usize = 6;
+
+    if input.input_len() < bound {
+        Err(Err::Error(make_error(input, ErrorKind::Eof)))
+    } else {
+        let mut res = 0u64;
+
+        for byte in input.iter_elements().take(bound) {
+            res = (res << 8) + byte as u64;
+        }
+
+        Ok((input.slice(bound..), res))
     }
 }

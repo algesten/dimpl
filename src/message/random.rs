@@ -9,7 +9,7 @@ use rand::Rng;
 
 use crate::time_tricks::InstantExt;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Random {
     pub gmt_unix_time: u32,
     pub random_bytes: [u8; 28],

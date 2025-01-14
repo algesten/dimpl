@@ -59,6 +59,13 @@ macro_rules! var_array {
                 Ok($name(array, data.len()))
             }
 
+            pub fn empty() -> Self {
+                if $min > 0 {
+                    panic!("{}::empty() is not valid", stringify!($name));
+                }
+                Self([0; $max], 0)
+            }
+
             pub fn random(len: usize) -> $name {
                 let mut t = rand::thread_rng();
                 #[allow(unused_comparisons)]
