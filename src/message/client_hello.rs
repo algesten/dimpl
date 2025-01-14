@@ -9,7 +9,7 @@ use nom::{
 };
 use tinyvec::ArrayVec;
 
-use super::util::many1;
+use crate::util::many1;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ClientHello {

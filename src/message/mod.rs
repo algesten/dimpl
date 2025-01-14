@@ -19,7 +19,6 @@ mod random;
 mod record;
 mod server_hello;
 mod server_key_exchange;
-mod util;
 mod wrapped;
 
 pub use certificate::Certificate;
@@ -52,6 +51,12 @@ pub enum ProtocolVersion {
     DTLS1_2,
     DTLS1_3,
     Unknown(u16),
+}
+
+impl Default for ProtocolVersion {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
 }
 
 impl ProtocolVersion {

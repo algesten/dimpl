@@ -1,5 +1,5 @@
-use super::util::{many0, many1};
 use super::{ClientCertificateType, DistinguishedName, SignatureAndHashAlgorithm};
+use crate::util::{many0, many1};
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u16, be_u8};
 use nom::Err;

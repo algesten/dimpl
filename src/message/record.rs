@@ -1,10 +1,10 @@
-use super::util::be_u48;
 use super::ProtocolVersion;
+use crate::util::be_u48;
 use nom::bytes::complete::take;
 use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct DTLSRecord<'a> {
     pub content_type: ContentType,
     pub version: ProtocolVersion,
@@ -53,6 +53,12 @@ pub enum ContentType {
     Handshake,
     ApplicationData,
     Unknown(u8),
+}
+
+impl Default for ContentType {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
 }
 
 impl ContentType {
