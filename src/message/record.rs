@@ -1,3 +1,6 @@
+use core::fmt;
+use std::cmp::Ordering;
+
 use super::ProtocolVersion;
 use crate::util::be_u48;
 use nom::bytes::complete::take;
@@ -8,10 +11,15 @@ use nom::IResult;
 pub struct DTLSRecord<'a> {
     pub content_type: ContentType,
     pub version: ProtocolVersion,
-    pub epoch: u16,
-    pub sequence_number: u64,
+    pub sequence: Sequence,
     pub length: u16,
     pub fragment: &'a [u8],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Sequence {
+    pub epoch: u16,
+    pub sequence_number: u64, // technically u48
 }
 
 impl<'a> DTLSRecord<'a> {
@@ -23,13 +31,17 @@ impl<'a> DTLSRecord<'a> {
         let (input, length) = be_u16(input)?;
         let (input, fragment) = take(length as usize)(input)?;
 
+        let sequence = Sequence {
+            epoch,
+            sequence_number,
+        };
+
         Ok((
             input,
             DTLSRecord {
                 content_type,
                 version,
-                epoch,
-                sequence_number,
+                sequence,
                 length,
                 fragment,
             },
@@ -39,8 +51,8 @@ impl<'a> DTLSRecord<'a> {
     pub fn serialize(&self, output: &mut Vec<u8>) {
         output.push(self.content_type.as_u8());
         self.version.serialize(output);
-        output.extend_from_slice(&self.epoch.to_be_bytes());
-        output.extend_from_slice(&self.sequence_number.to_be_bytes()[2..]);
+        output.extend_from_slice(&self.sequence.epoch.to_be_bytes());
+        output.extend_from_slice(&self.sequence.sequence_number.to_be_bytes()[2..]);
         output.extend_from_slice(&self.length.to_be_bytes());
         output.extend_from_slice(self.fragment);
     }
@@ -109,8 +121,10 @@ mod tests {
         let record = DTLSRecord {
             content_type: ContentType::Handshake,
             version: ProtocolVersion::DTLS1_2,
-            epoch: 1,
-            sequence_number: 1,
+            sequence: Sequence {
+                epoch: 1,
+                sequence_number: 1,
+            },
             length: 16,
             fragment: &RECORD[13..],
         };
@@ -125,5 +139,33 @@ mod tests {
         assert_eq!(parsed, record);
 
         assert!(rest.is_empty());
+    }
+}
+
+impl fmt::Display for Sequence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[epoch: {}, sequence_number: {}]",
+            self.epoch, self.sequence_number,
+        )
+    }
+}
+
+impl Ord for Sequence {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.epoch < other.epoch {
+            Ordering::Less
+        } else if self.epoch > other.epoch {
+            Ordering::Greater
+        } else {
+            self.sequence_number.cmp(&other.sequence_number)
+        }
+    }
+}
+
+impl PartialOrd for Sequence {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }

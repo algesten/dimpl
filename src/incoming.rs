@@ -1,18 +1,44 @@
+use std::ops::Deref;
+
 use nom::error::{Error as NomError, ErrorKind};
 use nom::{Err, IResult};
 use self_cell::self_cell;
 use tinyvec::ArrayVec;
 
-use crate::engine::Buffer;
+use crate::buffer::Buffer;
 use crate::message::{Body, CipherSuite, ContentType, DTLSRecord, Handshake};
 use crate::util::many1;
 use crate::Error;
 
+/// Holds both the UDP packet and the parsed result of that packet.
+///
+/// A self-referential struct.
+#[derive(Debug)]
+pub struct Incoming(Inner);
+
+impl Incoming {
+    pub fn into_inner(self) -> Buffer {
+        self.0.into_owner()
+    }
+
+    pub fn records(&self) -> &Records {
+        self.0.borrow_dependent()
+    }
+
+    pub fn first(&self) -> &Record {
+        // Invariant: Every Incoming must have at least one Record
+        // or the parser would have failed. See use of many1 below.
+        &self.records()[0]
+    }
+
+    pub fn last(&self) -> &Record {
+        // Invariant: See above.
+        self.records().last().unwrap()
+    }
+}
+
 self_cell!(
-    /// Holds both the UDP packet and the parsed result of that packet.
-    ///
-    /// A self-referential struct.
-    pub(crate) struct Incoming {
+    struct Inner {
         owner: Buffer, // Buffer with UDP packet data
         #[covariant]
         dependent: Records, // Parsed records from that UDP packet
@@ -36,22 +62,22 @@ impl Incoming {
         packet: &'b [u8],
         c: &mut Option<CipherSuite>,
         mut into: Buffer,
-    ) -> Result<Incoming, Error> {
+    ) -> Result<Self, Error> {
         // The Buffer is where we store the raw packet data.
         into.resize(packet.len(), 0);
         into.copy_from_slice(packet);
 
         // håll i hatten
-        let incoming = Incoming::try_new(into, |data| Ok::<_, Error>(Records::parse(&data, c)?.1))?;
+        let inner = Inner::try_new(into, |data| Ok::<_, Error>(Records::parse(&data, c)?.1))?;
 
-        Ok(incoming)
+        Ok(Incoming(inner))
     }
 }
 
 /// A number of records parsed from a single UDP packet.
 #[derive(Debug)]
 pub(crate) struct Records<'a> {
-    records: ArrayVec<[Record<'a>; 32]>,
+    pub records: ArrayVec<[Record<'a>; 32]>,
 }
 
 impl<'a> Records<'a> {
@@ -61,6 +87,14 @@ impl<'a> Records<'a> {
             return Err(Err::Failure(NomError::new(rest, ErrorKind::LengthValue)));
         }
         Ok((&[], Records { records }))
+    }
+}
+
+impl<'a> Deref for Records<'a> {
+    type Target = [Record<'a>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.records
     }
 }
 

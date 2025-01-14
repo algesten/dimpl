@@ -1,73 +1,98 @@
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::time::Instant;
 
-use tinyvec::{array_vec, ArrayVec};
+use tinyvec::array_vec;
 
+use crate::engine::Engine;
+use crate::incoming::Record;
 use crate::message::{
-    CipherSuite, ClientHello, CompressionMethod, Cookie, ProtocolVersion, Random, SessionId,
+    CipherSuite, ClientHello, CompressionMethod, ContentType, Cookie, MessageType, ProtocolVersion,
+    Random, SessionId,
 };
-use crate::state::client::CLIENT_HELLO;
-use crate::state::server::HELLO_VERIFY_REQUEST;
+use crate::{Config, Error, Output};
 
-pub struct Client<State> {
-    client_version: ProtocolVersion,
+pub struct Client {
+    /// Random unique data (with gmt timestamp). Used for signature checks.
     random: Random,
+
     /// SessionId is set by the server and only sent by the client if we
     /// are reusing a session (key renegotiation).
     session_id: Option<SessionId>,
-    /// Cookie is sent by the server in the HelloVerifyRequest.
+
+    /// Cookie is sent by the server in the optional HelloVerifyRequest.
+    /// It might remain null if there is no HelloVerifyRequest.
     cookie: Option<Cookie>,
-    cipher_suites: ArrayVec<[CipherSuite; 32]>,
-    _ph: PhantomData<State>,
+
+    /// The cipher suites in use. Set by ServerHello.
+    cipher_suite: Option<CipherSuite>,
+
+    /// Current client state.
+    state: ClientState,
+
+    /// Engine in common between server and client.
+    engine: Engine,
 }
 
-impl Default for Client<CLIENT_HELLO> {
-    fn default() -> Self {
-        Self {
-            client_version: ProtocolVersion::DTLS1_2,
-            random: Random::parse(&[0; 32]).unwrap().1, // placeholder
-            session_id: None,
-            cookie: None,
-            cipher_suites: array_vec![],
-            _ph: PhantomData,
-        }
-    }
+/// Current state of the client.
+#[derive(Debug)]
+pub enum ClientState {
+    /// Send the ClientHello
+    SendClientHello,
+
+    /// Waiting for a ServerHello, or maybe a HelloVerifyRequest
+    ///
+    /// Wait until we see ServerHelloDone.
+    AwaitServerHello { can_hello_verify: bool },
+
+    /// Send the client certificate and keys.
+    ///
+    /// All the messages up to Finished.
+    SendClientCertAndKeys,
+
+    /// Await server message until Finished.
+    AwaitServerFinished,
+
+    /// Send and receive encrypted data.
+    Running,
 }
 
-impl Client<()> {
-    pub fn new(now: Instant, s: impl IntoIterator<Item = CipherSuite>) -> Client<CLIENT_HELLO> {
+impl Client {
+    pub fn new(now: Instant, config: Arc<Config>) -> Client {
         Client {
             random: Random::new(now),
-            cipher_suites: s.into_iter().collect(),
-            ..Client::default()
+            session_id: None,
+            cookie: None,
+            cipher_suite: None,
+            state: ClientState::SendClientHello,
+            engine: Engine::new(config),
         }
     }
-}
 
-impl<S> Client<S> {
-    fn transition<State2>(self) -> Client<State2> {
-        Client {
-            client_version: self.client_version,
-            random: self.random,
-            session_id: self.session_id,
-            cookie: self.cookie,
-            cipher_suites: self.cipher_suites,
-            _ph: PhantomData,
-        }
+    pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+        self.engine.parse_packet(packet, &mut self.cipher_suite)?;
+        self.process_input()?;
+        Ok(())
+    }
+
+    pub fn poll_output(&mut self) -> Output {
+        self.engine.poll_output()
+    }
+
+    fn process_input(&self) -> Result<(), Error> {
+        todo!()
     }
 }
 
-impl Client<CLIENT_HELLO> {
-    pub fn into_handshake(self) -> (Client<HELLO_VERIFY_REQUEST>, ClientHello) {
-        let handshake = ClientHello {
-            client_version: self.client_version,
-            random: self.random,
-            session_id: SessionId::empty(),
-            cookie: Cookie::empty(),
-            cipher_suites: self.cipher_suites.clone(),
-            compression_methods: array_vec!([CompressionMethod; 4] => CompressionMethod::Null),
-        };
+// pub fn into_handshake(self) -> (Client<HELLO_VERIFY_REQUEST>, ClientHello) {
+//     let handshake = ClientHello {
+//         client_version: self.client_version,
+//         random: self.random,
+//         session_id: SessionId::empty(),
+//         cookie: Cookie::empty(),
+//         cipher_suites: self.engine.config().cipher_suites.iter().cloned().collect(),
+//         compression_methods: array_vec!([CompressionMethod; 4] => CompressionMethod::Null),
+//     };
 
-        (self.transition(), handshake)
-    }
-}
+//     (self.transition(), handshake)
+// }

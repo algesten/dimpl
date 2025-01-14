@@ -36,7 +36,7 @@ pub use id::{Cookie, SessionId};
 pub use named_curve::{CurveType, NamedCurve};
 pub use nom::error::{Error, ErrorKind};
 pub use random::Random;
-pub use record::{ContentType, DTLSRecord};
+pub use record::{ContentType, DTLSRecord, Sequence};
 pub use server_hello::ServerHello;
 pub use server_key_exchange::ServerKeyExchange;
 use tinyvec::{array_vec, ArrayVec};

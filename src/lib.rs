@@ -11,12 +11,15 @@ extern crate log;
 pub mod state;
 
 mod client;
+use std::time::Instant;
+
 pub use client::Client;
 
 pub(crate) mod message;
 
 mod time_tricks;
 
+mod buffer;
 mod engine;
 mod incoming;
 
@@ -24,3 +27,36 @@ mod util;
 
 mod error;
 pub use error::Error;
+
+mod config;
+pub use config::Config;
+
+// This is the full DTLS1.2 flow
+//
+// Client                                               Server
+//
+//       ClientHello                  -------->
+//
+//                                    <--------   HelloVerifyRequest
+//                                                 (contains cookie)
+//
+//       ClientHello                  -------->
+//       (with cookie)
+//                                                       ServerHello
+//                                                      Certificate*
+//                                                ServerKeyExchange*
+//                                               CertificateRequest*
+//                                    <--------      ServerHelloDone
+//       Certificate*
+//       ClientKeyExchange
+//       CertificateVerify*
+//       [ChangeCipherSpec]
+//       Finished                     -------->
+//                                                [ChangeCipherSpec]
+//                                    <--------             Finished
+//       Application Data             <------->     Application Data
+
+pub enum Output<'a> {
+    Packet(&'a [u8]),
+    Timeout(Instant),
+}
