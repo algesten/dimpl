@@ -3,8 +3,11 @@ use std::time::Instant;
 
 use smallvec::{smallvec, SmallVec};
 
-use crate::message::{CipherSuite, Cookie, ProtocolVersion, Random, SessionId};
+use crate::message::{
+    CipherSuite, ClientHello, CompressionMethod, Cookie, ProtocolVersion, Random, SessionId,
+};
 use crate::state::client::CLIENT_HELLO;
+use crate::state::server::HELLO_VERIFY_REQUEST;
 
 pub struct Client<State> {
     client_version: ProtocolVersion,
@@ -39,7 +42,9 @@ impl Client<()> {
             ..Client::default()
         }
     }
+}
 
+impl<S> Client<S> {
     fn transition<State2>(self) -> Client<State2> {
         Client {
             client_version: self.client_version,
@@ -49,5 +54,20 @@ impl Client<()> {
             cipher_suites: self.cipher_suites,
             _ph: PhantomData,
         }
+    }
+}
+
+impl Client<CLIENT_HELLO> {
+    pub fn into_handshake(self) -> (Client<HELLO_VERIFY_REQUEST>, ClientHello) {
+        let handshake = ClientHello {
+            client_version: self.client_version,
+            random: self.random,
+            session_id: SessionId::empty(),
+            cookie: Cookie::empty(),
+            cipher_suites: self.cipher_suites.clone(),
+            compression_methods: smallvec![CompressionMethod::Null],
+        };
+
+        (self.transition(), handshake)
     }
 }
