@@ -6,6 +6,8 @@ pub enum Error {
     CryptoError(String),
     CertificateError(String),
     SecurityError(String),
+    ReceiveQueueFull,
+    TransmitQueueFull,
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {

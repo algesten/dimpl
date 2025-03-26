@@ -55,7 +55,7 @@ impl Engine {
 
         let incoming = Incoming::parse_packet(packet, c, buffer)?;
 
-        self.insert_incoming(incoming);
+        self.insert_incoming(incoming)?;
 
         Ok(())
     }
@@ -65,8 +65,13 @@ impl Engine {
     /// 1. If it is a handshake, sort by the message_seq
     /// 2. If it is not a handshake, sort by sequence_number
     ///
-    fn insert_incoming(&mut self, incoming: Incoming) {
+    fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
         let first = incoming.first();
+
+        // Check if the queue has reached the maximum size
+        if self.queue_rx.len() >= self.config.max_queue_rx {
+            return Err(Error::ReceiveQueueFull);
+        }
 
         if let Some(h) = &first.handshake {
             match self
@@ -103,6 +108,8 @@ impl Engine {
                 }
             }
         }
+
+        Ok(())
     }
 
     pub(crate) fn poll_packet_tx(&mut self) -> Option<&[u8]> {
@@ -134,11 +141,6 @@ impl Engine {
         Instant::now()
     }
 
-    /// Check if there are any incoming packets to process
-    pub fn has_incoming(&self) -> bool {
-        !self.queue_rx.is_empty()
-    }
-
     /// Get the next incoming packet
     pub fn next_incoming(&mut self) -> Option<Incoming> {
         self.queue_rx.pop_front()
@@ -149,6 +151,11 @@ impl Engine {
     where
         F: FnOnce(&mut Vec<u8>),
     {
+        // Check if the queue has reached the maximum size before creating a new buffer
+        if self.queue_tx.len() >= self.config.max_queue_tx {
+            return Err(Error::TransmitQueueFull);
+        }
+
         let mut buffer = self.buffers_free.pop();
         let mut fragment = Vec::new();
 

@@ -17,9 +17,9 @@ use crate::Error;
 pub struct Incoming(Inner);
 
 impl Incoming {
-    pub fn into_inner(self) -> Buffer {
-        self.0.into_owner()
-    }
+    // pub fn into_inner(self) -> Buffer {
+    //     self.0.into_owner()
+    // }
 
     pub fn records(&self) -> &Records {
         self.0.borrow_dependent()
@@ -31,10 +31,10 @@ impl Incoming {
         &self.records()[0]
     }
 
-    pub fn last(&self) -> &Record {
-        // Invariant: See above.
-        self.records().last().unwrap()
-    }
+    // pub fn last(&self) -> &Record {
+    //     // Invariant: See above.
+    //     self.records().last().unwrap()
+    // }
 }
 
 self_cell!(
