@@ -257,14 +257,14 @@ impl CryptoContext {
         &mut self.trust_store
     }
 
-    /// Verify a server certificate chain against our trust store
-    pub fn verify_server_cert_chain(
+    /// Verify a server certificate against our trust store
+    pub fn verify_server_certificate(
         &self,
-        cert_chain: &[&[u8]],
+        certificate_data: &[u8],
         hostname: &str,
     ) -> Result<(), String> {
         self.trust_store
-            .verify_cert_chain(cert_chain, hostname)
+            .verify_certificate(certificate_data, hostname)
             .map_err(|err| match err {
                 CertificateError::InvalidFormat => "Invalid certificate format".to_string(),
                 CertificateError::FingerprintMismatch => {

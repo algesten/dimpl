@@ -265,17 +265,13 @@ impl Client {
                                 // Validate the server certificate if we have one
                                 if !self.server_certificates.is_empty() && !self.hostname.is_empty()
                                 {
-                                    // Convert certificates to the format needed for verification
-                                    let cert_refs: Vec<&[u8]> = self
-                                        .server_certificates
-                                        .iter()
-                                        .map(|cert| cert.as_slice())
-                                        .collect();
+                                    // Get the leaf certificate (first in the list)
+                                    let server_cert = &self.server_certificates[0];
 
-                                    // Verify the certificate chain (which for WebRTC just checks fingerprint)
+                                    // Verify the certificate (WebRTC just checks fingerprint)
                                     if let Err(err) = self
                                         .crypto_context
-                                        .verify_server_cert_chain(&cert_refs, &self.hostname)
+                                        .verify_server_certificate(server_cert, &self.hostname)
                                     {
                                         return Err(Error::CertificateError(format!(
                                             "Certificate verification failed: {}",

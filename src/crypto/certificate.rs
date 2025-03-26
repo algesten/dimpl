@@ -123,18 +123,13 @@ impl TrustStore {
     }
 
     /// Verify a certificate against stored fingerprints
-    pub fn verify_cert_chain(
+    pub fn verify_certificate(
         &self,
-        certs: &[&[u8]],
+        certificate_data: &[u8],
         hostname: &str,
     ) -> Result<(), CertificateError> {
-        // For WebRTC, we only care about verifying the fingerprint of the leaf certificate
-        if certs.is_empty() {
-            return Err(CertificateError::InvalidFormat);
-        }
-
-        // Calculate fingerprint of the leaf certificate
-        let cert_fingerprint = calculate_fingerprint(certs[0]);
+        // Calculate fingerprint of the certificate
+        let cert_fingerprint = calculate_fingerprint(certificate_data);
 
         // Verify against the trusted fingerprint for this hostname
         if let Some(trusted) = self.trusted_fingerprints.get(hostname) {
@@ -185,14 +180,12 @@ mod tests {
         trust_store.add_trusted_fingerprint("example.com", fingerprint.clone());
 
         // Verification should succeed with matching fingerprint
-        assert!(trust_store
-            .verify_cert_chain(&[&cert], "example.com")
-            .is_ok());
+        assert!(trust_store.verify_certificate(&cert, "example.com").is_ok());
 
         // Verification should fail with different certificate
         let wrong_cert = vec![0x06, 0x07, 0x08, 0x09, 0x0A];
         assert!(trust_store
-            .verify_cert_chain(&[&wrong_cert], "example.com")
+            .verify_certificate(&wrong_cert, "example.com")
             .is_err());
     }
 
