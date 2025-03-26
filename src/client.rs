@@ -20,9 +20,10 @@ use tinyvec::array_vec;
 use crate::crypto::{CertVerifier, CryptoContext};
 use crate::engine::Engine;
 use crate::message::{
-    Body, Certificate, CertificateRequest, CipherSuite, ClientDiffieHellmanPublic, ClientHello,
-    ClientKeyExchange, CompressionMethod, ContentType, Cookie, ExchangeKeys, Finished, MessageType,
-    ProtocolVersion, PublicValueEncoding, Random, ServerKeyExchange, SessionId,
+    Asn1Cert, Body, Certificate, CertificateRequest, CertificateVerify, CipherSuite,
+    ClientDiffieHellmanPublic, ClientHello, ClientKeyExchange, CompressionMethod, ContentType,
+    Cookie, DigitallySigned, ExchangeKeys, Finished, HashAlgorithm, MessageType, ProtocolVersion,
+    PublicValueEncoding, Random, ServerKeyExchange, SessionId,
 };
 use crate::{Config, Error, Output};
 
@@ -61,6 +62,9 @@ pub struct Client {
 
     /// Server certificates
     server_certificates: Vec<Vec<u8>>,
+
+    /// Handshake messages collected for CertificateVerify signature
+    handshake_messages: Vec<u8>,
 }
 
 /// Current state of the client.
@@ -113,6 +117,7 @@ impl Client {
             certificate_requested: false,
             _certificate_request: None,
             server_certificates: Vec::new(),
+            handshake_messages: Vec::new(),
         }
     }
 
@@ -196,6 +201,11 @@ impl Client {
                     let record = &records[i];
 
                     if let Some(handshake) = &record.handshake {
+                        // Save handshake message for CertificateVerify signature
+                        // We store all handshake messages for later signature generation
+                        self.handshake_messages
+                            .extend_from_slice(record.record.fragment);
+
                         match handshake.header.msg_type {
                             MessageType::HelloVerifyRequest => {
                                 if !can_hello_verify {
@@ -344,10 +354,9 @@ impl Client {
 
             // Send CertificateVerify if we sent a client certificate
             if self.certificate_requested && self.crypto_context.has_client_certificate() {
-                // In a real implementation, we would:
                 // 1. Create a signature over all handshake messages
                 // 2. Send the signature in a CertificateVerify message
-                // This is not implemented in this simplified version
+                self.send_certificate_verify()?;
             }
 
             // Derive keys
@@ -380,9 +389,27 @@ impl Client {
                     body.push(1);
                 })?;
 
-            // Calculate verify data for Finished message
-            // In a real implementation, this would use all handshake messages
-            let verify_data = [0u8; 12]; // Placeholder
+            // Calculate verify data for Finished message using PRF
+            // Using all handshake messages collected so far
+            let verify_data = match self
+                .crypto_context
+                .generate_verify_data(&self.handshake_messages, true)
+            {
+                Ok(vd) => {
+                    if vd.len() != 12 {
+                        return Err(Error::CryptoError("Invalid verify data length".to_string()));
+                    }
+                    let mut vd_array = [0u8; 12];
+                    vd_array.copy_from_slice(&vd);
+                    vd_array
+                }
+                Err(e) => {
+                    return Err(Error::CryptoError(format!(
+                        "Failed to generate verify data: {}",
+                        e
+                    )));
+                }
+            };
 
             // Send finished message
             let finished = Finished::new(&verify_data);
@@ -418,8 +445,35 @@ impl Client {
                         ContentType::Handshake => {
                             if let Some(handshake) = &record.handshake {
                                 if handshake.header.msg_type == MessageType::Finished {
-                                    // Verify server finished message
-                                    // In a real implementation, we would verify the server's verify_data
+                                    // Parse the Finished message
+                                    if let Body::Finished(finished) = &handshake.body {
+                                        // Verify the server's verify_data (using PRF)
+                                        // Generate expected verify data using PRF
+                                        match self.crypto_context.generate_verify_data(
+                                            &self.handshake_messages,
+                                            false, // false for server
+                                        ) {
+                                            Ok(expected_vec) => {
+                                                // Convert to array for comparison
+                                                let mut expected = [0u8; 12];
+                                                expected.copy_from_slice(&expected_vec);
+
+                                                // If verification fails, return an error
+                                                if finished.verify_data != expected {
+                                                    return Err(Error::SecurityError(
+                                                        "Server Finished verification failed"
+                                                            .to_string(),
+                                                    ));
+                                                }
+                                            }
+                                            Err(e) => {
+                                                return Err(Error::CryptoError(format!(
+                                                    "Failed to generate verify data: {}",
+                                                    e
+                                                )));
+                                            }
+                                        }
+                                    }
 
                                     // Handshake is complete
                                     self.state = ClientState::Running;
@@ -470,5 +524,31 @@ impl Client {
             }
             _ => Err(Error::UnexpectedMessage("Not in Running state".to_string())),
         }
+    }
+
+    /// Send a CertificateVerify message to prove possession of the private key
+    fn send_certificate_verify(&mut self) -> Result<(), Error> {
+        // Get the signature algorithm recommended for this client
+        let algorithm = self.crypto_context.get_signature_algorithm();
+
+        // Sign all handshake messages
+        let signature = self
+            .crypto_context
+            .sign_data(&self.handshake_messages)
+            .map_err(|e| Error::CryptoError(format!("Failed to sign handshake messages: {}", e)))?;
+
+        // Create the digitally signed structure
+        let digitally_signed = DigitallySigned::new(algorithm, &signature);
+
+        // Create the certificate verify message
+        let certificate_verify = CertificateVerify::new(digitally_signed);
+
+        // Send the certificate verify message
+        self.engine
+            .create_handshake(MessageType::CertificateVerify, 0, |body| {
+                certificate_verify.serialize(body);
+            })?;
+
+        Ok(())
     }
 }

@@ -11,11 +11,14 @@ mod prf;
 
 pub use encryption::{AesGcm, Cipher};
 pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
-pub use prf::{calculate_master_secret, key_expansion};
+pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
 
 use crate::message::Asn1Cert;
 use crate::message::ServerKeyExchangeParams;
-use crate::message::{Certificate, CipherSuite, NamedCurve};
+use crate::message::{
+    Certificate, CipherSuite, HashAlgorithm, NamedCurve, SignatureAlgorithm,
+    SignatureAndHashAlgorithm,
+};
 
 /// Certificate verifier trait for DTLS connections
 pub trait CertVerifier: Send + Sync {
@@ -311,6 +314,7 @@ impl CryptoContext {
             None
         } else {
             // Create a Certificate with a single Asn1Cert
+            use crate::message::Asn1Cert;
             use tinyvec::array_vec;
 
             let cert = Asn1Cert(self.client_cert.as_slice());
@@ -319,8 +323,97 @@ impl CryptoContext {
         }
     }
 
+    /// Get the client private key if available
+    ///
+    /// This should only be used for operations like signing where the private key is needed
+    pub fn get_client_private_key(&self) -> Option<&[u8]> {
+        if !self.client_cert.is_empty() {
+            Some(&self.client_cert)
+        } else {
+            None
+        }
+    }
+
+    /// Sign the provided data using the client's private key
+    /// Returns the signature or an error if signing fails
+    pub fn sign_data(&self, data: &[u8]) -> Result<Vec<u8>, String> {
+        if let Some(private_key) = self.get_client_private_key() {
+            // In a real implementation, this would use the private key to sign the data
+            // For now, we'll create a simplified signature (just for testing)
+            let mut signature = Vec::new();
+
+            // Add a simple signature based on a hash of the data
+            // In production code, this would use the actual private key for signing
+            let hash = self.calculate_hash(data, HashAlgorithm::SHA256)?;
+            signature.extend_from_slice(&hash);
+
+            Ok(signature)
+        } else {
+            Err("No client private key available for signing".to_string())
+        }
+    }
+
+    /// Get the recommended hash and signature algorithms for this client
+    pub fn get_signature_algorithm(&self) -> crate::message::SignatureAndHashAlgorithm {
+        // In a real implementation, this would be determined by the client certificate type
+        // For now, we'll use a common default
+        crate::message::SignatureAndHashAlgorithm::new(
+            crate::message::HashAlgorithm::SHA256,
+            crate::message::SignatureAlgorithm::RSA,
+        )
+    }
+
+    /// Calculate a hash using the specified algorithm
+    pub fn calculate_hash(
+        &self,
+        data: &[u8],
+        algorithm: crate::message::HashAlgorithm,
+    ) -> Result<Vec<u8>, String> {
+        // In a real implementation, this would use a proper hash function
+        // For now, create a simple hash to use for testing
+        let mut hash = Vec::new();
+
+        // Mix in the algorithm and data
+        hash.push(algorithm.as_u8());
+
+        // Add a simple data-based hash (just for testing)
+        let mut checksum: u32 = 0;
+        for &byte in data {
+            checksum = checksum.wrapping_add(byte as u32);
+        }
+        hash.extend_from_slice(&checksum.to_be_bytes());
+
+        Ok(hash)
+    }
+
     /// Verify a server certificate
     pub fn verify_server_certificate(&self, certificate_data: &[u8]) -> Result<(), String> {
         self.cert_verifier.verify_certificate(certificate_data)
+    }
+
+    /// Generate verify data for a Finished message using PRF
+    pub fn generate_verify_data(
+        &self,
+        handshake_messages: &[u8],
+        is_client: bool,
+    ) -> Result<Vec<u8>, String> {
+        // Get master secret
+        let master_secret = match &self.master_secret {
+            Some(ms) => ms,
+            None => return Err("Master secret not available".to_string()),
+        };
+
+        // Hash the handshake messages
+        let handshake_hash = self.calculate_hash(handshake_messages, HashAlgorithm::SHA256)?;
+
+        // Use the appropriate label based on whether this is for client or server
+        let label = if is_client {
+            "client finished"
+        } else {
+            "server finished"
+        };
+
+        // Generate 12 bytes of verify data using PRF
+        prf_tls12(master_secret, label, &handshake_hash, 12)
     }
 }

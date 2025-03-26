@@ -5,6 +5,7 @@ pub enum Error {
     UnexpectedMessage(String),
     CryptoError(String),
     CertificateError(String),
+    SecurityError(String),
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {
