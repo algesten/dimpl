@@ -4,13 +4,14 @@ use std::time::Instant;
 use std::u16;
 
 use crate::buffer::{Buffer, BufferPool};
+use crate::crypto::{CertVerifier, CryptoContext};
 use crate::incoming::Incoming;
 use crate::message::{
     CipherSuite, ContentType, DTLSRecord, Handshake, MessageType, ProtocolVersion, Sequence,
 };
 use crate::{Config, Error, Output};
 
-#[derive(Debug)]
+// Using debug_ignore_primary since CryptoContext doesn't implement Debug
 pub(crate) struct Engine {
     config: Arc<Config>,
 
@@ -28,10 +29,30 @@ pub(crate) struct Engine {
 
     /// Holder of last packet. To be able to return a reference.
     last_packet: Option<Buffer>,
+
+    /// Cryptographic context for handling encryption/decryption
+    crypto_context: CryptoContext,
+
+    /// Handshake messages collected for CertificateVerify signature
+    handshake_messages: Vec<u8>,
+
+    /// Server encryption enabled flag
+    server_encryption_enabled: bool,
+
+    /// Client encryption enabled flag
+    client_encryption_enabled: bool,
+
+    /// Whether this engine is for a client (true) or server (false)
+    is_client: bool,
 }
 
 impl Engine {
-    pub fn new(config: Arc<Config>) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        certificate: Vec<u8>,
+        cert_verifier: Box<dyn CertVerifier>,
+        is_client: bool,
+    ) -> Self {
         Self {
             config,
             buffers_free: BufferPool::default(),
@@ -39,7 +60,42 @@ impl Engine {
             queue_rx: VecDeque::new(),
             queue_tx: VecDeque::new(),
             last_packet: None,
+            crypto_context: CryptoContext::new(certificate, cert_verifier),
+            handshake_messages: Vec::new(),
+            server_encryption_enabled: false,
+            client_encryption_enabled: false,
+            is_client,
         }
+    }
+
+    /// Get a reference to the crypto context
+    pub fn crypto_context(&self) -> &CryptoContext {
+        &self.crypto_context
+    }
+
+    /// Get a mutable reference to the crypto context
+    pub fn crypto_context_mut(&mut self) -> &mut CryptoContext {
+        &mut self.crypto_context
+    }
+
+    /// Get a reference to the handshake messages buffer
+    pub fn handshake_messages(&self) -> &[u8] {
+        &self.handshake_messages
+    }
+
+    /// Add handshake message to the buffer
+    pub fn add_handshake_message(&mut self, message: &[u8]) {
+        self.handshake_messages.extend_from_slice(message);
+    }
+
+    /// Enable server encryption
+    pub fn enable_server_encryption(&mut self) {
+        self.server_encryption_enabled = true;
+    }
+
+    /// Enable client encryption
+    pub fn enable_client_encryption(&mut self) {
+        self.client_encryption_enabled = true;
     }
 
     pub fn config(&self) -> &Config {
@@ -54,6 +110,15 @@ impl Engine {
         let buffer = self.buffers_free.pop();
 
         let incoming = Incoming::parse_packet(packet, c, buffer)?;
+
+        // If this is a handshake message, save it for CertificateVerify
+        for record in incoming.records().iter() {
+            if record.record.content_type == ContentType::Handshake {
+                if record.handshake.is_some() {
+                    self.add_handshake_message(record.record.fragment);
+                }
+            }
+        }
 
         self.insert_incoming(incoming)?;
 
@@ -162,10 +227,28 @@ impl Engine {
         // Let the callback fill the fragment
         f(&mut fragment);
 
+        // Create the record
+        let sequence = self.next_sequence_tx.clone();
+        let length = fragment.len() as u16;
+
+        // Handle encryption if enabled and content type requires it
+        let fragment = if self.should_encrypt(content_type) {
+            // Create proper AAD for encryption
+            let aad = self.create_aad(content_type, &sequence, length);
+
+            // Generate nonce
+            let nonce = self.generate_nonce()?;
+
+            // Encrypt the fragment
+            self.encrypt_data(&fragment, &aad, &nonce)?
+        } else {
+            fragment
+        };
+
         let record = DTLSRecord {
             content_type,
             version: ProtocolVersion::DTLS1_2,
-            sequence: self.next_sequence_tx.clone(),
+            sequence,
             length: fragment.len() as u16,
             fragment: &fragment,
         };
@@ -197,27 +280,113 @@ impl Engine {
     where
         F: FnOnce(&mut Vec<u8>),
     {
+        // Create a buffer for the handshake body
+        let mut body_buffer = Vec::new();
+
+        // Let the callback fill the handshake body
+        f(&mut body_buffer);
+
+        // Create the handshake header
+        let header = Handshake {
+            header: crate::message::Header {
+                msg_type,
+                length: body_buffer.len() as u32,
+                message_seq,
+                fragment_offset: 0,
+                fragment_length: body_buffer.len() as u32,
+            },
+            body: crate::message::Body::Fragment(&body_buffer),
+        };
+
+        // Save this handshake message for future CertificateVerify
+        let mut handshake_data = Vec::new();
+        header.serialize(&mut handshake_data);
+        self.add_handshake_message(&handshake_data);
+
+        // Serialize the handshake into a temp buffer
+        let mut handshake_buffer = Vec::new();
+        header.serialize(&mut handshake_buffer);
+
+        // Now create the record with the serialized handshake
         self.create_record(ContentType::Handshake, |fragment| {
-            // Create a buffer for the handshake body
-            let mut body_buffer = Vec::new();
-
-            // Let the callback fill the handshake body
-            f(&mut body_buffer);
-
-            // Create the handshake header
-            let header = Handshake {
-                header: crate::message::Header {
-                    msg_type,
-                    length: body_buffer.len() as u32,
-                    message_seq,
-                    fragment_offset: 0,
-                    fragment_length: body_buffer.len() as u32,
-                },
-                body: crate::message::Body::Fragment(&body_buffer),
-            };
-
-            // Serialize the handshake
-            header.serialize(fragment);
+            fragment.extend_from_slice(&handshake_buffer);
         })
+    }
+
+    /// Generate a nonce appropriate for the role (client or server)
+    fn generate_nonce(&self) -> Result<Vec<u8>, Error> {
+        if self.is_client {
+            self.crypto_context
+                .generate_client_nonce()
+                .map_err(|e| Error::CryptoError(format!("Failed to generate client nonce: {}", e)))
+        } else {
+            self.crypto_context
+                .generate_server_nonce()
+                .map_err(|e| Error::CryptoError(format!("Failed to generate server nonce: {}", e)))
+        }
+    }
+
+    /// Encrypt data appropriate for the role (client or server)
+    fn encrypt_data(&self, plaintext: &[u8], aad: &[u8], nonce: &[u8]) -> Result<Vec<u8>, Error> {
+        if self.is_client {
+            self.crypto_context
+                .encrypt_client_to_server(plaintext, aad, nonce)
+                .map_err(|e| Error::CryptoError(format!("Client encryption failed: {}", e)))
+        } else {
+            // Server encrypting to client is equivalent to decrypting from client to server
+            // For server, we're going in the opposite direction
+            self.crypto_context
+                .decrypt_server_to_client(plaintext, aad, nonce)
+                .map_err(|e| Error::CryptoError(format!("Server encryption failed: {}", e)))
+        }
+    }
+
+    /// Should encryption be used for this message based on content type and encryption state
+    fn should_encrypt(&self, content_type: ContentType) -> bool {
+        // Application data is always encrypted
+        if content_type == ContentType::ApplicationData {
+            return true;
+        }
+
+        // For handshake messages, encryption depends on role and state
+        if content_type == ContentType::Handshake {
+            if self.is_client {
+                return self.client_encryption_enabled;
+            } else {
+                return self.server_encryption_enabled;
+            }
+        }
+
+        // Other message types are not encrypted
+        false
+    }
+
+    /// Create AAD (Additional Authenticated Data) for a DTLS record
+    pub fn create_aad(
+        &self,
+        content_type: ContentType,
+        sequence: &Sequence,
+        length: u16,
+    ) -> Vec<u8> {
+        let mut aad = Vec::with_capacity(13);
+
+        // Content type (1 byte)
+        aad.push(content_type.as_u8());
+
+        // Protocol version (2 bytes)
+        let version = ProtocolVersion::DTLS1_2;
+        aad.extend_from_slice(&version.as_u16().to_be_bytes());
+
+        // Epoch (2 bytes)
+        aad.extend_from_slice(&sequence.epoch.to_be_bytes());
+
+        // Sequence number (6 bytes)
+        let seq_bytes = sequence.sequence_number.to_be_bytes();
+        aad.extend_from_slice(&seq_bytes[2..]); // Skip first 2 bytes for 6-byte sequence
+
+        // Length (2 bytes)
+        aad.extend_from_slice(&length.to_be_bytes());
+
+        aad
     }
 }

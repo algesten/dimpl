@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use tinyvec::array_vec;
 
-use crate::crypto::{CertVerifier, CryptoContext};
+use crate::crypto::CertVerifier;
 use crate::engine::Engine;
 use crate::message::{
     Body, Certificate, CertificateRequest, CertificateVerify, CipherSuite,
@@ -51,9 +51,6 @@ pub struct Client {
     /// Server random. Set by ServerHello.
     server_random: Option<Random>,
 
-    /// Cryptographic context
-    crypto_context: CryptoContext,
-
     /// Flag indicating if the client certificate was requested
     certificate_requested: bool,
 
@@ -62,9 +59,6 @@ pub struct Client {
 
     /// Server certificates
     server_certificates: Vec<Vec<u8>>,
-
-    /// Handshake messages collected for CertificateVerify signature
-    handshake_messages: Vec<u8>,
 
     /// Server encryption enabled flag - set when server ChangeCipherSpec is received
     server_encryption_enabled: bool,
@@ -108,19 +102,19 @@ impl Client {
         certificate: Vec<u8>,
         cert_verifier: Box<dyn CertVerifier>,
     ) -> Client {
+        let engine = Engine::new(config, certificate, cert_verifier, true);
+
         Client {
             random: Random::new(now),
             session_id: None,
             cookie: None,
             cipher_suite: None,
             state: ClientState::SendClientHello,
-            engine: Engine::new(config),
+            engine,
             server_random: None,
-            crypto_context: CryptoContext::new(certificate, cert_verifier),
             certificate_requested: false,
             _certificate_request: None,
             server_certificates: Vec::new(),
-            handshake_messages: Vec::new(),
             server_encryption_enabled: false,
         }
     }
@@ -208,8 +202,7 @@ impl Client {
                 };
 
                 // Save handshake message for CertificateVerify signature
-                self.handshake_messages
-                    .extend_from_slice(record.record.fragment);
+                self.engine.add_handshake_message(record.record.fragment);
 
                 // Validate transition using our FSM
                 state = state.handle(handshake.header.msg_type)?;
@@ -275,7 +268,8 @@ impl Client {
 
         // Initialize the key exchange based on selected cipher suite
         let cs = server_hello.cipher_suite;
-        self.crypto_context
+        self.engine
+            .crypto_context_mut()
             .init_key_exchange(cs)
             .map_err(|e| Error::CryptoError(format!("Failed to initialize key exchange: {}", e)))?;
 
@@ -310,7 +304,8 @@ impl Client {
         };
 
         // Process the server key exchange message
-        self.crypto_context
+        self.engine
+            .crypto_context_mut()
             .process_server_key_exchange(server_key_exchange)
             .map_err(|e| {
                 Error::CryptoError(format!("Failed to process server key exchange: {}", e))
@@ -329,7 +324,8 @@ impl Client {
 
         // Verify the certificate using the configured verifier
         if let Err(err) = self
-            .crypto_context
+            .engine
+            .crypto_context()
             .verify_server_certificate(&self.server_certificates[0])
         {
             return Err(Error::CertificateError(format!(
@@ -356,10 +352,19 @@ impl Client {
             return Ok(());
         }
 
-        if let Some(client_cert) = self.crypto_context.get_client_certificate() {
+        // Get the client certificate info before borrowing engine mutably
+        let crypto = self.engine.crypto_context();
+        let client_cert_opt = crypto.get_client_certificate();
+
+        if let Some(client_cert) = client_cert_opt {
+            // Store the client certificate data for sending
+            let mut cert_data = Vec::new();
+            client_cert.serialize(&mut cert_data);
+
+            // Now use the engine with the stored data
             self.engine
                 .create_handshake(MessageType::Certificate, 0, |body| {
-                    client_cert.serialize(body);
+                    body.extend_from_slice(&cert_data);
                 })?;
         } else {
             // If we don't have a certificate, send empty list
@@ -384,7 +389,8 @@ impl Client {
 
         // Generate key exchange data
         let public_key = self
-            .crypto_context
+            .engine
+            .crypto_context_mut()
             .generate_key_exchange()
             .map_err(|e| Error::CryptoError(format!("Failed to generate key exchange: {}", e)))?;
 
@@ -404,7 +410,7 @@ impl Client {
             })?;
 
         // Send CertificateVerify if we sent a client certificate
-        if self.certificate_requested && self.crypto_context.has_client_certificate() {
+        if self.certificate_requested && self.engine.crypto_context().has_client_certificate() {
             self.send_certificate_verify()?;
         }
 
@@ -439,12 +445,14 @@ impl Client {
         server_random.serialize(&mut server_random_vec);
 
         // Derive master secret
-        self.crypto_context
+        self.engine
+            .crypto_context_mut()
             .derive_master_secret(&client_random, &server_random_vec)
             .map_err(|e| Error::CryptoError(format!("Failed to derive master secret: {}", e)))?;
 
         // Derive the encryption/decryption keys
-        self.crypto_context
+        self.engine
+            .crypto_context_mut()
             .derive_keys(cipher_suite, &client_random, &server_random_vec)
             .map_err(|e| Error::CryptoError(format!("Failed to derive keys: {}", e)))?;
 
@@ -454,6 +462,9 @@ impl Client {
                 // Change cipher spec is just a single byte with value 1
                 body.push(1);
             })?;
+
+        // Enable client encryption
+        self.engine.enable_client_encryption();
 
         // Send finished message with verify data
         self.send_finished_message()?;
@@ -477,8 +488,9 @@ impl Client {
 
     fn generate_verify_data(&self, is_client: bool) -> Result<[u8; 12], Error> {
         let verify_data_vec = self
-            .crypto_context
-            .generate_verify_data(&self.handshake_messages, is_client)
+            .engine
+            .crypto_context()
+            .generate_verify_data(self.engine.handshake_messages(), is_client)
             .map_err(|e| Error::CryptoError(format!("Failed to generate verify data: {}", e)))?;
 
         if verify_data_vec.len() != 12 {
@@ -503,6 +515,7 @@ impl Client {
                     ContentType::ChangeCipherSpec => {
                         // Server changed encryption state
                         self.server_encryption_enabled = true;
+                        self.engine.enable_server_encryption();
                         debug!("Server encryption enabled after ChangeCipherSpec");
                     }
                     ContentType::Handshake => {
@@ -542,49 +555,16 @@ impl Client {
         Ok(())
     }
 
-    /// Send application data when the client is in the Running state
-    ///
-    /// This should only be called when the client is in the Running state,
-    /// after the handshake is complete.
-    pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
-        if !matches!(self.state, ClientState::Running) {
-            return Err(Error::UnexpectedMessage("Not in Running state".to_string()));
-        }
-
-        // Generate a secure random nonce from the client cipher
-        let nonce = self
-            .crypto_context
-            .generate_client_nonce()
-            .map_err(|e| Error::CryptoError(format!("Failed to generate nonce: {}", e)))?;
-
-        // Prepare AAD (Additional Authenticated Data)
-        // For DTLS, this would typically include parts of the record header
-        let aad = Vec::new(); // Using an empty AAD for simplicity
-
-        // Encrypt the data using the established crypto context
-        let encrypted = self
-            .crypto_context
-            .encrypt_client_to_server(data, &aad, &nonce)
-            .map_err(|e| Error::CryptoError(format!("Encryption failed: {}", e)))?;
-
-        // Send the encrypted data in an ApplicationData record
-        self.engine
-            .create_record(ContentType::ApplicationData, |body| {
-                body.extend_from_slice(&encrypted);
-            })?;
-
-        Ok(())
-    }
-
     /// Send a CertificateVerify message to prove possession of the private key
     fn send_certificate_verify(&mut self) -> Result<(), Error> {
         // Get the signature algorithm recommended for this client
-        let algorithm = self.crypto_context.get_signature_algorithm();
+        let algorithm = self.engine.crypto_context().get_signature_algorithm();
 
         // Sign all handshake messages
         let signature = self
-            .crypto_context
-            .sign_data(&self.handshake_messages)
+            .engine
+            .crypto_context()
+            .sign_data(self.engine.handshake_messages())
             .map_err(|e| Error::CryptoError(format!("Failed to sign handshake messages: {}", e)))?;
 
         // Create the digitally signed structure
@@ -597,6 +577,25 @@ impl Client {
         self.engine
             .create_handshake(MessageType::CertificateVerify, 0, |body| {
                 certificate_verify.serialize(body);
+            })?;
+
+        Ok(())
+    }
+
+    /// Send application data when the client is in the Running state
+    ///
+    /// This should only be called when the client is in the Running state,
+    /// after the handshake is complete.
+    pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
+        if !matches!(self.state, ClientState::Running) {
+            return Err(Error::UnexpectedMessage("Not in Running state".to_string()));
+        }
+
+        // Use the engine's create_record to send application data
+        // The encryption is now handled in the engine
+        self.engine
+            .create_record(ContentType::ApplicationData, |body| {
+                body.extend_from_slice(data);
             })?;
 
         Ok(())
