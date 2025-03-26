@@ -13,12 +13,12 @@ self_cell = "1.1.0"
 zeroize = "1.8.1"
 
 # Cryptography dependencies
-p256 = { version = "0.13", features = ["ecdh"] }
+p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
 x25519-dalek = { version = "2", features = ["getrandom"] }
 aes-gcm = "0.10"
 hmac = "0.12"
 sha2 = "0.10"
-p384 = { version = "0.13", features = ["ecdh"] }
+p384 = { version = "0.13", features = ["ecdh", "ecdsa"] }
 sec1 = "0.7"
 elliptic-curve = "0.13"
 num-bigint = { version = "0.4", features = ["rand"] }
@@ -26,3 +26,7 @@ time = { version = "0.3", features = ["formatting"] }
 x509-cert = { version = "0.2", features = ["builder"] }
 rcgen = "0.10"
 der = "0.7"
+rsa = { version = "0.9", features = ["pem", "sha2"] }
+pkcs8 = { version = "0.10", features = ["pem"] }
+signature = "2.1"
+spki = "0.7"

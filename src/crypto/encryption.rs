@@ -2,7 +2,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
     Aes128Gcm, Aes256Gcm, Nonce,
 };
-use rand::{Rng, RngCore};
+use rand::RngCore;
 
 /// Cipher trait for DTLS encryption and decryption
 pub trait Cipher {

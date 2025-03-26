@@ -10,10 +10,12 @@ use tinyvec::array_vec;
 mod encryption;
 mod key_exchange;
 mod prf;
+mod signing;
 
 pub use encryption::{AesGcm, Cipher};
 pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
 pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
+pub use signing::sign_data;
 
 use crate::message::Asn1Cert;
 use crate::message::ServerKeyExchangeParams;
@@ -333,17 +335,12 @@ impl CryptoContext {
     /// Sign the provided data using the client's private key
     /// Returns the signature or an error if signing fails
     pub fn sign_data(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        if let Some(private_key) = self.get_client_private_key() {
-            // In a real implementation, this would use the private key to sign the data
-            // For now, we'll create a simplified signature (just for testing)
-            let mut signature = Vec::new();
+        if let Some(private_key_data) = self.get_client_private_key() {
+            // Parse the private key using appropriate format from the certificate
+            let sig_alg = self.get_signature_algorithm();
 
-            // Add a simple signature based on a hash of the data
-            // In production code, this would use the actual private key for signing
-            let hash = self.calculate_hash(data, HashAlgorithm::SHA256)?;
-            signature.extend_from_slice(&hash);
-
-            Ok(signature)
+            // Use the signing module to sign the data
+            signing::sign_data(private_key_data, data, sig_alg)
         } else {
             Err("No client private key available for signing".to_string())
         }
