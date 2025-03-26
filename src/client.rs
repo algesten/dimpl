@@ -83,16 +83,3 @@ impl Client {
         todo!()
     }
 }
-
-// pub fn into_handshake(self) -> (Client<HELLO_VERIFY_REQUEST>, ClientHello) {
-//     let handshake = ClientHello {
-//         client_version: self.client_version,
-//         random: self.random,
-//         session_id: SessionId::empty(),
-//         cookie: Cookie::empty(),
-//         cipher_suites: self.engine.config().cipher_suites.iter().cloned().collect(),
-//         compression_methods: array_vec!([CompressionMethod; 4] => CompressionMethod::Null),
-//     };
-
-//     (self.transition(), handshake)
-// }
