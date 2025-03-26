@@ -206,7 +206,9 @@ impl Client {
                         match handshake.header.msg_type {
                             MessageType::HelloVerifyRequest => {
                                 if !can_hello_verify {
-                                    return Err(Error::UnexpectedMessage);
+                                    return Err(Error::UnexpectedMessage(
+                                        "Unexpected HelloVerifyRequest".to_string(),
+                                    ));
                                 }
 
                                 // Extract the cookie from the HelloVerifyRequest
@@ -390,7 +392,9 @@ impl Client {
                     finished.serialize(body);
                 })?;
         } else {
-            return Err(Error::UnexpectedMessage); // No cipher suite selected
+            return Err(Error::UnexpectedMessage(
+                "No cipher suite selected".to_string(),
+            )); // No cipher suite selected
         }
 
         Ok(())
@@ -441,36 +445,31 @@ impl Client {
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         match self.state {
             ClientState::Running => {
-                // Use the crypto context to encrypt the data
-                // In a real implementation, this would generate a proper nonce and AAD
-                let nonce = vec![0u8; 12]; // Placeholder
-                let aad = vec![]; // Placeholder
+                // Generate a secure random nonce from the client cipher
+                let nonce = self
+                    .crypto_context
+                    .generate_client_nonce()
+                    .map_err(|e| Error::CryptoError(format!("Failed to generate nonce: {}", e)))?;
 
-                // Encrypt the data if we have the crypto context set up
-                match self
+                // Prepare AAD (Additional Authenticated Data)
+                // For DTLS, this would typically include parts of the record header
+                let aad = Vec::new(); // Using an empty AAD for simplicity
+
+                // Encrypt the data using the established crypto context
+                let encrypted = self
                     .crypto_context
                     .encrypt_client_to_server(data, &aad, &nonce)
-                {
-                    Ok(encrypted) => {
-                        // Send the encrypted data in an ApplicationData record
-                        self.engine
-                            .create_record(ContentType::ApplicationData, |body| {
-                                body.extend_from_slice(&encrypted);
-                            })?;
-                        Ok(())
-                    }
-                    Err(_) => {
-                        // If encryption fails, fall back to sending unencrypted
-                        // (This would be a security issue in production code)
-                        self.engine
-                            .create_record(ContentType::ApplicationData, |body| {
-                                body.extend_from_slice(data);
-                            })?;
-                        Ok(())
-                    }
-                }
+                    .map_err(|e| Error::CryptoError(format!("Encryption failed: {}", e)))?;
+
+                // Send the encrypted data in an ApplicationData record
+                self.engine
+                    .create_record(ContentType::ApplicationData, |body| {
+                        body.extend_from_slice(&encrypted);
+                    })?;
+
+                Ok(())
             }
-            _ => Err(Error::UnexpectedMessage), // Not in the right state to send application data
+            _ => Err(Error::UnexpectedMessage("Not in Running state".to_string())),
         }
     }
 
@@ -492,13 +491,35 @@ impl Client {
     /// Get the fingerprint of our local certificate
     /// This should be shared with the remote peer through the signaling channel
     pub fn get_local_fingerprint(&self) -> Option<Vec<u8>> {
-        if let Some(cert) = &self.crypto_context.trust_store().get_client_certificate() {
-            if !cert.certificate_list.is_empty() {
-                let cert_bytes = cert.certificate_list[0].0;
-                return Some(crate::crypto::calculate_fingerprint(cert_bytes));
+        if self.crypto_context.trust_store().has_client_certificate() {
+            // Get the client certificate from the trust store
+            if let Some(cert) = self.crypto_context.trust_store().get_client_certificate() {
+                if !cert.certificate_list.is_empty() {
+                    let cert_bytes = cert.certificate_list[0].0;
+                    return Some(crate::crypto::calculate_fingerprint(cert_bytes));
+                }
             }
         }
         None
+    }
+
+    /// Get the fingerprint of our local certificate as a formatted string
+    /// Returns the SHA-256 fingerprint in WebRTC's standard colon-separated hex format
+    /// Example: "SHA-256 AF:12:F6:..."
+    pub fn get_formatted_fingerprint(&self) -> Option<String> {
+        self.get_local_fingerprint()
+            .map(|fp| format!("SHA-256 {}", crate::crypto::format_fingerprint(&fp)))
+    }
+
+    /// Generate a new self-signed certificate for this client
+    /// Returns the SHA-256 fingerprint of the certificate
+    pub fn generate_certificate(&mut self) -> Result<Vec<u8>, crate::Error> {
+        self.crypto_context
+            .trust_store_mut()
+            .generate_self_signed_certificate()
+            .map_err(|e| {
+                crate::Error::CertificateError(format!("Failed to generate certificate: {:?}", e))
+            })
     }
 
     /// Get a mutable reference to the crypto context

@@ -4,7 +4,9 @@ use sha2::{Digest, Sha256};
 type HmacSha256 = Hmac<Sha256>;
 
 /// Implement TLS 1.2 PRF (Pseudorandom Function)
-/// as specified in RFC 5246 Section 5
+/// as specified in RFC 5246 Section 5.
+///
+/// PRF(secret, label, seed) = P_<hash>(secret, label + seed)
 pub fn prf_tls12(
     secret: &[u8],
     label: &str,
@@ -12,38 +14,41 @@ pub fn prf_tls12(
     output_len: usize,
 ) -> Result<Vec<u8>, String> {
     // In TLS 1.2, PRF uses HMAC-SHA256
-    let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
-
-    // A(1) = HMAC_hash(secret, label + seed)
-    hmac.update(label.as_bytes());
-    hmac.update(seed);
-    let a1 = hmac.finalize().into_bytes();
-
     let mut result = Vec::with_capacity(output_len);
-    let mut a_i = a1.clone();
 
-    // P_hash(secret, seed) = HMAC_hash(secret, A(1) + seed) +
-    //                        HMAC_hash(secret, A(2) + seed) +
-    //                        HMAC_hash(secret, A(3) + seed) + ...
+    // A(0) = seed, A(i) = HMAC_hash(secret, A(i-1))
+    // We don't actually compute A(0) as it's just the label+seed
+
+    // Create input seed for A(1)
+    let mut input = Vec::with_capacity(label.len() + seed.len());
+    input.extend_from_slice(label.as_bytes());
+    input.extend_from_slice(seed);
+
+    // Compute A(1) = HMAC_hash(secret, label + seed)
+    let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
+    hmac.update(&input);
+    let mut a = hmac.finalize().into_bytes();
+
     while result.len() < output_len {
+        // P_hash = HMAC_hash(secret, A(i) + [label + seed])
         let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
-
-        // HMAC_hash(secret, A(i) + label + seed)
-        hmac.update(&a_i);
-        hmac.update(label.as_bytes());
-        hmac.update(seed);
-
+        hmac.update(&a);
+        hmac.update(&input);
         let output = hmac.finalize().into_bytes();
-        result.extend_from_slice(&output);
 
-        // A(i+1) = HMAC_hash(secret, A(i))
-        let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
-        hmac.update(&a_i);
-        a_i = hmac.finalize().into_bytes();
+        // Add as much of the output as needed
+        let remaining = output_len - result.len();
+        let to_copy = std::cmp::min(remaining, output.len());
+        result.extend_from_slice(&output[..to_copy]);
+
+        // If we need more, compute A(i+1) = HMAC_hash(secret, A(i))
+        if result.len() < output_len {
+            let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
+            hmac.update(&a);
+            a = hmac.finalize().into_bytes();
+        }
     }
 
-    // Truncate to the desired length
-    result.truncate(output_len);
     Ok(result)
 }
 

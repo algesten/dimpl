@@ -1,6 +1,7 @@
 use crate::message::{CurveType, NamedCurve};
 use elliptic_curve::sec1::FromEncodedPoint;
 use elliptic_curve::sec1::{EncodedPoint, ToEncodedPoint};
+use num_bigint::{BigUint, RandomBits};
 use p256::{
     ecdh::{EphemeralSecret as P256EphemeralSecret, SharedSecret as P256SharedSecret},
     PublicKey as P256PublicKey,
@@ -9,6 +10,7 @@ use p384::{
     ecdh::{EphemeralSecret as P384EphemeralSecret, SharedSecret as P384SharedSecret},
     PublicKey as P384PublicKey,
 };
+use rand::distributions::Distribution;
 use rand::{rngs::OsRng, Rng};
 use sha2::{Digest, Sha256};
 use std::convert::TryFrom;
@@ -120,40 +122,66 @@ impl KeyExchange for EcdhKeyExchange {
     }
 }
 
-/// DHE Key Exchange - we'll implement a simple version
+/// DHE Key Exchange implementation
 pub struct DhKeyExchange {
-    // For a real implementation, we would use a proper DH library
-    // This is a simplified version for example purposes
-    private_key: Option<Vec<u8>>,
-    prime: Vec<u8>,
-    generator: Vec<u8>,
+    /// Diffie-Hellman prime modulus
+    prime: BigUint,
+
+    /// Diffie-Hellman generator
+    generator: BigUint,
+
+    /// Our private key (random exponent)
+    private_key: Option<BigUint>,
 }
 
 impl DhKeyExchange {
     pub fn new(prime: Vec<u8>, generator: Vec<u8>) -> Self {
         DhKeyExchange {
+            prime: BigUint::from_bytes_be(&prime),
+            generator: BigUint::from_bytes_be(&generator),
             private_key: None,
-            prime,
-            generator,
         }
     }
 }
 
 impl KeyExchange for DhKeyExchange {
     fn generate(&mut self) -> Vec<u8> {
-        // Generate a random private key
-        let mut private_key = [0u8; 32];
-        OsRng.fill(&mut private_key);
-        self.private_key = Some(private_key.to_vec());
+        // Determine bit size of prime
+        let prime_bits = self.prime.bits() as u64;
 
-        // For a real implementation, we would compute g^private_key mod p
-        // For now, we'll just return a dummy public key
-        vec![1, 2, 3, 4]
+        // Generate a random private key smaller than the prime
+        let mut rng = rand::thread_rng();
+        let distribution = RandomBits::new(prime_bits - 1); // One bit less than prime
+        let private_key: BigUint = distribution.sample(&mut rng);
+
+        // Compute public key as g^private_key mod p
+        let public_key = self.generator.modpow(&private_key, &self.prime);
+
+        // Store private key for later use
+        self.private_key = Some(private_key);
+
+        // Return public key as bytes
+        public_key.to_bytes_be()
     }
 
-    fn compute_shared_secret(&self, _peer_public_key: &[u8]) -> Result<Vec<u8>, String> {
-        // In a real implementation, we would compute (peer_public_key)^private_key mod p
-        // For now, return a dummy shared secret
-        Ok(vec![0x12, 0x34, 0x56, 0x78])
+    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Vec<u8>, String> {
+        // Convert peer's public key to BigUint
+        let peer_public = BigUint::from_bytes_be(peer_public_key);
+
+        // Get our private key
+        match &self.private_key {
+            Some(private_key) => {
+                // Compute shared secret as peer_public^private_key mod p
+                let shared_secret = peer_public.modpow(private_key, &self.prime);
+
+                // Return shared secret as big-endian bytes
+                Ok(shared_secret.to_bytes_be())
+            }
+            None => Err("DH private key not generated".to_string()),
+        }
+    }
+
+    fn get_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
+        None // DHE doesn't use named curves
     }
 }

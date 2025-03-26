@@ -2,7 +2,7 @@
 pub enum Error {
     ParseIncomplete,
     ParseError(nom::error::ErrorKind),
-    UnexpectedMessage,
+    UnexpectedMessage(String),
     CryptoError(String),
     CertificateError(String),
 }

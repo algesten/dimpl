@@ -4,15 +4,15 @@ use aes_gcm::{
 };
 use rand::{rngs::OsRng, Rng, RngCore};
 
-/// Trait for encryption/decryption operations
+/// Cipher trait for DTLS encryption and decryption
 pub trait Cipher {
-    /// Encrypt data with additional authenticated data (AAD)
+    /// Encrypt plaintext and return ciphertext
     fn encrypt(&self, plaintext: &[u8], aad: &[u8], nonce: &[u8]) -> Result<Vec<u8>, String>;
 
-    /// Decrypt data with additional authenticated data (AAD)
+    /// Decrypt ciphertext and return plaintext
     fn decrypt(&self, ciphertext: &[u8], aad: &[u8], nonce: &[u8]) -> Result<Vec<u8>, String>;
 
-    /// Generate a random nonce
+    /// Generate a random nonce suitable for this cipher
     fn generate_nonce(&self) -> Vec<u8>;
 }
 
@@ -85,8 +85,15 @@ impl Cipher for AesGcm {
     }
 
     fn generate_nonce(&self) -> Vec<u8> {
-        let mut nonce = vec![0u8; 12];
-        OsRng.fill_bytes(&mut nonce);
+        let mut nonce = vec![0u8; 12]; // AES-GCM requires a 12-byte nonce
+        rand::thread_rng().fill_bytes(&mut nonce);
         nonce
     }
+}
+
+/// Generate a random nonce
+pub fn generate_nonce() -> Vec<u8> {
+    let mut nonce = vec![0u8; 12]; // AES-GCM requires a 12-byte nonce
+    rand::thread_rng().fill(&mut nonce[..]);
+    nonce
 }

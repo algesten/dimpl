@@ -10,8 +10,8 @@ mod encryption;
 mod key_exchange;
 mod prf;
 
-pub use certificate::{calculate_fingerprint, CertificateError, TrustStore};
-pub use encryption::{AesGcm, Cipher};
+pub use certificate::{calculate_fingerprint, format_fingerprint, CertificateError, TrustStore};
+pub use encryption::{generate_nonce, AesGcm, Cipher};
 pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
 pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
 
@@ -227,6 +227,22 @@ impl CryptoContext {
     ) -> Result<Vec<u8>, String> {
         match &self.server_cipher {
             Some(cipher) => cipher.decrypt(ciphertext, aad, nonce),
+            None => Err("Server cipher not initialized".to_string()),
+        }
+    }
+
+    /// Generate a random nonce for encryption
+    pub fn generate_client_nonce(&self) -> Result<Vec<u8>, String> {
+        match &self.client_cipher {
+            Some(cipher) => Ok(cipher.generate_nonce()),
+            None => Err("Client cipher not initialized".to_string()),
+        }
+    }
+
+    /// Generate a random nonce for decryption
+    pub fn generate_server_nonce(&self) -> Result<Vec<u8>, String> {
+        match &self.server_cipher {
+            Some(cipher) => Ok(cipher.generate_nonce()),
             None => Err("Server cipher not initialized".to_string()),
         }
     }
