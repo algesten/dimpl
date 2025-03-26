@@ -20,10 +20,10 @@ use tinyvec::array_vec;
 use crate::crypto::{CertVerifier, CryptoContext};
 use crate::engine::Engine;
 use crate::message::{
-    Asn1Cert, Body, Certificate, CertificateRequest, CertificateVerify, CipherSuite,
+    Body, Certificate, CertificateRequest, CertificateVerify, CipherSuite,
     ClientDiffieHellmanPublic, ClientHello, ClientKeyExchange, CompressionMethod, ContentType,
-    Cookie, DigitallySigned, ExchangeKeys, Finished, HashAlgorithm, MessageType, ProtocolVersion,
-    PublicValueEncoding, Random, ServerKeyExchange, SessionId,
+    Cookie, DigitallySigned, ExchangeKeys, Finished, MessageType, ProtocolVersion,
+    PublicValueEncoding, Random, SessionId,
 };
 use crate::{Config, Error, Output};
 
@@ -65,6 +65,9 @@ pub struct Client {
 
     /// Handshake messages collected for CertificateVerify signature
     handshake_messages: Vec<u8>,
+
+    /// Server encryption enabled flag - set when server ChangeCipherSpec is received
+    server_encryption_enabled: bool,
 }
 
 /// Current state of the client.
@@ -118,6 +121,7 @@ impl Client {
             _certificate_request: None,
             server_certificates: Vec::new(),
             handshake_messages: Vec::new(),
+            server_encryption_enabled: false,
         }
     }
 
@@ -440,7 +444,11 @@ impl Client {
                     match record.record.content_type {
                         ContentType::ChangeCipherSpec => {
                             // Server changed encryption state
-                            // In a real implementation, we would update our state to use encryption
+                            // Update our state to use encryption for incoming messages
+                            self.server_encryption_enabled = true;
+
+                            // Log the change for debugging
+                            debug!("Server encryption enabled after ChangeCipherSpec");
                         }
                         ContentType::Handshake => {
                             if let Some(handshake) = &record.handshake {

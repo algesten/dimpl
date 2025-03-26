@@ -1,19 +1,11 @@
 use crate::message::{CurveType, NamedCurve};
 use elliptic_curve::sec1::FromEncodedPoint;
-use elliptic_curve::sec1::{EncodedPoint, ToEncodedPoint};
+use elliptic_curve::sec1::ToEncodedPoint;
 use num_bigint::{BigUint, RandomBits};
-use p256::{
-    ecdh::{EphemeralSecret as P256EphemeralSecret, SharedSecret as P256SharedSecret},
-    PublicKey as P256PublicKey,
-};
-use p384::{
-    ecdh::{EphemeralSecret as P384EphemeralSecret, SharedSecret as P384SharedSecret},
-    PublicKey as P384PublicKey,
-};
+use p256::{ecdh::EphemeralSecret as P256EphemeralSecret, PublicKey as P256PublicKey};
+use p384::{ecdh::EphemeralSecret as P384EphemeralSecret, PublicKey as P384PublicKey};
 use rand::distributions::Distribution;
-use rand::{rngs::OsRng, Rng};
-use sha2::{Digest, Sha256};
-use std::convert::TryFrom;
+use rand::rngs::OsRng;
 
 /// Trait for key exchange mechanisms
 pub trait KeyExchange {

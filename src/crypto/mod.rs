@@ -5,6 +5,8 @@
 // - ECDHE+AES256 (AES256_EECDH)
 // - DHE+AES256 (AES256_EDH)
 
+use tinyvec::array_vec;
+
 mod encryption;
 mod key_exchange;
 mod prf;
@@ -15,10 +17,7 @@ pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
 
 use crate::message::Asn1Cert;
 use crate::message::ServerKeyExchangeParams;
-use crate::message::{
-    Certificate, CipherSuite, HashAlgorithm, NamedCurve, SignatureAlgorithm,
-    SignatureAndHashAlgorithm,
-};
+use crate::message::{Certificate, CipherSuite, HashAlgorithm, NamedCurve};
 
 /// Certificate verifier trait for DTLS connections
 pub trait CertVerifier: Send + Sync {
@@ -314,9 +313,6 @@ impl CryptoContext {
             None
         } else {
             // Create a Certificate with a single Asn1Cert
-            use crate::message::Asn1Cert;
-            use tinyvec::array_vec;
-
             let cert = Asn1Cert(self.client_cert.as_slice());
             let certs = array_vec![[Asn1Cert; 32] => cert];
             Some(Certificate::new(certs))
