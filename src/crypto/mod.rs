@@ -18,7 +18,7 @@ use crate::message::{Certificate, CipherSuite, NamedCurve};
 /// Certificate verifier trait for DTLS connections
 pub trait CertVerifier: Send + Sync {
     /// Verify a certificate by its binary DER representation
-    fn verify_certificate(&self, certificate_data: &[u8], hostname: &str) -> Result<(), String>;
+    fn verify_certificate(&self, certificate_data: &[u8]) -> Result<(), String>;
 }
 
 /// DTLS 1.2 crypto context
@@ -57,15 +57,15 @@ pub struct CryptoContext {
     server_cipher: Option<Box<dyn Cipher>>,
 
     /// Client certificate (DER format)
-    client_cert: Option<Vec<u8>>,
+    client_cert: Vec<u8>,
 
     /// Certificate verifier
-    cert_verifier: Option<Box<dyn CertVerifier>>,
+    cert_verifier: Box<dyn CertVerifier>,
 }
 
 impl CryptoContext {
     /// Create a new crypto context
-    pub fn new(client_cert: Option<Vec<u8>>, cert_verifier: Option<Box<dyn CertVerifier>>) -> Self {
+    pub fn new(client_cert: Vec<u8>, cert_verifier: Box<dyn CertVerifier>) -> Self {
         CryptoContext {
             key_exchange: None,
             client_write_key: None,
@@ -257,31 +257,26 @@ impl CryptoContext {
 
     /// Check if we have a client certificate available
     pub fn has_client_certificate(&self) -> bool {
-        self.client_cert.is_some()
+        !self.client_cert.is_empty()
     }
 
     /// Get client certificate for authentication
     pub fn get_client_certificate(&self) -> Option<Certificate> {
-        self.client_cert.as_ref().map(|cert_der| {
+        if self.client_cert.is_empty() {
+            None
+        } else {
             // Create a Certificate with a single Asn1Cert
             use crate::message::Asn1Cert;
             use tinyvec::array_vec;
 
-            let cert = Asn1Cert(cert_der.as_slice());
-            let mut certs = array_vec![[Asn1Cert; 32] => cert];
-            Certificate::new(certs)
-        })
+            let cert = Asn1Cert(self.client_cert.as_slice());
+            let certs = array_vec![[Asn1Cert; 32] => cert];
+            Some(Certificate::new(certs))
+        }
     }
 
     /// Verify a server certificate
-    pub fn verify_server_certificate(
-        &self,
-        certificate_data: &[u8],
-        hostname: &str,
-    ) -> Result<(), String> {
-        match &self.cert_verifier {
-            Some(verifier) => verifier.verify_certificate(certificate_data, hostname),
-            None => Err("No certificate verifier configured".to_string()),
-        }
+    pub fn verify_server_certificate(&self, certificate_data: &[u8]) -> Result<(), String> {
+        self.cert_verifier.verify_certificate(certificate_data)
     }
 }

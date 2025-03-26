@@ -59,9 +59,6 @@ pub struct Client {
     /// Certificate request details (for client auth)
     _certificate_request: Option<CertificateRequest<'static>>,
 
-    /// Server hostname (for certificate validation)
-    hostname: String,
-
     /// Server certificates
     server_certificates: Vec<Vec<u8>>,
 }
@@ -96,13 +93,13 @@ impl Client {
     ///
     /// * `now` - Current timestamp for random generation
     /// * `config` - DTLS configuration
-    /// * `certificate` - Optional client certificate, create one with `generate_self_signed_certificate()`
-    /// * `cert_verifier` - Optional certificate verifier, if None no certificate validation will be performed
+    /// * `certificate` - Client certificate, create one with `generate_self_signed_certificate()`
+    /// * `cert_verifier` - Certificate verifier for validating server certificates
     pub fn new(
         now: Instant,
         config: Arc<Config>,
-        certificate: Option<Vec<u8>>,
-        cert_verifier: Option<Box<dyn CertVerifier>>,
+        certificate: Vec<u8>,
+        cert_verifier: Box<dyn CertVerifier>,
     ) -> Client {
         Client {
             random: Random::new(now),
@@ -115,7 +112,6 @@ impl Client {
             crypto_context: CryptoContext::new(certificate, cert_verifier),
             certificate_requested: false,
             _certificate_request: None,
-            hostname: String::new(),
             server_certificates: Vec::new(),
         }
     }
@@ -260,15 +256,11 @@ impl Client {
                                 // Server is done sending initial messages
 
                                 // Validate the server certificate if we have one
-                                if !self.server_certificates.is_empty() && !self.hostname.is_empty()
-                                {
-                                    // Get the leaf certificate (first in the list)
-                                    let server_cert = &self.server_certificates[0];
-
+                                if !self.server_certificates.is_empty() {
                                     // Verify the certificate using the configured verifier
                                     if let Err(err) = self
                                         .crypto_context
-                                        .verify_server_certificate(server_cert, &self.hostname)
+                                        .verify_server_certificate(&self.server_certificates[0])
                                     {
                                         return Err(Error::CertificateError(format!(
                                             "Certificate verification failed: {}",
@@ -463,29 +455,5 @@ impl Client {
             }
             _ => Err(Error::UnexpectedMessage("Not in Running state".to_string())),
         }
-    }
-
-    /// Set the hostname for certificate validation
-    pub fn set_hostname(&mut self, hostname: &str) {
-        self.hostname = hostname.to_string();
-    }
-
-    /// Get the fingerprint of the client certificate if available
-    pub fn get_certificate_fingerprint(&self) -> Option<Vec<u8>> {
-        if let Some(cert) = self.crypto_context.get_client_certificate() {
-            if !cert.certificate_list.is_empty() {
-                let cert_bytes = cert.certificate_list[0].0;
-                return Some(crate::certificate::calculate_fingerprint(cert_bytes));
-            }
-        }
-        None
-    }
-
-    /// Get the certificate fingerprint as a formatted string
-    /// Returns the SHA-256 fingerprint in colon-separated hex format
-    /// Example: "SHA-256 AF:12:F6:..."
-    pub fn get_formatted_fingerprint(&self) -> Option<String> {
-        self.get_certificate_fingerprint()
-            .map(|fp| format!("SHA-256 {}", crate::certificate::format_fingerprint(&fp)))
     }
 }

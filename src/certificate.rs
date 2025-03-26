@@ -109,72 +109,9 @@ pub fn format_fingerprint(fingerprint: &[u8]) -> String {
         .join(":")
 }
 
-/// Simple fingerprint verifier implementation
-pub struct FingerprintVerifier {
-    trusted_fingerprints: std::collections::HashMap<String, Vec<u8>>,
-}
-
-impl FingerprintVerifier {
-    /// Create a new empty fingerprint verifier
-    pub fn new() -> Self {
-        FingerprintVerifier {
-            trusted_fingerprints: std::collections::HashMap::new(),
-        }
-    }
-
-    /// Add a trusted fingerprint for a hostname
-    pub fn add_fingerprint(&mut self, hostname: &str, fingerprint: Vec<u8>) {
-        self.trusted_fingerprints
-            .insert(hostname.to_string(), fingerprint);
-    }
-}
-
-impl crate::crypto::CertVerifier for FingerprintVerifier {
-    fn verify_certificate(&self, certificate_data: &[u8], hostname: &str) -> Result<(), String> {
-        // Calculate fingerprint of the certificate
-        let cert_fingerprint = calculate_fingerprint(certificate_data);
-
-        // Verify against the trusted fingerprint for this hostname
-        if let Some(trusted) = self.trusted_fingerprints.get(hostname) {
-            if &cert_fingerprint == trusted {
-                Ok(())
-            } else {
-                Err(format!("Certificate fingerprint mismatch for {}", hostname))
-            }
-        } else {
-            Err(format!(
-                "No trusted fingerprint registered for {}",
-                hostname
-            ))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::CertVerifier;
-
-    #[test]
-    fn test_fingerprint_verification() {
-        let mut verifier = FingerprintVerifier::new();
-
-        // Create a test certificate
-        let cert = vec![0x01, 0x02, 0x03, 0x04, 0x05];
-        let fingerprint = calculate_fingerprint(&cert);
-
-        // Register the fingerprint
-        verifier.add_fingerprint("example.com", fingerprint.clone());
-
-        // Verification should succeed with matching fingerprint
-        assert!(verifier.verify_certificate(&cert, "example.com").is_ok());
-
-        // Verification should fail with different certificate
-        let wrong_cert = vec![0x06, 0x07, 0x08, 0x09, 0x0A];
-        assert!(verifier
-            .verify_certificate(&wrong_cert, "example.com")
-            .is_err());
-    }
 
     #[test]
     fn test_self_signed_certificate() {
