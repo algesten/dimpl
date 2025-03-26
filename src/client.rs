@@ -266,18 +266,22 @@ impl Client {
                             MessageType::ServerHelloDone => {
                                 // Server is done sending initial messages
 
-                                // Validate the server certificate if we have one
-                                if !self.server_certificates.is_empty() {
-                                    // Verify the certificate using the configured verifier
-                                    if let Err(err) = self
-                                        .crypto_context
-                                        .verify_server_certificate(&self.server_certificates[0])
-                                    {
-                                        return Err(Error::CertificateError(format!(
-                                            "Certificate verification failed: {}",
-                                            err
-                                        )));
-                                    }
+                                // Validate the server certificate
+                                if self.server_certificates.is_empty() {
+                                    return Err(Error::CertificateError(
+                                        "No server certificate received".to_string(),
+                                    ));
+                                }
+
+                                // Verify the certificate using the configured verifier
+                                if let Err(err) = self
+                                    .crypto_context
+                                    .verify_server_certificate(&self.server_certificates[0])
+                                {
+                                    return Err(Error::CertificateError(format!(
+                                        "Certificate verification failed: {}",
+                                        err
+                                    )));
                                 }
 
                                 // Transition to next state
