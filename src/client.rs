@@ -189,6 +189,13 @@ impl Client {
     }
 
     fn process_server_hello(&mut self, can_hello_verify: bool) -> Result<(), Error> {
+        // Initialize the handshake state machine based on where we are in the flow
+        let mut state = if can_hello_verify {
+            HandshakeState::AwaitingFirstServerMessage
+        } else {
+            HandshakeState::AwaitingServerHelloAfterVerify
+        };
+
         while let Some(incoming) = self.engine.next_incoming() {
             let records = incoming.records();
 
@@ -204,14 +211,11 @@ impl Client {
                 self.handshake_messages
                     .extend_from_slice(record.record.fragment);
 
+                // Validate transition using our FSM
+                state = state.handle(handshake.header.msg_type)?;
+
                 match handshake.header.msg_type {
                     MessageType::HelloVerifyRequest => {
-                        if !can_hello_verify {
-                            return Err(Error::UnexpectedMessage(
-                                "Unexpected HelloVerifyRequest".to_string(),
-                            ));
-                        }
-
                         let Body::HelloVerifyRequest(hello_verify) = &handshake.body else {
                             continue;
                         };
@@ -241,9 +245,19 @@ impl Client {
                         return self.handle_server_hello_done();
                     }
 
-                    _ => {}
+                    _ => {
+                        // Unknown or unexpected message type
+                        return Err(Error::UnexpectedMessage(format!(
+                            "Unexpected message type: {:?}",
+                            handshake.header.msg_type
+                        )));
+                    }
                 }
             }
+        }
+
+        if state != HandshakeState::HandshakePhaseComplete {
+            return Err(Error::IncompleteServerHello);
         }
 
         // No state transition yet, continue waiting for more messages
@@ -586,5 +600,104 @@ impl Client {
             })?;
 
         Ok(())
+    }
+}
+
+/// Handshake state machine states for tracking message order
+#[derive(Debug, PartialEq, Eq)]
+enum HandshakeState {
+    /// Initial state when starting handshake
+    Initial,
+
+    /// Waiting for initial server response after sending ClientHello
+    /// Can receive either ServerHello or HelloVerifyRequest
+    AwaitingFirstServerMessage,
+
+    /// Waiting for ServerHello after HelloVerifyRequest
+    /// After HelloVerifyRequest, only ServerHello is valid
+    AwaitingServerHelloAfterVerify,
+
+    /// Server hello received, waiting for certificate
+    AwaitingCertificate,
+
+    /// Certificate received, waiting for server key exchange
+    AwaitingServerKeyExchange,
+
+    /// Server key exchange received, waiting for certificate request or hello done
+    AwaitingCertificateRequestOrHelloDone,
+
+    /// Certificate request received, waiting for hello done
+    AwaitingServerHelloDone,
+
+    /// After ServerHelloDone, handshake is complete from server hello phase
+    HandshakePhaseComplete,
+}
+
+impl HandshakeState {
+    /// Process a handshake message and return the next state
+    fn handle(&self, message_type: MessageType) -> Result<HandshakeState, Error> {
+        match (self, message_type) {
+            // Initial state transitions
+            (HandshakeState::Initial, _) => Err(Error::UnexpectedMessage(
+                "Not in a valid state to process messages".to_string(),
+            )),
+
+            // First server message after ClientHello
+            (HandshakeState::AwaitingFirstServerMessage, MessageType::HelloVerifyRequest) => {
+                Ok(HandshakeState::Initial)
+            } // Will restart with a new ClientHello
+
+            (HandshakeState::AwaitingFirstServerMessage, MessageType::ServerHello) => {
+                Ok(HandshakeState::AwaitingCertificate)
+            }
+
+            // After HelloVerifyRequest and sending a new ClientHello
+            (HandshakeState::AwaitingServerHelloAfterVerify, MessageType::ServerHello) => {
+                Ok(HandshakeState::AwaitingCertificate)
+            }
+
+            (HandshakeState::AwaitingServerHelloAfterVerify, MessageType::HelloVerifyRequest) => {
+                Err(Error::UnexpectedMessage(
+                    "Received second HelloVerifyRequest".to_string(),
+                ))
+            }
+
+            // ServerHello already received, expecting Certificate
+            (HandshakeState::AwaitingCertificate, MessageType::Certificate) => {
+                Ok(HandshakeState::AwaitingServerKeyExchange)
+            }
+
+            // Certificate received, expecting ServerKeyExchange
+            (HandshakeState::AwaitingServerKeyExchange, MessageType::ServerKeyExchange) => {
+                Ok(HandshakeState::AwaitingCertificateRequestOrHelloDone)
+            }
+
+            // After ServerKeyExchange, can get either CertificateRequest or ServerHelloDone
+            (
+                HandshakeState::AwaitingCertificateRequestOrHelloDone,
+                MessageType::CertificateRequest,
+            ) => Ok(HandshakeState::AwaitingServerHelloDone),
+
+            (
+                HandshakeState::AwaitingCertificateRequestOrHelloDone,
+                MessageType::ServerHelloDone,
+            ) => Ok(HandshakeState::HandshakePhaseComplete),
+
+            // After CertificateRequest, must get ServerHelloDone
+            (HandshakeState::AwaitingServerHelloDone, MessageType::ServerHelloDone) => {
+                Ok(HandshakeState::HandshakePhaseComplete)
+            }
+
+            // After HandshakePhaseComplete, no more messages expected during this phase
+            (HandshakeState::HandshakePhaseComplete, _) => Err(Error::UnexpectedMessage(
+                "Handshake phase already complete".to_string(),
+            )),
+
+            // Any other state/message combination is invalid
+            (state, message) => Err(Error::UnexpectedMessage(format!(
+                "Unexpected message {:?} in state {:?}",
+                message, state
+            ))),
+        }
     }
 }

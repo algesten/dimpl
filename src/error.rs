@@ -8,6 +8,7 @@ pub enum Error {
     SecurityError(String),
     ReceiveQueueFull,
     TransmitQueueFull,
+    IncompleteServerHello,
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {
