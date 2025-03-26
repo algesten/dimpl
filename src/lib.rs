@@ -32,6 +32,12 @@ pub use error::Error;
 mod config;
 pub use config::Config;
 
+pub mod certificate;
+pub use certificate::{
+    calculate_fingerprint, format_fingerprint, generate_self_signed_certificate, CertificateError,
+    DtlsCertificate, FingerprintVerifier,
+};
+
 // This is the full DTLS1.2 flow
 //
 // Client                                               Server

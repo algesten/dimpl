@@ -5,17 +5,21 @@
 // - ECDHE+AES256 (AES256_EECDH)
 // - DHE+AES256 (AES256_EDH)
 
-mod certificate;
 mod encryption;
 mod key_exchange;
 mod prf;
 
-pub use certificate::{calculate_fingerprint, format_fingerprint, CertificateError, TrustStore};
-pub use encryption::{generate_nonce, AesGcm, Cipher};
+pub use encryption::{AesGcm, Cipher};
 pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
-pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
+pub use prf::{calculate_master_secret, key_expansion};
 
-use crate::message::{CipherSuite, NamedCurve};
+use crate::message::{Certificate, CipherSuite, NamedCurve};
+
+/// Certificate verifier trait for DTLS connections
+pub trait CertVerifier: Send + Sync {
+    /// Verify a certificate by its binary DER representation
+    fn verify_certificate(&self, certificate_data: &[u8], hostname: &str) -> Result<(), String>;
+}
 
 /// DTLS 1.2 crypto context
 pub struct CryptoContext {
@@ -52,13 +56,16 @@ pub struct CryptoContext {
     /// Server cipher
     server_cipher: Option<Box<dyn Cipher>>,
 
-    /// Trust store for certificate validation
-    trust_store: TrustStore,
+    /// Client certificate (DER format)
+    client_cert: Option<Vec<u8>>,
+
+    /// Certificate verifier
+    cert_verifier: Option<Box<dyn CertVerifier>>,
 }
 
 impl CryptoContext {
     /// Create a new crypto context
-    pub fn new() -> Self {
+    pub fn new(client_cert: Option<Vec<u8>>, cert_verifier: Option<Box<dyn CertVerifier>>) -> Self {
         CryptoContext {
             key_exchange: None,
             client_write_key: None,
@@ -71,7 +78,8 @@ impl CryptoContext {
             pre_master_secret: None,
             client_cipher: None,
             server_cipher: None,
-            trust_store: TrustStore::new(),
+            client_cert,
+            cert_verifier,
         }
     }
 
@@ -247,40 +255,33 @@ impl CryptoContext {
         }
     }
 
-    /// Get reference to the trust store
-    pub fn trust_store(&self) -> &TrustStore {
-        &self.trust_store
+    /// Check if we have a client certificate available
+    pub fn has_client_certificate(&self) -> bool {
+        self.client_cert.is_some()
     }
 
-    /// Get mutable reference to the trust store
-    pub fn trust_store_mut(&mut self) -> &mut TrustStore {
-        &mut self.trust_store
+    /// Get client certificate for authentication
+    pub fn get_client_certificate(&self) -> Option<Certificate> {
+        self.client_cert.as_ref().map(|cert_der| {
+            // Create a Certificate with a single Asn1Cert
+            use crate::message::Asn1Cert;
+            use tinyvec::array_vec;
+
+            let cert = Asn1Cert(cert_der.as_slice());
+            let mut certs = array_vec![[Asn1Cert; 32] => cert];
+            Certificate::new(certs)
+        })
     }
 
-    /// Verify a server certificate against our trust store
+    /// Verify a server certificate
     pub fn verify_server_certificate(
         &self,
         certificate_data: &[u8],
         hostname: &str,
     ) -> Result<(), String> {
-        self.trust_store
-            .verify_certificate(certificate_data, hostname)
-            .map_err(|err| match err {
-                CertificateError::InvalidFormat => "Invalid certificate format".to_string(),
-                CertificateError::FingerprintMismatch => {
-                    format!("Certificate fingerprint mismatch for {}", hostname)
-                }
-                CertificateError::GenerationFailed => "Certificate generation failed".to_string(),
-            })
-    }
-
-    /// Check if we have a client certificate available
-    pub fn has_client_certificate(&self) -> bool {
-        self.trust_store.has_client_certificate()
-    }
-
-    /// Get client certificate for authentication
-    pub fn get_client_certificate(&self) -> Option<crate::message::Certificate> {
-        self.trust_store.get_client_certificate()
+        match &self.cert_verifier {
+            Some(verifier) => verifier.verify_certificate(certificate_data, hostname),
+            None => Err("No certificate verifier configured".to_string()),
+        }
     }
 }

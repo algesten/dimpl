@@ -10,18 +10,15 @@
 // 5. Server sends ChangeCipherSpec, Finished
 // 6. Handshake complete, application data can flow
 //
-// This implementation is a Sans-IO DTLS 1.2 client for WebRTC.
-// It uses self-signed certificates and fingerprint verification.
+// This implementation is a Sans-IO DTLS 1.2 client.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Instant;
 
 use tinyvec::array_vec;
 
-use crate::crypto::CryptoContext;
+use crate::crypto::{CertVerifier, CryptoContext};
 use crate::engine::Engine;
-use crate::incoming::{Incoming, Record};
 use crate::message::{
     Body, Certificate, CertificateRequest, CipherSuite, ClientDiffieHellmanPublic, ClientHello,
     ClientKeyExchange, CompressionMethod, ContentType, Cookie, ExchangeKeys, Finished, MessageType,
@@ -60,12 +57,12 @@ pub struct Client {
     certificate_requested: bool,
 
     /// Certificate request details (for client auth)
-    certificate_request: Option<CertificateRequest<'static>>,
+    _certificate_request: Option<CertificateRequest<'static>>,
 
     /// Server hostname (for certificate validation)
     hostname: String,
 
-    /// Server certificate chain
+    /// Server certificates
     server_certificates: Vec<Vec<u8>>,
 }
 
@@ -93,9 +90,21 @@ pub enum ClientState {
 }
 
 impl Client {
-    pub fn new(now: Instant, config: Arc<Config>) -> Client {
-        // Create client with default values
-        let mut client = Client {
+    /// Create a new DTLS client
+    ///
+    /// # Parameters
+    ///
+    /// * `now` - Current timestamp for random generation
+    /// * `config` - DTLS configuration
+    /// * `certificate` - Optional client certificate, create one with `generate_self_signed_certificate()`
+    /// * `cert_verifier` - Optional certificate verifier, if None no certificate validation will be performed
+    pub fn new(
+        now: Instant,
+        config: Arc<Config>,
+        certificate: Option<Vec<u8>>,
+        cert_verifier: Option<Box<dyn CertVerifier>>,
+    ) -> Client {
+        Client {
             random: Random::new(now),
             session_id: None,
             cookie: None,
@@ -103,24 +112,12 @@ impl Client {
             state: ClientState::SendClientHello,
             engine: Engine::new(config),
             server_random: None,
-            crypto_context: CryptoContext::new(),
+            crypto_context: CryptoContext::new(certificate, cert_verifier),
             certificate_requested: false,
-            certificate_request: None,
+            _certificate_request: None,
             hostname: String::new(),
             server_certificates: Vec::new(),
-        };
-
-        // Generate a self-signed certificate for the client
-        // This ensures we always have a certificate for WebRTC
-        if let Ok(_) = client
-            .crypto_context
-            .trust_store_mut()
-            .generate_self_signed_certificate()
-        {
-            // Certificate generated successfully
         }
-
-        client
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
@@ -268,7 +265,7 @@ impl Client {
                                     // Get the leaf certificate (first in the list)
                                     let server_cert = &self.server_certificates[0];
 
-                                    // Verify the certificate (WebRTC just checks fingerprint)
+                                    // Verify the certificate using the configured verifier
                                     if let Err(err) = self
                                         .crypto_context
                                         .verify_server_certificate(server_cert, &self.hostname)
@@ -298,15 +295,14 @@ impl Client {
     fn send_client_cert_and_keys(&mut self) -> Result<(), Error> {
         // Send client certificate if requested by server
         if self.certificate_requested {
-            // In WebRTC, we always send our self-signed certificate
+            // Check if we have a client certificate
             if let Some(client_cert) = self.crypto_context.get_client_certificate() {
                 self.engine
                     .create_handshake(MessageType::Certificate, 0, |body| {
                         client_cert.serialize(body);
                     })?;
             } else {
-                // If we don't have a certificate (which shouldn't happen), send empty list
-                // Create an empty certificate with proper initialization
+                // If we don't have a certificate, send empty list
                 let empty_cert_list = array_vec![[crate::message::Asn1Cert<'_>; 32]];
                 let empty_cert = Certificate::new(empty_cert_list);
                 self.engine
@@ -390,7 +386,7 @@ impl Client {
         } else {
             return Err(Error::UnexpectedMessage(
                 "No cipher suite selected".to_string(),
-            )); // No cipher suite selected
+            ));
         }
 
         Ok(())
@@ -474,52 +470,22 @@ impl Client {
         self.hostname = hostname.to_string();
     }
 
-    /// Set the expected fingerprint for the remote peer
-    /// This is critical for WebRTC security
-    pub fn set_remote_fingerprint(&mut self, fingerprint: Vec<u8>) {
-        if !self.hostname.is_empty() {
-            self.crypto_context
-                .trust_store_mut()
-                .add_trusted_fingerprint(&self.hostname, fingerprint);
-        }
-    }
-
-    /// Get the fingerprint of our local certificate
-    /// This should be shared with the remote peer through the signaling channel
-    pub fn get_local_fingerprint(&self) -> Option<Vec<u8>> {
-        if self.crypto_context.trust_store().has_client_certificate() {
-            // Get the client certificate from the trust store
-            if let Some(cert) = self.crypto_context.trust_store().get_client_certificate() {
-                if !cert.certificate_list.is_empty() {
-                    let cert_bytes = cert.certificate_list[0].0;
-                    return Some(crate::crypto::calculate_fingerprint(cert_bytes));
-                }
+    /// Get the fingerprint of the client certificate if available
+    pub fn get_certificate_fingerprint(&self) -> Option<Vec<u8>> {
+        if let Some(cert) = self.crypto_context.get_client_certificate() {
+            if !cert.certificate_list.is_empty() {
+                let cert_bytes = cert.certificate_list[0].0;
+                return Some(crate::certificate::calculate_fingerprint(cert_bytes));
             }
         }
         None
     }
 
-    /// Get the fingerprint of our local certificate as a formatted string
-    /// Returns the SHA-256 fingerprint in WebRTC's standard colon-separated hex format
+    /// Get the certificate fingerprint as a formatted string
+    /// Returns the SHA-256 fingerprint in colon-separated hex format
     /// Example: "SHA-256 AF:12:F6:..."
     pub fn get_formatted_fingerprint(&self) -> Option<String> {
-        self.get_local_fingerprint()
-            .map(|fp| format!("SHA-256 {}", crate::crypto::format_fingerprint(&fp)))
-    }
-
-    /// Generate a new self-signed certificate for this client
-    /// Returns the SHA-256 fingerprint of the certificate
-    pub fn generate_certificate(&mut self) -> Result<Vec<u8>, crate::Error> {
-        self.crypto_context
-            .trust_store_mut()
-            .generate_self_signed_certificate()
-            .map_err(|e| {
-                crate::Error::CertificateError(format!("Failed to generate certificate: {:?}", e))
-            })
-    }
-
-    /// Get a mutable reference to the crypto context
-    pub fn crypto_context_mut(&mut self) -> &mut CryptoContext {
-        &mut self.crypto_context
+        self.get_certificate_fingerprint()
+            .map(|fp| format!("SHA-256 {}", crate::certificate::format_fingerprint(&fp)))
     }
 }

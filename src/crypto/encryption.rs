@@ -1,8 +1,8 @@
 use aes_gcm::{
-    aead::{Aead, AeadCore, KeyInit, Payload},
-    Aes128Gcm, Aes256Gcm, Nonce, Tag,
+    aead::{Aead, KeyInit, Payload},
+    Aes128Gcm, Aes256Gcm, Nonce,
 };
-use rand::{rngs::OsRng, Rng, RngCore};
+use rand::{Rng, RngCore};
 
 /// Cipher trait for DTLS encryption and decryption
 pub trait Cipher {
@@ -89,11 +89,4 @@ impl Cipher for AesGcm {
         rand::thread_rng().fill_bytes(&mut nonce);
         nonce
     }
-}
-
-/// Generate a random nonce
-pub fn generate_nonce() -> Vec<u8> {
-    let mut nonce = vec![0u8; 12]; // AES-GCM requires a 12-byte nonce
-    rand::thread_rng().fill(&mut nonce[..]);
-    nonce
 }
