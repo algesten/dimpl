@@ -164,7 +164,11 @@ impl Client {
         let client_version = ProtocolVersion::DTLS1_2;
         let session_id = self.session_id.clone().unwrap_or_else(SessionId::empty);
         let cookie = self.cookie.clone().unwrap_or_else(Cookie::empty);
-        let cipher_suites = CipherSuite::all();
+
+        // Convert Vec<CipherSuite> to ArrayVec<[CipherSuite; 32]>
+        let mut cipher_suites = array_vec![[CipherSuite; 32]];
+        cipher_suites.extend(self.engine.config().cipher_suites.iter().cloned().take(32));
+
         let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
         let client_hello = ClientHello::new(
@@ -357,14 +361,12 @@ impl Client {
     }
 
     fn send_client_key_exchange(&mut self) -> Result<(), Error> {
-        let cipher_suite = match self.cipher_suite {
-            Some(cs) => cs,
-            None => {
-                return Err(Error::UnexpectedMessage(
-                    "No cipher suite selected".to_string(),
-                ))
-            }
-        };
+        // Just check that a cipher suite exists without binding to unused variable
+        if self.cipher_suite.is_none() {
+            return Err(Error::UnexpectedMessage(
+                "No cipher suite selected".to_string(),
+            ));
+        }
 
         // Generate key exchange data
         let public_key = self
