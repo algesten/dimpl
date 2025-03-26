@@ -5,10 +5,12 @@
 // - ECDHE+AES256 (AES256_EECDH)
 // - DHE+AES256 (AES256_EDH)
 
+mod certificate;
 mod encryption;
 mod key_exchange;
 mod prf;
 
+pub use certificate::{calculate_fingerprint, CertificateError, TrustStore};
 pub use encryption::{AesGcm, Cipher};
 pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
 pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
@@ -49,6 +51,9 @@ pub struct CryptoContext {
 
     /// Server cipher
     server_cipher: Option<Box<dyn Cipher>>,
+
+    /// Trust store for certificate validation
+    trust_store: TrustStore,
 }
 
 impl CryptoContext {
@@ -66,11 +71,12 @@ impl CryptoContext {
             pre_master_secret: None,
             client_cipher: None,
             server_cipher: None,
+            trust_store: TrustStore::new(),
         }
     }
 
     /// Initialize key exchange based on cipher suite
-    pub fn init_key_exchange(&mut self, cipher_suite: CipherSuite) -> Result<(), &'static str> {
+    pub fn init_key_exchange(&mut self, cipher_suite: CipherSuite) -> Result<(), String> {
         self.key_exchange = Some(match cipher_suite.as_key_exchange_algorithm() {
             crate::message::KeyExchangeAlgorithm::EECDH => {
                 // Use P-256 as the default curve
@@ -83,28 +89,28 @@ impl CryptoContext {
                 let generator = vec![2]; // Common generator value g=2
                 Box::new(DhKeyExchange::new(prime, generator))
             }
-            _ => return Err("Unsupported key exchange algorithm"),
+            _ => return Err("Unsupported key exchange algorithm".to_string()),
         });
 
         Ok(())
     }
 
     /// Generate key exchange public key
-    pub fn generate_key_exchange(&mut self) -> Result<Vec<u8>, &'static str> {
+    pub fn generate_key_exchange(&mut self) -> Result<Vec<u8>, String> {
         match &mut self.key_exchange {
             Some(ke) => Ok(ke.generate()),
-            None => Err("Key exchange not initialized"),
+            None => Err("Key exchange not initialized".to_string()),
         }
     }
 
     /// Process peer's public key and compute shared secret
-    pub fn compute_shared_secret(&mut self, peer_public_key: &[u8]) -> Result<(), &'static str> {
+    pub fn compute_shared_secret(&mut self, peer_public_key: &[u8]) -> Result<(), String> {
         match &self.key_exchange {
             Some(ke) => {
                 self.pre_master_secret = Some(ke.compute_shared_secret(peer_public_key)?);
                 Ok(())
             }
-            None => Err("Key exchange not initialized"),
+            None => Err("Key exchange not initialized".to_string()),
         }
     }
 
@@ -113,7 +119,7 @@ impl CryptoContext {
         &mut self,
         client_random: &[u8],
         server_random: &[u8],
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), String> {
         match &self.pre_master_secret {
             Some(pms) => {
                 self.master_secret =
@@ -122,7 +128,7 @@ impl CryptoContext {
                 self.pre_master_secret = None;
                 Ok(())
             }
-            None => Err("Pre-master secret not available"),
+            None => Err("Pre-master secret not available".to_string()),
         }
     }
 
@@ -132,17 +138,17 @@ impl CryptoContext {
         cipher_suite: CipherSuite,
         client_random: &[u8],
         server_random: &[u8],
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), String> {
         let master_secret = match &self.master_secret {
             Some(ms) => ms,
-            None => return Err("Master secret not available"),
+            None => return Err("Master secret not available".to_string()),
         };
 
         // Key sizes depend on the cipher suite
         let (mac_key_len, enc_key_len, fixed_iv_len) = match cipher_suite {
             CipherSuite::EECDH_AESGCM | CipherSuite::EDH_AESGCM => (0, 16, 4), // AES-128-GCM
             CipherSuite::AES256_EECDH | CipherSuite::AES256_EDH => (0, 32, 4), // AES-256-GCM
-            _ => return Err("Unsupported cipher suite for key derivation"),
+            _ => return Err("Unsupported cipher suite for key derivation".to_string()),
         };
 
         // Calculate total key material length
@@ -195,7 +201,7 @@ impl CryptoContext {
 
                 Ok(())
             }
-            _ => Err("Unsupported cipher suite"),
+            _ => Err("Unsupported cipher suite".to_string()),
         }
     }
 
@@ -205,10 +211,10 @@ impl CryptoContext {
         plaintext: &[u8],
         aad: &[u8],
         nonce: &[u8],
-    ) -> Result<Vec<u8>, &'static str> {
+    ) -> Result<Vec<u8>, String> {
         match &self.client_cipher {
             Some(cipher) => cipher.encrypt(plaintext, aad, nonce),
-            None => Err("Client cipher not initialized"),
+            None => Err("Client cipher not initialized".to_string()),
         }
     }
 
@@ -218,10 +224,47 @@ impl CryptoContext {
         ciphertext: &[u8],
         aad: &[u8],
         nonce: &[u8],
-    ) -> Result<Vec<u8>, &'static str> {
+    ) -> Result<Vec<u8>, String> {
         match &self.server_cipher {
             Some(cipher) => cipher.decrypt(ciphertext, aad, nonce),
-            None => Err("Server cipher not initialized"),
+            None => Err("Server cipher not initialized".to_string()),
         }
+    }
+
+    /// Get reference to the trust store
+    pub fn trust_store(&self) -> &TrustStore {
+        &self.trust_store
+    }
+
+    /// Get mutable reference to the trust store
+    pub fn trust_store_mut(&mut self) -> &mut TrustStore {
+        &mut self.trust_store
+    }
+
+    /// Verify a server certificate chain against our trust store
+    pub fn verify_server_cert_chain(
+        &self,
+        cert_chain: &[&[u8]],
+        hostname: &str,
+    ) -> Result<(), String> {
+        self.trust_store
+            .verify_cert_chain(cert_chain, hostname)
+            .map_err(|err| match err {
+                CertificateError::InvalidFormat => "Invalid certificate format".to_string(),
+                CertificateError::FingerprintMismatch => {
+                    format!("Certificate fingerprint mismatch for {}", hostname)
+                }
+                CertificateError::GenerationFailed => "Certificate generation failed".to_string(),
+            })
+    }
+
+    /// Check if we have a client certificate available
+    pub fn has_client_certificate(&self) -> bool {
+        self.trust_store.has_client_certificate()
+    }
+
+    /// Get client certificate for authentication
+    pub fn get_client_certificate(&self) -> Option<crate::message::Certificate> {
+        self.trust_store.get_client_certificate()
     }
 }

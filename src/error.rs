@@ -3,7 +3,8 @@ pub enum Error {
     ParseIncomplete,
     ParseError(nom::error::ErrorKind),
     UnexpectedMessage,
-    CryptoError,
+    CryptoError(String),
+    CertificateError(String),
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {

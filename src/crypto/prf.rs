@@ -10,9 +10,9 @@ pub fn prf_tls12(
     label: &str,
     seed: &[u8],
     output_len: usize,
-) -> Result<Vec<u8>, &'static str> {
+) -> Result<Vec<u8>, String> {
     // In TLS 1.2, PRF uses HMAC-SHA256
-    let mut hmac = HmacSha256::new_from_slice(secret).map_err(|_| "Failed to create HMAC")?;
+    let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
 
     // A(1) = HMAC_hash(secret, label + seed)
     hmac.update(label.as_bytes());
@@ -26,7 +26,7 @@ pub fn prf_tls12(
     //                        HMAC_hash(secret, A(2) + seed) +
     //                        HMAC_hash(secret, A(3) + seed) + ...
     while result.len() < output_len {
-        let mut hmac = HmacSha256::new_from_slice(secret).map_err(|_| "Failed to create HMAC")?;
+        let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
 
         // HMAC_hash(secret, A(i) + label + seed)
         hmac.update(&a_i);
@@ -37,7 +37,7 @@ pub fn prf_tls12(
         result.extend_from_slice(&output);
 
         // A(i+1) = HMAC_hash(secret, A(i))
-        let mut hmac = HmacSha256::new_from_slice(secret).map_err(|_| "Failed to create HMAC")?;
+        let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
         hmac.update(&a_i);
         a_i = hmac.finalize().into_bytes();
     }
@@ -53,7 +53,7 @@ pub fn calculate_master_secret(
     pre_master_secret: &[u8],
     client_random: &[u8],
     server_random: &[u8],
-) -> Result<Vec<u8>, &'static str> {
+) -> Result<Vec<u8>, String> {
     // Concatenate client_random and server_random for seed
     let mut seed = Vec::with_capacity(client_random.len() + server_random.len());
     seed.extend_from_slice(client_random);
@@ -70,7 +70,7 @@ pub fn key_expansion(
     client_random: &[u8],
     server_random: &[u8],
     key_material_length: usize,
-) -> Result<Vec<u8>, &'static str> {
+) -> Result<Vec<u8>, String> {
     // For key expansion, the seed is server_random + client_random
     let mut seed = Vec::with_capacity(client_random.len() + server_random.len());
     seed.extend_from_slice(server_random);

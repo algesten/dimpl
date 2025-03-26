@@ -1,9 +1,15 @@
 use crate::message::{CurveType, NamedCurve};
 use elliptic_curve::sec1::FromEncodedPoint;
-use p256::{ecdh::EphemeralSecret as P256EphemeralSecret, PublicKey as P256PublicKey};
-use p384::{ecdh::EphemeralSecret as P384EphemeralSecret, PublicKey as P384PublicKey};
+use elliptic_curve::sec1::{EncodedPoint, ToEncodedPoint};
+use p256::{
+    ecdh::{EphemeralSecret as P256EphemeralSecret, SharedSecret as P256SharedSecret},
+    PublicKey as P256PublicKey,
+};
+use p384::{
+    ecdh::{EphemeralSecret as P384EphemeralSecret, SharedSecret as P384SharedSecret},
+    PublicKey as P384PublicKey,
+};
 use rand::{rngs::OsRng, Rng};
-use sec1::point::EncodedPoint;
 use sha2::{Digest, Sha256};
 use std::convert::TryFrom;
 
@@ -13,7 +19,7 @@ pub trait KeyExchange {
     fn generate(&mut self) -> Vec<u8>;
 
     /// Compute shared secret using peer's public key
-    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Vec<u8>, &'static str>;
+    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Vec<u8>, String>;
 
     /// Get curve info for ECDHE
     fn get_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
@@ -46,69 +52,61 @@ impl KeyExchange for EcdhKeyExchange {
         match self {
             EcdhKeyExchange::P256 { private_key } => {
                 let secret = P256EphemeralSecret::random(&mut OsRng);
-                let public_key = p256::PublicKey::from(&secret);
-                let encoded_point = EncodedPoint::from(public_key);
+                let public_key = P256PublicKey::from(&secret);
+                let encoded_point = public_key.to_encoded_point(false);
                 *private_key = Some(secret);
                 encoded_point.as_bytes().to_vec()
             }
             EcdhKeyExchange::P384 { private_key } => {
                 let secret = P384EphemeralSecret::random(&mut OsRng);
-                let public_key = p384::PublicKey::from(&secret);
-                let encoded_point = EncodedPoint::from(public_key);
+                let public_key = P384PublicKey::from(&secret);
+                let encoded_point = public_key.to_encoded_point(false);
                 *private_key = Some(secret);
                 encoded_point.as_bytes().to_vec()
             }
         }
     }
 
-    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Vec<u8>, &'static str> {
+    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Vec<u8>, String> {
         match self {
             EcdhKeyExchange::P256 { private_key } => {
                 if let Some(secret) = private_key {
-                    let encoded_point = EncodedPoint::from_bytes(peer_public_key)
-                        .map_err(|_| "Invalid peer public key")?;
+                    let encoded_point = p256::EncodedPoint::from_bytes(peer_public_key)
+                        .map_err(|_| "Invalid peer public key for P-256".to_string())?;
 
-                    // Create public key from encoded point
                     let public_key_opt = P256PublicKey::from_encoded_point(&encoded_point);
 
-                    // Check if the point is valid and was properly converted
                     if public_key_opt.is_some().into() {
                         let public_key = public_key_opt.unwrap();
 
-                        // Compute shared secret
                         let shared_secret = secret.diffie_hellman(&public_key);
 
-                        // Return the raw bytes of the shared secret
                         Ok(shared_secret.raw_secret_bytes().as_slice().to_vec())
                     } else {
-                        Err("Invalid peer public key format")
+                        Err("Invalid peer public key format for P-256".to_string())
                     }
                 } else {
-                    Err("Private key not generated")
+                    Err("Private key not generated".to_string())
                 }
             }
             EcdhKeyExchange::P384 { private_key } => {
                 if let Some(secret) = private_key {
-                    let encoded_point = EncodedPoint::from_bytes(peer_public_key)
-                        .map_err(|_| "Invalid peer public key")?;
+                    let encoded_point = p384::EncodedPoint::from_bytes(peer_public_key)
+                        .map_err(|_| "Invalid peer public key for P-384".to_string())?;
 
-                    // Create public key from encoded point
                     let public_key_opt = P384PublicKey::from_encoded_point(&encoded_point);
 
-                    // Check if the point is valid and was properly converted
                     if public_key_opt.is_some().into() {
                         let public_key = public_key_opt.unwrap();
 
-                        // Compute shared secret
                         let shared_secret = secret.diffie_hellman(&public_key);
 
-                        // Return the raw bytes of the shared secret
                         Ok(shared_secret.raw_secret_bytes().as_slice().to_vec())
                     } else {
-                        Err("Invalid peer public key format")
+                        Err("Invalid peer public key format for P-384".to_string())
                     }
                 } else {
-                    Err("Private key not generated")
+                    Err("Private key not generated".to_string())
                 }
             }
         }
@@ -153,9 +151,9 @@ impl KeyExchange for DhKeyExchange {
         vec![1, 2, 3, 4]
     }
 
-    fn compute_shared_secret(&self, _peer_public_key: &[u8]) -> Result<Vec<u8>, &'static str> {
+    fn compute_shared_secret(&self, _peer_public_key: &[u8]) -> Result<Vec<u8>, String> {
         // In a real implementation, we would compute (peer_public_key)^private_key mod p
         // For now, return a dummy shared secret
-        Ok(vec![5, 6, 7, 8])
+        Ok(vec![0x12, 0x34, 0x56, 0x78])
     }
 }
