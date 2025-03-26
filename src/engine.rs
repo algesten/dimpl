@@ -5,7 +5,9 @@ use std::u16;
 
 use crate::buffer::{Buffer, BufferPool};
 use crate::incoming::Incoming;
-use crate::message::{CipherSuite, Sequence};
+use crate::message::{
+    CipherSuite, ContentType, DTLSRecord, Handshake, MessageType, ProtocolVersion, Sequence,
+};
 use crate::{Config, Error, Output};
 
 #[derive(Debug)]
@@ -130,5 +132,85 @@ impl Engine {
 
     fn poll_timeout(&self) -> Instant {
         Instant::now()
+    }
+
+    /// Check if there are any incoming packets to process
+    pub fn has_incoming(&self) -> bool {
+        !self.queue_rx.is_empty()
+    }
+
+    /// Get the next incoming packet
+    pub fn next_incoming(&mut self) -> Option<Incoming> {
+        self.queue_rx.pop_front()
+    }
+
+    /// Create a DTLS record and serialize it into a buffer
+    pub fn create_record<F>(&mut self, content_type: ContentType, f: F) -> Result<(), Error>
+    where
+        F: FnOnce(&mut Vec<u8>),
+    {
+        let mut buffer = self.buffers_free.pop();
+        let mut fragment = Vec::new();
+
+        // Let the callback fill the fragment
+        f(&mut fragment);
+
+        let record = DTLSRecord {
+            content_type,
+            version: ProtocolVersion::DTLS1_2,
+            sequence: self.next_sequence_tx.clone(),
+            length: fragment.len() as u16,
+            fragment: &fragment,
+        };
+
+        // Increment the sequence number for the next transmission
+        self.next_sequence_tx.sequence_number += 1;
+
+        // Serialize the record into the buffer
+        let mut serialized = Vec::new();
+        record.serialize(&mut serialized);
+
+        // Copy the serialized data to the buffer
+        buffer.resize(serialized.len(), 0);
+        buffer.copy_from_slice(&serialized);
+
+        // Add to the outgoing queue
+        self.queue_tx.push_back(buffer);
+
+        Ok(())
+    }
+
+    /// Create a handshake message and wrap it in a DTLS record
+    pub fn create_handshake<F>(
+        &mut self,
+        msg_type: MessageType,
+        message_seq: u16,
+        f: F,
+    ) -> Result<(), Error>
+    where
+        F: FnOnce(&mut Vec<u8>),
+    {
+        self.create_record(ContentType::Handshake, |fragment| {
+            // Create a buffer for the handshake body
+            let mut body_buffer = Vec::new();
+
+            // Let the callback fill the handshake body
+            f(&mut body_buffer);
+
+            // Create the handshake header
+            let header = Handshake {
+                header: crate::message::Header {
+                    msg_type,
+                    length: body_buffer.len() as u32,
+                    message_seq,
+                    fragment_offset: 0,
+                    fragment_length: body_buffer.len() as u32,
+                },
+                body: crate::message::Body::Fragment(&body_buffer),
+            };
+
+            // Serialize the handshake
+            header.serialize(fragment);
+        })
     }
 }

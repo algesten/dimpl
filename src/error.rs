@@ -2,6 +2,8 @@
 pub enum Error {
     ParseIncomplete,
     ParseError(nom::error::ErrorKind),
+    UnexpectedMessage,
+    CryptoError,
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {

@@ -20,6 +20,7 @@ pub(crate) mod message;
 mod time_tricks;
 
 mod buffer;
+mod crypto;
 mod engine;
 mod incoming;
 
