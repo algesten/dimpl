@@ -22,7 +22,7 @@ use crate::engine::Engine;
 use crate::message::{
     Body, Certificate, CertificateRequest, CipherSuite, ClientDiffieHellmanPublic, ClientHello,
     ClientKeyExchange, CompressionMethod, ContentType, Cookie, ExchangeKeys, Finished, MessageType,
-    ProtocolVersion, PublicValueEncoding, Random, SessionId,
+    ProtocolVersion, PublicValueEncoding, Random, ServerKeyExchange, SessionId,
 };
 use crate::{Config, Error, Output};
 
@@ -221,14 +221,14 @@ impl Client {
                                     self.server_random = Some(server_hello.random.clone());
 
                                     // Initialize the key exchange based on selected cipher suite
-                                    if let Some(cs) = self.cipher_suite {
-                                        self.crypto_context.init_key_exchange(cs).map_err(|e| {
-                                            Error::CryptoError(format!(
-                                                "Failed to initialize key exchange: {}",
-                                                e
-                                            ))
-                                        })?;
-                                    }
+                                    // unwrap is safe because we just set the cipher suite
+                                    let cs = self.cipher_suite.unwrap();
+                                    self.crypto_context.init_key_exchange(cs).map_err(|e| {
+                                        Error::CryptoError(format!(
+                                            "Failed to initialize key exchange: {}",
+                                            e
+                                        ))
+                                    })?;
                                 }
                             }
                             MessageType::Certificate => {
@@ -245,8 +245,19 @@ impl Client {
                             }
                             MessageType::ServerKeyExchange => {
                                 // Process server key exchange parameters
-                                // In a real implementation, we would extract key exchange parameters
-                                // from the server's key exchange message
+                                if let Body::ServerKeyExchange(server_key_exchange) =
+                                    &handshake.body
+                                {
+                                    // Process the server key exchange message
+                                    self.crypto_context
+                                        .process_server_key_exchange(server_key_exchange)
+                                        .map_err(|e| {
+                                            Error::CryptoError(format!(
+                                                "Failed to process server key exchange: {}",
+                                                e
+                                            ))
+                                        })?;
+                                }
                             }
                             MessageType::CertificateRequest => {
                                 // Server requests client certificate

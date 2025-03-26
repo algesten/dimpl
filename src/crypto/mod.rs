@@ -13,6 +13,8 @@ pub use encryption::{AesGcm, Cipher};
 pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
 pub use prf::{calculate_master_secret, key_expansion};
 
+use crate::message::Asn1Cert;
+use crate::message::ServerKeyExchangeParams;
 use crate::message::{Certificate, CipherSuite, NamedCurve};
 
 /// Certificate verifier trait for DTLS connections
@@ -119,6 +121,49 @@ impl CryptoContext {
                 Ok(())
             }
             None => Err("Key exchange not initialized".to_string()),
+        }
+    }
+
+    /// Process a ServerKeyExchange message and set up key exchange accordingly
+    pub fn process_server_key_exchange(
+        &mut self,
+        server_key_exchange: &crate::message::ServerKeyExchange,
+    ) -> Result<(), String> {
+        // Process the server key exchange message based on the parameter type
+        match &server_key_exchange.params {
+            ServerKeyExchangeParams::ServerDhParams(dh_params) => {
+                // For DHE, create a new DhKeyExchange with server parameters
+                let prime = dh_params.p.to_vec();
+                let generator = dh_params.g.to_vec();
+                let server_public = dh_params.ys.to_vec();
+
+                // Update our key exchange
+                self.key_exchange = Some(Box::new(DhKeyExchange::new(prime, generator)));
+
+                // Generate our keypair
+                let _our_public = self.generate_key_exchange()?;
+
+                // Compute shared secret with the server's public key
+                self.compute_shared_secret(&server_public)?;
+
+                Ok(())
+            }
+            ServerKeyExchangeParams::ServerEcdhParams(ecdh_params) => {
+                // For ECDHE, create a new EcdhKeyExchange with the specified curve
+                let curve = ecdh_params.named_curve;
+                let server_public = ecdh_params.public_key.to_vec();
+
+                // Update our key exchange
+                self.key_exchange = Some(Box::new(EcdhKeyExchange::new(curve)));
+
+                // Generate our keypair
+                let _our_public = self.generate_key_exchange()?;
+
+                // Compute shared secret with the server's public key
+                self.compute_shared_secret(&server_public)?;
+
+                Ok(())
+            }
         }
     }
 
@@ -266,7 +311,6 @@ impl CryptoContext {
             None
         } else {
             // Create a Certificate with a single Asn1Cert
-            use crate::message::Asn1Cert;
             use tinyvec::array_vec;
 
             let cert = Asn1Cert(self.client_cert.as_slice());
