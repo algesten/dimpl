@@ -11,8 +11,8 @@ pub struct ServerKeyExchange<'a> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ServerKeyExchangeParams<'a> {
-    ServerDhParams(ServerDhParams<'a>),
-    ServerEcdhParams(ServerEcdhParams<'a>),
+    Dh(DhParams<'a>),
+    Ecdh(EcdhParams<'a>),
 }
 
 impl<'a> ServerKeyExchange<'a> {
@@ -22,15 +22,12 @@ impl<'a> ServerKeyExchange<'a> {
     ) -> IResult<&'a [u8], ServerKeyExchange<'a>> {
         let (input, params) = match key_exchange_algorithm {
             KeyExchangeAlgorithm::EDH => {
-                let (input, dh_params) = ServerDhParams::parse(input)?;
-                (input, ServerKeyExchangeParams::ServerDhParams(dh_params))
+                let (input, dh_params) = DhParams::parse(input)?;
+                (input, ServerKeyExchangeParams::Dh(dh_params))
             }
             KeyExchangeAlgorithm::EECDH => {
-                let (input, ecdh_params) = ServerEcdhParams::parse(input)?;
-                (
-                    input,
-                    ServerKeyExchangeParams::ServerEcdhParams(ecdh_params),
-                )
+                let (input, ecdh_params) = EcdhParams::parse(input)?;
+                (input, ServerKeyExchangeParams::Ecdh(ecdh_params))
             }
             _ => return Err(Err::Failure(Error::new(input, ErrorKind::Tag))),
         };
@@ -40,25 +37,25 @@ impl<'a> ServerKeyExchange<'a> {
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
         match &self.params {
-            ServerKeyExchangeParams::ServerDhParams(dh_params) => dh_params.serialize(output),
-            ServerKeyExchangeParams::ServerEcdhParams(ecdh_params) => ecdh_params.serialize(output),
+            ServerKeyExchangeParams::Dh(dh_params) => dh_params.serialize(output),
+            ServerKeyExchangeParams::Ecdh(ecdh_params) => ecdh_params.serialize(output),
         }
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ServerDhParams<'a> {
+pub struct DhParams<'a> {
     pub p: &'a [u8],
     pub g: &'a [u8],
     pub ys: &'a [u8],
 }
 
-impl<'a> ServerDhParams<'a> {
+impl<'a> DhParams<'a> {
     pub fn new(p: &'a [u8], g: &'a [u8], ys: &'a [u8]) -> Self {
-        ServerDhParams { p, g, ys }
+        DhParams { p, g, ys }
     }
 
-    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], ServerDhParams<'a>> {
+    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], DhParams<'a>> {
         let (input, p_len) = be_u16(input)?;
         if p_len < 1 {
             return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
@@ -75,7 +72,7 @@ impl<'a> ServerDhParams<'a> {
         }
         let (input, ys) = take(ys_len)(input)?;
 
-        Ok((input, ServerDhParams { p, g, ys }))
+        Ok((input, DhParams { p, g, ys }))
     }
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
@@ -89,22 +86,22 @@ impl<'a> ServerDhParams<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ServerEcdhParams<'a> {
+pub struct EcdhParams<'a> {
     pub curve_type: CurveType,
     pub named_curve: NamedCurve,
     pub public_key: &'a [u8],
 }
 
-impl<'a> ServerEcdhParams<'a> {
+impl<'a> EcdhParams<'a> {
     pub fn new(curve_type: CurveType, named_curve: NamedCurve, public_key: &'a [u8]) -> Self {
-        ServerEcdhParams {
+        EcdhParams {
             curve_type,
             named_curve,
             public_key,
         }
     }
 
-    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], ServerEcdhParams<'a>> {
+    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], EcdhParams<'a>> {
         let (input, curve_type) = CurveType::parse(input)?;
         let (input, named_curve) = NamedCurve::parse(input)?;
         let (input, public_key_len) = be_u8(input)?;
@@ -112,7 +109,7 @@ impl<'a> ServerEcdhParams<'a> {
 
         Ok((
             input,
-            ServerEcdhParams {
+            EcdhParams {
                 curve_type,
                 named_curve,
                 public_key,
@@ -152,11 +149,10 @@ mod test {
     fn roundtrip_dh() {
         let mut serialized = Vec::new();
 
-        let dh_params =
-            ServerDhParams::new(&MESSAGE_DH[2..6], &MESSAGE_DH[8..10], &MESSAGE_DH[12..14]);
+        let dh_params = DhParams::new(&MESSAGE_DH[2..6], &MESSAGE_DH[8..10], &MESSAGE_DH[12..14]);
 
         let server_key_exchange = ServerKeyExchange {
-            params: ServerKeyExchangeParams::ServerDhParams(dh_params),
+            params: ServerKeyExchangeParams::Dh(dh_params),
         };
 
         // Serialize and compare to DH_MESSAGE
@@ -175,14 +171,14 @@ mod test {
     fn roundtrip_ecdh() {
         let mut serialized = Vec::new();
 
-        let ecdh_params = ServerEcdhParams::new(
+        let ecdh_params = EcdhParams::new(
             CurveType::NamedCurve,
             NamedCurve::Secp256r1,
             &MESSAGE_ECDH[4..],
         );
 
         let server_key_exchange = ServerKeyExchange {
-            params: ServerKeyExchangeParams::ServerEcdhParams(ecdh_params),
+            params: ServerKeyExchangeParams::Ecdh(ecdh_params),
         };
 
         // Serialize and compare to ECDH_MESSAGE

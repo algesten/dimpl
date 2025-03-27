@@ -228,7 +228,7 @@ impl CryptoContext {
     ) -> Result<(), String> {
         // Process the server key exchange message based on the parameter type
         match &server_key_exchange.params {
-            ServerKeyExchangeParams::ServerDhParams(dh_params) => {
+            ServerKeyExchangeParams::Dh(dh_params) => {
                 // For DHE, create a new DhKeyExchange with server parameters
                 let prime = dh_params.p.to_vec();
                 let generator = dh_params.g.to_vec();
@@ -245,7 +245,7 @@ impl CryptoContext {
 
                 Ok(())
             }
-            ServerKeyExchangeParams::ServerEcdhParams(ecdh_params) => {
+            ServerKeyExchangeParams::Ecdh(ecdh_params) => {
                 // For ECDHE, create a new EcdhKeyExchange with the specified curve
                 let curve = ecdh_params.named_curve;
                 let server_public = ecdh_params.public_key.to_vec();

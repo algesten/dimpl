@@ -40,9 +40,7 @@ pub use nom::error::{Error, ErrorKind};
 pub use random::Random;
 pub use record::{ContentType, DTLSRecord, Sequence};
 pub use server_hello::ServerHello;
-pub use server_key_exchange::{
-    ServerDhParams, ServerEcdhParams, ServerKeyExchange, ServerKeyExchangeParams,
-};
+pub use server_key_exchange::{DhParams, EcdhParams, ServerKeyExchange, ServerKeyExchangeParams};
 use tinyvec::{array_vec, ArrayVec};
 pub use wrapped::{Asn1Cert, DistinguishedName};
 

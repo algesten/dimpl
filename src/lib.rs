@@ -15,7 +15,7 @@ use std::time::Instant;
 
 pub use client::Client;
 
-pub(crate) mod message;
+pub mod message;
 
 mod time_tricks;
 
