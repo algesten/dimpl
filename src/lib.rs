@@ -33,10 +33,6 @@ mod config;
 pub use config::Config;
 
 pub mod certificate;
-pub use certificate::{
-    calculate_fingerprint, format_fingerprint, generate_self_signed_certificate, CertificateError,
-    DtlsCertificate,
-};
 
 pub use crypto::KeyingMaterial;
 
@@ -64,8 +60,10 @@ pub use crypto::KeyingMaterial;
 //                                                [ChangeCipherSpec]
 //                                    <--------             Finished
 //       Application Data             <------->     Application Data
-
 pub enum Output<'a> {
     Packet(&'a [u8]),
     Timeout(Instant),
+    Connected,
+    PeerCert(Vec<u8>),
+    ApplicationData(Vec<u8>),
 }

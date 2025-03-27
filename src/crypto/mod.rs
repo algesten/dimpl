@@ -38,7 +38,7 @@ use crate::message::{
 /// Certificate verifier trait for DTLS connections
 pub trait CertVerifier: Send + Sync {
     /// Verify a certificate by its binary DER representation
-    fn verify_certificate(&self, certificate_data: &[u8]) -> Result<(), String>;
+    fn verify_certificate(&self, der: &[u8]) -> Result<(), String>;
 }
 
 /// DTLS 1.2 crypto context
@@ -452,8 +452,8 @@ impl CryptoContext {
     }
 
     /// Verify a server certificate
-    pub fn verify_server_certificate(&self, certificate_data: &[u8]) -> Result<(), String> {
-        self.cert_verifier.verify_certificate(certificate_data)
+    pub fn verify_server_certificate(&self, der: &[u8]) -> Result<(), String> {
+        self.cert_verifier.verify_certificate(der)
     }
 
     /// Generate verify data for a Finished message using PRF

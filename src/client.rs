@@ -150,7 +150,8 @@ impl Client {
             }
             ClientState::AwaitServerFinished => self.process_server_finished(),
             ClientState::Running => {
-                // Just keep the connection running
+                // Process incoming application data packets using the engine
+                self.engine.process_application_data()?;
                 Ok(())
             }
         }
@@ -334,6 +335,12 @@ impl Client {
                 "Certificate verification failed: {}",
                 err
             )));
+        }
+
+        // Send the server certificate as an event
+        if !self.server_certificates.is_empty() {
+            let cert_data = self.server_certificates[0].clone();
+            self.engine.push_peer_cert(cert_data);
         }
 
         // Transition to next state
@@ -581,6 +588,10 @@ impl Client {
 
                         // Handshake is complete
                         self.state = ClientState::Running;
+
+                        // Emit Connected event
+                        self.engine.push_connected();
+
                         return Ok(());
                     }
                     _ => {}

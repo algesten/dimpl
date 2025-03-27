@@ -27,6 +27,9 @@ pub(crate) struct Engine {
     /// Queue of outgoing packets.
     queue_tx: VecDeque<Buffer>,
 
+    /// Queue of Output events
+    queue_events: VecDeque<Output<'static>>,
+
     /// Holder of last packet. To be able to return a reference.
     last_packet: Option<Buffer>,
 
@@ -60,6 +63,7 @@ impl Engine {
             next_sequence_tx: Sequence::default(),
             queue_rx: VecDeque::new(),
             queue_tx: VecDeque::new(),
+            queue_events: VecDeque::new(),
             last_packet: None,
             crypto_context: CryptoContext::new(certificate, private_key, cert_verifier),
             handshake_messages: Vec::new(),
@@ -194,6 +198,11 @@ impl Engine {
     }
 
     pub(crate) fn poll_output(&mut self) -> Output {
+        // First check if we have any events
+        if let Some(event) = self.queue_events.pop_front() {
+            return event;
+        }
+
         let next_timeout = self.poll_timeout();
 
         if let Some(packet) = self.poll_packet_tx() {
@@ -342,6 +351,21 @@ impl Engine {
         }
     }
 
+    /// Decrypt data appropriate for the role (client or server)
+    fn decrypt_data(&self, ciphertext: &[u8], aad: &[u8], nonce: &[u8]) -> Result<Vec<u8>, Error> {
+        if self.is_client {
+            // Client decrypting data from server
+            self.crypto_context
+                .decrypt_server_to_client(ciphertext, aad, nonce)
+                .map_err(|e| Error::CryptoError(format!("Client decryption failed: {}", e)))
+        } else {
+            // Server decrypting data from client
+            self.crypto_context
+                .encrypt_client_to_server(ciphertext, aad, nonce)
+                .map_err(|e| Error::CryptoError(format!("Server decryption failed: {}", e)))
+        }
+    }
+
     /// Should encryption be used for this message based on content type and encryption state
     fn should_encrypt(&self, content_type: ContentType) -> bool {
         // Application data is always encrypted
@@ -389,5 +413,46 @@ impl Engine {
         aad.extend_from_slice(&length.to_be_bytes());
 
         aad
+    }
+
+    /// Push a Connected event to the queue
+    pub fn push_connected(&mut self) {
+        self.queue_events.push_back(Output::Connected);
+    }
+
+    /// Push a PeerCert event to the queue
+    pub fn push_peer_cert(&mut self, cert_data: Vec<u8>) {
+        self.queue_events.push_back(Output::PeerCert(cert_data));
+    }
+
+    /// Process application data packets from the incoming queue
+    pub fn process_application_data(&mut self) -> Result<(), Error> {
+        // Process any incoming packets with application data
+        while let Some(incoming) = self.next_incoming() {
+            let records = incoming.records();
+
+            for i in 0..records.len() {
+                let record = &records[i];
+                if record.record.content_type == ContentType::ApplicationData {
+                    // Create AAD for decryption
+                    let aad = self.create_aad(
+                        record.record.content_type,
+                        &record.record.sequence,
+                        record.record.length,
+                    );
+
+                    // Generate appropriate nonce for decryption
+                    let nonce = self.generate_nonce()?;
+
+                    // Decrypt the application data
+                    let plaintext = self.decrypt_data(record.record.fragment, &aad, &nonce)?;
+
+                    // Push the decrypted data to the queue
+                    self.queue_events
+                        .push_back(Output::ApplicationData(plaintext));
+                }
+            }
+        }
+        Ok(())
     }
 }
