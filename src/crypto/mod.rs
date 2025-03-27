@@ -14,6 +14,7 @@ use tinyvec::array_vec;
 use p256::ecdsa::SigningKey as P256SigningKey;
 use p384::ecdsa::SigningKey as P384SigningKey;
 use rsa::RsaPrivateKey;
+use sha2::{Digest, Sha256, Sha384};
 
 // Internal module imports
 mod encryption;
@@ -429,21 +430,23 @@ impl CryptoContext {
 
     /// Calculate a hash using the specified algorithm
     pub fn calculate_hash(&self, data: &[u8], algorithm: HashAlgorithm) -> Result<Vec<u8>, String> {
-        // In a real implementation, this would use a proper hash function
-        // For now, create a simple hash to use for testing
-        let mut hash = Vec::new();
-
-        // Mix in the algorithm and data
-        hash.push(algorithm.as_u8());
-
-        // Add a simple data-based hash (just for testing)
-        let mut checksum: u32 = 0;
-        for &byte in data {
-            checksum = checksum.wrapping_add(byte as u32);
+        match algorithm {
+            HashAlgorithm::SHA256 => {
+                let mut hasher = Sha256::new();
+                hasher.update(data);
+                Ok(hasher.finalize().to_vec())
+            }
+            HashAlgorithm::SHA384 => {
+                let mut hasher = Sha384::new();
+                hasher.update(data);
+                Ok(hasher.finalize().to_vec())
+            }
+            // For other hash algorithms, which we don't need for our supported cipher suites
+            _ => Err(format!(
+                "Hash algorithm {:?} not supported for our cipher suites",
+                algorithm
+            )),
         }
-        hash.extend_from_slice(&checksum.to_be_bytes());
-
-        Ok(hash)
     }
 
     /// Verify a server certificate
