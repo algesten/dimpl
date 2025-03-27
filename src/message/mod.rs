@@ -26,7 +26,7 @@ pub use certificate_request::CertificateRequest;
 pub use certificate_verify::CertificateVerify;
 pub use client_diffie_hellman::ClientDiffieHellmanPublic;
 pub use client_hello::ClientHello;
-pub use client_key_exchange::{ClientKeyExchange, ExchangeKeys};
+pub use client_key_exchange::{ClientEcdhKeys, ClientKeyExchange, ExchangeKeys};
 pub use digitally_signed::DigitallySigned;
 pub use extension::{Extension, ExtensionType};
 pub use finished::Finished;

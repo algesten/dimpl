@@ -20,9 +20,9 @@ use tinyvec::array_vec;
 use crate::crypto::CertVerifier;
 use crate::engine::Engine;
 use crate::message::{
-    Body, Certificate, CertificateRequest, CertificateVerify, CipherSuite,
-    ClientDiffieHellmanPublic, ClientHello, ClientKeyExchange, CompressionMethod, ContentType,
-    Cookie, DigitallySigned, ExchangeKeys, Finished, MessageType, ProtocolVersion,
+    Body, CertificateRequest, CertificateVerify, CipherSuite, ClientDiffieHellmanPublic,
+    ClientEcdhKeys, ClientHello, ClientKeyExchange, CompressionMethod, ContentType, Cookie,
+    DigitallySigned, ExchangeKeys, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion,
     PublicValueEncoding, Random, SessionId,
 };
 use crate::{Config, Error, Output};
@@ -95,14 +95,16 @@ impl Client {
     /// * `now` - Current timestamp for random generation
     /// * `config` - DTLS configuration
     /// * `certificate` - Client certificate, create one with `generate_self_signed_certificate()`
+    /// * `private_key` - Client private key corresponding to the certificate
     /// * `cert_verifier` - Certificate verifier for validating server certificates
     pub fn new(
         now: Instant,
         config: Arc<Config>,
         certificate: Vec<u8>,
+        private_key: Vec<u8>,
         cert_verifier: Box<dyn CertVerifier>,
     ) -> Client {
-        let engine = Engine::new(config, certificate, cert_verifier, true);
+        let engine = Engine::new(config, certificate, private_key, cert_verifier, true);
 
         Client {
             random: Random::new(now),
@@ -352,29 +354,19 @@ impl Client {
             return Ok(());
         }
 
-        // Get the client certificate info before borrowing engine mutably
+        // Get the client certificate
         let crypto = self.engine.crypto_context();
-        let client_cert_opt = crypto.get_client_certificate();
+        let client_cert = crypto.get_client_certificate();
 
-        if let Some(client_cert) = client_cert_opt {
-            // Store the client certificate data for sending
-            let mut cert_data = Vec::new();
-            client_cert.serialize(&mut cert_data);
+        // Store the client certificate data for sending
+        let mut cert_data = Vec::new();
+        client_cert.serialize(&mut cert_data);
 
-            // Now use the engine with the stored data
-            self.engine
-                .create_handshake(MessageType::Certificate, 0, |body| {
-                    body.extend_from_slice(&cert_data);
-                })?;
-        } else {
-            // If we don't have a certificate, send empty list
-            let empty_cert_list = array_vec![[crate::message::Asn1Cert<'_>; 32]];
-            let empty_cert = Certificate::new(empty_cert_list);
-            self.engine
-                .create_handshake(MessageType::Certificate, 0, |body| {
-                    empty_cert.serialize(body);
-                })?;
-        }
+        // Now use the engine with the stored data
+        self.engine
+            .create_handshake(MessageType::Certificate, 0, |body| {
+                body.extend_from_slice(&cert_data);
+            })?;
 
         Ok(())
     }
@@ -387,6 +379,16 @@ impl Client {
             ));
         }
 
+        let cipher_suite = self.cipher_suite.unwrap();
+        let key_exchange_algorithm = cipher_suite.as_key_exchange_algorithm();
+
+        // For ECDHE, get curve info before we create the handshake (to avoid borrow issues)
+        let curve_info = if key_exchange_algorithm == KeyExchangeAlgorithm::EECDH {
+            self.engine.crypto_context().get_key_exchange_curve_info()
+        } else {
+            None
+        };
+
         // Generate key exchange data
         let public_key = self
             .engine
@@ -397,20 +399,55 @@ impl Client {
         // Send client key exchange message
         self.engine
             .create_handshake(MessageType::ClientKeyExchange, 1, |body| {
-                // Create a properly formatted ClientKeyExchange message
-                // First create a ClientDiffieHellmanPublic with the correct encoding
-                let dh_public =
-                    ClientDiffieHellmanPublic::new(PublicValueEncoding::Explicit, &public_key);
+                // Create a properly formatted ClientKeyExchange message based on the key exchange algorithm
+                let exchange_keys = match key_exchange_algorithm {
+                    KeyExchangeAlgorithm::EECDH => {
+                        // For ECDHE, use the curve information we retrieved earlier
+                        if let Some((curve_type, named_curve)) = curve_info {
+                            debug!(
+                                "Using ECDHE curve info: {:?}, {:?}",
+                                curve_type, named_curve
+                            );
 
-                // Then wrap it in ExchangeKeys and ClientKeyExchange
-                let client_key_exchange = ClientKeyExchange::new(ExchangeKeys::DhAnon(dh_public));
+                            // Create ClientEcdhKeys with the proper curve information and public key
+                            let ecdh_keys =
+                                ClientEcdhKeys::new(curve_type, named_curve, &public_key);
+                            ExchangeKeys::Ecdh(ecdh_keys)
+                        } else {
+                            // Fallback if no curve info is available (shouldn't happen)
+                            warn!("No curve info available for ECDHE, using fallback");
+                            let dh_public = ClientDiffieHellmanPublic::new(
+                                PublicValueEncoding::Explicit,
+                                &public_key,
+                            );
+                            ExchangeKeys::DhAnon(dh_public)
+                        }
+                    }
+                    KeyExchangeAlgorithm::EDH => {
+                        // For DHE, use the standard encoding
+                        let dh_public = ClientDiffieHellmanPublic::new(
+                            PublicValueEncoding::Explicit,
+                            &public_key,
+                        );
+                        ExchangeKeys::DhAnon(dh_public)
+                    }
+                    _ => {
+                        // Create a default format for unknown algorithms
+                        let dh_public = ClientDiffieHellmanPublic::new(
+                            PublicValueEncoding::Explicit,
+                            &public_key,
+                        );
+                        ExchangeKeys::DhAnon(dh_public)
+                    }
+                };
 
-                // Serialize the fully structured message
+                // Wrap in ClientKeyExchange and serialize
+                let client_key_exchange = ClientKeyExchange::new(exchange_keys);
                 client_key_exchange.serialize(body);
             })?;
 
         // Send CertificateVerify if we sent a client certificate
-        if self.certificate_requested && self.engine.crypto_context().has_client_certificate() {
+        if self.certificate_requested {
             self.send_certificate_verify()?;
         }
 

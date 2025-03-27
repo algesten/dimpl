@@ -1,12 +1,15 @@
-use crate::message::{HashAlgorithm, SignatureAlgorithm, SignatureAndHashAlgorithm};
+use std::str;
 
 use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
 use p384::ecdsa::{Signature as P384Signature, SigningKey as P384SigningKey};
 use pkcs8::DecodePrivateKey;
 use rand::thread_rng;
+use rsa::pkcs1v15::SigningKey as RsaPkcs1v15SigningKey;
 use rsa::{pkcs8, RsaPrivateKey};
 use sha2::{Sha256, Sha384};
 use signature::{RandomizedSigner, SignatureEncoding, Signer};
+
+use crate::message::{HashAlgorithm, SignatureAlgorithm, SignatureAndHashAlgorithm};
 
 /// Sign data using RSA with the provided private key and hash algorithm
 pub fn sign_rsa(
@@ -15,13 +18,12 @@ pub fn sign_rsa(
     hash_alg: HashAlgorithm,
 ) -> Result<Vec<u8>, String> {
     // Try to decode the private key data in PKCS#8 format
-    // In a real implementation, you might need to handle different key formats
     let private_key = match RsaPrivateKey::from_pkcs8_der(private_key_data) {
         Ok(key) => key,
         Err(_) => {
             // Try PEM format if DER fails
             RsaPrivateKey::from_pkcs8_pem(
-                std::str::from_utf8(private_key_data)
+                str::from_utf8(private_key_data)
                     .map_err(|e| format!("Invalid UTF-8 in private key: {}", e))?,
             )
             .map_err(|e| format!("Failed to parse RSA private key: {}", e))?
@@ -31,18 +33,14 @@ pub fn sign_rsa(
     // Select the appropriate padding scheme based on the hash algorithm
     match hash_alg {
         HashAlgorithm::SHA256 => {
-            use rsa::pkcs1v15::{Signature, SigningKey};
-
-            let signing_key = SigningKey::<Sha256>::new_with_prefix(private_key);
-            let mut rng = rand::thread_rng();
+            let signing_key = RsaPkcs1v15SigningKey::<Sha256>::new(private_key);
+            let mut rng = thread_rng();
             let signature = signing_key.sign_with_rng(&mut rng, data);
             Ok(signature.to_bytes().to_vec())
         }
         HashAlgorithm::SHA384 => {
-            use rsa::pkcs1v15::{Signature, SigningKey};
-
-            let signing_key = SigningKey::<Sha384>::new_with_prefix(private_key);
-            let mut rng = rand::thread_rng();
+            let signing_key = RsaPkcs1v15SigningKey::<Sha384>::new(private_key);
+            let mut rng = thread_rng();
             let signature = signing_key.sign_with_rng(&mut rng, data);
             Ok(signature.to_bytes().to_vec())
         }
@@ -70,7 +68,7 @@ pub fn sign_ecdsa(private_key_data: &[u8], data: &[u8]) -> Result<Vec<u8>, Strin
     }
 
     // If we can't determine the curve or load the key, try PEM format
-    if let Ok(key_pem) = std::str::from_utf8(private_key_data) {
+    if let Ok(key_pem) = str::from_utf8(private_key_data) {
         if let Ok(signing_key) = P256SigningKey::from_pkcs8_pem(key_pem) {
             // Sign with P-256
             let signature: P256Signature = signing_key.sign(data);

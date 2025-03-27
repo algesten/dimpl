@@ -5,21 +5,32 @@
 // - ECDHE+AES256 (AES256_EECDH)
 // - DHE+AES256 (AES256_EDH)
 
+use std::str;
+
+use pkcs8::DecodePrivateKey;
 use tinyvec::array_vec;
 
+// Crypto-related imports
+use p256::ecdsa::SigningKey as P256SigningKey;
+use p384::ecdsa::SigningKey as P384SigningKey;
+use rsa::RsaPrivateKey;
+
+// Internal module imports
 mod encryption;
 mod key_exchange;
 mod prf;
 mod signing;
 
+// Public re-exports
 pub use encryption::{AesGcm, Cipher};
 pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
 pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
-pub use signing::sign_data;
 
-use crate::message::Asn1Cert;
-use crate::message::ServerKeyExchangeParams;
-use crate::message::{Certificate, CipherSuite, HashAlgorithm, NamedCurve};
+// Message-related imports
+use crate::message::{
+    Asn1Cert, Certificate, CipherSuite, CurveType, HashAlgorithm, KeyExchangeAlgorithm, NamedCurve,
+    ServerKeyExchangeParams, SignatureAlgorithm, SignatureAndHashAlgorithm,
+};
 
 /// Certificate verifier trait for DTLS connections
 pub trait CertVerifier: Send + Sync {
@@ -65,13 +76,35 @@ pub struct CryptoContext {
     /// Client certificate (DER format)
     client_cert: Vec<u8>,
 
+    /// Client private key (DER or PEM format)
+    client_private_key: Vec<u8>,
+
     /// Certificate verifier
     cert_verifier: Box<dyn CertVerifier>,
+
+    /// Signature algorithm based on client certificate type
+    signature_algorithm: SignatureAndHashAlgorithm,
 }
 
 impl CryptoContext {
     /// Create a new crypto context
-    pub fn new(client_cert: Vec<u8>, cert_verifier: Box<dyn CertVerifier>) -> Self {
+    pub fn new(
+        client_cert: Vec<u8>,
+        client_private_key: Vec<u8>,
+        cert_verifier: Box<dyn CertVerifier>,
+    ) -> Self {
+        // Validate that we have a certificate and private key
+        if client_cert.is_empty() {
+            panic!("Client certificate cannot be empty");
+        }
+
+        if client_private_key.is_empty() {
+            panic!("Client private key cannot be empty");
+        }
+
+        // Determine the signature algorithm based on the private key
+        let signature_algorithm = Self::determine_signature_algorithm(&client_private_key);
+
         CryptoContext {
             key_exchange: None,
             client_write_key: None,
@@ -85,18 +118,75 @@ impl CryptoContext {
             client_cipher: None,
             server_cipher: None,
             client_cert,
+            client_private_key,
             cert_verifier,
+            signature_algorithm,
         }
+    }
+
+    /// Determine signature algorithm from the client certificate
+    fn determine_signature_algorithm(cert_data: &[u8]) -> SignatureAndHashAlgorithm {
+        // Check if it's a PEM encoded key
+        if let Ok(pem_str) = str::from_utf8(cert_data) {
+            // Try as RSA key
+            if RsaPrivateKey::from_pkcs8_pem(pem_str).is_ok() {
+                return SignatureAndHashAlgorithm::new(
+                    HashAlgorithm::SHA256,
+                    SignatureAlgorithm::RSA,
+                );
+            }
+
+            // Try as P-256 key
+            if P256SigningKey::from_pkcs8_pem(pem_str).is_ok() {
+                return SignatureAndHashAlgorithm::new(
+                    HashAlgorithm::SHA256,
+                    SignatureAlgorithm::ECDSA,
+                );
+            }
+
+            // Try as P-384 key
+            if P384SigningKey::from_pkcs8_pem(pem_str).is_ok() {
+                return SignatureAndHashAlgorithm::new(
+                    HashAlgorithm::SHA384,
+                    SignatureAlgorithm::ECDSA,
+                );
+            }
+        }
+
+        // Try as DER encoded key
+        // Try as RSA key
+        if RsaPrivateKey::from_pkcs8_der(cert_data).is_ok() {
+            return SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA);
+        }
+
+        // Try as P-256 key
+        if P256SigningKey::from_pkcs8_der(cert_data).is_ok() {
+            return SignatureAndHashAlgorithm::new(
+                HashAlgorithm::SHA256,
+                SignatureAlgorithm::ECDSA,
+            );
+        }
+
+        // Try as P-384 key
+        if P384SigningKey::from_pkcs8_der(cert_data).is_ok() {
+            return SignatureAndHashAlgorithm::new(
+                HashAlgorithm::SHA384,
+                SignatureAlgorithm::ECDSA,
+            );
+        }
+
+        // Default to RSA + SHA256 if we can't determine
+        SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA)
     }
 
     /// Initialize key exchange based on cipher suite
     pub fn init_key_exchange(&mut self, cipher_suite: CipherSuite) -> Result<(), String> {
         self.key_exchange = Some(match cipher_suite.as_key_exchange_algorithm() {
-            crate::message::KeyExchangeAlgorithm::EECDH => {
+            KeyExchangeAlgorithm::EECDH => {
                 // Use P-256 as the default curve
                 Box::new(EcdhKeyExchange::new(NamedCurve::Secp256r1))
             }
-            crate::message::KeyExchangeAlgorithm::EDH => {
+            KeyExchangeAlgorithm::EDH => {
                 // For DHE, we need prime and generator values (typically from server)
                 // This is a placeholder - real implementation would use values from ServerKeyExchange
                 let prime = vec![0u8; 256]; // Placeholder
@@ -304,64 +394,41 @@ impl CryptoContext {
         }
     }
 
-    /// Check if we have a client certificate available
-    pub fn has_client_certificate(&self) -> bool {
-        !self.client_cert.is_empty()
-    }
-
     /// Get client certificate for authentication
-    pub fn get_client_certificate(&self) -> Option<Certificate> {
-        if self.client_cert.is_empty() {
-            None
-        } else {
-            // Create a Certificate with a single Asn1Cert
-            let cert = Asn1Cert(self.client_cert.as_slice());
-            let certs = array_vec![[Asn1Cert; 32] => cert];
-            Some(Certificate::new(certs))
-        }
+    pub fn get_client_certificate(&self) -> Certificate {
+        // We validate in constructor, so we can assume we have a certificate
+        let cert = Asn1Cert(self.client_cert.as_slice());
+        let certs = array_vec![[Asn1Cert; 32] => cert];
+        Certificate::new(certs)
     }
 
-    /// Get the client private key if available
+    /// Get the client private key
     ///
     /// This should only be used for operations like signing where the private key is needed
-    pub fn get_client_private_key(&self) -> Option<&[u8]> {
-        if !self.client_cert.is_empty() {
-            Some(&self.client_cert)
-        } else {
-            None
-        }
+    pub fn get_client_private_key(&self) -> &[u8] {
+        // We validate in constructor, so we can assume we have a private key
+        &self.client_private_key
     }
 
     /// Sign the provided data using the client's private key
     /// Returns the signature or an error if signing fails
     pub fn sign_data(&self, data: &[u8]) -> Result<Vec<u8>, String> {
-        if let Some(private_key_data) = self.get_client_private_key() {
-            // Parse the private key using appropriate format from the certificate
-            let sig_alg = self.get_signature_algorithm();
-
-            // Use the signing module to sign the data
-            signing::sign_data(private_key_data, data, sig_alg)
-        } else {
-            Err("No client private key available for signing".to_string())
-        }
-    }
-
-    /// Get the recommended hash and signature algorithms for this client
-    pub fn get_signature_algorithm(&self) -> crate::message::SignatureAndHashAlgorithm {
-        // In a real implementation, this would be determined by the client certificate type
-        // For now, we'll use a common default
-        crate::message::SignatureAndHashAlgorithm::new(
-            crate::message::HashAlgorithm::SHA256,
-            crate::message::SignatureAlgorithm::RSA,
+        // Use the signing module to sign the data
+        signing::sign_data(
+            self.get_client_private_key(),
+            data,
+            self.get_signature_algorithm(),
         )
     }
 
+    /// Get the recommended hash and signature algorithms for this client
+    pub fn get_signature_algorithm(&self) -> SignatureAndHashAlgorithm {
+        // Return the signature algorithm determined from the certificate
+        self.signature_algorithm
+    }
+
     /// Calculate a hash using the specified algorithm
-    pub fn calculate_hash(
-        &self,
-        data: &[u8],
-        algorithm: crate::message::HashAlgorithm,
-    ) -> Result<Vec<u8>, String> {
+    pub fn calculate_hash(&self, data: &[u8], algorithm: HashAlgorithm) -> Result<Vec<u8>, String> {
         // In a real implementation, this would use a proper hash function
         // For now, create a simple hash to use for testing
         let mut hash = Vec::new();
@@ -408,5 +475,13 @@ impl CryptoContext {
 
         // Generate 12 bytes of verify data using PRF
         prf_tls12(master_secret, label, &handshake_hash, 12)
+    }
+
+    /// Get curve info for ECDHE key exchange
+    pub fn get_key_exchange_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
+        match &self.key_exchange {
+            Some(ke) => ke.get_curve_info(),
+            None => None,
+        }
     }
 }

@@ -50,6 +50,7 @@ impl Engine {
     pub fn new(
         config: Arc<Config>,
         certificate: Vec<u8>,
+        private_key: Vec<u8>,
         cert_verifier: Box<dyn CertVerifier>,
         is_client: bool,
     ) -> Self {
@@ -60,7 +61,7 @@ impl Engine {
             queue_rx: VecDeque::new(),
             queue_tx: VecDeque::new(),
             last_packet: None,
-            crypto_context: CryptoContext::new(certificate, cert_verifier),
+            crypto_context: CryptoContext::new(certificate, private_key, cert_verifier),
             handshake_messages: Vec::new(),
             server_encryption_enabled: false,
             client_encryption_enabled: false,
