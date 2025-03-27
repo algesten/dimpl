@@ -21,6 +21,7 @@ mod time_tricks;
 
 mod buffer;
 mod crypto;
+pub use crypto::CertVerifier;
 mod engine;
 mod incoming;
 

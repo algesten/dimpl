@@ -17,16 +17,17 @@ pub enum CryptoError {
 mod cert;
 use std::io;
 
-pub use cert::{Fingerprint, OsslDtlsCert};
+pub use cert::{DtlsCertOptions, DtlsPKeyType, Fingerprint, OsslDtlsCert};
 
 mod io_buf;
 mod stream;
 
 mod dtls;
 use dimpl::{KeyingMaterial, SrtpProfile};
-pub use dtls::OsslDtlsImpl;
+pub use dtls::{dtls_ssl_create, OsslDtlsImpl};
 
 pub use io_buf::DatagramSend;
+use std::collections::VecDeque;
 use thiserror::Error;
 
 /// Targeted MTU

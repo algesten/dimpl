@@ -18,8 +18,8 @@ const RSA_F4: u32 = 0x10001;
 /// Certificate used for DTLS.
 #[derive(Debug, Clone)]
 pub struct OsslDtlsCert {
-    pub(crate) pkey: PKey<Private>,
-    pub(crate) x509: X509,
+    pub pkey: PKey<Private>,
+    pub x509: X509,
 }
 
 /// Defines the type of key pair to generate for the DTLS certificate.
@@ -134,7 +134,7 @@ impl OsslDtlsCert {
         }
     }
 
-    pub(crate) fn new_dtls_impl(&self) -> Result<OsslDtlsImpl, CryptoError> {
+    pub fn new_dtls_impl(&self) -> Result<OsslDtlsImpl, CryptoError> {
         OsslDtlsImpl::new(self.clone())
     }
 }
