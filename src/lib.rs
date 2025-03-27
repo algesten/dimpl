@@ -19,11 +19,11 @@ pub mod message;
 
 mod time_tricks;
 
-mod buffer;
+pub mod buffer;
 mod crypto;
 pub use crypto::CertVerifier;
 mod engine;
-mod incoming;
+pub mod incoming;
 
 mod util;
 

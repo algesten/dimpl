@@ -39,7 +39,7 @@ impl fmt::Debug for BufferPool {
 }
 
 #[derive(Debug)]
-pub(crate) struct Buffer(Vec<u8>);
+pub struct Buffer(Vec<u8>);
 
 impl Buffer {
     pub fn reset(&mut self) {

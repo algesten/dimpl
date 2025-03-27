@@ -76,7 +76,7 @@ impl Incoming {
 
 /// A number of records parsed from a single UDP packet.
 #[derive(Debug)]
-pub(crate) struct Records<'a> {
+pub struct Records<'a> {
     pub records: ArrayVec<[Record<'a>; 32]>,
 }
 
@@ -100,7 +100,7 @@ impl<'a> Deref for Records<'a> {
 
 /// One record parsed from a UDP packet.
 #[derive(Debug, Default)]
-pub(crate) struct Record<'a> {
+pub struct Record<'a> {
     /// The parsed DTLSRecord
     pub record: DTLSRecord<'a>,
 
