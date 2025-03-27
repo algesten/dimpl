@@ -4,7 +4,7 @@ use std::time::Instant;
 use std::u16;
 
 use crate::buffer::{Buffer, BufferPool};
-use crate::crypto::{CertVerifier, CryptoContext};
+use crate::crypto::{CertVerifier, CryptoContext, KeyingMaterial, SrtpProfile};
 use crate::incoming::Incoming;
 use crate::message::{
     CipherSuite, ContentType, DTLSRecord, Handshake, MessageType, ProtocolVersion, Sequence,
@@ -423,6 +423,12 @@ impl Engine {
     /// Push a PeerCert event to the queue
     pub fn push_peer_cert(&mut self, cert_data: Vec<u8>) {
         self.queue_events.push_back(Output::PeerCert(cert_data));
+    }
+
+    /// Push a KeyingMaterial event to the queue
+    pub fn push_keying_material(&mut self, keying_material: KeyingMaterial, profile: SrtpProfile) {
+        self.queue_events
+            .push_back(Output::KeyingMaterial(keying_material, profile));
     }
 
     /// Process application data packets from the incoming queue

@@ -2,12 +2,13 @@ use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};
 
+use dimpl::SrtpProfile;
 use openssl::ssl::{Ssl, SslContext, SslContextBuilder, SslMethod, SslOptions, SslVerifyMode};
 
 use super::cert::OsslDtlsCert;
 use super::io_buf::IoBuffer;
 use super::stream::TlsStream;
-use super::{CryptoError, DtlsEvent, SrtpProfile, DATAGRAM_MTU, DATAGRAM_MTU_WARN};
+use super::{CryptoError, DtlsEvent, DATAGRAM_MTU, DATAGRAM_MTU_WARN};
 
 // We restrict cipher suites to those that include ephermeral Diffie-Hellman or ephemeral
 // Elliptical Curve Diffie-Hellman AND AES-256 or AES-GCM.
@@ -134,10 +135,7 @@ pub fn dtls_create_ctx(cert: &OsslDtlsCert) -> Result<SslContext, CryptoError> {
     let srtp_profiles = {
         // Rust can't join directly to a string, need to allocate a vec first :(
         // This happens very rarely so the extra allocations don't matter
-        let all: Vec<_> = SrtpProfile::ALL
-            .iter()
-            .map(SrtpProfile::openssl_name)
-            .collect();
+        let all: Vec<_> = SrtpProfile::ALL.iter().map(openssl_name).collect();
 
         all.join(":")
     };
@@ -159,6 +157,13 @@ pub fn dtls_create_ctx(cert: &OsslDtlsCert) -> Result<SslContext, CryptoError> {
     let ctx = ctx.build();
 
     Ok(ctx)
+}
+
+fn openssl_name(profile: &SrtpProfile) -> &'static str {
+    match profile {
+        SrtpProfile::Aes128CmSha1_80 => "SRTP_AES128_CM_SHA1_80",
+        SrtpProfile::AeadAes128Gcm => "SRTP_AEAD_AES_128_GCM",
+    }
 }
 
 pub fn dtls_ssl_create(ctx: &SslContext) -> Result<Ssl, CryptoError> {

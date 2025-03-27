@@ -1,5 +1,5 @@
 use super::{CipherSuite, CompressionMethod, ProtocolVersion};
-use super::{Cookie, Random, SessionId};
+use super::{Cookie, Extension, ExtensionType, Random, SessionId, UseSrtpExtension};
 use nom::error::{Error, ErrorKind};
 use nom::Err;
 use nom::{
@@ -12,16 +12,17 @@ use tinyvec::ArrayVec;
 use crate::util::many1;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ClientHello {
+pub struct ClientHello<'a> {
     pub client_version: ProtocolVersion,
     pub random: Random,
     pub session_id: SessionId,
     pub cookie: Cookie,
     pub cipher_suites: ArrayVec<[CipherSuite; 32]>,
     pub compression_methods: ArrayVec<[CompressionMethod; 4]>,
+    pub extensions: ArrayVec<[Extension<'a>; 16]>,
 }
 
-impl ClientHello {
+impl<'a> ClientHello<'a> {
     pub fn new(
         client_version: ProtocolVersion,
         random: Random,
@@ -37,10 +38,30 @@ impl ClientHello {
             cookie,
             cipher_suites,
             compression_methods,
+            extensions: ArrayVec::new(),
         }
     }
 
-    pub fn parse(input: &[u8]) -> IResult<&[u8], ClientHello> {
+    /// Add a use_srtp extension with the default SRTP profiles
+    /// The extension data will be owned by the vector passed in
+    pub fn with_use_srtp(mut self, extension_data: &'a mut Vec<u8>) -> Self {
+        // Create the use_srtp extension with default profiles
+        let use_srtp = UseSrtpExtension::default();
+
+        // Clear the vector and serialize the extension into it
+        extension_data.clear();
+        use_srtp.serialize(extension_data);
+
+        // Create the extension with the serialized data
+        let extension = Extension::new(ExtensionType::UseSrtp, extension_data);
+
+        // Add to extensions
+        self.extensions.push(extension);
+
+        self
+    }
+
+    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], ClientHello<'a>> {
         let (input, client_version) = ProtocolVersion::parse(input)?;
         let (input, random) = Random::parse(input)?;
         let (input, session_id) = SessionId::parse(input)?;
@@ -58,8 +79,11 @@ impl ClientHello {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
 
+        // Parse extensions if there are any left
+        let (remaining_input, extensions) = Self::parse_extensions(input)?;
+
         Ok((
-            input,
+            remaining_input,
             ClientHello {
                 client_version,
                 random,
@@ -67,8 +91,42 @@ impl ClientHello {
                 cookie,
                 cipher_suites,
                 compression_methods,
+                extensions,
             },
         ))
+    }
+
+    /// Parse extensions from the input
+    fn parse_extensions(input: &'a [u8]) -> IResult<&'a [u8], ArrayVec<[Extension<'a>; 16]>> {
+        let mut extensions = ArrayVec::new();
+
+        // Early return if input is empty
+        if input.is_empty() {
+            return Ok((input, extensions));
+        }
+
+        // Parse extensions length
+        let (remaining, extensions_len) = be_u16(input)?;
+
+        // Early return if extensions length is 0
+        if extensions_len == 0 {
+            return Ok((remaining, extensions));
+        }
+
+        // Take the extensions data
+        let (remaining, extensions_data) = take(extensions_len)(remaining)?;
+
+        // Parse individual extensions
+        let mut extensions_rest = extensions_data;
+        while !extensions_rest.is_empty() && extensions.len() < 16 {
+            let (rest, extension) = Extension::parse(extensions_rest)?;
+
+            // Add the extension directly with the proper lifetime
+            extensions.push(extension);
+            extensions_rest = rest;
+        }
+
+        Ok((remaining, extensions))
     }
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
@@ -85,6 +143,24 @@ impl ClientHello {
         output.push(self.compression_methods.len() as u8);
         for method in &self.compression_methods {
             output.push(method.as_u8());
+        }
+
+        // Add extensions if any
+        if !self.extensions.is_empty() {
+            // First calculate total extensions length
+            let mut extensions_len = 0;
+            for ext in &self.extensions {
+                // Extension type (2) + Extension length (2) + Extension data
+                extensions_len += 4 + ext.extension_data.len();
+            }
+
+            // Write extensions length
+            output.extend_from_slice(&(extensions_len as u16).to_be_bytes());
+
+            // Write each extension
+            for ext in &self.extensions {
+                ext.serialize(output);
+            }
         }
     }
 }

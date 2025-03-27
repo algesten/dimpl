@@ -34,7 +34,7 @@ pub use config::Config;
 
 pub mod certificate;
 
-pub use crypto::KeyingMaterial;
+pub use crypto::{KeyingMaterial, SrtpProfile};
 
 // This is the full DTLS1.2 flow
 //
@@ -65,5 +65,6 @@ pub enum Output<'a> {
     Timeout(Instant),
     Connected,
     PeerCert(Vec<u8>),
+    KeyingMaterial(KeyingMaterial, SrtpProfile),
     ApplicationData(Vec<u8>),
 }

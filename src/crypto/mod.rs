@@ -26,7 +26,7 @@ mod signing;
 // Public re-exports
 pub use encryption::{AesGcm, Cipher};
 pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
-pub use keying::KeyingMaterial;
+pub use keying::{KeyingMaterial, SrtpProfile};
 pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
 
 // Message-related imports
@@ -462,24 +462,47 @@ impl CryptoContext {
         handshake_messages: &[u8],
         is_client: bool,
     ) -> Result<Vec<u8>, String> {
-        // Get master secret
         let master_secret = match &self.master_secret {
             Some(ms) => ms,
-            None => return Err("Master secret not available".to_string()),
+            None => return Err("No master secret available".to_string()),
         };
 
-        // Hash the handshake messages
-        let handshake_hash = self.calculate_hash(handshake_messages, HashAlgorithm::SHA256)?;
-
-        // Use the appropriate label based on whether this is for client or server
         let label = if is_client {
             "client finished"
         } else {
             "server finished"
         };
 
+        // Hash the handshake messages using SHA-256
+        let handshake_hash = self.calculate_hash(handshake_messages, HashAlgorithm::SHA256)?;
+
         // Generate 12 bytes of verify data using PRF
         prf_tls12(master_secret, label, &handshake_hash, 12)
+    }
+
+    /// Extract SRTP keying material from the master secret
+    /// This is per RFC 5764 (DTLS-SRTP) section 4.2
+    pub fn extract_srtp_keying_material(
+        &self,
+        profile: SrtpProfile,
+    ) -> Result<KeyingMaterial, String> {
+        const DTLS_SRTP_KEY_LABEL: &str = "EXTRACTOR-dtls_srtp";
+
+        let master_secret = match &self.master_secret {
+            Some(ms) => ms,
+            None => return Err("No master secret available".to_string()),
+        };
+
+        // Extract the keying material using the PRF function
+        // The seed is empty for DTLS-SRTP as per RFC 5764
+        let keying_material = prf_tls12(
+            master_secret,
+            DTLS_SRTP_KEY_LABEL,
+            &[],
+            profile.keying_material_len(),
+        )?;
+
+        Ok(KeyingMaterial::new(keying_material))
     }
 
     /// Get curve info for ECDHE key exchange

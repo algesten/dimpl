@@ -267,7 +267,7 @@ impl MessageType {
 #[allow(clippy::large_enum_variant)]
 pub enum Body<'a> {
     HelloRequest, // empty
-    ClientHello(ClientHello),
+    ClientHello(ClientHello<'a>),
     HelloVerifyRequest(HelloVerifyRequest),
     ServerHello(ServerHello<'a>),
     Certificate(Certificate<'a>),

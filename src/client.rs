@@ -17,16 +17,17 @@ use std::time::Instant;
 
 use tinyvec::array_vec;
 
-use crate::crypto::CertVerifier;
+use crate::crypto::{CertVerifier, SrtpProfile};
 use crate::engine::Engine;
 use crate::message::{
     Body, CertificateRequest, CertificateVerify, CipherSuite, ClientDiffieHellmanPublic,
     ClientEcdhKeys, ClientHello, ClientKeyExchange, CompressionMethod, ContentType, Cookie,
-    DigitallySigned, ExchangeKeys, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion,
-    PublicValueEncoding, Random, SessionId,
+    DigitallySigned, ExchangeKeys, ExtensionType, Finished, KeyExchangeAlgorithm, MessageType,
+    ProtocolVersion, PublicValueEncoding, Random, SessionId, UseSrtpExtension,
 };
 use crate::{Config, Error, Output};
 
+/// DTLS client
 pub struct Client {
     /// Random unique data (with gmt timestamp). Used for signature checks.
     random: Random,
@@ -39,8 +40,14 @@ pub struct Client {
     /// It might remain null if there is no HelloVerifyRequest.
     cookie: Option<Cookie>,
 
-    /// The cipher suites in use. Set by ServerHello.
+    /// The cipher suite in use. Set by ServerHello.
     cipher_suite: Option<CipherSuite>,
+
+    /// Storage for extension data
+    extension_data: Vec<u8>,
+
+    /// The negotiated SRTP profile (if any)
+    negotiated_srtp_profile: Option<SrtpProfile>,
 
     /// Current client state.
     state: ClientState,
@@ -118,6 +125,8 @@ impl Client {
             _certificate_request: None,
             server_certificates: Vec::new(),
             server_encryption_enabled: false,
+            negotiated_srtp_profile: None,
+            extension_data: Vec::with_capacity(256), // Pre-allocate extension data buffer
         }
     }
 
@@ -168,6 +177,7 @@ impl Client {
 
         let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
+        // Create ClientHello with use_srtp extension
         let client_hello = ClientHello::new(
             client_version,
             self.random.clone(),
@@ -175,7 +185,8 @@ impl Client {
             cookie,
             cipher_suites,
             compression_methods,
-        );
+        )
+        .with_use_srtp(&mut self.extension_data);
 
         self.engine
             .create_handshake(MessageType::ClientHello, 0, |body| {
@@ -275,6 +286,22 @@ impl Client {
             .crypto_context_mut()
             .init_key_exchange(cs)
             .map_err(|e| Error::CryptoError(format!("Failed to initialize key exchange: {}", e)))?;
+
+        // Check for use_srtp extension to get the negotiated SRTP profile
+        if let Some(extensions) = &server_hello.extensions {
+            for extension in extensions {
+                if extension.extension_type == ExtensionType::UseSrtp {
+                    // Parse the use_srtp extension to get the selected profile
+                    if let Ok((_, use_srtp)) = UseSrtpExtension::parse(extension.extension_data) {
+                        // Store the first profile as our negotiated profile
+                        if !use_srtp.profiles.is_empty() {
+                            self.negotiated_srtp_profile =
+                                Some(use_srtp.profiles[0].to_srtp_profile());
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
@@ -591,6 +618,18 @@ impl Client {
 
                         // Emit Connected event
                         self.engine.push_connected();
+
+                        // Extract and emit SRTP keying material if we have a negotiated profile
+                        if let Some(profile) = self.negotiated_srtp_profile {
+                            if let Ok(keying_material) = self
+                                .engine
+                                .crypto_context()
+                                .extract_srtp_keying_material(profile)
+                            {
+                                // Emit the keying material event with the negotiated profile
+                                self.engine.push_keying_material(keying_material, profile);
+                            }
+                        }
 
                         return Ok(());
                     }
