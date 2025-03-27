@@ -19,12 +19,14 @@ use sha2::{Digest, Sha256, Sha384};
 // Internal module imports
 mod encryption;
 mod key_exchange;
+mod keying;
 mod prf;
 mod signing;
 
 // Public re-exports
 pub use encryption::{AesGcm, Cipher};
 pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
+pub use keying::KeyingMaterial;
 pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
 
 // Message-related imports

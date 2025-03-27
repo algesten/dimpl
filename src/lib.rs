@@ -38,6 +38,8 @@ pub use certificate::{
     DtlsCertificate,
 };
 
+pub use crypto::KeyingMaterial;
+
 // This is the full DTLS1.2 flow
 //
 // Client                                               Server

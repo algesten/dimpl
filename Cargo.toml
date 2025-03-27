@@ -30,3 +30,8 @@ rsa = { version = "0.9", features = ["pem", "sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 signature = "2.1"
 spki = "0.7"
+
+[dev-dependencies]
+openssl = "0.10.70"
+thiserror = "1.0"
+libc = "0.2"
