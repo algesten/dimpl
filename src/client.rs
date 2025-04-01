@@ -140,6 +140,15 @@ impl Client {
         self.engine.poll_output()
     }
 
+    /// Explicitly start the handshake process by sending a ClientHello
+    pub fn handle_timeout(&mut self, _now: Instant) -> Result<(), Error> {
+        // Only process if we're in the initial state
+        if matches!(self.state, ClientState::SendClientHello) {
+            self.process_input()?;
+        }
+        Ok(())
+    }
+
     fn process_input(&mut self) -> Result<(), Error> {
         match self.state {
             ClientState::SendClientHello => {
