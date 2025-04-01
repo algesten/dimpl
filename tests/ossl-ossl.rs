@@ -1,11 +1,20 @@
 mod ossl;
 
 use std::collections::VecDeque;
+use std::fs;
+use std::path::Path;
 
 use ossl::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
 
 #[test]
 fn ossl_ossl() {
+    // Create datagrams directory if it doesn't exist
+    let datagrams_dir = Path::new("tests/datagrams");
+    fs::create_dir_all(datagrams_dir).expect("Failed to create datagrams directory");
+
+    // Counter for datagram files
+    let mut datagram_counter = 0;
+
     // Generate certificates for both client and server
     let client_cert_options = DtlsCertOptions::default();
     let client_cert = OsslDtlsCert::new(client_cert_options);
@@ -53,6 +62,11 @@ fn ossl_ossl() {
     for _ in 0..20 {
         // Poll client for datagrams
         while let Some(datagram) = client.poll_datagram() {
+            // Save client->server datagram
+            let filename = format!("tests/datagrams/client_to_server_{}.bin", datagram_counter);
+            fs::write(&filename, &*datagram).expect("Failed to write client datagram");
+            datagram_counter += 1;
+
             // Client data goes to server
             if let Err(e) = server.handle_receive(&datagram, &mut server_events) {
                 panic!("Server failed to handle client packet: {:?}", e);
@@ -88,6 +102,11 @@ fn ossl_ossl() {
 
         // Poll server for datagrams
         while let Some(datagram) = server.poll_datagram() {
+            // Save server->client datagram
+            let filename = format!("tests/datagrams/server_to_client_{}.bin", datagram_counter);
+            fs::write(&filename, &*datagram).expect("Failed to write server datagram");
+            datagram_counter += 1;
+
             // Server data goes to client
             if let Err(e) = client.handle_receive(&datagram, &mut client_events) {
                 panic!("Client failed to handle server packet: {:?}", e);
