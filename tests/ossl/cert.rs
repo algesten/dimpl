@@ -139,6 +139,7 @@ impl OsslDtlsCert {
     }
 }
 
+#[derive(Debug)]
 pub struct Fingerprint {
     pub hash_func: String,
     pub bytes: Vec<u8>,

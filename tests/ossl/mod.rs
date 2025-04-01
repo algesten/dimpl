@@ -37,6 +37,7 @@ pub(crate) const DATAGRAM_MTU: usize = 1150;
 pub(crate) const DATAGRAM_MTU_WARN: usize = 1280;
 
 /// Events arising from a [`Dtls`] instance.
+#[derive(Debug)]
 pub enum DtlsEvent {
     /// When the DTLS has finished handshaking.
     Connected,
