@@ -9,15 +9,15 @@ use tinyvec::ArrayVec;
 #[derive(Debug, PartialEq, Eq)]
 pub struct CertificateRequest<'a> {
     pub certificate_types: ArrayVec<[ClientCertificateType; 8]>,
-    pub supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 16]>,
-    pub certificate_authorities: ArrayVec<[DistinguishedName<'a>; 16]>,
+    pub supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 32]>,
+    pub certificate_authorities: ArrayVec<[DistinguishedName<'a>; 32]>,
 }
 
 impl<'a> CertificateRequest<'a> {
     pub fn new(
         certificate_types: ArrayVec<[ClientCertificateType; 8]>,
-        supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 16]>,
-        certificate_authorities: ArrayVec<[DistinguishedName<'a>; 16]>,
+        supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 32]>,
+        certificate_authorities: ArrayVec<[DistinguishedName<'a>; 32]>,
     ) -> Self {
         CertificateRequest {
             certificate_types,

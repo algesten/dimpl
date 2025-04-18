@@ -47,12 +47,12 @@ impl SrtpProfileId {
 /// UseSrtp extension as defined in RFC 5764
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UseSrtpExtension {
-    pub profiles: ArrayVec<[SrtpProfileId; 2]>,
+    pub profiles: ArrayVec<[SrtpProfileId; 32]>,
     pub mki: Vec<u8>, // MKI value (usually empty)
 }
 
 impl UseSrtpExtension {
-    pub fn new(profiles: ArrayVec<[SrtpProfileId; 2]>, mki: Vec<u8>) -> Self {
+    pub fn new(profiles: ArrayVec<[SrtpProfileId; 32]>, mki: Vec<u8>) -> Self {
         UseSrtpExtension { profiles, mki }
     }
 
