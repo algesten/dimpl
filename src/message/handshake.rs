@@ -137,6 +137,7 @@ impl<'a> Handshake<'a> {
             unreachable!("Non-Fragment body in defragment()")
         };
         buffer.extend_from_slice(data);
+        first.handled.set(true);
 
         let mut next_type = None;
 
