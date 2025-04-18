@@ -44,15 +44,30 @@ impl<'a> ServerHello<'a> {
         let (input, session_id) = SessionId::parse(input)?;
         let (input, cipher_suite) = CipherSuite::parse(input)?;
         let (input, compression_method) = CompressionMethod::parse(input)?;
-        let (input, extensions_present) = be_u8(input)?;
-        let (input, extensions) = if extensions_present != 0 {
-            let (input, extensions_len) = be_u16(input)?;
-            let (rest, input_ext) = take(extensions_len)(input)?;
-            if !rest.is_empty() {
-                return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
+
+        // Parse extensions if there are any bytes left
+        let (input, extensions) = if !input.is_empty() {
+            // Check if we have enough bytes to read the extensions length (2 bytes)
+            if input.len() < 2 {
+                return Err(Err::Failure(Error::new(input, ErrorKind::Eof)));
             }
-            let (input, extensions) = many0(Extension::parse)(input_ext)?;
-            (input, Some(extensions))
+            let (input, extensions_len) = be_u16(input)?;
+
+            // Check if we have enough bytes to read the extensions data
+            if input.len() < extensions_len as usize {
+                return Err(Err::Failure(Error::new(input, ErrorKind::Eof)));
+            }
+
+            if extensions_len > 0 {
+                let (rest, input_ext) = take(extensions_len)(input)?;
+                if !rest.is_empty() {
+                    return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
+                }
+                let (input, extensions) = many0(Extension::parse)(input_ext)?;
+                (input, Some(extensions))
+            } else {
+                (input, None)
+            }
         } else {
             (input, None)
         };
@@ -78,20 +93,20 @@ impl<'a> ServerHello<'a> {
         output.extend_from_slice(&self.cipher_suite.as_u16().to_be_bytes());
         output.push(self.compression_method.as_u8());
         if let Some(extensions) = &self.extensions {
-            output.push(1);
-
-            // reserve space for length
-            let l1 = output.len();
-            output.extend_from_slice(&[0, 0]);
-
-            for extension in extensions {
-                extension.serialize(output);
+            // First calculate total extensions length
+            let mut extensions_len = 0;
+            for ext in extensions {
+                // Extension type (2) + Extension length (2) + Extension data
+                extensions_len += 4 + ext.extension_data.len();
             }
 
-            let ext_len = (output.len() - l1 - 2) as u16;
-            output[l1..(l1 + 2)].copy_from_slice(&ext_len.to_be_bytes());
-        } else {
-            output.push(0);
+            // Write extensions length
+            output.extend_from_slice(&(extensions_len as u16).to_be_bytes());
+
+            // Write each extension
+            for ext in extensions {
+                ext.serialize(output);
+            }
         }
     }
 }
