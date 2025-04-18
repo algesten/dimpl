@@ -100,8 +100,9 @@ impl<'a> Handshake<'a> {
             let (input, fragment) = take(header.fragment_length as usize)(input)?;
             (input, Body::Fragment(fragment))
         } else {
-            let (input, body) = take(header.length as usize)(input)?;
-            Body::parse(input, header.msg_type, c)?
+            let (input, body_bytes) = take(header.length as usize)(input)?;
+            let (_, body) = Body::parse(body_bytes, header.msg_type, c)?;
+            (input, body)
         };
 
         Ok((
