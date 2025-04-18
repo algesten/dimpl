@@ -127,6 +127,7 @@ impl<'a> Handshake<'a> {
     pub fn defragment<'b, 'c: 'b>(
         mut iter: impl Iterator<Item = &'b Handshake<'c>>,
         buffer: &'a mut Vec<u8>,
+        cipher_suite: Option<CipherSuite>,
     ) -> Result<(Handshake<'a>, Option<MessageType>), crate::Error> {
         buffer.clear();
 
@@ -156,7 +157,7 @@ impl<'a> Handshake<'a> {
             buffer.extend_from_slice(data);
         }
 
-        let (rest, body) = Body::parse(buffer, first.header.msg_type, None)?;
+        let (rest, body) = Body::parse(buffer, first.header.msg_type, cipher_suite)?;
 
         if !rest.is_empty() {
             return Err(crate::Error::ParseIncomplete);
@@ -527,7 +528,7 @@ mod tests {
         // Defragment the fragments
         let mut defragmented_buffer = Vec::new();
         let (defragmented_handshake, _next_type) =
-            Handshake::defragment(fragments.iter(), &mut defragmented_buffer).unwrap();
+            Handshake::defragment(fragments.iter(), &mut defragmented_buffer, None).unwrap();
 
         // Serialize and compare to MESSAGE
         defragmented_handshake.serialize(&mut serialized);
