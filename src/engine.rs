@@ -159,7 +159,7 @@ impl Engine {
                     .map(|h| (h.header.message_seq, h.header.fragment_offset))
                     .unwrap_or((u16::MAX, u32::MAX));
                 let current = (h.header.message_seq, h.header.fragment_offset);
-                current.cmp(&other)
+                other.cmp(&current)
             }) {
                 Ok(_) => {
                     // We have already received this exact handshake packet.
