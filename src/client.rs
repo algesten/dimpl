@@ -75,7 +75,7 @@ pub struct Client {
 }
 
 /// Current state of the client.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientState {
     /// Send the ClientHello
     SendClientHello,
@@ -154,6 +154,17 @@ impl Client {
     }
 
     fn process_input(&mut self) -> Result<(), Error> {
+        loop {
+            let prev_state = self.state;
+            self.do_process_input()?;
+            if prev_state == self.state {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn do_process_input(&mut self) -> Result<(), Error> {
         match self.state {
             ClientState::SendClientHello => {
                 self.send_client_hello()?;
