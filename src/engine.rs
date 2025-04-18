@@ -285,6 +285,7 @@ impl Engine {
         &mut self,
         flight: &mut Flight,
         defragment_buffer: &'b mut Vec<u8>,
+        cipher_suite: Option<CipherSuite>,
     ) -> Result<Option<Handshake<'b>>, Error> {
         if flight.current.is_none() {
             return Ok(None);
@@ -298,7 +299,8 @@ impl Engine {
             // Handled in previous iteration
             .skip_while(|h| h.handled.get());
 
-        let (handshake, next_type) = Handshake::defragment(iter, defragment_buffer)?;
+        // Get the cipher suite from the crypto context
+        let (handshake, next_type) = Handshake::defragment(iter, defragment_buffer, cipher_suite)?;
 
         // Update the flight with the next message type, this eventually returns None
         // and that makes the flight complete.

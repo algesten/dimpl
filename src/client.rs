@@ -221,10 +221,11 @@ impl Client {
             return Ok(());
         };
 
-        while let Some(handshake) = self
-            .engine
-            .next_from_flight(&mut flight, &mut self.defragment_buffer)?
-        {
+        while let Some(handshake) = self.engine.next_from_flight(
+            &mut flight,
+            &mut self.defragment_buffer,
+            self.cipher_suite,
+        )? {
             // Validate transition using our FSM
             state = state.handle(handshake.header.msg_type)?;
 
