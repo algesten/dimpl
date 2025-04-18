@@ -90,22 +90,40 @@ pub struct EcdhParams<'a> {
     pub curve_type: CurveType,
     pub named_curve: NamedCurve,
     pub public_key: &'a [u8],
+    pub signature: Option<&'a [u8]>,
 }
 
 impl<'a> EcdhParams<'a> {
-    pub fn new(curve_type: CurveType, named_curve: NamedCurve, public_key: &'a [u8]) -> Self {
+    pub fn new(
+        curve_type: CurveType,
+        named_curve: NamedCurve,
+        public_key: &'a [u8],
+        signature: Option<&'a [u8]>,
+    ) -> Self {
         EcdhParams {
             curve_type,
             named_curve,
             public_key,
+            signature,
         }
     }
 
     pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], EcdhParams<'a>> {
         let (input, curve_type) = CurveType::parse(input)?;
         let (input, named_curve) = NamedCurve::parse(input)?;
+
+        // First byte is the length of the public key
         let (input, public_key_len) = be_u8(input)?;
-        let (input, public_key) = take(public_key_len)(input)?;
+        let (input, public_key) = take(public_key_len as usize)(input)?;
+
+        // The signature is in ASN.1 DER format
+        // It starts with 0x30 (SEQUENCE) followed by length
+        let (input, signature) = if !input.is_empty() {
+            // Take the entire remaining input as the signature
+            (&b""[..], Some(input))
+        } else {
+            (input, None)
+        };
 
         Ok((
             input,
@@ -113,6 +131,7 @@ impl<'a> EcdhParams<'a> {
                 curve_type,
                 named_curve,
                 public_key,
+                signature,
             },
         ))
     }
@@ -122,6 +141,9 @@ impl<'a> EcdhParams<'a> {
         output.extend_from_slice(&self.named_curve.as_u16().to_be_bytes());
         output.push(self.public_key.len() as u8);
         output.extend_from_slice(self.public_key);
+        if let Some(signature) = self.signature {
+            output.extend_from_slice(signature);
+        }
     }
 }
 
@@ -143,6 +165,8 @@ mod test {
         0x00, 0x17, // named_curve
         0x04, // public_key length
         0x01, 0x02, 0x03, 0x04, // public_key
+        0x00, 0x04, // signature length
+        0x05, 0x06, 0x07, 0x08, // signature
     ];
 
     #[test]
@@ -174,7 +198,8 @@ mod test {
         let ecdh_params = EcdhParams::new(
             CurveType::NamedCurve,
             NamedCurve::Secp256r1,
-            &MESSAGE_ECDH[4..],
+            &MESSAGE_ECDH[4..8],
+            Some(&MESSAGE_ECDH[8..14]),
         );
 
         let server_key_exchange = ServerKeyExchange {
