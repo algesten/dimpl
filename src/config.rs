@@ -18,7 +18,7 @@ impl Default for Config {
         Self {
             max_queue_rx: 30,
             max_queue_tx: 10,
-            cipher_suites: CipherSuite::all().into_iter().collect(),
+            cipher_suites: CipherSuite::all().into_iter().cloned().collect(),
         }
     }
 }

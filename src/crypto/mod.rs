@@ -306,14 +306,6 @@ impl CryptoContext {
             | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
             | CipherSuite::DHE_RSA_AES256_GCM_SHA384 => (0, 32, 4),
 
-            // AES-256-CBC suites
-            CipherSuite::ECDHE_ECDSA_AES256_SHA384
-            | CipherSuite::ECDHE_ECDSA_AES256_SHA
-            | CipherSuite::ECDHE_RSA_AES256_SHA384
-            | CipherSuite::ECDHE_RSA_AES256_SHA
-            | CipherSuite::DHE_RSA_AES256_SHA256
-            | CipherSuite::DHE_RSA_AES256_SHA => (0, 32, 4),
-
             _ => return Err("Unsupported cipher suite for key derivation".to_string()),
         };
 
@@ -545,14 +537,6 @@ impl CipherSuite {
             CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
             | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
             | CipherSuite::DHE_RSA_AES256_GCM_SHA384 => (0, 32, 4),
-
-            // AES-256-CBC suites
-            CipherSuite::ECDHE_ECDSA_AES256_SHA384
-            | CipherSuite::ECDHE_ECDSA_AES256_SHA
-            | CipherSuite::ECDHE_RSA_AES256_SHA384
-            | CipherSuite::ECDHE_RSA_AES256_SHA
-            | CipherSuite::DHE_RSA_AES256_SHA256
-            | CipherSuite::DHE_RSA_AES256_SHA => (0, 32, 4),
 
             CipherSuite::Unknown(_) => (0, 32, 4), // Default to AES-256-GCM
         }
