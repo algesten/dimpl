@@ -151,20 +151,23 @@ impl Engine {
         }
 
         if let Some(h) = &first.handshake {
-            match self
-                .queue_rx
-                .binary_search_by_key(&h.header.message_seq, |i| {
-                    i.first()
-                        .handshake
-                        .as_ref()
-                        .map(|h| h.header.message_seq)
-                        // Non-handshakes are sorted later.
-                        .unwrap_or(u16::MAX)
-                }) {
+            match self.queue_rx.binary_search_by(|i| {
+                let other = i
+                    .first()
+                    .handshake
+                    .as_ref()
+                    .map(|h| (h.header.message_seq, h.header.fragment_offset))
+                    .unwrap_or((u16::MAX, u32::MAX));
+                let current = (h.header.message_seq, h.header.fragment_offset);
+                current.cmp(&other)
+            }) {
                 Ok(_) => {
                     // We have already received this exact handshake packet.
                     // Ignore the new one.
-                    debug!("Dupe handshake with message_seq: {}", h.header.message_seq);
+                    debug!(
+                        "Dupe handshake with message_seq: {} and offset: {}",
+                        h.header.message_seq, h.header.fragment_offset
+                    );
                 }
                 Err(index) => {
                     // Insert in order of handshake
