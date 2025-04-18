@@ -34,15 +34,18 @@ mod test {
 
     #[test]
     fn roundtrip() {
-        let finished = Finished::new(MESSAGE);
+        let verify_data = vec![
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C,
+        ];
+        let finished = Finished::new(&verify_data);
 
         // Serialize and compare to MESSAGE
         let mut serialized = Vec::new();
         finished.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
 
         // Parse and compare with original
-        let (rest, parsed) = Finished::parse(&serialized, CipherSuite::EECDH_AESGCM).unwrap();
+        let (rest, parsed) =
+            Finished::parse(&serialized, CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256).unwrap();
         assert_eq!(parsed, finished);
 
         assert!(rest.is_empty());

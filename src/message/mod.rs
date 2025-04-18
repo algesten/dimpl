@@ -99,10 +99,26 @@ impl ProtocolVersion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum CipherSuite {
-    EECDH_AESGCM,
-    EDH_AESGCM,
-    AES256_EECDH,
-    AES256_EDH,
+    // ECDHE with AES-GCM
+    ECDHE_ECDSA_AES256_GCM_SHA384, // 0xC02C
+    ECDHE_ECDSA_AES128_GCM_SHA256, // 0xC02B
+    ECDHE_RSA_AES256_GCM_SHA384,   // 0xC030
+    ECDHE_RSA_AES128_GCM_SHA256,   // 0xC02F
+
+    // DHE with AES-GCM
+    DHE_RSA_AES256_GCM_SHA384, // 0x009F
+    DHE_RSA_AES128_GCM_SHA256, // 0x009E
+
+    // ECDHE with AES-256-CBC
+    ECDHE_ECDSA_AES256_SHA384, // 0xC024
+    ECDHE_ECDSA_AES256_SHA,    // 0xC00A
+    ECDHE_RSA_AES256_SHA384,   // 0xC028
+    ECDHE_RSA_AES256_SHA,      // 0xC014
+
+    // DHE with AES-256-CBC
+    DHE_RSA_AES256_SHA256, // 0x006B
+    DHE_RSA_AES256_SHA,    // 0x0039
+
     Unknown(u16),
 }
 
@@ -115,20 +131,52 @@ impl Default for CipherSuite {
 impl CipherSuite {
     pub fn from_u16(value: u16) -> Self {
         match value {
-            0xC02F => CipherSuite::EECDH_AESGCM,
-            0xC030 => CipherSuite::EDH_AESGCM,
-            0xC031 => CipherSuite::AES256_EECDH,
-            0xC032 => CipherSuite::AES256_EDH,
+            // ECDHE with AES-GCM
+            0xC02C => CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
+            0xC02B => CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+            0xC030 => CipherSuite::ECDHE_RSA_AES256_GCM_SHA384,
+            0xC02F => CipherSuite::ECDHE_RSA_AES128_GCM_SHA256,
+
+            // DHE with AES-GCM
+            0x009F => CipherSuite::DHE_RSA_AES256_GCM_SHA384,
+            0x009E => CipherSuite::DHE_RSA_AES128_GCM_SHA256,
+
+            // ECDHE with AES-256-CBC
+            0xC024 => CipherSuite::ECDHE_ECDSA_AES256_SHA384,
+            0xC00A => CipherSuite::ECDHE_ECDSA_AES256_SHA,
+            0xC028 => CipherSuite::ECDHE_RSA_AES256_SHA384,
+            0xC014 => CipherSuite::ECDHE_RSA_AES256_SHA,
+
+            // DHE with AES-256-CBC
+            0x006B => CipherSuite::DHE_RSA_AES256_SHA256,
+            0x0039 => CipherSuite::DHE_RSA_AES256_SHA,
+
             _ => CipherSuite::Unknown(value),
         }
     }
 
     pub fn as_u16(&self) -> u16 {
         match self {
-            CipherSuite::EECDH_AESGCM => 0xC02F,
-            CipherSuite::EDH_AESGCM => 0xC030,
-            CipherSuite::AES256_EECDH => 0xC031,
-            CipherSuite::AES256_EDH => 0xC032,
+            // ECDHE with AES-GCM
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => 0xC02C,
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 0xC02B,
+            CipherSuite::ECDHE_RSA_AES256_GCM_SHA384 => 0xC030,
+            CipherSuite::ECDHE_RSA_AES128_GCM_SHA256 => 0xC02F,
+
+            // DHE with AES-GCM
+            CipherSuite::DHE_RSA_AES256_GCM_SHA384 => 0x009F,
+            CipherSuite::DHE_RSA_AES128_GCM_SHA256 => 0x009E,
+
+            // ECDHE with AES-256-CBC
+            CipherSuite::ECDHE_ECDSA_AES256_SHA384 => 0xC024,
+            CipherSuite::ECDHE_ECDSA_AES256_SHA => 0xC00A,
+            CipherSuite::ECDHE_RSA_AES256_SHA384 => 0xC028,
+            CipherSuite::ECDHE_RSA_AES256_SHA => 0xC014,
+
+            // DHE with AES-256-CBC
+            CipherSuite::DHE_RSA_AES256_SHA256 => 0x006B,
+            CipherSuite::DHE_RSA_AES256_SHA => 0x0039,
+
             CipherSuite::Unknown(value) => *value,
         }
     }
@@ -140,16 +188,44 @@ impl CipherSuite {
 
     pub fn verify_data_length(&self) -> usize {
         match self {
-            CipherSuite::EECDH_AESGCM | CipherSuite::EDH_AESGCM => 12,
-            CipherSuite::AES256_EECDH | CipherSuite::AES256_EDH => 12,
-            CipherSuite::Unknown(_) => 12, // Default to 12 for unknown suites
+            // AES-GCM suites
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+            | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+            | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
+            | CipherSuite::DHE_RSA_AES256_GCM_SHA384
+            | CipherSuite::DHE_RSA_AES128_GCM_SHA256 => 12,
+
+            // AES-CBC suites
+            CipherSuite::ECDHE_ECDSA_AES256_SHA384
+            | CipherSuite::ECDHE_ECDSA_AES256_SHA
+            | CipherSuite::ECDHE_RSA_AES256_SHA384
+            | CipherSuite::ECDHE_RSA_AES256_SHA
+            | CipherSuite::DHE_RSA_AES256_SHA256
+            | CipherSuite::DHE_RSA_AES256_SHA => 12,
+
+            CipherSuite::Unknown(_) => 12, // Default length for unknown cipher suites
         }
     }
 
     pub fn as_key_exchange_algorithm(&self) -> KeyExchangeAlgorithm {
         match self {
-            CipherSuite::EECDH_AESGCM | CipherSuite::AES256_EECDH => KeyExchangeAlgorithm::EECDH,
-            CipherSuite::EDH_AESGCM | CipherSuite::AES256_EDH => KeyExchangeAlgorithm::EDH,
+            // All ECDHE ciphers
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+            | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            | CipherSuite::ECDHE_ECDSA_AES256_SHA384
+            | CipherSuite::ECDHE_ECDSA_AES256_SHA
+            | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+            | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
+            | CipherSuite::ECDHE_RSA_AES256_SHA384
+            | CipherSuite::ECDHE_RSA_AES256_SHA => KeyExchangeAlgorithm::EECDH,
+
+            // All DHE ciphers
+            CipherSuite::DHE_RSA_AES256_GCM_SHA384
+            | CipherSuite::DHE_RSA_AES128_GCM_SHA256
+            | CipherSuite::DHE_RSA_AES256_SHA256
+            | CipherSuite::DHE_RSA_AES256_SHA => KeyExchangeAlgorithm::EDH,
+
             CipherSuite::Unknown(_) => KeyExchangeAlgorithm::Unknown,
         }
     }
@@ -157,20 +233,36 @@ impl CipherSuite {
     pub fn has_ecc(&self) -> bool {
         matches!(
             self,
-            CipherSuite::EECDH_AESGCM
-                | CipherSuite::EDH_AESGCM
-                | CipherSuite::AES256_EECDH
-                | CipherSuite::AES256_EDH
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+                | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+                | CipherSuite::ECDHE_ECDSA_AES256_SHA384
+                | CipherSuite::ECDHE_ECDSA_AES256_SHA
+                | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+                | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
+                | CipherSuite::ECDHE_RSA_AES256_SHA384
+                | CipherSuite::ECDHE_RSA_AES256_SHA
         )
     }
 
     pub(crate) fn all() -> ArrayVec<[CipherSuite; 32]> {
-        let mut suites = ArrayVec::new();
-        suites.push(CipherSuite::EECDH_AESGCM);
-        suites.push(CipherSuite::EDH_AESGCM);
-        suites.push(CipherSuite::AES256_EECDH);
-        suites.push(CipherSuite::AES256_EDH);
-        suites
+        use CipherSuite::*;
+        // This is the priority-ordered list of suites to offer in the ClientHello
+        array_vec![
+            // ECDHE with AES-GCM (most secure)
+            ECDHE_ECDSA_AES256_GCM_SHA384,
+            ECDHE_RSA_AES256_GCM_SHA384,
+            ECDHE_ECDSA_AES128_GCM_SHA256,
+            ECDHE_RSA_AES128_GCM_SHA256,
+            DHE_RSA_AES256_GCM_SHA384,
+            DHE_RSA_AES128_GCM_SHA256,
+            // ECDHE with AES-256-CBC
+            ECDHE_ECDSA_AES256_SHA384,
+            ECDHE_RSA_AES256_SHA384,
+            ECDHE_ECDSA_AES256_SHA,
+            ECDHE_RSA_AES256_SHA,
+            DHE_RSA_AES256_SHA256,
+            DHE_RSA_AES256_SHA
+        ]
     }
 }
 

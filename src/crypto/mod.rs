@@ -296,8 +296,24 @@ impl CryptoContext {
 
         // Key sizes depend on the cipher suite
         let (mac_key_len, enc_key_len, fixed_iv_len) = match cipher_suite {
-            CipherSuite::EECDH_AESGCM | CipherSuite::EDH_AESGCM => (0, 16, 4), // AES-128-GCM
-            CipherSuite::AES256_EECDH | CipherSuite::AES256_EDH => (0, 32, 4), // AES-256-GCM
+            // AES-128-GCM suites
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
+            | CipherSuite::DHE_RSA_AES128_GCM_SHA256 => (0, 16, 4),
+
+            // AES-256-GCM suites
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+            | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+            | CipherSuite::DHE_RSA_AES256_GCM_SHA384 => (0, 32, 4),
+
+            // AES-256-CBC suites
+            CipherSuite::ECDHE_ECDSA_AES256_SHA384
+            | CipherSuite::ECDHE_ECDSA_AES256_SHA
+            | CipherSuite::ECDHE_RSA_AES256_SHA384
+            | CipherSuite::ECDHE_RSA_AES256_SHA
+            | CipherSuite::DHE_RSA_AES256_SHA256
+            | CipherSuite::DHE_RSA_AES256_SHA => (0, 32, 4),
+
             _ => return Err("Unsupported cipher suite for key derivation".to_string()),
         };
 
@@ -336,10 +352,13 @@ impl CryptoContext {
 
         // Initialize ciphers
         match cipher_suite {
-            CipherSuite::EECDH_AESGCM
-            | CipherSuite::EDH_AESGCM
-            | CipherSuite::AES256_EECDH
-            | CipherSuite::AES256_EDH => {
+            // AES-GCM suites
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
+            | CipherSuite::DHE_RSA_AES128_GCM_SHA256
+            | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+            | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+            | CipherSuite::DHE_RSA_AES256_GCM_SHA384 => {
                 // AES-GCM ciphers
                 self.client_cipher = Some(Box::new(AesGcm::new(
                     self.client_write_key.as_ref().unwrap(),
@@ -511,5 +530,43 @@ impl CryptoContext {
             Some(ke) => ke.get_curve_info(),
             None => None,
         }
+    }
+}
+
+impl CipherSuite {
+    pub fn key_length(&self) -> (usize, usize, usize) {
+        match self {
+            // AES-128-GCM suites
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
+            | CipherSuite::DHE_RSA_AES128_GCM_SHA256 => (0, 16, 4),
+
+            // AES-256-GCM suites
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+            | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+            | CipherSuite::DHE_RSA_AES256_GCM_SHA384 => (0, 32, 4),
+
+            // AES-256-CBC suites
+            CipherSuite::ECDHE_ECDSA_AES256_SHA384
+            | CipherSuite::ECDHE_ECDSA_AES256_SHA
+            | CipherSuite::ECDHE_RSA_AES256_SHA384
+            | CipherSuite::ECDHE_RSA_AES256_SHA
+            | CipherSuite::DHE_RSA_AES256_SHA256
+            | CipherSuite::DHE_RSA_AES256_SHA => (0, 32, 4),
+
+            CipherSuite::Unknown(_) => (0, 32, 4), // Default to AES-256-GCM
+        }
+    }
+
+    pub fn is_gcm(&self) -> bool {
+        matches!(
+            self,
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+                | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
+                | CipherSuite::DHE_RSA_AES128_GCM_SHA256
+                | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+                | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+                | CipherSuite::DHE_RSA_AES256_GCM_SHA384
+        )
     }
 }

@@ -432,7 +432,10 @@ mod tests {
         let random = Random::parse(&MESSAGE[14..46]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
-        let cipher_suites = array_vec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];
+        let cipher_suites = array_vec![
+            CipherSuite::ECDHE_RSA_AES128_GCM_SHA256,
+            CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+        ];
         let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
         let client_hello = ClientHello::new(
@@ -472,7 +475,10 @@ mod tests {
         let random = Random::parse(&MESSAGE[14..46]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
-        let cipher_suites = array_vec![CipherSuite::EECDH_AESGCM, CipherSuite::EDH_AESGCM];
+        let cipher_suites = array_vec![
+            CipherSuite::ECDHE_RSA_AES128_GCM_SHA256,
+            CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+        ];
         let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
         let client_hello = ClientHello::new(

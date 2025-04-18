@@ -1,5 +1,5 @@
-use crate::util::many0;
 use super::{CipherSuite, CompressionMethod, Extension, ProtocolVersion, Random, SessionId};
+use crate::util::many0;
 use nom::error::{Error, ErrorKind};
 use nom::Err;
 use nom::{
@@ -128,7 +128,7 @@ mod test {
 
         let random = Random::parse(&MESSAGE[2..34]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
-        let cipher_suite = CipherSuite::EECDH_AESGCM;
+        let cipher_suite = CipherSuite::ECDHE_RSA_AES128_GCM_SHA256;
         let compression_method = CompressionMethod::Null;
         let extensions = Some(array_vec!([Extension; 32] => Extension::new(
             ExtensionType::SupportedGroups,
