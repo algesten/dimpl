@@ -85,6 +85,11 @@ fn client_ossl() {
             let output = client.poll_output();
             match output {
                 Output::Packet(data) => {
+                    println!(
+                        "Client -> Server packet ({} bytes): {:02x?}",
+                        data.len(),
+                        data
+                    );
                     // Client data goes to server
                     if let Err(e) = server.handle_receive(data, &mut server_events) {
                         panic!("Server failed to handle client packet: {:?}", e);
@@ -109,7 +114,11 @@ fn client_ossl() {
                 }
                 Output::ApplicationData(data) => {
                     client_received_data.extend_from_slice(&data);
-                    println!("Client received {} bytes of application data", data.len());
+                    println!(
+                        "Client received {} bytes of application data: {:02x?}",
+                        data.len(),
+                        data
+                    );
                 }
                 Output::Timeout(_) => {
                     // If we get a timeout, it means there are no more packets ready
@@ -141,13 +150,22 @@ fn client_ossl() {
                 }
                 DtlsEvent::Data(data) => {
                     server_received_data.extend_from_slice(&data);
-                    println!("Server received {} bytes of application data", data.len());
+                    println!(
+                        "Server received {} bytes of application data: {:02x?}",
+                        data.len(),
+                        data
+                    );
                 }
             }
         }
 
         // Send server datagrams to client
         while let Some(datagram) = server.poll_datagram() {
+            println!(
+                "Server -> Client packet ({} bytes): {:02x?}",
+                datagram.len(),
+                datagram
+            );
             client
                 .handle_packet(&datagram)
                 .expect("Failed to handle server packet");

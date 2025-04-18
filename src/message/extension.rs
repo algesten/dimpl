@@ -17,7 +17,11 @@ impl<'a> Extension<'a> {
     pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], Extension<'a>> {
         let (input, extension_type) = ExtensionType::parse(input)?;
         let (input, extension_length) = be_u16(input)?;
-        let (input, extension_data) = take(extension_length)(input)?;
+        let (input, extension_data) = if extension_length > 0 {
+            take(extension_length)(input)?
+        } else {
+            (input, &input[0..0])
+        };
 
         Ok((
             input,
@@ -31,7 +35,9 @@ impl<'a> Extension<'a> {
     pub fn serialize(&self, output: &mut Vec<u8>) {
         output.extend_from_slice(&self.extension_type.as_u16().to_be_bytes());
         output.extend_from_slice(&(self.extension_data.len() as u16).to_be_bytes());
-        output.extend_from_slice(self.extension_data);
+        if !self.extension_data.is_empty() {
+            output.extend_from_slice(self.extension_data);
+        }
     }
 }
 

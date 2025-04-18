@@ -62,6 +62,11 @@ fn ossl_ossl() {
     for _ in 0..20 {
         // Poll client for datagrams
         while let Some(datagram) = client.poll_datagram() {
+            println!(
+                "Client -> Server packet ({} bytes): {:02x?}",
+                datagram.len(),
+                datagram
+            );
             // Save client->server datagram
             let filename = format!("tests/datagrams/client_to_server_{}.bin", datagram_counter);
             fs::write(&filename, &*datagram).expect("Failed to write client datagram");
@@ -95,13 +100,22 @@ fn ossl_ossl() {
                 }
                 DtlsEvent::Data(data) => {
                     server_received_data.extend_from_slice(&data);
-                    println!("Server received {} bytes of application data", data.len());
+                    println!(
+                        "Server received {} bytes of application data: {:02x?}",
+                        data.len(),
+                        data
+                    );
                 }
             }
         }
 
         // Poll server for datagrams
         while let Some(datagram) = server.poll_datagram() {
+            println!(
+                "Server -> Client packet ({} bytes): {:02x?}",
+                datagram.len(),
+                datagram
+            );
             // Save server->client datagram
             let filename = format!("tests/datagrams/server_to_client_{}.bin", datagram_counter);
             fs::write(&filename, &*datagram).expect("Failed to write server datagram");
@@ -135,7 +149,11 @@ fn ossl_ossl() {
                 }
                 DtlsEvent::Data(data) => {
                     client_received_data.extend_from_slice(&data);
-                    println!("Client received {} bytes of application data", data.len());
+                    println!(
+                        "Client received {} bytes of application data: {:02x?}",
+                        data.len(),
+                        data
+                    );
                 }
             }
         }

@@ -257,7 +257,7 @@ impl Engine {
 
         let record = DTLSRecord {
             content_type,
-            version: ProtocolVersion::DTLS1_2,
+            version: ProtocolVersion::DTLS1_0,
             sequence,
             length: fragment.len() as u16,
             fragment: &fragment,

@@ -52,7 +52,16 @@ impl<'a> ClientHello<'a> {
         extension_data.clear();
 
         // First write all extension data
-        let mut extension_ranges = ArrayVec::<[(ExtensionType, usize, usize); 4]>::new();
+        let mut extension_ranges = ArrayVec::<[(ExtensionType, usize, usize); 8]>::new();
+
+        // Add renegotiation_info extension (empty)
+        let start_pos = extension_data.len();
+        extension_data.extend_from_slice(&[0x00]); // Empty extension data
+        extension_ranges.push((
+            ExtensionType::Unknown(0xff01), // renegotiation_info
+            start_pos,
+            extension_data.len(),
+        ));
 
         // Check if we have any ECC-based cipher suites
         let has_ecc = self.cipher_suites.iter().any(|suite| suite.has_ecc());
@@ -95,6 +104,32 @@ impl<'a> ClientHello<'a> {
         let start_pos = extension_data.len();
         use_srtp.serialize(extension_data);
         extension_ranges.push((ExtensionType::UseSrtp, start_pos, extension_data.len()));
+
+        // Add session_ticket extension (empty)
+        let start_pos = extension_data.len();
+        extension_data.extend_from_slice(&[0x00]); // Empty extension data
+        extension_ranges.push((
+            ExtensionType::SessionTicket,
+            start_pos,
+            extension_data.len(),
+        ));
+
+        // Add encrypt_then_mac extension (empty)
+        let start_pos = extension_data.len();
+        extension_data.extend_from_slice(&[0x00]); // Empty extension data
+        extension_ranges.push((
+            ExtensionType::EncryptThenMac,
+            start_pos,
+            extension_data.len(),
+        ));
+
+        // Add extended_master_secret extension (empty)
+        let start_pos = extension_data.len();
+        extension_ranges.push((
+            ExtensionType::ExtendedMasterSecret,
+            start_pos,
+            start_pos, // No data at all
+        ));
 
         // Now create all extensions using the written data
         for (extension_type, start, end) in extension_ranges {
