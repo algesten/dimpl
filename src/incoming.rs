@@ -31,10 +31,10 @@ impl Incoming {
         &self.records()[0]
     }
 
-    // pub fn last(&self) -> &Record {
-    //     // Invariant: See above.
-    //     self.records().last().unwrap()
-    // }
+    pub fn last(&self) -> &Record {
+        // Invariant: See above.
+        self.records().last().unwrap()
+    }
 }
 
 self_cell!(
@@ -114,7 +114,8 @@ impl<'a> Record<'a> {
         let handshake = if record.content_type != ContentType::Handshake {
             None
         } else {
-            let (_, handshake) = Handshake::parse(input, *c)?;
+            // Parse incoming as fragments
+            let (_, handshake) = Handshake::parse(input, *c, true)?;
 
             // When we get the ServerHello, we know which cipher suite was selected.
             // Parsing further messages after this must be informed by that choice.

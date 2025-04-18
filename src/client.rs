@@ -69,6 +69,9 @@ pub struct Client {
 
     /// Server encryption enabled flag - set when server ChangeCipherSpec is received
     server_encryption_enabled: bool,
+
+    /// Buffer for defragmenting handshakes
+    defragment_buffer: Vec<u8>,
 }
 
 /// Current state of the client.
@@ -127,6 +130,7 @@ impl Client {
             server_encryption_enabled: false,
             negotiated_srtp_profile: None,
             extension_data: Vec::with_capacity(256), // Pre-allocate extension data buffer
+            defragment_buffer: Vec::new(),
         }
     }
 
@@ -213,61 +217,110 @@ impl Client {
             HandshakeState::AwaitingServerHelloAfterVerify
         };
 
-        while let Some(incoming) = self.engine.next_incoming() {
-            let records = incoming.records();
+        let Some(mut flight) = self.engine.has_flight(MessageType::ServerHello) else {
+            return Ok(());
+        };
 
-            for i in 0..records.len() {
-                let record = &records[i];
+        while let Some(handshake) = self
+            .engine
+            .next_from_flight(&mut flight, &mut self.defragment_buffer)?
+        {
+            // Validate transition using our FSM
+            state = state.handle(handshake.header.msg_type)?;
 
-                let handshake = match &record.handshake {
-                    Some(h) => h,
-                    None => continue,
-                };
+            match handshake.header.msg_type {
+                MessageType::HelloVerifyRequest => {
+                    let Body::HelloVerifyRequest(hello_verify) = &handshake.body else {
+                        continue;
+                    };
 
-                // Save handshake message for CertificateVerify signature
-                self.engine.add_handshake_message(record.record.fragment);
+                    self.cookie = Some(hello_verify.cookie.clone());
+                    self.state = ClientState::SendClientHello;
+                    return Ok(());
+                }
 
-                // Validate transition using our FSM
-                state = state.handle(handshake.header.msg_type)?;
-
-                match handshake.header.msg_type {
-                    MessageType::HelloVerifyRequest => {
-                        let Body::HelloVerifyRequest(hello_verify) = &handshake.body else {
-                            continue;
-                        };
-
-                        self.cookie = Some(hello_verify.cookie.clone());
-                        self.state = ClientState::SendClientHello;
+                MessageType::ServerHello => {
+                    let Body::ServerHello(server_hello) = &handshake.body else {
                         return Ok(());
-                    }
+                    };
 
-                    MessageType::ServerHello => {
-                        self.handle_server_hello(handshake)?;
-                    }
+                    self.cipher_suite = Some(server_hello.cipher_suite);
+                    self.session_id = Some(server_hello.session_id.clone());
+                    self.server_random = Some(server_hello.random.clone());
 
-                    MessageType::Certificate => {
-                        self.handle_server_certificate(handshake)?;
-                    }
+                    // Initialize the key exchange based on selected cipher suite
+                    let cs = server_hello.cipher_suite;
+                    self.engine
+                        .crypto_context_mut()
+                        .init_key_exchange(cs)
+                        .map_err(|e| {
+                            Error::CryptoError(format!("Failed to initialize key exchange: {}", e))
+                        })?;
 
-                    MessageType::ServerKeyExchange => {
-                        self.handle_server_key_exchange(handshake)?;
+                    // Check for use_srtp extension to get the negotiated SRTP profile
+                    if let Some(extensions) = &server_hello.extensions {
+                        for extension in extensions {
+                            if extension.extension_type == ExtensionType::UseSrtp {
+                                // Parse the use_srtp extension to get the selected profile
+                                if let Ok((_, use_srtp)) =
+                                    UseSrtpExtension::parse(extension.extension_data)
+                                {
+                                    // Store the first profile as our negotiated profile
+                                    if !use_srtp.profiles.is_empty() {
+                                        self.negotiated_srtp_profile =
+                                            Some(use_srtp.profiles[0].to_srtp_profile());
+                                    }
+                                }
+                            }
+                        }
                     }
+                }
 
-                    MessageType::CertificateRequest => {
-                        self.certificate_requested = true;
-                    }
+                MessageType::Certificate => {
+                    let Body::Certificate(certificate) = &handshake.body else {
+                        return Ok(());
+                    };
 
-                    MessageType::ServerHelloDone => {
-                        return self.handle_server_hello_done();
-                    }
+                    // Store the certificate chain for validation
+                    self.server_certificates.clear();
 
-                    _ => {
-                        // Unknown or unexpected message type
-                        return Err(Error::UnexpectedMessage(format!(
-                            "Unexpected message type: {:?}",
-                            handshake.header.msg_type
-                        )));
+                    // Convert ASN.1 certificates to byte arrays
+                    for cert in &certificate.certificate_list {
+                        self.server_certificates.push(cert.0.to_vec());
                     }
+                }
+
+                MessageType::ServerKeyExchange => {
+                    let Body::ServerKeyExchange(server_key_exchange) = &handshake.body else {
+                        return Ok(());
+                    };
+
+                    // Process the server key exchange message
+                    self.engine
+                        .crypto_context_mut()
+                        .process_server_key_exchange(server_key_exchange)
+                        .map_err(|e| {
+                            Error::CryptoError(format!(
+                                "Failed to process server key exchange: {}",
+                                e
+                            ))
+                        })?;
+                }
+
+                MessageType::CertificateRequest => {
+                    self.certificate_requested = true;
+                }
+
+                MessageType::ServerHelloDone => {
+                    return self.handle_server_hello_done();
+                }
+
+                _ => {
+                    // Unknown or unexpected message type
+                    return Err(Error::UnexpectedMessage(format!(
+                        "Unexpected message type: {:?}",
+                        handshake.header.msg_type
+                    )));
                 }
             }
         }
@@ -277,79 +330,6 @@ impl Client {
         }
 
         // No state transition yet, continue waiting for more messages
-        Ok(())
-    }
-
-    fn handle_server_hello(&mut self, handshake: &crate::message::Handshake) -> Result<(), Error> {
-        let Body::ServerHello(server_hello) = &handshake.body else {
-            return Ok(());
-        };
-
-        self.cipher_suite = Some(server_hello.cipher_suite);
-        self.session_id = Some(server_hello.session_id.clone());
-        self.server_random = Some(server_hello.random.clone());
-
-        // Initialize the key exchange based on selected cipher suite
-        let cs = server_hello.cipher_suite;
-        self.engine
-            .crypto_context_mut()
-            .init_key_exchange(cs)
-            .map_err(|e| Error::CryptoError(format!("Failed to initialize key exchange: {}", e)))?;
-
-        // Check for use_srtp extension to get the negotiated SRTP profile
-        if let Some(extensions) = &server_hello.extensions {
-            for extension in extensions {
-                if extension.extension_type == ExtensionType::UseSrtp {
-                    // Parse the use_srtp extension to get the selected profile
-                    if let Ok((_, use_srtp)) = UseSrtpExtension::parse(extension.extension_data) {
-                        // Store the first profile as our negotiated profile
-                        if !use_srtp.profiles.is_empty() {
-                            self.negotiated_srtp_profile =
-                                Some(use_srtp.profiles[0].to_srtp_profile());
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn handle_server_certificate(
-        &mut self,
-        handshake: &crate::message::Handshake,
-    ) -> Result<(), Error> {
-        let Body::Certificate(certificate) = &handshake.body else {
-            return Ok(());
-        };
-
-        // Store the certificate chain for validation
-        self.server_certificates.clear();
-
-        // Convert ASN.1 certificates to byte arrays
-        for cert in &certificate.certificate_list {
-            self.server_certificates.push(cert.0.to_vec());
-        }
-
-        Ok(())
-    }
-
-    fn handle_server_key_exchange(
-        &mut self,
-        handshake: &crate::message::Handshake,
-    ) -> Result<(), Error> {
-        let Body::ServerKeyExchange(server_key_exchange) = &handshake.body else {
-            return Ok(());
-        };
-
-        // Process the server key exchange message
-        self.engine
-            .crypto_context_mut()
-            .process_server_key_exchange(server_key_exchange)
-            .map_err(|e| {
-                Error::CryptoError(format!("Failed to process server key exchange: {}", e))
-            })?;
-
         Ok(())
     }
 

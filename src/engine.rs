@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
@@ -10,6 +11,8 @@ use crate::message::{
     CipherSuite, ContentType, DTLSRecord, Handshake, MessageType, ProtocolVersion, Sequence,
 };
 use crate::{Config, Error, Output};
+
+const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
 // Using debug_ignore_primary since CryptoContext doesn't implement Debug
 pub(crate) struct Engine {
@@ -47,6 +50,9 @@ pub(crate) struct Engine {
 
     /// Whether this engine is for a client (true) or server (false)
     is_client: bool,
+
+    /// Expected peer handshake sequence number
+    peer_handshake_seq_no: u16,
 }
 
 impl Engine {
@@ -70,6 +76,7 @@ impl Engine {
             server_encryption_enabled: false,
             client_encryption_enabled: false,
             is_client,
+            peer_handshake_seq_no: 0,
         }
     }
 
@@ -216,6 +223,115 @@ impl Engine {
         Instant::now()
     }
 
+    pub fn has_flight(&mut self, to: MessageType) -> Option<Flight> {
+        if self.queue_rx.is_empty() {
+            return None;
+        }
+
+        let first = self.queue_rx.front().unwrap().first().handshake.as_ref()?;
+
+        if first.header.message_seq != self.peer_handshake_seq_no {
+            return None;
+        }
+
+        let mut current_seq = first.header.message_seq;
+        let mut found_end = false;
+        let mut last_fragment_end = 0;
+
+        // Cap to MAX_DEFRAGMENT_PACKETS to avoid misbehaving peers
+        for incoming in self.queue_rx.iter().take(MAX_DEFRAGMENT_PACKETS) {
+            for record in incoming.records().iter() {
+                if let Some(h) = &record.handshake {
+                    // Check message sequence contiguity
+                    if h.header.message_seq != current_seq {
+                        // Reset fragment tracking for new message sequence
+                        last_fragment_end = 0;
+                        current_seq = h.header.message_seq;
+                    }
+
+                    // Check fragment contiguity
+                    if h.header.fragment_offset > 0 {
+                        if h.header.fragment_offset != last_fragment_end {
+                            return None;
+                        }
+                    }
+                    last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
+
+                    if h.header.msg_type == to {
+                        found_end = true;
+                        break;
+                    }
+                }
+            }
+            if found_end {
+                break;
+            }
+        }
+
+        if !found_end {
+            return None;
+        }
+
+        Some(Flight {
+            to,
+            current: Some(first.header.msg_type),
+        })
+    }
+
+    pub fn next_from_flight<'b>(
+        &mut self,
+        flight: &mut Flight,
+        defragment_buffer: &'b mut Vec<u8>,
+    ) -> Result<Option<Handshake<'b>>, Error> {
+        if flight.current.is_none() {
+            return Ok(None);
+        }
+
+        let iter = self
+            .queue_rx
+            .iter()
+            .map(|i| i.records().iter().filter_map(|r| r.handshake.as_ref()))
+            .flatten()
+            // Handled in previous iteration
+            .skip_while(|h| h.handled.get());
+
+        let (handshake, next_type) = Handshake::defragment(iter, defragment_buffer)?;
+
+        // Update the flight with the next message type, this eventually returns None
+        // and that makes the flight complete.
+        flight.current = if flight.current == Some(flight.to) {
+            // We reached the end condition
+            None
+        } else {
+            // There might be another message after this one
+            next_type
+        };
+
+        // Purge completely handled packets. We can only purge the Incoming if all the
+        // Handshake in it are handled.
+        while let Some(incoming) = self.queue_rx.front() {
+            let all_handled = incoming
+                .records()
+                .iter()
+                .filter_map(|r| r.handshake.as_ref())
+                .all(|h| h.handled.get());
+
+            if all_handled {
+                let incoming = self.queue_rx.pop_front().unwrap();
+
+                // The last handled handshake
+                let last_handshake = incoming.last().handshake.as_ref().unwrap();
+
+                // Move the expected sequence number
+                self.peer_handshake_seq_no = last_handshake.header.message_seq + 1;
+            } else {
+                break;
+            }
+        }
+
+        Ok(Some(handshake))
+    }
+
     /// Get the next incoming packet
     pub fn next_incoming(&mut self) -> Option<Incoming> {
         self.queue_rx.pop_front()
@@ -306,6 +422,7 @@ impl Engine {
                 fragment_length: body_buffer.len() as u32,
             },
             body: crate::message::Body::Fragment(&body_buffer),
+            handled: Cell::new(false),
         };
 
         // Save this handshake message for future CertificateVerify
@@ -461,4 +578,10 @@ impl Engine {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Flight {
+    to: MessageType,
+    current: Option<MessageType>,
 }

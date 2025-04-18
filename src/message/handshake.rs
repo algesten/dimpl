@@ -1,4 +1,9 @@
+use std::cell::Cell;
+use std::collections::VecDeque;
 use std::hash::DefaultHasher;
+use std::iter::Peekable;
+
+use crate::incoming::Incoming;
 
 use super::{
     Certificate, CertificateRequest, CertificateVerify, CipherSuite, ClientHello,
@@ -27,6 +32,7 @@ pub struct Header {
 pub struct Handshake<'a> {
     pub header: Header,
     pub body: Body<'a>,
+    pub handled: Cell<bool>,
 }
 
 impl<'a> Handshake<'a> {
@@ -50,6 +56,7 @@ impl<'a> Handshake<'a> {
                 fragment_length,
             },
             body,
+            handled: Cell::new(false),
         }
     }
 
@@ -76,19 +83,34 @@ impl<'a> Handshake<'a> {
         ))
     }
 
-    pub fn parse(input: &'a [u8], c: Option<CipherSuite>) -> IResult<&'a [u8], Handshake<'a>> {
+    pub fn parse(
+        input: &'a [u8],
+        c: Option<CipherSuite>,
+        as_fragment: bool,
+    ) -> IResult<&'a [u8], Handshake<'a>> {
         let (input, header) = Self::parse_header(input)?;
 
         let is_fragment = header.fragment_offset > 0 || header.fragment_length < header.length;
 
-        let (input, body) = if is_fragment {
+        if !as_fragment && is_fragment {
+            return Err(nom::Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
+
+        let (input, body) = if as_fragment {
             let (input, fragment) = take(header.fragment_length as usize)(input)?;
             (input, Body::Fragment(fragment))
         } else {
             Body::parse(input, header.msg_type, c)?
         };
 
-        Ok((input, Handshake { header, body }))
+        Ok((
+            input,
+            Handshake {
+                header,
+                body,
+                handled: Cell::new(false),
+            },
+        ))
     }
 
     pub fn serialize(&self, output: &mut Vec<u8>) {
@@ -101,60 +123,55 @@ impl<'a> Handshake<'a> {
     }
 
     pub fn defragment<'b, 'c: 'b>(
-        fragments: impl IntoIterator<Item = &'b Handshake<'c>>,
+        mut iter: impl Iterator<Item = &'b Handshake<'c>>,
         buffer: &'a mut Vec<u8>,
-    ) -> Option<Handshake<'a>> {
-        let mut fragments: Vec<&'b Handshake<'c>> = fragments.into_iter().collect();
+    ) -> Result<(Handshake<'a>, Option<MessageType>), crate::Error> {
+        buffer.clear();
 
-        if fragments.is_empty() {
-            return None;
-        }
+        // Invariant is upheld by the caller.
+        let first = iter.next().unwrap();
 
-        fragments.sort_by_key(|f| f.header.message_seq);
-        let first = fragments[0];
+        let Body::Fragment(data) = first.body else {
+            unreachable!("Non-Fragment body in defragment()")
+        };
 
-        let is_contiguous = fragments
-            .iter()
-            .enumerate()
-            // We don't have to worry about roll-over because the handshake starts at 0
-            // and finishes long before u16::MAX.
-            .all(|(i, f)| f.header.message_seq == first.header.message_seq + i as u16);
+        let mut next_type = None;
 
-        let is_from_start = first.header.fragment_offset == 0;
+        for handshake in iter {
+            if handshake.header.msg_type != first.header.msg_type {
+                next_type = Some(handshake.header.msg_type);
+                break;
+            }
 
-        // unwrap is ok because we check is_empty above.
-        let is_to_end = fragments
-            .last()
-            .map(|f| f.header.fragment_offset + f.header.fragment_length == f.header.length)
-            .unwrap();
-
-        if !is_contiguous || !is_from_start || !is_to_end {
-            return None;
-        }
-
-        for f in fragments {
-            let Body::Fragment(data) = f.body else {
-                // We must not call defragment() with any other body type.
+            let Body::Fragment(data) = handshake.body else {
                 unreachable!("Non-Fragment body in defragment()")
             };
 
-            // parse() should make this impossible to break.
-            assert_eq!(data.len(), f.header.fragment_length as usize);
+            handshake.handled.set(true);
 
             buffer.extend_from_slice(data);
         }
 
-        // Create a new Handshake with the merged body
-        Some(Handshake {
+        let (rest, body) = Body::parse(buffer, first.header.msg_type, None)?;
+
+        if !rest.is_empty() {
+            return Err(crate::Error::ParseIncomplete);
+        }
+
+        let handshake = Handshake {
             header: Header {
                 msg_type: first.header.msg_type,
                 length: first.header.length,
                 message_seq: first.header.message_seq,
                 fragment_offset: 0,
-                fragment_length: first.header.length,
+                fragment_length: buffer.len() as u32,
             },
-            body: Body::Fragment(buffer),
-        })
+            body,
+            handled: Cell::new(false),
+        };
+
+        // Create a new Handshake with the merged body
+        Ok((handshake, next_type))
     }
 
     fn do_clone<'b>(&self) -> Handshake<'b> {
@@ -167,6 +184,7 @@ impl<'a> Handshake<'a> {
                 fragment_length: self.header.fragment_length,
             },
             body: Body::HelloRequest, // Placeholder
+            handled: Cell::new(false),
         }
     }
 
@@ -461,7 +479,7 @@ mod tests {
         assert_eq!(serialized, MESSAGE);
 
         // Parse and compare with original
-        let (rest, parsed) = Handshake::parse(&serialized, None).unwrap();
+        let (rest, parsed) = Handshake::parse(&serialized, None, false).unwrap();
         assert_eq!(parsed, handshake);
 
         assert!(rest.is_empty());
@@ -500,19 +518,19 @@ mod tests {
         );
 
         // Fragment the handshake with size 10
-        let fragments: Vec<_> = handshake.fragment(10, &mut buffer).collect();
+        let mut fragments: VecDeque<_> = handshake.fragment(10, &mut buffer).collect();
 
         // Defragment the fragments
         let mut defragmented_buffer = Vec::new();
-        let defragmented_handshake =
-            Handshake::defragment(&fragments, &mut defragmented_buffer).unwrap();
+        let (defragmented_handshake, _next_type) =
+            Handshake::defragment(fragments.iter(), &mut defragmented_buffer).unwrap();
 
         // Serialize and compare to MESSAGE
         defragmented_handshake.serialize(&mut serialized);
         assert_eq!(serialized, MESSAGE);
 
         // Parse and compare with original
-        let (rest, parsed) = Handshake::parse(&serialized, None).unwrap();
+        let (rest, parsed) = Handshake::parse(&serialized, None, false).unwrap();
         assert_eq!(parsed, handshake);
 
         assert!(rest.is_empty());
