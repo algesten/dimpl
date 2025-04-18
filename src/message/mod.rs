@@ -142,7 +142,7 @@ impl CipherSuite {
         match self {
             CipherSuite::EECDH_AESGCM | CipherSuite::EDH_AESGCM => 12,
             CipherSuite::AES256_EECDH | CipherSuite::AES256_EDH => 12,
-            CipherSuite::Unknown(_) => 12, // Default length for unknown cipher suites
+            CipherSuite::Unknown(_) => 12, // Default to 12 for unknown suites
         }
     }
 
@@ -150,13 +150,27 @@ impl CipherSuite {
         match self {
             CipherSuite::EECDH_AESGCM | CipherSuite::AES256_EECDH => KeyExchangeAlgorithm::EECDH,
             CipherSuite::EDH_AESGCM | CipherSuite::AES256_EDH => KeyExchangeAlgorithm::EDH,
-            _ => KeyExchangeAlgorithm::Unknown,
+            CipherSuite::Unknown(_) => KeyExchangeAlgorithm::Unknown,
         }
     }
 
+    pub fn has_ecc(&self) -> bool {
+        matches!(
+            self,
+            CipherSuite::EECDH_AESGCM
+                | CipherSuite::EDH_AESGCM
+                | CipherSuite::AES256_EECDH
+                | CipherSuite::AES256_EDH
+        )
+    }
+
     pub(crate) fn all() -> ArrayVec<[CipherSuite; 32]> {
-        use CipherSuite::*;
-        array_vec![EECDH_AESGCM, EDH_AESGCM, AES256_EECDH, AES256_EDH]
+        let mut suites = ArrayVec::new();
+        suites.push(CipherSuite::EECDH_AESGCM);
+        suites.push(CipherSuite::EDH_AESGCM);
+        suites.push(CipherSuite::AES256_EECDH);
+        suites.push(CipherSuite::AES256_EDH);
+        suites
     }
 }
 

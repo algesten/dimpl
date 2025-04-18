@@ -1,5 +1,9 @@
+use super::extensions::{
+    ECPointFormatsExtension, SignatureAlgorithmsExtension, SupportedGroupsExtension,
+    UseSrtpExtension,
+};
 use super::{CipherSuite, CompressionMethod, ProtocolVersion};
-use super::{Cookie, Extension, ExtensionType, Random, SessionId, UseSrtpExtension};
+use super::{Cookie, Extension, ExtensionType, Random, SessionId};
 use nom::error::{Error, ErrorKind};
 use nom::Err;
 use nom::{
@@ -42,21 +46,61 @@ impl<'a> ClientHello<'a> {
         }
     }
 
-    /// Add a use_srtp extension with the default SRTP profiles
-    /// The extension data will be owned by the vector passed in
-    pub fn with_use_srtp(mut self, extension_data: &'a mut Vec<u8>) -> Self {
-        // Create the use_srtp extension with default profiles
-        let use_srtp = UseSrtpExtension::default();
-
-        // Clear the vector and serialize the extension into it
+    /// Add all required extensions for DTLS handshake
+    pub fn with_extensions(mut self, extension_data: &'a mut Vec<u8>) -> Self {
+        // Clear the extension data buffer
         extension_data.clear();
+
+        // First write all extension data
+        let mut extension_ranges = ArrayVec::<[(ExtensionType, usize, usize); 4]>::new();
+
+        // Check if we have any ECC-based cipher suites
+        let has_ecc = self.cipher_suites.iter().any(|suite| suite.has_ecc());
+
+        // Add supported groups and EC point formats if using ECC
+        if has_ecc {
+            // Add supported groups extension
+            let supported_groups = SupportedGroupsExtension::default();
+            let start_pos = extension_data.len();
+            supported_groups.serialize(extension_data);
+            extension_ranges.push((
+                ExtensionType::SupportedGroups,
+                start_pos,
+                extension_data.len(),
+            ));
+
+            // Add EC point formats extension
+            let ec_point_formats = ECPointFormatsExtension::default();
+            let start_pos = extension_data.len();
+            ec_point_formats.serialize(extension_data);
+            extension_ranges.push((
+                ExtensionType::EcPointFormats,
+                start_pos,
+                extension_data.len(),
+            ));
+        }
+
+        // Add signature algorithms extension (required for TLS 1.2+)
+        let signature_algorithms = SignatureAlgorithmsExtension::default();
+        let start_pos = extension_data.len();
+        signature_algorithms.serialize(extension_data);
+        extension_ranges.push((
+            ExtensionType::SignatureAlgorithms,
+            start_pos,
+            extension_data.len(),
+        ));
+
+        // Add use_srtp extension for DTLS-SRTP support
+        let use_srtp = UseSrtpExtension::default();
+        let start_pos = extension_data.len();
         use_srtp.serialize(extension_data);
+        extension_ranges.push((ExtensionType::UseSrtp, start_pos, extension_data.len()));
 
-        // Create the extension with the serialized data
-        let extension = Extension::new(ExtensionType::UseSrtp, extension_data);
-
-        // Add to extensions
-        self.extensions.push(extension);
+        // Now create all extensions using the written data
+        for (extension_type, start, end) in extension_ranges {
+            self.extensions
+                .push(Extension::new(extension_type, &extension_data[start..end]));
+        }
 
         self
     }

@@ -4,11 +4,13 @@ use nom::{
     number::complete::{be_u16, be_u8},
     IResult,
 };
+use tinyvec::ArrayVec;
 
 /// DTLS-SRTP protection profile identifiers
 /// From RFC 5764 Section 4.1.2
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SrtpProfileId {
+    #[default]
     SrtpAes128CmSha1_80 = 0x0001,
     SrtpAeadAes128Gcm = 0x0007,
 }
@@ -45,18 +47,18 @@ impl SrtpProfileId {
 /// UseSrtp extension as defined in RFC 5764
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UseSrtpExtension {
-    pub profiles: Vec<SrtpProfileId>,
+    pub profiles: ArrayVec<[SrtpProfileId; 2]>,
     pub mki: Vec<u8>, // MKI value (usually empty)
 }
 
 impl UseSrtpExtension {
-    pub fn new(profiles: Vec<SrtpProfileId>, mki: Vec<u8>) -> Self {
+    pub fn new(profiles: ArrayVec<[SrtpProfileId; 2]>, mki: Vec<u8>) -> Self {
         UseSrtpExtension { profiles, mki }
     }
 
     /// Create a default UseSrtpExtension with standard profiles
     pub fn default() -> Self {
-        let mut profiles = Vec::new();
+        let mut profiles = ArrayVec::new();
         // Add profiles in order of preference (most secure first)
         profiles.push(SrtpProfileId::SrtpAeadAes128Gcm);
         profiles.push(SrtpProfileId::SrtpAes128CmSha1_80);
@@ -72,7 +74,7 @@ impl UseSrtpExtension {
         let (input, profiles_data) = take(profiles_length)(input)?;
 
         // Parse the profiles
-        let mut profiles = Vec::new();
+        let mut profiles = ArrayVec::new();
         let mut profiles_rest = profiles_data;
 
         while !profiles_rest.is_empty() {
@@ -112,12 +114,14 @@ impl UseSrtpExtension {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tinyvec::array_vec;
 
     #[test]
     fn test_use_srtp_extension() {
-        let mut profiles = Vec::new();
-        profiles.push(SrtpProfileId::SrtpAeadAes128Gcm);
-        profiles.push(SrtpProfileId::SrtpAes128CmSha1_80);
+        let profiles = array_vec![
+            SrtpProfileId::SrtpAeadAes128Gcm,
+            SrtpProfileId::SrtpAes128CmSha1_80
+        ];
 
         let mki = vec![1, 2, 3];
 

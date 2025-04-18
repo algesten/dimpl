@@ -186,7 +186,7 @@ impl Client {
 
         let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
-        // Create ClientHello with use_srtp extension
+        // Create ClientHello with all required extensions
         let client_hello = ClientHello::new(
             client_version,
             self.random.clone(),
@@ -195,7 +195,7 @@ impl Client {
             cipher_suites,
             compression_methods,
         )
-        .with_use_srtp(&mut self.extension_data);
+        .with_extensions(&mut self.extension_data);
 
         self.engine
             .create_handshake(MessageType::ClientHello, 0, |body| {
