@@ -217,7 +217,7 @@ impl Client {
             HandshakeState::AwaitingServerHelloAfterVerify
         };
 
-        let Some(mut flight) = self.engine.has_flight(MessageType::ServerHello) else {
+        let Some(mut flight) = self.engine.has_flight(MessageType::ServerHelloDone) else {
             return Ok(());
         };
 
