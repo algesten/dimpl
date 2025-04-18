@@ -16,6 +16,9 @@ where
         let mut acc = ArrayVec::default();
         loop {
             let len = i.input_len();
+            if len == 0 {
+                return Ok((i, acc));
+            }
             match f.parse(i.clone()) {
                 Err(Err::Error(_)) => return Ok((i, acc)),
                 Err(e) => return Err(e),

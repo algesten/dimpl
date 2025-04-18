@@ -63,8 +63,8 @@ impl<'a> ServerHello<'a> {
                 if !rest.is_empty() {
                     return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
                 }
-                let (input, extensions) = many0(Extension::parse)(input_ext)?;
-                (input, Some(extensions))
+                let (_, extensions) = many0(Extension::parse)(input_ext)?;
+                (rest, Some(extensions))
             } else {
                 (input, None)
             }
