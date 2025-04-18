@@ -93,11 +93,11 @@ impl<'a> ServerHello<'a> {
         output.extend_from_slice(&self.cipher_suite.as_u16().to_be_bytes());
         output.push(self.compression_method.as_u8());
         if let Some(extensions) = &self.extensions {
-            // First calculate total extensions length
+            // Calculate total extensions length according to spec:
+            // For each extension: type (2) + length (2) + data
             let mut extensions_len = 0;
-            for ext in extensions {
-                // Extension type (2) + Extension length (2) + Extension data
-                extensions_len += 4 + ext.extension_data.len();
+            for ext in extensions.iter() {
+                extensions_len += 2 + 2 + ext.extension_data.len();
             }
 
             // Write extensions length
@@ -129,12 +129,13 @@ mod test {
         0xAA, // SessionId
         0xC0, 0x2F, // CipherSuite::EECDH_AESGCM
         0x00, // CompressionMethod::Null
-        0x01, // Extensions present
-        0x00, 0x0C, // Extensions length
-        // Extensions
-        0x00, 0x0A, // ExtensionType
-        0x00, 0x08, // data length
-        0x00, 0x06, 0x00, 0x17, 0x00, 0x18, 0x00, 0x19,
+        0x00, 0x0C, // Extensions length (12 bytes total: 2 type + 2 length + 8 data)
+        0x00, 0x0A, // ExtensionType::SupportedGroups
+        0x00, 0x08, // Extension data length (8 bytes)
+        0x00, 0x06, // Extension data
+        0x00, 0x17, // NamedGroup::Secp256r1
+        0x00, 0x18, // NamedGroup::Secp384r1
+        0x00, 0x19, // NamedGroup::Secp521r1
     ];
 
     #[test]
@@ -147,7 +148,7 @@ mod test {
         let compression_method = CompressionMethod::Null;
         let extensions = Some(array_vec!([Extension; 32] => Extension::new(
             ExtensionType::SupportedGroups,
-            &MESSAGE[46..],
+            &MESSAGE[45..], // Only include the raw extension data (after type and length)
         )));
 
         let server_hello = ServerHello::new(
