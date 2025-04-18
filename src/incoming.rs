@@ -115,7 +115,7 @@ impl<'a> Record<'a> {
             None
         } else {
             // Parse incoming as fragments
-            let (_, handshake) = Handshake::parse(input, *c, true)?;
+            let (_, handshake) = Handshake::parse(record.fragment, *c, true)?;
 
             // When we get the ServerHello, we know which cipher suite was selected.
             // Parsing further messages after this must be informed by that choice.
