@@ -135,6 +135,7 @@ impl<'a> Handshake<'a> {
         let Body::Fragment(data) = first.body else {
             unreachable!("Non-Fragment body in defragment()")
         };
+        buffer.extend_from_slice(data);
 
         let mut next_type = None;
 
