@@ -36,6 +36,102 @@ use crate::message::{
     ServerKeyExchangeParams, SignatureAlgorithm, SignatureAndHashAlgorithm,
 };
 
+use sec1::der::Decode;
+use sec1::EcPrivateKey;
+
+/// A parsed private key with its associated signature algorithm
+pub enum ParsedKey {
+    /// P-256 ECDSA key with SHA-256
+    P256(P256SigningKey),
+    /// P-384 ECDSA key with SHA-384
+    P384(P384SigningKey),
+    /// RSA key with SHA-256
+    Rsa(RsaPrivateKey),
+}
+
+impl ParsedKey {
+    /// Get the signature algorithm for this key
+    pub fn signature_algorithm(&self) -> SignatureAndHashAlgorithm {
+        match self {
+            ParsedKey::P256(_) => {
+                SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA)
+            }
+            ParsedKey::P384(_) => {
+                SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::ECDSA)
+            }
+            ParsedKey::Rsa(_) => {
+                SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA)
+            }
+        }
+    }
+
+    /// Try to parse a private key from raw bytes
+    pub fn try_parse_key(key_data: &[u8]) -> Result<Self, String> {
+        // Try parsing as SEC1 DER format
+        if let Ok(ec_key) = EcPrivateKey::from_der(key_data) {
+            let private_key = ec_key.private_key;
+            if private_key.len() == 32 {
+                let key_bytes = GenericArray::from_slice(private_key);
+                if let Ok(signing_key) = P256SigningKey::from_bytes(key_bytes) {
+                    return Ok(ParsedKey::P256(signing_key));
+                }
+            }
+            if private_key.len() == 48 {
+                let key_bytes = GenericArray::from_slice(private_key);
+                if let Ok(signing_key) = P384SigningKey::from_bytes(key_bytes) {
+                    return Ok(ParsedKey::P384(signing_key));
+                }
+            }
+        }
+
+        // Then try raw SEC1 format (raw private key)
+        if key_data.len() == 32 {
+            let key_bytes = GenericArray::from_slice(key_data);
+            if let Ok(signing_key) = P256SigningKey::from_bytes(key_bytes) {
+                return Ok(ParsedKey::P256(signing_key));
+            }
+        }
+
+        if key_data.len() == 48 {
+            let key_bytes = GenericArray::from_slice(key_data);
+            if let Ok(signing_key) = P384SigningKey::from_bytes(key_bytes) {
+                return Ok(ParsedKey::P384(signing_key));
+            }
+        }
+
+        // Check if it's a PEM encoded key
+        if let Ok(pem_str) = str::from_utf8(key_data) {
+            // Try as RSA key
+            if let Ok(private_key) = RsaPrivateKey::from_pkcs8_pem(pem_str) {
+                return Ok(ParsedKey::Rsa(private_key));
+            }
+
+            // Try as P-256 key
+            if let Ok(signing_key) = P256SigningKey::from_pkcs8_pem(pem_str) {
+                return Ok(ParsedKey::P256(signing_key));
+            }
+
+            // Try as P-384 key
+            if let Ok(signing_key) = P384SigningKey::from_pkcs8_pem(pem_str) {
+                return Ok(ParsedKey::P384(signing_key));
+            }
+        }
+
+        // Try as PKCS#8 DER format
+        if let Ok(private_key) = RsaPrivateKey::from_pkcs8_der(key_data) {
+            return Ok(ParsedKey::Rsa(private_key));
+        }
+        if let Ok(signing_key) = P256SigningKey::from_pkcs8_der(key_data) {
+            return Ok(ParsedKey::P256(signing_key));
+        }
+        if let Ok(signing_key) = P384SigningKey::from_pkcs8_der(key_data) {
+            return Ok(ParsedKey::P384(signing_key));
+        }
+
+        Err("Failed to parse private key in any supported format".to_string())
+    }
+}
+
 /// Certificate verifier trait for DTLS connections
 pub trait CertVerifier: Send + Sync {
     /// Verify a certificate by its binary DER representation
@@ -80,14 +176,11 @@ pub struct CryptoContext {
     /// Client certificate (DER format)
     client_cert: Vec<u8>,
 
-    /// Client private key (DER or PEM format)
-    client_private_key: Vec<u8>,
-
     /// Certificate verifier
     cert_verifier: Box<dyn CertVerifier>,
 
-    /// Signature algorithm based on client certificate type
-    signature_algorithm: SignatureAndHashAlgorithm,
+    /// Parsed client private key with signature algorithm
+    parsed_client_key: ParsedKey,
 }
 
 impl CryptoContext {
@@ -106,8 +199,9 @@ impl CryptoContext {
             panic!("Client private key cannot be empty");
         }
 
-        // Determine the signature algorithm based on the private key
-        let signature_algorithm = Self::determine_signature_algorithm(&client_private_key);
+        // Parse the private key
+        let parsed_client_key = ParsedKey::try_parse_key(&client_private_key)
+            .expect("Failed to parse client private key");
 
         CryptoContext {
             key_exchange: None,
@@ -122,86 +216,14 @@ impl CryptoContext {
             client_cipher: None,
             server_cipher: None,
             client_cert,
-            client_private_key,
             cert_verifier,
-            signature_algorithm,
+            parsed_client_key,
         }
     }
 
-    /// Determine signature algorithm from the client certificate
-    fn determine_signature_algorithm(cert_data: &[u8]) -> SignatureAndHashAlgorithm {
-        // First try SEC1 format (raw private key)
-        if cert_data.len() == 32 {
-            let key_bytes = GenericArray::from_slice(cert_data);
-            if let Ok(_) = P256SigningKey::from_bytes(key_bytes) {
-                return SignatureAndHashAlgorithm::new(
-                    HashAlgorithm::SHA256,
-                    SignatureAlgorithm::ECDSA,
-                );
-            }
-        }
-
-        if cert_data.len() == 48 {
-            let key_bytes = GenericArray::from_slice(cert_data);
-            if let Ok(_) = P384SigningKey::from_bytes(key_bytes) {
-                return SignatureAndHashAlgorithm::new(
-                    HashAlgorithm::SHA384,
-                    SignatureAlgorithm::ECDSA,
-                );
-            }
-        }
-
-        // Check if it's a PEM encoded key
-        if let Ok(pem_str) = str::from_utf8(cert_data) {
-            // Try as RSA key
-            if RsaPrivateKey::from_pkcs8_pem(pem_str).is_ok() {
-                return SignatureAndHashAlgorithm::new(
-                    HashAlgorithm::SHA256,
-                    SignatureAlgorithm::RSA,
-                );
-            }
-
-            // Try as P-256 key
-            if P256SigningKey::from_pkcs8_pem(pem_str).is_ok() {
-                return SignatureAndHashAlgorithm::new(
-                    HashAlgorithm::SHA256,
-                    SignatureAlgorithm::ECDSA,
-                );
-            }
-
-            // Try as P-384 key
-            if P384SigningKey::from_pkcs8_pem(pem_str).is_ok() {
-                return SignatureAndHashAlgorithm::new(
-                    HashAlgorithm::SHA384,
-                    SignatureAlgorithm::ECDSA,
-                );
-            }
-        }
-
-        // Try as DER encoded key
-        // Try as RSA key
-        if RsaPrivateKey::from_pkcs8_der(cert_data).is_ok() {
-            return SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA);
-        }
-
-        // Try as P-256 key
-        if P256SigningKey::from_pkcs8_der(cert_data).is_ok() {
-            return SignatureAndHashAlgorithm::new(
-                HashAlgorithm::SHA256,
-                SignatureAlgorithm::ECDSA,
-            );
-        }
-
-        // Try as P-384 key
-        if P384SigningKey::from_pkcs8_der(cert_data).is_ok() {
-            return SignatureAndHashAlgorithm::new(
-                HashAlgorithm::SHA384,
-                SignatureAlgorithm::ECDSA,
-            );
-        }
-
-        // Default to RSA + SHA256 if we can't determine
-        SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA)
+    /// Get the signature algorithm for the client's private key
+    pub fn get_signature_algorithm(&self) -> SignatureAndHashAlgorithm {
+        self.parsed_client_key.signature_algorithm()
     }
 
     /// Initialize key exchange based on cipher suite
@@ -438,29 +460,11 @@ impl CryptoContext {
         Certificate::new(certs)
     }
 
-    /// Get the client private key
-    ///
-    /// This should only be used for operations like signing where the private key is needed
-    pub fn get_client_private_key(&self) -> &[u8] {
-        // We validate in constructor, so we can assume we have a private key
-        &self.client_private_key
-    }
-
     /// Sign the provided data using the client's private key
     /// Returns the signature or an error if signing fails
     pub fn sign_data(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         // Use the signing module to sign the data
-        signing::sign_data(
-            self.get_client_private_key(),
-            data,
-            self.get_signature_algorithm(),
-        )
-    }
-
-    /// Get the recommended hash and signature algorithms for this client
-    pub fn get_signature_algorithm(&self) -> SignatureAndHashAlgorithm {
-        // Return the signature algorithm determined from the certificate
-        self.signature_algorithm
+        signing::sign_data(&self.parsed_client_key, data)
     }
 
     /// Calculate a hash using the specified algorithm
