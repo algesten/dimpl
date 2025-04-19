@@ -22,6 +22,40 @@ fn ossl_ossl() {
     let server_cert_options = DtlsCertOptions::default();
     let server_cert = OsslDtlsCert::new(server_cert_options);
 
+    // Save certificates and keys
+    fs::write(
+        "tests/datagrams/client_cert.der",
+        client_cert
+            .x509
+            .to_der()
+            .expect("Failed to get client cert DER"),
+    )
+    .expect("Failed to write client cert");
+    fs::write(
+        "tests/datagrams/client_key.der",
+        client_cert
+            .pkey
+            .private_key_to_der()
+            .expect("Failed to get client key DER"),
+    )
+    .expect("Failed to write client key");
+    fs::write(
+        "tests/datagrams/server_cert.der",
+        server_cert
+            .x509
+            .to_der()
+            .expect("Failed to get server cert DER"),
+    )
+    .expect("Failed to write server cert");
+    fs::write(
+        "tests/datagrams/server_key.der",
+        server_cert
+            .pkey
+            .private_key_to_der()
+            .expect("Failed to get server key DER"),
+    )
+    .expect("Failed to write server key");
+
     // Create server
     let mut server = server_cert
         .new_dtls_impl()

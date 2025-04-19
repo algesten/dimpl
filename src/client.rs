@@ -54,7 +54,7 @@ pub struct Client {
     state: ClientState,
 
     /// Engine in common between server and client.
-    engine: Engine,
+    pub engine: Engine,
 
     /// Server random. Set by ServerHello.
     server_random: Option<Random>,

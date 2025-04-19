@@ -15,7 +15,7 @@ use crate::{Config, Error, Output};
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
 // Using debug_ignore_primary since CryptoContext doesn't implement Debug
-pub(crate) struct Engine {
+pub struct Engine {
     config: Arc<Config>,
 
     /// Pool of buffers
