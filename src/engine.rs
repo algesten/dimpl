@@ -343,7 +343,7 @@ impl Engine {
         }
 
         let mut buffer = self.buffers_free.pop();
-        let mut fragment = Vec::new();
+        let mut fragment = self.buffers_free.pop();
 
         // Let the callback fill the fragment
         f(&mut fragment);
@@ -359,18 +359,16 @@ impl Engine {
         let length = fragment.len() as u16;
 
         // Handle encryption if enabled and content type requires it
-        let fragment = if self.should_encrypt(content_type) {
+        if self.should_encrypt(content_type) {
             // Create proper AAD for encryption
             let aad = self.create_aad(content_type, &sequence, length);
 
             // Generate nonce
             let nonce = self.generate_nonce()?;
 
-            // Encrypt the fragment
-            self.encrypt_data(&fragment, &aad, &nonce)?
-        } else {
-            fragment
-        };
+            // Encrypt the fragment in-place
+            self.encrypt_data(&mut fragment, &aad, &nonce)?;
+        }
 
         let record = DTLSRecord {
             content_type,
@@ -393,6 +391,9 @@ impl Engine {
 
         // Add to the outgoing queue
         self.queue_tx.push_back(buffer);
+
+        // We can reuse this buffer.
+        self.buffers_free.push(fragment);
 
         Ok(())
     }
@@ -444,7 +445,7 @@ impl Engine {
     }
 
     /// Encrypt data appropriate for the role (client or server)
-    fn encrypt_data(&self, plaintext: &[u8], aad: &[u8], nonce: &[u8]) -> Result<Vec<u8>, Error> {
+    fn encrypt_data(&self, plaintext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), Error> {
         if self.is_client {
             self.crypto_context
                 .encrypt_client_to_server(plaintext, aad, nonce)
@@ -459,7 +460,7 @@ impl Engine {
     }
 
     /// Decrypt data appropriate for the role (client or server)
-    fn decrypt_data(&self, ciphertext: &[u8], aad: &[u8], nonce: &[u8]) -> Result<Vec<u8>, Error> {
+    fn decrypt_data(&self, ciphertext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), Error> {
         if self.is_client {
             // Client decrypting data from server
             self.crypto_context
@@ -557,8 +558,13 @@ impl Engine {
                     // Generate appropriate nonce for decryption
                     let nonce = self.generate_nonce()?;
 
+                    let ciphertext = record.record.fragment.to_vec();
+                    let mut buffer = Buffer::wrap(ciphertext);
+
                     // Decrypt the application data
-                    let plaintext = self.decrypt_data(record.record.fragment, &aad, &nonce)?;
+                    self.decrypt_data(&mut buffer, &aad, &nonce)?;
+
+                    let plaintext = buffer.into_inner();
 
                     // Push the decrypted data to the queue
                     self.queue_events

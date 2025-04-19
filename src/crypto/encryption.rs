@@ -1,16 +1,18 @@
 use aes_gcm::{
-    aead::{Aead, KeyInit, Payload},
+    aead::{AeadInPlace, KeyInit},
     Aes128Gcm, Aes256Gcm, Nonce,
 };
 use rand::RngCore;
 
+use crate::buffer::Buffer;
+
 /// Cipher trait for DTLS encryption and decryption
 pub trait Cipher {
-    /// Encrypt plaintext and return ciphertext
-    fn encrypt(&self, plaintext: &[u8], aad: &[u8], nonce: &[u8]) -> Result<Vec<u8>, String>;
+    /// Encrypt plaintext in-place
+    fn encrypt(&self, plaintext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), String>;
 
-    /// Decrypt ciphertext and return plaintext
-    fn decrypt(&self, ciphertext: &[u8], aad: &[u8], nonce: &[u8]) -> Result<Vec<u8>, String>;
+    /// Decrypt ciphertext in-place
+    fn decrypt(&self, ciphertext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), String>;
 
     /// Generate a random nonce suitable for this cipher
     fn generate_nonce(&self) -> Vec<u8>;
@@ -42,46 +44,42 @@ impl AesGcm {
 }
 
 impl Cipher for AesGcm {
-    fn encrypt(&self, plaintext: &[u8], aad: &[u8], nonce: &[u8]) -> Result<Vec<u8>, String> {
+    fn encrypt(&self, plaintext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), String> {
         if nonce.len() != 12 {
             return Err("AES-GCM nonce must be 12 bytes".to_string());
         }
 
         let nonce = Nonce::from_slice(nonce);
-        let payload = Payload {
-            msg: plaintext,
-            aad,
-        };
 
         match self {
             AesGcm::Aes128(cipher) => cipher
-                .encrypt(nonce, payload)
+                .encrypt_in_place(nonce, aad, plaintext)
                 .map_err(|_| "Encryption failed".to_string()),
             AesGcm::Aes256(cipher) => cipher
-                .encrypt(nonce, payload)
+                .encrypt_in_place(nonce, aad, plaintext)
                 .map_err(|_| "Encryption failed".to_string()),
-        }
+        }?;
+
+        Ok(())
     }
 
-    fn decrypt(&self, ciphertext: &[u8], aad: &[u8], nonce: &[u8]) -> Result<Vec<u8>, String> {
+    fn decrypt(&self, ciphertext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), String> {
         if nonce.len() != 12 {
             return Err("AES-GCM nonce must be 12 bytes".to_string());
         }
 
         let nonce = Nonce::from_slice(nonce);
-        let payload = Payload {
-            msg: ciphertext,
-            aad,
-        };
 
         match self {
             AesGcm::Aes128(cipher) => cipher
-                .decrypt(nonce, payload)
+                .decrypt_in_place(nonce, aad, ciphertext)
                 .map_err(|_| "Decryption failed".to_string()),
             AesGcm::Aes256(cipher) => cipher
-                .decrypt(nonce, payload)
+                .decrypt_in_place(nonce, aad, ciphertext)
                 .map_err(|_| "Decryption failed".to_string()),
-        }
+        }?;
+
+        Ok(())
     }
 
     fn generate_nonce(&self) -> Vec<u8> {

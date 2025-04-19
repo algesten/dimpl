@@ -32,6 +32,7 @@ pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
 pub use keying::{KeyingMaterial, SrtpProfile};
 pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
 
+use crate::buffer::Buffer;
 // Message-related imports
 use crate::message::{
     Asn1Cert, Certificate, CipherSuite, CurveType, HashAlgorithm, KeyExchangeAlgorithm, NamedCurve,
@@ -425,10 +426,10 @@ impl CryptoContext {
     /// Encrypt data (client to server)
     pub fn encrypt_client_to_server(
         &self,
-        plaintext: &[u8],
+        plaintext: &mut Buffer,
         aad: &[u8],
         nonce: &[u8],
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<(), String> {
         match &self.client_cipher {
             Some(cipher) => cipher.encrypt(plaintext, aad, nonce),
             None => Err("Client cipher not initialized".to_string()),
@@ -438,10 +439,10 @@ impl CryptoContext {
     /// Decrypt data (server to client)
     pub fn decrypt_server_to_client(
         &self,
-        ciphertext: &[u8],
+        ciphertext: &mut Buffer,
         aad: &[u8],
         nonce: &[u8],
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<(), String> {
         match &self.server_cipher {
             Some(cipher) => cipher.decrypt(ciphertext, aad, nonce),
             None => Err("Server cipher not initialized".to_string()),
