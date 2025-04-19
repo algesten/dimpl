@@ -232,7 +232,7 @@ impl Client {
         .with_extensions(&mut self.extension_data);
 
         self.engine
-            .create_handshake(MessageType::ClientHello, 0, |body| {
+            .create_handshake(MessageType::ClientHello, |body| {
                 client_hello.serialize(body);
             })?;
 
@@ -398,16 +398,15 @@ impl Client {
     fn send_client_cert_and_keys(&mut self) -> Result<(), Error> {
         self.send_client_certificate()?;
         self.send_client_key_exchange()?;
+        if self.certificate_requested {
+            self.send_certificate_verify()?;
+        }
         self.derive_and_send_keys()?;
 
         Ok(())
     }
 
     fn send_client_certificate(&mut self) -> Result<(), Error> {
-        if !self.certificate_requested {
-            return Ok(());
-        }
-
         // Get the client certificate
         let crypto = self.engine.crypto_context();
         let client_cert = crypto.get_client_certificate();
@@ -418,7 +417,7 @@ impl Client {
 
         // Now use the engine with the stored data
         self.engine
-            .create_handshake(MessageType::Certificate, 0, |body| {
+            .create_handshake(MessageType::Certificate, |body| {
                 body.extend_from_slice(&cert_data);
             })?;
 
@@ -452,7 +451,7 @@ impl Client {
 
         // Send client key exchange message
         self.engine
-            .create_handshake(MessageType::ClientKeyExchange, 1, |body| {
+            .create_handshake(MessageType::ClientKeyExchange, |body| {
                 // Create a properly formatted ClientKeyExchange message based on the key exchange algorithm
                 let exchange_keys = match key_exchange_algorithm {
                     KeyExchangeAlgorithm::EECDH => {
@@ -499,11 +498,6 @@ impl Client {
                 let client_key_exchange = ClientKeyExchange::new(exchange_keys);
                 client_key_exchange.serialize(body);
             })?;
-
-        // Send CertificateVerify if we sent a client certificate
-        if self.certificate_requested {
-            self.send_certificate_verify()?;
-        }
 
         Ok(())
     }
@@ -570,7 +564,7 @@ impl Client {
         // Send finished message
         let finished = Finished::new(&verify_data);
         self.engine
-            .create_handshake(MessageType::Finished, 2, |body| {
+            .create_handshake(MessageType::Finished, |body| {
                 finished.serialize(body);
             })?;
 
@@ -697,7 +691,7 @@ impl Client {
 
         // Send the certificate verify message
         self.engine
-            .create_handshake(MessageType::CertificateVerify, 0, |body| {
+            .create_handshake(MessageType::CertificateVerify, |body| {
                 certificate_verify.serialize(body);
             })?;
 

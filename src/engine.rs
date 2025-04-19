@@ -53,6 +53,9 @@ pub(crate) struct Engine {
 
     /// Expected peer handshake sequence number
     peer_handshake_seq_no: u16,
+
+    /// Next handshake message sequence number for sending
+    next_handshake_seq_no: u16,
 }
 
 impl Engine {
@@ -77,6 +80,7 @@ impl Engine {
             client_encryption_enabled: false,
             is_client,
             peer_handshake_seq_no: 0,
+            next_handshake_seq_no: 0,
         }
     }
 
@@ -97,7 +101,10 @@ impl Engine {
 
     /// Add handshake message to the buffer
     pub fn add_handshake_message(&mut self, message: &[u8]) {
-        self.handshake_messages.extend_from_slice(message);
+        // Only buffer messages before CertificateVerify
+        if !self.client_encryption_enabled && !self.server_encryption_enabled {
+            self.handshake_messages.extend_from_slice(message);
+        }
     }
 
     /// Enable server encryption
@@ -122,8 +129,11 @@ impl Engine {
         // If this is a handshake message, save it for CertificateVerify
         for record in incoming.records().iter() {
             if record.record.content_type == ContentType::Handshake {
-                if record.handshake.is_some() {
-                    self.add_handshake_message(record.record.fragment);
+                if let Some(handshake) = &record.handshake {
+                    // Serialize the handshake message and add it to the buffer
+                    let mut handshake_data = Vec::new();
+                    handshake.serialize(&mut handshake_data);
+                    self.add_handshake_message(&handshake_data);
                 }
             }
         }
@@ -398,12 +408,7 @@ impl Engine {
     }
 
     /// Create a handshake message and wrap it in a DTLS record
-    pub fn create_handshake<F>(
-        &mut self,
-        msg_type: MessageType,
-        message_seq: u16,
-        f: F,
-    ) -> Result<(), Error>
+    pub fn create_handshake<F>(&mut self, msg_type: MessageType, f: F) -> Result<(), Error>
     where
         F: FnOnce(&mut Vec<u8>),
     {
@@ -413,18 +418,21 @@ impl Engine {
         // Let the callback fill the handshake body
         f(&mut body_buffer);
 
-        // Create the handshake header
+        // Create the handshake header with the next sequence number
         let header = Handshake {
             header: crate::message::Header {
                 msg_type,
                 length: body_buffer.len() as u32,
-                message_seq,
+                message_seq: self.next_handshake_seq_no,
                 fragment_offset: 0,
                 fragment_length: body_buffer.len() as u32,
             },
             body: crate::message::Body::Fragment(&body_buffer),
             handled: Cell::new(false),
         };
+
+        // Increment the sequence number for the next handshake message
+        self.next_handshake_seq_no += 1;
 
         // Save this handshake message for future CertificateVerify
         let mut handshake_data = Vec::new();
