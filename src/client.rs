@@ -59,9 +59,6 @@ pub struct Client {
     /// Server random. Set by ServerHello.
     server_random: Option<Random>,
 
-    /// Flag indicating if the client certificate was requested
-    certificate_requested: bool,
-
     /// Server certificates
     server_certificates: Vec<Vec<u8>>,
 
@@ -122,7 +119,6 @@ impl Client {
             state: ClientState::SendClientHello,
             engine,
             server_random: None,
-            certificate_requested: false,
             server_certificates: Vec::new(),
             server_encryption_enabled: false,
             negotiated_srtp_profile: None,
@@ -346,8 +342,6 @@ impl Client {
                             hash_algorithm
                         )));
                     }
-
-                    self.certificate_requested = true;
                 }
 
                 MessageType::ServerHelloDone => {
