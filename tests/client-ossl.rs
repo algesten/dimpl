@@ -9,6 +9,8 @@ use ossl::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
 
 #[test]
 fn client_ossl() {
+    env_logger::init();
+
     // Generate certificates for both client and server
     let client_cert_options = DtlsCertOptions::default();
     let client_cert = OsslDtlsCert::new(client_cert_options);
