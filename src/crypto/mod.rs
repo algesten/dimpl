@@ -7,6 +7,7 @@
 
 use std::str;
 
+use elliptic_curve::generic_array::GenericArray;
 use pkcs8::DecodePrivateKey;
 use tinyvec::array_vec;
 
@@ -129,6 +130,27 @@ impl CryptoContext {
 
     /// Determine signature algorithm from the client certificate
     fn determine_signature_algorithm(cert_data: &[u8]) -> SignatureAndHashAlgorithm {
+        // First try SEC1 format (raw private key)
+        if cert_data.len() == 32 {
+            let key_bytes = GenericArray::from_slice(cert_data);
+            if let Ok(_) = P256SigningKey::from_bytes(key_bytes) {
+                return SignatureAndHashAlgorithm::new(
+                    HashAlgorithm::SHA256,
+                    SignatureAlgorithm::ECDSA,
+                );
+            }
+        }
+
+        if cert_data.len() == 48 {
+            let key_bytes = GenericArray::from_slice(cert_data);
+            if let Ok(_) = P384SigningKey::from_bytes(key_bytes) {
+                return SignatureAndHashAlgorithm::new(
+                    HashAlgorithm::SHA384,
+                    SignatureAlgorithm::ECDSA,
+                );
+            }
+        }
+
         // Check if it's a PEM encoded key
         if let Ok(pem_str) = str::from_utf8(cert_data) {
             // Try as RSA key
