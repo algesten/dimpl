@@ -15,7 +15,6 @@ use tinyvec::array_vec;
 use p256::ecdsa::SigningKey as P256SigningKey;
 use p384::ecdsa::SigningKey as P384SigningKey;
 use rsa::RsaPrivateKey;
-use sha2::{Digest, Sha256, Sha384};
 
 // Internal module imports
 mod encryption;
@@ -480,27 +479,6 @@ impl CryptoContext {
         signing::sign_data(&self.parsed_client_key, data, hash_alg)
     }
 
-    /// Calculate a hash using the specified algorithm
-    pub fn calculate_hash(&self, data: &[u8], algorithm: HashAlgorithm) -> Result<Vec<u8>, String> {
-        match algorithm {
-            HashAlgorithm::SHA256 => {
-                let mut hasher = Sha256::new();
-                hasher.update(data);
-                Ok(hasher.finalize().to_vec())
-            }
-            HashAlgorithm::SHA384 => {
-                let mut hasher = Sha384::new();
-                hasher.update(data);
-                Ok(hasher.finalize().to_vec())
-            }
-            // For other hash algorithms, which we don't need for our supported cipher suites
-            _ => Err(format!(
-                "Hash algorithm {:?} not supported for our cipher suites",
-                algorithm
-            )),
-        }
-    }
-
     /// Verify a server certificate
     pub fn verify_server_certificate(&self, der: &[u8]) -> Result<(), String> {
         self.cert_verifier.verify_certificate(der)
@@ -509,7 +487,7 @@ impl CryptoContext {
     /// Generate verify data for a Finished message using PRF
     pub fn generate_verify_data(
         &self,
-        handshake_messages: &[u8],
+        handshake_hash: &[u8],
         is_client: bool,
     ) -> Result<Vec<u8>, String> {
         let master_secret = match &self.master_secret {
@@ -522,9 +500,6 @@ impl CryptoContext {
         } else {
             "server finished"
         };
-
-        // Hash the handshake messages using SHA-256
-        let handshake_hash = self.calculate_hash(handshake_messages, HashAlgorithm::SHA256)?;
 
         // Generate 12 bytes of verify data using PRF
         prf_tls12(master_secret, label, &handshake_hash, 12)
