@@ -197,7 +197,13 @@ impl Client {
 
         // Convert Vec<CipherSuite> to ArrayVec<[CipherSuite; 32]>
         let mut cipher_suites = array_vec![[CipherSuite; 32]];
-        cipher_suites.extend(self.engine.config().cipher_suites.iter().cloned().take(32));
+
+        // Get the client certificate type
+        let cert_type = self.engine.crypto_context().get_certificate_type();
+
+        // Get compatible cipher suites
+        let compatible_suites = CipherSuite::compatible_with_certificate(cert_type);
+        cipher_suites.extend(compatible_suites.iter().cloned().take(32));
 
         let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 

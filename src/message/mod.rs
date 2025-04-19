@@ -209,6 +209,22 @@ impl CipherSuite {
             CipherSuite::DHE_RSA_AES128_GCM_SHA256,
         ]
     }
+
+    pub fn compatible_with_certificate(cert_type: SignatureAlgorithm) -> &'static [CipherSuite] {
+        match cert_type {
+            SignatureAlgorithm::ECDSA => &[
+                CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
+                CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+            ],
+            SignatureAlgorithm::RSA => &[
+                CipherSuite::ECDHE_RSA_AES256_GCM_SHA384,
+                CipherSuite::ECDHE_RSA_AES128_GCM_SHA256,
+                CipherSuite::DHE_RSA_AES256_GCM_SHA384,
+                CipherSuite::DHE_RSA_AES128_GCM_SHA256,
+            ],
+            _ => panic!("Need either RSA or ECDSA certificate"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

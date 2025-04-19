@@ -110,10 +110,6 @@ impl Engine {
         self.client_encryption_enabled = true;
     }
 
-    pub fn config(&self) -> &Config {
-        &*self.config
-    }
-
     pub fn parse_packet(
         &mut self,
         packet: &[u8],

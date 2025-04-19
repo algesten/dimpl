@@ -549,6 +549,10 @@ impl CryptoContext {
             None => None,
         }
     }
+
+    pub fn get_certificate_type(&self) -> SignatureAlgorithm {
+        self.parsed_client_key.signature_algorithm().signature
+    }
 }
 
 impl CipherSuite {
