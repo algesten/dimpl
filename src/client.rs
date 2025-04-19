@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use log::debug;
 use tinyvec::array_vec;
 
 use crate::crypto::{CertVerifier, SrtpProfile};
@@ -180,6 +181,7 @@ impl Client {
     }
 
     fn send_client_hello(&mut self) -> Result<(), Error> {
+        debug!("Sending ClientHello");
         let client_version = ProtocolVersion::DTLS1_2;
         let session_id = self.session_id.clone().unwrap_or_else(SessionId::empty);
         let cookie = self.cookie.clone().unwrap_or_else(Cookie::empty);
@@ -205,6 +207,13 @@ impl Client {
             .collect();
 
         cipher_suites.extend(filtered_suites.into_iter().take(32));
+
+        debug!(
+            "Sending ClientHello: DTLS version={:?}, cookie_len={}, offering {} cipher suites",
+            client_version,
+            cookie.len(),
+            cipher_suites.len()
+        );
 
         let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
@@ -253,9 +262,17 @@ impl Client {
                         continue;
                     };
 
+                    debug!(
+                        "Received HelloVerifyRequest with cookie length: {}",
+                        hello_verify.cookie.len()
+                    );
                     self.cookie = Some(hello_verify.cookie.clone());
                     self.state = ClientState::SendClientHello;
                     self.engine.reset_handshake_seq_no();
+                    debug!(
+                        "Resetting handshake: will send new ClientHello with cookie (len={})",
+                        hello_verify.cookie.len()
+                    );
                     return Ok(());
                 }
 
@@ -264,6 +281,10 @@ impl Client {
                         return Ok(());
                     };
 
+                    debug!(
+                        "Received ServerHello with cipher suite: {:?}",
+                        server_hello.cipher_suite
+                    );
                     let cs = server_hello.cipher_suite;
                     self.cipher_suite = Some(cs);
                     self.session_id = Some(server_hello.session_id.clone());
@@ -298,12 +319,18 @@ impl Client {
                         return Ok(());
                     };
 
+                    debug!(
+                        "Received Certificate with {} certificates",
+                        certificate.certificate_list.len()
+                    );
                     // Store the certificate chain for validation
                     self.server_certificates.clear();
 
                     // Convert ASN.1 certificates to byte arrays
-                    for cert in &certificate.certificate_list {
-                        self.server_certificates.push(cert.0.to_vec());
+                    for (i, cert) in certificate.certificate_list.iter().enumerate() {
+                        let cert_data = cert.0.to_vec();
+                        debug!("Certificate #{} size: {} bytes", i + 1, cert_data.len());
+                        self.server_certificates.push(cert_data);
                     }
                 }
 
@@ -311,6 +338,16 @@ impl Client {
                     let Body::ServerKeyExchange(server_key_exchange) = &handshake.body else {
                         return Ok(());
                     };
+
+                    debug!("Received ServerKeyExchange");
+
+                    // Get key exchange algorithm for better logging
+                    let key_exchange_alg = match self.cipher_suite {
+                        Some(cs) => cs.as_key_exchange_algorithm(),
+                        None => KeyExchangeAlgorithm::Unknown,
+                    };
+
+                    debug!("ServerKeyExchange using algorithm: {:?}", key_exchange_alg);
 
                     // Process the server key exchange message
                     self.engine
@@ -329,22 +366,37 @@ impl Client {
                         panic!("CertificateRequest message should have been parsed");
                     };
 
+                    debug!("Received CertificateRequest with {} certificate types, {} signature algorithms",
+                           cr.certificate_types.len(), cr.supported_signature_algorithms.len());
+
                     // Check that the hash algorithm we selected in the ServerHello
                     // is one of the supported by the CertificateRequest
                     let hash_algorithm = self.cipher_suite.unwrap().hash_algorithm();
+                    debug!(
+                        "Checking if server supports our hash algorithm: {:?}",
+                        hash_algorithm
+                    );
+
                     if !cr.supports_hash_algorithm(hash_algorithm) {
                         return Err(Error::CertificateError(format!(
                             "Unsupported hash algorithm: {:?}",
                             hash_algorithm
                         )));
                     }
+
+                    debug!("Server supports our hash algorithm: {:?}", hash_algorithm);
                 }
 
                 MessageType::ServerHelloDone => {
+                    debug!("Received ServerHelloDone - handshake message phase complete");
                     return self.handle_server_hello_done();
                 }
 
                 _ => {
+                    debug!(
+                        "Received unexpected message type: {:?}",
+                        handshake.header.msg_type
+                    );
                     // Unknown or unexpected message type
                     return Err(Error::UnexpectedMessage(format!(
                         "Unexpected message type: {:?}",
@@ -363,6 +415,7 @@ impl Client {
     }
 
     fn handle_server_hello_done(&mut self) -> Result<(), Error> {
+        debug!("Handling ServerHelloDone");
         // Validate the server certificate
         if self.server_certificates.is_empty() {
             return Err(Error::CertificateError(
@@ -371,6 +424,10 @@ impl Client {
         }
 
         // Verify the certificate using the configured verifier
+        debug!(
+            "Verifying server certificate (size: {} bytes)",
+            self.server_certificates[0].len()
+        );
         if let Err(err) = self
             .engine
             .crypto_context()
@@ -381,6 +438,7 @@ impl Client {
                 err
             )));
         }
+        debug!("Server certificate verification successful");
 
         // Send the server certificate as an event
         if !self.server_certificates.is_empty() {
@@ -389,24 +447,33 @@ impl Client {
         }
 
         // Transition to next state
+        debug!("Transitioning to SendClientCertAndKeys state");
         self.state = ClientState::SendClientCertAndKeys;
         Ok(())
     }
 
     fn send_client_cert_and_keys(&mut self) -> Result<(), Error> {
+        debug!("Preparing to send client certificate and keys");
         self.send_client_certificate()?;
         self.send_client_key_exchange()?;
         self.send_certificate_verify()?;
 
+        debug!("Client key exchange complete, deriving session keys");
         self.derive_and_send_keys()?;
 
         Ok(())
     }
 
     fn send_client_certificate(&mut self) -> Result<(), Error> {
+        debug!("Sending Certificate");
         // Get the client certificate
         let crypto = self.engine.crypto_context();
         let client_cert = crypto.get_client_certificate();
+
+        // Get certificate size for logging
+        let mut temp_buf = Vec::new();
+        client_cert.serialize(&mut temp_buf);
+        debug!("Client certificate size: {} bytes", temp_buf.len());
 
         // Store the client certificate data for sending
         let mut cert_data = Vec::new();
@@ -422,6 +489,7 @@ impl Client {
     }
 
     fn send_client_key_exchange(&mut self) -> Result<(), Error> {
+        debug!("Sending ClientKeyExchange");
         // Just check that a cipher suite exists without binding to unused variable
         if self.cipher_suite.is_none() {
             return Err(Error::UnexpectedMessage(
@@ -432,6 +500,8 @@ impl Client {
         let cipher_suite = self.cipher_suite.unwrap();
         let key_exchange_algorithm = cipher_suite.as_key_exchange_algorithm();
 
+        debug!("Using key exchange algorithm: {:?}", key_exchange_algorithm);
+
         // For ECDHE, get curve info before we create the handshake (to avoid borrow issues)
         let curve_info = if key_exchange_algorithm == KeyExchangeAlgorithm::EECDH {
             self.engine.crypto_context().get_key_exchange_curve_info()
@@ -439,12 +509,22 @@ impl Client {
             None
         };
 
+        if let Some((curve_type, named_curve)) = &curve_info {
+            debug!(
+                "Using ECDHE curve info: {:?}, curve: {:?}",
+                curve_type, named_curve
+            );
+        }
+
         // Generate key exchange data
+        debug!("Generating key exchange data");
         let public_key = self
             .engine
             .crypto_context_mut()
             .generate_key_exchange()
             .map_err(|e| Error::CryptoError(format!("Failed to generate key exchange: {}", e)))?;
+
+        debug!("Generated public key size: {} bytes", public_key.len());
 
         // Send client key exchange message
         self.engine
@@ -500,6 +580,7 @@ impl Client {
     }
 
     fn derive_and_send_keys(&mut self) -> Result<(), Error> {
+        debug!("Deriving keys and sending ChangeCipherSpec");
         let cipher_suite = match self.cipher_suite {
             Some(cs) => cs,
             None => {
@@ -508,6 +589,8 @@ impl Client {
                 ))
             }
         };
+
+        debug!("Using cipher suite for key derivation: {:?}", cipher_suite);
 
         let server_random = match &self.server_random {
             Some(sr) => sr,
@@ -526,17 +609,28 @@ impl Client {
         self.random.serialize(&mut client_random);
         server_random.serialize(&mut server_random_vec);
 
+        debug!(
+            "Deriving master secret using client random ({} bytes) and server random ({} bytes)",
+            client_random.len(),
+            server_random_vec.len()
+        );
+
         // Derive master secret
         self.engine
             .crypto_context_mut()
             .derive_master_secret(&client_random, &server_random_vec)
             .map_err(|e| Error::CryptoError(format!("Failed to derive master secret: {}", e)))?;
 
+        debug!("Master secret derived successfully");
+
         // Derive the encryption/decryption keys
+        debug!("Deriving encryption/decryption keys");
         self.engine
             .crypto_context_mut()
             .derive_keys(cipher_suite, &client_random, &server_random_vec)
             .map_err(|e| Error::CryptoError(format!("Failed to derive keys: {}", e)))?;
+
+        debug!("Encryption/decryption keys derived successfully, sending ChangeCipherSpec");
 
         // Send change cipher spec
         self.engine
@@ -548,6 +642,7 @@ impl Client {
 
         // Enable client encryption
         self.engine.enable_client_encryption();
+        debug!("Client encryption enabled");
 
         // Send finished message with verify data
         self.send_finished_message()?;
@@ -556,8 +651,11 @@ impl Client {
     }
 
     fn send_finished_message(&mut self) -> Result<(), Error> {
+        debug!("Sending Finished message to complete handshake");
         // Calculate verify data for Finished message using PRF
         let verify_data = self.generate_verify_data(true)?;
+
+        debug!("Generated verify data for Finished message (12 bytes)");
 
         // Send finished message
         let finished = Finished::new(&verify_data);
@@ -570,7 +668,13 @@ impl Client {
     }
 
     fn generate_verify_data(&self, is_client: bool) -> Result<[u8; 12], Error> {
+        debug!(
+            "Generating verify data for {}, using handshake hash",
+            if is_client { "client" } else { "server" }
+        );
         let handshake_hash = self.engine.handshake_hash_finalize();
+
+        debug!("Handshake hash size: {} bytes", handshake_hash.len());
 
         let verify_data_vec = self
             .engine
@@ -591,20 +695,22 @@ impl Client {
     fn process_server_finished(&mut self) -> Result<(), Error> {
         // Generate expected verify data before the loop to avoid borrow issues
         let expected = self.generate_verify_data(false)?;
+        debug!("Generated expected server verify data, waiting for server Finished message");
 
         // First check for ChangeCipherSpec record
         if let Some(incoming) = self.engine.next_incoming() {
             for record in incoming.records().iter() {
                 if record.record.content_type == ContentType::ChangeCipherSpec {
+                    debug!("Received server ChangeCipherSpec, enabling server encryption");
                     // Server changed encryption state
                     self.engine.enable_server_encryption();
-                    debug!("Server encryption enabled after ChangeCipherSpec");
                 }
             }
         }
 
         // Wait for server finished message
         let Some(mut flight) = self.engine.has_flight(MessageType::Finished) else {
+            debug!("Waiting for server Finished message");
             return Ok(());
         };
 
@@ -619,7 +725,16 @@ impl Client {
             // Update state based on message type
             state = state.handle(handshake.header.msg_type)?;
 
+            debug!(
+                "Received handshake message: {:?}, sequence: {}",
+                handshake.header.msg_type, handshake.header.message_seq
+            );
+
             if !matches!(handshake.header.msg_type, MessageType::Finished) {
+                debug!(
+                    "Expected Finished message, got: {:?}",
+                    handshake.header.msg_type
+                );
                 return Err(Error::UnexpectedMessage(format!(
                     "Unexpected message type: {:?}",
                     handshake.header.msg_type
@@ -630,27 +745,38 @@ impl Client {
                 panic!("Finished message should have been parsed");
             };
 
+            debug!("Processing server Finished message, verifying data");
+
             // If verification fails, return an error
             if finished.verify_data != expected {
+                debug!("Server Finished verification failed, data mismatch");
                 return Err(Error::SecurityError(
                     "Server Finished verification failed".to_string(),
                 ));
             }
 
+            debug!("Server Finished verified successfully, handshake complete, state=Running");
             // Handshake is complete
             self.state = ClientState::Running;
 
             // Emit Connected event
             self.engine.push_connected();
+            debug!("Connection established event sent");
 
             // Extract and emit SRTP keying material if we have a negotiated profile
             if let Some(profile) = self.negotiated_srtp_profile {
+                debug!("Extracting SRTP keying material for profile: {:?}", profile);
                 if let Ok(keying_material) = self
                     .engine
                     .crypto_context()
                     .extract_srtp_keying_material(profile)
                 {
                     // Emit the keying material event with the negotiated profile
+                    debug!(
+                        "SRTP keying material extracted ({} bytes) for profile: {:?}",
+                        keying_material.len(),
+                        profile
+                    );
                     self.engine.push_keying_material(keying_material, profile);
                 }
             }
@@ -662,21 +788,25 @@ impl Client {
 
     /// Send a CertificateVerify message to prove possession of the private key
     fn send_certificate_verify(&mut self) -> Result<(), Error> {
+        debug!("Sending CertificateVerify to prove client certificate ownership");
         // Get the cipher suite to determine the hash algorithm
         // Unwrap because we should not be here without a ServerHello.
         let cipher_suite = self.cipher_suite.unwrap();
 
         // Get the hash algorithm from the cipher suite
         let hash_alg = cipher_suite.hash_algorithm();
+        debug!("Using hash algorithm for signature: {:?}", hash_alg);
 
         // Get the signature algorithm type
         let sig_alg = self.engine.crypto_context().get_certificate_type();
+        debug!("Using signature algorithm: {:?}", sig_alg);
 
         // Create the signature algorithm
         let algorithm = SignatureAndHashAlgorithm::new(hash_alg, sig_alg);
 
         // The handshake hash is all handshake up until before the CertificateVerify message
         let handshake_hash = self.engine.handshake_hash_finalize();
+        debug!("Signing handshake hash ({} bytes)", handshake_hash.len());
 
         // Sign all handshake messages
         let signature = self
@@ -684,6 +814,8 @@ impl Client {
             .crypto_context()
             .sign_data(&handshake_hash, hash_alg)
             .map_err(|e| Error::CryptoError(format!("Failed to sign handshake messages: {}", e)))?;
+
+        debug!("Generated signature size: {} bytes", signature.len());
 
         // Create the digitally signed structure
         let digitally_signed = DigitallySigned::new(algorithm, &signature);
@@ -706,8 +838,18 @@ impl Client {
     /// after the handshake is complete.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         if !matches!(self.state, ClientState::Running) {
+            debug!(
+                "Attempted to send application data while not in Running state: {:?}",
+                self.state
+            );
             return Err(Error::UnexpectedMessage("Not in Running state".to_string()));
         }
+
+        debug!(
+            "Sending application data: {} bytes with cipher suite: {:?}",
+            data.len(),
+            self.cipher_suite.unwrap_or(CipherSuite::Unknown(0))
+        );
 
         // Use the engine's create_record to send application data
         // The encryption is now handled in the engine
