@@ -113,15 +113,6 @@ impl Engine {
 
         let incoming = Incoming::parse_packet(packet, c, buffer)?;
 
-        // If this is a handshake message, update the hash
-        for record in incoming.records().iter() {
-            if record.record.content_type == ContentType::Handshake {
-                if record.handshake.is_some() {
-                    self.handshake_hash.update(record.record.fragment);
-                }
-            }
-        }
-
         self.insert_incoming(incoming)?;
 
         Ok(())
@@ -289,8 +280,13 @@ impl Engine {
             // Handled in previous iteration
             .skip_while(|h| h.handled.get());
 
-        // Get the cipher suite from the crypto context
-        let (handshake, next_type) = Handshake::defragment(iter, defragment_buffer, cipher_suite)?;
+        let (handshake, next_type) = Handshake::defragment(
+            iter,
+            defragment_buffer,
+            cipher_suite,
+            self.is_client,
+            &mut self.handshake_hash,
+        )?;
 
         // Update the flight with the next message type, this eventually returns None
         // and that makes the flight complete.
@@ -335,7 +331,7 @@ impl Engine {
     /// Create a DTLS record and serialize it into a buffer
     pub fn create_record<F>(&mut self, content_type: ContentType, f: F) -> Result<(), Error>
     where
-        F: FnOnce(&mut Vec<u8>),
+        F: FnOnce(&mut Vec<u8>) -> Option<MessageType>,
     {
         // Check if the queue has reached the maximum size before creating a new buffer
         if self.queue_tx.len() >= self.config.max_queue_tx {
@@ -346,12 +342,13 @@ impl Engine {
         let mut fragment = self.buffers_free.pop();
 
         // Let the callback fill the fragment
-        f(&mut fragment);
+        let maybe_msg_type = f(&mut fragment);
 
         // As long as we're handshaking, update the hash with the fragment. This
         // becomes a no-op once we consumed the hashes.
-        if !self.is_encryption_enabled() {
-            self.handshake_hash.update(&fragment);
+        if let Some(msg_type) = maybe_msg_type {
+            self.handshake_hash
+                .update(self.is_client, msg_type, &fragment);
         }
 
         // Create the record
@@ -428,6 +425,7 @@ impl Engine {
         // Now create the record with the serialized handshake
         self.create_record(ContentType::Handshake, |fragment| {
             handshake.serialize(fragment);
+            Some(msg_type)
         })
     }
 
@@ -575,10 +573,6 @@ impl Engine {
         Ok(())
     }
 
-    fn is_encryption_enabled(&self) -> bool {
-        self.client_encryption_enabled || self.server_encryption_enabled
-    }
-
     pub fn handshake_hash_finalize(&self) -> Vec<u8> {
         self.handshake_hash.finalize()
     }
@@ -603,17 +597,23 @@ pub struct Flight {
     current: Option<MessageType>,
 }
 
-enum StoreThenHash {
+pub(crate) enum StoreThenHash {
     Store(Vec<u8>),
     Hash(Hash),
 }
 
 impl StoreThenHash {
-    fn new() -> Self {
+    pub fn new() -> Self {
         StoreThenHash::Store(Vec::new())
     }
 
-    fn update(&mut self, data: &[u8]) {
+    pub fn update(&mut self, is_client: bool, msg_type: MessageType, data: &[u8]) {
+        trace!(
+            "Updating handshake hash: {}->{:?} {} bytes",
+            if is_client { "Client" } else { "Server" },
+            msg_type,
+            data.len()
+        );
         match self {
             StoreThenHash::Store(vec) => vec.extend_from_slice(data),
             StoreThenHash::Hash(hash) => hash.update(data),
@@ -635,6 +635,7 @@ impl StoreThenHash {
     }
 
     fn finalize(&self) -> Vec<u8> {
+        trace!("Finalizing handshake hash");
         let StoreThenHash::Hash(hash) = self else {
             panic!("StoreThenHash not a hash");
         };

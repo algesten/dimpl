@@ -543,6 +543,7 @@ impl Client {
             .create_record(ContentType::ChangeCipherSpec, |body| {
                 // Change cipher spec is just a single byte with value 1
                 body.push(1);
+                None
             })?;
 
         // Enable client encryption
@@ -713,6 +714,7 @@ impl Client {
         self.engine
             .create_record(ContentType::ApplicationData, |body| {
                 body.extend_from_slice(data);
+                None
             })?;
 
         Ok(())
