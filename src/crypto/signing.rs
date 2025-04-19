@@ -39,12 +39,14 @@ pub fn sign_rsa(
 /// Sign data using ECDSA with the provided private key
 pub fn sign_ecdsa_p256(signing_key: &P256SigningKey, data: &[u8]) -> Result<Vec<u8>, String> {
     let signature: P256Signature = signing_key.sign(data);
-    Ok(signature.to_der().to_vec())
+    // Use raw format (r || s) instead of DER for TLS compatibility
+    Ok(signature.to_bytes().to_vec())
 }
 
 pub fn sign_ecdsa_p384(signing_key: &P384SigningKey, data: &[u8]) -> Result<Vec<u8>, String> {
     let signature: P384Signature = signing_key.sign(data);
-    Ok(signature.to_der().to_vec())
+    // Use raw format (r || s) instead of DER for TLS compatibility
+    Ok(signature.to_bytes().to_vec())
 }
 
 /// Sign data using the provided parsed key and hash algorithm

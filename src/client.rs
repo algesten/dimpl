@@ -396,9 +396,8 @@ impl Client {
     fn send_client_cert_and_keys(&mut self) -> Result<(), Error> {
         self.send_client_certificate()?;
         self.send_client_key_exchange()?;
-        if self.certificate_requested {
-            self.send_certificate_verify()?;
-        }
+        self.send_certificate_verify()?;
+
         self.derive_and_send_keys()?;
 
         Ok(())
