@@ -62,9 +62,6 @@ pub struct Client {
     /// Server certificates
     server_certificates: Vec<Vec<u8>>,
 
-    /// Server encryption enabled flag - set when server ChangeCipherSpec is received
-    server_encryption_enabled: bool,
-
     /// Buffer for defragmenting handshakes
     defragment_buffer: Vec<u8>,
 }
@@ -120,7 +117,6 @@ impl Client {
             engine,
             server_random: None,
             server_certificates: Vec::new(),
-            server_encryption_enabled: false,
             negotiated_srtp_profile: None,
             extension_data: Vec::with_capacity(256), // Pre-allocate extension data buffer
             defragment_buffer: Vec::new(),
@@ -600,7 +596,6 @@ impl Client {
             for record in incoming.records().iter() {
                 if record.record.content_type == ContentType::ChangeCipherSpec {
                     // Server changed encryption state
-                    self.server_encryption_enabled = true;
                     self.engine.enable_server_encryption();
                     debug!("Server encryption enabled after ChangeCipherSpec");
                 }
