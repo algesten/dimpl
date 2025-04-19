@@ -20,9 +20,9 @@ use tinyvec::array_vec;
 use crate::crypto::{CertVerifier, SrtpProfile};
 use crate::engine::Engine;
 use crate::message::{
-    Body, CertificateRequest, CertificateVerify, ClientDiffieHellmanPublic, ClientEcdhKeys,
-    ClientHello, ClientKeyExchange, CompressionMethod, ContentType, Cookie, DigitallySigned,
-    ExchangeKeys, ExtensionType, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion,
+    Body, CertificateVerify, ClientDiffieHellmanPublic, ClientEcdhKeys, ClientHello,
+    ClientKeyExchange, CompressionMethod, ContentType, Cookie, DigitallySigned, ExchangeKeys,
+    ExtensionType, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion,
     PublicValueEncoding, Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension,
 };
 use crate::message::{CipherSuite, HashAlgorithm};
@@ -61,9 +61,6 @@ pub struct Client {
 
     /// Flag indicating if the client certificate was requested
     certificate_requested: bool,
-
-    /// Certificate request details (for client auth)
-    _certificate_request: Option<CertificateRequest<'static>>,
 
     /// Server certificates
     server_certificates: Vec<Vec<u8>>,
@@ -126,7 +123,6 @@ impl Client {
             engine,
             server_random: None,
             certificate_requested: false,
-            _certificate_request: None,
             server_certificates: Vec::new(),
             server_encryption_enabled: false,
             negotiated_srtp_profile: None,
@@ -337,6 +333,20 @@ impl Client {
                 }
 
                 MessageType::CertificateRequest => {
+                    let Body::CertificateRequest(cr) = &handshake.body else {
+                        panic!("CertificateRequest message should have been parsed");
+                    };
+
+                    // Check that the hash algorithm we selected in the ServerHello
+                    // is one of the supported by the CertificateRequest
+                    let hash_algorithm = self.cipher_suite.unwrap().hash_algorithm();
+                    if !cr.supports_hash_algorithm(hash_algorithm) {
+                        return Err(Error::CertificateError(format!(
+                            "Unsupported hash algorithm: {:?}",
+                            hash_algorithm
+                        )));
+                    }
+
                     self.certificate_requested = true;
                 }
 

@@ -82,6 +82,13 @@ impl<'a> CertificateRequest<'a> {
             output.extend_from_slice(name);
         }
     }
+
+    /// Checks if the CertificateRequest supports a specific hash algorithm
+    pub fn supports_hash_algorithm(&self, hash_algorithm: super::HashAlgorithm) -> bool {
+        self.supported_signature_algorithms
+            .iter()
+            .any(|algo| algo.hash == hash_algorithm)
+    }
 }
 
 #[cfg(test)]
