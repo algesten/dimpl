@@ -267,6 +267,7 @@ impl Client {
 
                     self.cookie = Some(hello_verify.cookie.clone());
                     self.state = ClientState::SendClientHello;
+                    self.engine.reset_handshake_seq_no();
                     return Ok(());
                 }
 
@@ -281,12 +282,9 @@ impl Client {
                     self.server_random = Some(server_hello.random.clone());
 
                     // Initialize the key exchange based on selected cipher suite
-                    self.engine
-                        .crypto_context_mut()
-                        .init_key_exchange(cs)
-                        .map_err(|e| {
-                            Error::CryptoError(format!("Failed to initialize key exchange: {}", e))
-                        })?;
+                    self.engine.init_cipher_suite(cs).map_err(|e| {
+                        Error::CryptoError(format!("Failed to initialize key exchange: {}", e))
+                    })?;
 
                     // Check for use_srtp extension to get the negotiated SRTP profile
                     if let Some(extensions) = &server_hello.extensions {
@@ -572,10 +570,12 @@ impl Client {
     }
 
     fn generate_verify_data(&self, is_client: bool) -> Result<[u8; 12], Error> {
+        let handshake_hash = self.engine.handshake_hash_finalize();
+
         let verify_data_vec = self
             .engine
             .crypto_context()
-            .generate_verify_data(self.engine.handshake_messages(), is_client)
+            .generate_verify_data(&handshake_hash, is_client)
             .map_err(|e| Error::CryptoError(format!("Failed to generate verify data: {}", e)))?;
 
         if verify_data_vec.len() != 12 {
@@ -676,11 +676,14 @@ impl Client {
         // Create the signature algorithm
         let algorithm = SignatureAndHashAlgorithm::new(hash_alg, sig_alg);
 
+        // The handshake hash is all handshake up until before the CertificateVerify message
+        let handshake_hash = self.engine.handshake_hash_finalize();
+
         // Sign all handshake messages
         let signature = self
             .engine
             .crypto_context()
-            .sign_data(self.engine.handshake_messages(), hash_alg)
+            .sign_data(&handshake_hash, hash_alg)
             .map_err(|e| Error::CryptoError(format!("Failed to sign handshake messages: {}", e)))?;
 
         // Create the digitally signed structure

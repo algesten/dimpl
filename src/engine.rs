@@ -2,13 +2,13 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
-use std::u16;
 
 use crate::buffer::{Buffer, BufferPool};
-use crate::crypto::{CertVerifier, CryptoContext, KeyingMaterial, SrtpProfile};
+use crate::crypto::{CertVerifier, CryptoContext, Hash, KeyingMaterial, SrtpProfile};
 use crate::incoming::Incoming;
 use crate::message::{
-    CipherSuite, ContentType, DTLSRecord, Handshake, MessageType, ProtocolVersion, Sequence,
+    CipherSuite, ContentType, DTLSRecord, Handshake, HashAlgorithm, MessageType, ProtocolVersion,
+    Sequence,
 };
 use crate::{Config, Error, Output};
 
@@ -39,9 +39,6 @@ pub(crate) struct Engine {
     /// Cryptographic context for handling encryption/decryption
     crypto_context: CryptoContext,
 
-    /// Handshake messages collected for CertificateVerify signature
-    handshake_messages: Vec<u8>,
-
     /// Server encryption enabled flag
     server_encryption_enabled: bool,
 
@@ -56,6 +53,9 @@ pub(crate) struct Engine {
 
     /// Next handshake message sequence number for sending
     next_handshake_seq_no: u16,
+
+    /// Hash of handshake messages.
+    handshake_hash: StoreThenHash,
 }
 
 impl Engine {
@@ -75,12 +75,12 @@ impl Engine {
             queue_events: VecDeque::new(),
             last_packet: None,
             crypto_context: CryptoContext::new(certificate, private_key, cert_verifier),
-            handshake_messages: Vec::new(),
             server_encryption_enabled: false,
             client_encryption_enabled: false,
             is_client,
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
+            handshake_hash: StoreThenHash::new(),
         }
     }
 
@@ -92,19 +92,6 @@ impl Engine {
     /// Get a mutable reference to the crypto context
     pub fn crypto_context_mut(&mut self) -> &mut CryptoContext {
         &mut self.crypto_context
-    }
-
-    /// Get a reference to the handshake messages buffer
-    pub fn handshake_messages(&self) -> &[u8] {
-        &self.handshake_messages
-    }
-
-    /// Add handshake message to the buffer
-    pub fn add_handshake_message(&mut self, message: &[u8]) {
-        // Only buffer messages before CertificateVerify
-        if !self.client_encryption_enabled && !self.server_encryption_enabled {
-            self.handshake_messages.extend_from_slice(message);
-        }
     }
 
     /// Enable server encryption
@@ -126,14 +113,11 @@ impl Engine {
 
         let incoming = Incoming::parse_packet(packet, c, buffer)?;
 
-        // If this is a handshake message, save it for CertificateVerify
+        // If this is a handshake message, update the hash
         for record in incoming.records().iter() {
             if record.record.content_type == ContentType::Handshake {
-                if let Some(handshake) = &record.handshake {
-                    // Serialize the handshake message and add it to the buffer
-                    let mut handshake_data = Vec::new();
-                    handshake.serialize(&mut handshake_data);
-                    self.add_handshake_message(&handshake_data);
+                if record.handshake.is_some() {
+                    self.handshake_hash.update(record.record.fragment);
                 }
             }
         }
@@ -364,6 +348,12 @@ impl Engine {
         // Let the callback fill the fragment
         f(&mut fragment);
 
+        // As long as we're handshaking, update the hash with the fragment. This
+        // becomes a no-op once we consumed the hashes.
+        if !self.is_encryption_enabled() {
+            self.handshake_hash.update(&fragment);
+        }
+
         // Create the record
         let sequence = self.next_sequence_tx.clone();
         let length = fragment.len() as u16;
@@ -419,7 +409,7 @@ impl Engine {
         f(&mut body_buffer);
 
         // Create the handshake header with the next sequence number
-        let header = Handshake {
+        let handshake = Handshake {
             header: crate::message::Header {
                 msg_type,
                 length: body_buffer.len() as u32,
@@ -434,18 +424,9 @@ impl Engine {
         // Increment the sequence number for the next handshake message
         self.next_handshake_seq_no += 1;
 
-        // Save this handshake message for future CertificateVerify
-        let mut handshake_data = Vec::new();
-        header.serialize(&mut handshake_data);
-        self.add_handshake_message(&handshake_data);
-
-        // Serialize the handshake into a temp buffer
-        let mut handshake_buffer = Vec::new();
-        header.serialize(&mut handshake_buffer);
-
         // Now create the record with the serialized handshake
         self.create_record(ContentType::Handshake, |fragment| {
-            fragment.extend_from_slice(&handshake_buffer);
+            handshake.serialize(fragment);
         })
     }
 
@@ -587,10 +568,71 @@ impl Engine {
         }
         Ok(())
     }
+
+    fn is_encryption_enabled(&self) -> bool {
+        self.client_encryption_enabled || self.server_encryption_enabled
+    }
+
+    pub fn handshake_hash_finalize(&self) -> Vec<u8> {
+        self.handshake_hash.finalize()
+    }
+
+    pub(crate) fn init_cipher_suite(&mut self, cs: CipherSuite) -> Result<(), String> {
+        // Now that we know which hash to use, convert the hashes to hash as we go.
+        let algorithm = cs.hash_algorithm();
+        self.handshake_hash.convert_to_hash(algorithm);
+
+        // Initialize the cipher suite
+        self.crypto_context.init_cipher_suite(cs)
+    }
+
+    pub(crate) fn reset_handshake_seq_no(&mut self) {
+        self.next_handshake_seq_no = 0;
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Flight {
     to: MessageType,
     current: Option<MessageType>,
+}
+
+enum StoreThenHash {
+    Store(Vec<u8>),
+    Hash(Hash),
+}
+
+impl StoreThenHash {
+    fn new() -> Self {
+        StoreThenHash::Store(Vec::new())
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        match self {
+            StoreThenHash::Store(vec) => vec.extend_from_slice(data),
+            StoreThenHash::Hash(hash) => hash.update(data),
+        }
+    }
+
+    fn convert_to_hash(&mut self, algorithm: HashAlgorithm) {
+        let StoreThenHash::Store(vec) = self else {
+            panic!("StoreThenHash already converted to hash");
+        };
+
+        let mut hash = Hash::new(algorithm);
+
+        // Update the hash with the data stored up until this point.
+        hash.update(vec);
+
+        // Convert to hash
+        *self = StoreThenHash::Hash(hash);
+    }
+
+    fn finalize(&self) -> Vec<u8> {
+        let StoreThenHash::Hash(hash) = self else {
+            panic!("StoreThenHash not a hash");
+        };
+
+        hash.clone_and_finalize()
+    }
 }

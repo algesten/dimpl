@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256, Sha384};
 
 // Internal module imports
 mod encryption;
+mod hash;
 mod key_exchange;
 mod keying;
 mod prf;
@@ -26,6 +27,7 @@ mod signing;
 
 // Public re-exports
 pub use encryption::{AesGcm, Cipher};
+pub use hash::Hash;
 pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
 pub use keying::{KeyingMaterial, SrtpProfile};
 pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
@@ -236,8 +238,8 @@ impl CryptoContext {
         }
     }
 
-    /// Initialize key exchange based on cipher suite
-    pub fn init_key_exchange(&mut self, cipher_suite: CipherSuite) -> Result<(), String> {
+    /// Initialize engine based on cipher suite
+    pub fn init_cipher_suite(&mut self, cipher_suite: CipherSuite) -> Result<(), String> {
         self.key_exchange = Some(match cipher_suite.as_key_exchange_algorithm() {
             KeyExchangeAlgorithm::EECDH => {
                 // Use P-256 as the default curve
