@@ -595,65 +595,70 @@ impl Client {
     }
 
     fn process_server_finished(&mut self) -> Result<(), Error> {
-        // Wait for server change cipher spec and finished messages
-        while let Some(incoming) = self.engine.next_incoming() {
-            let records = incoming.records();
+        // Generate expected verify data before the loop to avoid borrow issues
+        let expected = self.generate_verify_data(false)?;
 
-            for i in 0..records.len() {
-                let record = &records[i];
+        // First check for ChangeCipherSpec record
+        if let Some(incoming) = self.engine.next_incoming() {
+            for record in incoming.records().iter() {
+                if record.record.content_type == ContentType::ChangeCipherSpec {
+                    // Server changed encryption state
+                    self.server_encryption_enabled = true;
+                    self.engine.enable_server_encryption();
+                    debug!("Server encryption enabled after ChangeCipherSpec");
+                }
+            }
+        }
 
-                match record.record.content_type {
-                    ContentType::ChangeCipherSpec => {
-                        // Server changed encryption state
-                        self.server_encryption_enabled = true;
-                        self.engine.enable_server_encryption();
-                        debug!("Server encryption enabled after ChangeCipherSpec");
-                    }
-                    ContentType::Handshake => {
-                        let handshake = match &record.handshake {
-                            Some(h) => h,
-                            None => continue,
-                        };
+        // Wait for server finished message
+        let Some(mut flight) = self.engine.has_flight(MessageType::Finished) else {
+            return Ok(());
+        };
 
-                        if handshake.header.msg_type != MessageType::Finished {
-                            continue;
-                        }
+        // Start in HandshakePhaseComplete state since we've already received ServerHelloDone
+        let mut state = HandshakeState::HandshakePhaseComplete;
 
-                        let Body::Finished(finished) = &handshake.body else {
-                            continue;
-                        };
+        while let Some(handshake) = self.engine.next_from_flight(
+            &mut flight,
+            &mut self.defragment_buffer,
+            self.cipher_suite,
+        )? {
+            // Update state based on message type
+            state = state.handle(handshake.header.msg_type)?;
 
-                        // Verify the server's verify_data
-                        let expected = self.generate_verify_data(false)?;
+            if !matches!(handshake.header.msg_type, MessageType::Finished) {
+                return Err(Error::UnexpectedMessage(format!(
+                    "Unexpected message type: {:?}",
+                    handshake.header.msg_type
+                )));
+            }
 
-                        // If verification fails, return an error
-                        if finished.verify_data != expected {
-                            return Err(Error::SecurityError(
-                                "Server Finished verification failed".to_string(),
-                            ));
-                        }
+            let Body::Finished(finished) = &handshake.body else {
+                panic!("Finished message should have been parsed");
+            };
 
-                        // Handshake is complete
-                        self.state = ClientState::Running;
+            // If verification fails, return an error
+            if finished.verify_data != expected {
+                return Err(Error::SecurityError(
+                    "Server Finished verification failed".to_string(),
+                ));
+            }
 
-                        // Emit Connected event
-                        self.engine.push_connected();
+            // Handshake is complete
+            self.state = ClientState::Running;
 
-                        // Extract and emit SRTP keying material if we have a negotiated profile
-                        if let Some(profile) = self.negotiated_srtp_profile {
-                            if let Ok(keying_material) = self
-                                .engine
-                                .crypto_context()
-                                .extract_srtp_keying_material(profile)
-                            {
-                                // Emit the keying material event with the negotiated profile
-                                self.engine.push_keying_material(keying_material, profile);
-                            }
-                        }
+            // Emit Connected event
+            self.engine.push_connected();
 
-                        return Ok(());
-                    }
-                    _ => {}
+            // Extract and emit SRTP keying material if we have a negotiated profile
+            if let Some(profile) = self.negotiated_srtp_profile {
+                if let Ok(keying_material) = self
+                    .engine
+                    .crypto_context()
+                    .extract_srtp_keying_material(profile)
+                {
+                    // Emit the keying material event with the negotiated profile
+                    self.engine.push_keying_material(keying_material, profile);
                 }
             }
         }
