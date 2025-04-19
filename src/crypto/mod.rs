@@ -33,7 +33,7 @@ pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
 // Message-related imports
 use crate::message::{
     Asn1Cert, Certificate, CipherSuite, CurveType, HashAlgorithm, KeyExchangeAlgorithm, NamedCurve,
-    ServerKeyExchangeParams, SignatureAlgorithm, SignatureAndHashAlgorithm,
+    ServerKeyExchangeParams, SignatureAlgorithm,
 };
 
 use sec1::der::Decode;
@@ -41,26 +41,41 @@ use sec1::EcPrivateKey;
 
 /// A parsed private key with its associated signature algorithm
 pub enum ParsedKey {
-    /// P-256 ECDSA key with SHA-256
+    /// P-256 ECDSA key
     P256(P256SigningKey),
-    /// P-384 ECDSA key with SHA-384
+    /// P-384 ECDSA key
     P384(P384SigningKey),
-    /// RSA key with SHA-256
+    /// RSA key
     Rsa(RsaPrivateKey),
 }
 
 impl ParsedKey {
-    /// Get the signature algorithm for this key
-    pub fn signature_algorithm(&self) -> SignatureAndHashAlgorithm {
+    /// Get the signature algorithm type for this key
+    pub fn signature_algorithm_type(&self) -> SignatureAlgorithm {
         match self {
-            ParsedKey::P256(_) => {
-                SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA)
-            }
-            ParsedKey::P384(_) => {
-                SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::ECDSA)
+            ParsedKey::P256(_) | ParsedKey::P384(_) => SignatureAlgorithm::ECDSA,
+            ParsedKey::Rsa(_) => SignatureAlgorithm::RSA,
+        }
+    }
+
+    /// Check if this key is compatible with a given cipher suite
+    pub fn is_compatible(&self, cipher_suite: CipherSuite) -> bool {
+        match self {
+            ParsedKey::P256(_) | ParsedKey::P384(_) => {
+                matches!(
+                    cipher_suite,
+                    CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+                        | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+                )
             }
             ParsedKey::Rsa(_) => {
-                SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA)
+                matches!(
+                    cipher_suite,
+                    CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+                        | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
+                        | CipherSuite::DHE_RSA_AES256_GCM_SHA384
+                        | CipherSuite::DHE_RSA_AES128_GCM_SHA256
+                )
             }
         }
     }
@@ -219,11 +234,6 @@ impl CryptoContext {
             cert_verifier,
             parsed_client_key,
         }
-    }
-
-    /// Get the signature algorithm for the client's private key
-    pub fn get_signature_algorithm(&self) -> SignatureAndHashAlgorithm {
-        self.parsed_client_key.signature_algorithm()
     }
 
     /// Initialize key exchange based on cipher suite
@@ -462,9 +472,9 @@ impl CryptoContext {
 
     /// Sign the provided data using the client's private key
     /// Returns the signature or an error if signing fails
-    pub fn sign_data(&self, data: &[u8]) -> Result<Vec<u8>, String> {
+    pub fn sign_data(&self, data: &[u8], hash_alg: HashAlgorithm) -> Result<Vec<u8>, String> {
         // Use the signing module to sign the data
-        signing::sign_data(&self.parsed_client_key, data)
+        signing::sign_data(&self.parsed_client_key, data, hash_alg)
     }
 
     /// Calculate a hash using the specified algorithm
@@ -551,7 +561,12 @@ impl CryptoContext {
     }
 
     pub fn get_certificate_type(&self) -> SignatureAlgorithm {
-        self.parsed_client_key.signature_algorithm().signature
+        self.parsed_client_key.signature_algorithm_type()
+    }
+
+    /// Check if the client's private key is compatible with a given cipher suite
+    pub fn is_cipher_suite_compatible(&self, cipher_suite: CipherSuite) -> bool {
+        self.parsed_client_key.is_compatible(cipher_suite)
     }
 }
 

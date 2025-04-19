@@ -47,10 +47,14 @@ pub fn sign_ecdsa_p384(signing_key: &P384SigningKey, data: &[u8]) -> Result<Vec<
     Ok(signature.to_der().to_vec())
 }
 
-/// Sign data using the provided parsed key and signature algorithm
-pub fn sign_data(parsed_key: &ParsedKey, data: &[u8]) -> Result<Vec<u8>, String> {
+/// Sign data using the provided parsed key and hash algorithm
+pub fn sign_data(
+    parsed_key: &ParsedKey,
+    data: &[u8],
+    hash_alg: HashAlgorithm,
+) -> Result<Vec<u8>, String> {
     match parsed_key {
-        ParsedKey::Rsa(private_key) => sign_rsa(private_key, data, HashAlgorithm::SHA256),
+        ParsedKey::Rsa(private_key) => sign_rsa(private_key, data, hash_alg),
         ParsedKey::P256(signing_key) => sign_ecdsa_p256(signing_key, data),
         ParsedKey::P384(signing_key) => sign_ecdsa_p384(signing_key, data),
     }

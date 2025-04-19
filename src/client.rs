@@ -20,11 +20,12 @@ use tinyvec::array_vec;
 use crate::crypto::{CertVerifier, SrtpProfile};
 use crate::engine::Engine;
 use crate::message::{
-    Body, CertificateRequest, CertificateVerify, CipherSuite, ClientDiffieHellmanPublic,
-    ClientEcdhKeys, ClientHello, ClientKeyExchange, CompressionMethod, ContentType, Cookie,
-    DigitallySigned, ExchangeKeys, ExtensionType, Finished, KeyExchangeAlgorithm, MessageType,
-    ProtocolVersion, PublicValueEncoding, Random, SessionId, UseSrtpExtension,
+    Body, CertificateRequest, CertificateVerify, ClientDiffieHellmanPublic, ClientEcdhKeys,
+    ClientHello, ClientKeyExchange, CompressionMethod, ContentType, Cookie, DigitallySigned,
+    ExchangeKeys, ExtensionType, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion,
+    PublicValueEncoding, Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension,
 };
+use crate::message::{CipherSuite, HashAlgorithm};
 use crate::{Config, Error, Output};
 
 /// DTLS client
@@ -203,7 +204,19 @@ impl Client {
 
         // Get compatible cipher suites
         let compatible_suites = CipherSuite::compatible_with_certificate(cert_type);
-        cipher_suites.extend(compatible_suites.iter().cloned().take(32));
+
+        // Filter cipher suites based on the client's private key
+        let filtered_suites: Vec<CipherSuite> = compatible_suites
+            .iter()
+            .filter(|suite| {
+                self.engine
+                    .crypto_context()
+                    .is_cipher_suite_compatible(**suite)
+            })
+            .cloned()
+            .collect();
+
+        cipher_suites.extend(filtered_suites.into_iter().take(32));
 
         let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
@@ -262,12 +275,12 @@ impl Client {
                         return Ok(());
                     };
 
-                    self.cipher_suite = Some(server_hello.cipher_suite);
+                    let cs = server_hello.cipher_suite;
+                    self.cipher_suite = Some(cs);
                     self.session_id = Some(server_hello.session_id.clone());
                     self.server_random = Some(server_hello.random.clone());
 
                     // Initialize the key exchange based on selected cipher suite
-                    let cs = server_hello.cipher_suite;
                     self.engine
                         .crypto_context_mut()
                         .init_key_exchange(cs)
@@ -651,14 +664,24 @@ impl Client {
 
     /// Send a CertificateVerify message to prove possession of the private key
     fn send_certificate_verify(&mut self) -> Result<(), Error> {
-        // Get the signature algorithm recommended for this client
-        let algorithm = self.engine.crypto_context().get_signature_algorithm();
+        // Get the cipher suite to determine the hash algorithm
+        // Unwrap because we should not be here without a ServerHello.
+        let cipher_suite = self.cipher_suite.unwrap();
+
+        // Get the hash algorithm from the cipher suite
+        let hash_alg = cipher_suite.hash_algorithm();
+
+        // Get the signature algorithm type
+        let sig_alg = self.engine.crypto_context().get_certificate_type();
+
+        // Create the signature algorithm
+        let algorithm = SignatureAndHashAlgorithm::new(hash_alg, sig_alg);
 
         // Sign all handshake messages
         let signature = self
             .engine
             .crypto_context()
-            .sign_data(self.engine.handshake_messages())
+            .sign_data(self.engine.handshake_messages(), hash_alg)
             .map_err(|e| Error::CryptoError(format!("Failed to sign handshake messages: {}", e)))?;
 
         // Create the digitally signed structure
@@ -791,6 +814,20 @@ impl HandshakeState {
                 "Unexpected message {:?} in state {:?}",
                 message, state
             ))),
+        }
+    }
+}
+
+impl CipherSuite {
+    pub fn hash_algorithm(&self) -> HashAlgorithm {
+        match self {
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
+            CipherSuite::ECDHE_RSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
+            CipherSuite::ECDHE_RSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
+            CipherSuite::DHE_RSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
+            CipherSuite::DHE_RSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
+            CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
         }
     }
 }
