@@ -76,4 +76,33 @@ mod tests {
 
         assert_eq!(result, expected);
     }
+
+    #[test]
+    fn test_clone_and_finalize_continues_hashing() {
+        let mut hash = Hash::new(HashAlgorithm::SHA256);
+
+        // First part of the message
+        hash.update(b"hello");
+        hash.update(b" ");
+
+        // Get intermediate hash
+        let intermediate = hash.clone_and_finalize();
+
+        // Continue hashing
+        hash.update(b"world");
+        let final_result = hash.clone_and_finalize();
+
+        // Create a new hash for comparison
+        let mut expected_hash = Hash::new(HashAlgorithm::SHA256);
+        expected_hash.update(b"hello");
+        expected_hash.update(b" ");
+        expected_hash.update(b"world");
+        let expected = expected_hash.clone_and_finalize();
+
+        // Verify the final result matches what we expect
+        assert_eq!(final_result, expected);
+
+        // Verify the intermediate hash is different from the final hash
+        assert_ne!(intermediate, final_result);
+    }
 }
