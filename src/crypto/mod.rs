@@ -456,22 +456,6 @@ impl CryptoContext {
         }
     }
 
-    /// Generate a random nonce for encryption
-    pub fn generate_client_nonce(&self) -> Result<Vec<u8>, String> {
-        match &self.client_cipher {
-            Some(cipher) => Ok(cipher.generate_nonce()),
-            None => Err("Client cipher not initialized".to_string()),
-        }
-    }
-
-    /// Generate a random nonce for decryption
-    pub fn generate_server_nonce(&self) -> Result<Vec<u8>, String> {
-        match &self.server_cipher {
-            Some(cipher) => Ok(cipher.generate_nonce()),
-            None => Err("Server cipher not initialized".to_string()),
-        }
-    }
-
     /// Get client certificate for authentication
     pub fn get_client_certificate(&self) -> Certificate {
         // We validate in constructor, so we can assume we have a certificate
@@ -557,6 +541,16 @@ impl CryptoContext {
     /// Check if the client's private key is compatible with a given cipher suite
     pub fn is_cipher_suite_compatible(&self, cipher_suite: CipherSuite) -> bool {
         self.parsed_client_key.is_compatible(cipher_suite)
+    }
+
+    /// Get client write IV
+    pub fn get_client_write_iv(&self) -> Option<&Vec<u8>> {
+        self.client_write_iv.as_ref()
+    }
+
+    /// Get server write IV
+    pub fn get_server_write_iv(&self) -> Option<&Vec<u8>> {
+        self.server_write_iv.as_ref()
     }
 }
 

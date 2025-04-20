@@ -2,7 +2,6 @@ use aes_gcm::{
     aead::{AeadInPlace, KeyInit},
     Aes128Gcm, Aes256Gcm, Nonce,
 };
-use rand::RngCore;
 
 use crate::buffer::Buffer;
 
@@ -13,9 +12,6 @@ pub trait Cipher {
 
     /// Decrypt ciphertext in-place
     fn decrypt(&self, ciphertext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), String>;
-
-    /// Generate a random nonce suitable for this cipher
-    fn generate_nonce(&self) -> Vec<u8>;
 }
 
 /// AES-GCM implementation with different key sizes
@@ -80,11 +76,5 @@ impl Cipher for AesGcm {
         }?;
 
         Ok(())
-    }
-
-    fn generate_nonce(&self) -> Vec<u8> {
-        let mut nonce = vec![0u8; 12]; // AES-GCM requires a 12-byte nonce
-        rand::thread_rng().fill_bytes(&mut nonce);
-        nonce
     }
 }

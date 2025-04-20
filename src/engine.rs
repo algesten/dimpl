@@ -97,11 +97,23 @@ impl Engine {
     /// Enable server encryption
     pub fn enable_server_encryption(&mut self) {
         self.server_encryption_enabled = true;
+
+        // Start epoch 1 for server
+        if !self.is_client {
+            self.next_sequence_tx.epoch = 1;
+            self.next_sequence_tx.sequence_number = 0;
+        }
     }
 
     /// Enable client encryption
     pub fn enable_client_encryption(&mut self) {
         self.client_encryption_enabled = true;
+
+        // Start epoch 1 for client
+        if self.is_client {
+            self.next_sequence_tx.epoch = 1;
+            self.next_sequence_tx.sequence_number = 0;
+        }
     }
 
     pub fn parse_packet(
@@ -346,8 +358,7 @@ impl Engine {
             self.handshakes.extend_from_slice(&fragment);
         }
 
-        // Create the record
-        let sequence = self.next_sequence_tx.clone();
+        let sequence = self.next_sequence_tx;
         let length = fragment.len() as u16;
 
         // Handle encryption if enabled and content type requires it
@@ -356,7 +367,7 @@ impl Engine {
             let aad = self.create_aad(content_type, &sequence, length);
 
             // Generate nonce
-            let nonce = self.generate_nonce()?;
+            let nonce = self.generate_nonce(&sequence)?;
 
             // Encrypt the fragment in-place
             self.encrypt_data(&mut fragment, &aad, &nonce)?;
@@ -364,7 +375,7 @@ impl Engine {
 
         let record = DTLSRecord {
             content_type,
-            version: ProtocolVersion::DTLS1_0,
+            version: ProtocolVersion::DTLS1_2,
             sequence,
             length: fragment.len() as u16,
             fragment: &fragment,
@@ -424,17 +435,44 @@ impl Engine {
         })
     }
 
-    /// Generate a nonce appropriate for the role (client or server)
-    fn generate_nonce(&self) -> Result<Vec<u8>, Error> {
-        if self.is_client {
-            self.crypto_context
-                .generate_client_nonce()
-                .map_err(|e| Error::CryptoError(format!("Failed to generate client nonce: {}", e)))
+    /// Generate nonce for encryption/decryption
+    /// For AES-GCM in DTLS, the nonce is constructed as:
+    /// IV_LENGTH (4 bytes from key derivation) || SEQUENCE_NUMBER (8 bytes)
+    fn generate_nonce(&self, sequence: &Sequence) -> Result<Vec<u8>, Error> {
+        let iv = if self.is_client {
+            self.crypto_context.get_client_write_iv()
         } else {
-            self.crypto_context
-                .generate_server_nonce()
-                .map_err(|e| Error::CryptoError(format!("Failed to generate server nonce: {}", e)))
+            self.crypto_context.get_server_write_iv()
+        };
+
+        let Some(iv) = iv else {
+            return Err(Error::CryptoError(format!(
+                "{} write IV not available",
+                if self.is_client { "Client" } else { "Server" }
+            )));
+        };
+
+        // Check if we have the proper fixed IV length (should be 4 bytes)
+        if iv.len() != 4 {
+            return Err(Error::CryptoError(format!(
+                "Invalid IV length: {}",
+                iv.len()
+            )));
         }
+
+        // Create the nonce: 4-byte fixed IV + 8-byte sequence number
+        let mut nonce = Vec::with_capacity(12);
+        nonce.extend_from_slice(iv);
+
+        // For the sequence number, we need 8 bytes (2 for epoch, 6 for sequence number)
+        let epoch_bytes = sequence.epoch.to_be_bytes();
+        let seq_bytes = sequence.sequence_number.to_be_bytes();
+
+        nonce.extend_from_slice(&epoch_bytes);
+        // Take the lower 6 bytes of sequence number
+        nonce.extend_from_slice(&seq_bytes[2..]);
+
+        Ok(nonce)
     }
 
     /// Encrypt data appropriate for the role (client or server)
@@ -549,7 +587,7 @@ impl Engine {
                     );
 
                     // Generate appropriate nonce for decryption
-                    let nonce = self.generate_nonce()?;
+                    let nonce = self.generate_nonce(&record.record.sequence)?;
 
                     let ciphertext = record.record.fragment.to_vec();
                     let mut buffer = Buffer::wrap(ciphertext);
