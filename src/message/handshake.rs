@@ -130,8 +130,6 @@ impl<'a> Handshake<'a> {
         mut iter: impl Iterator<Item = &'b Handshake<'c>>,
         buffer: &'a mut Vec<u8>,
         cipher_suite: Option<CipherSuite>,
-        is_client: bool,
-        hash: &mut StoreThenHash,
     ) -> Result<(Handshake<'a>, Option<MessageType>), crate::Error> {
         buffer.clear();
 
@@ -161,11 +159,15 @@ impl<'a> Handshake<'a> {
             buffer.extend_from_slice(data);
         }
 
-        hash.update(is_client, first.header.msg_type, buffer);
+        if buffer.len() != first.header.length as usize {
+            debug!("Defragmentation failed. Fragment length mismatch");
+            return Err(crate::Error::ParseIncomplete);
+        }
 
         let (rest, body) = Body::parse(buffer, first.header.msg_type, cipher_suite)?;
 
         if !rest.is_empty() {
+            debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
             return Err(crate::Error::ParseIncomplete);
         }
 
@@ -175,7 +177,7 @@ impl<'a> Handshake<'a> {
                 length: first.header.length,
                 message_seq: first.header.message_seq,
                 fragment_offset: 0,
-                fragment_length: buffer.len() as u32,
+                fragment_length: first.header.length,
             },
             body,
             handled: Cell::new(false),
@@ -455,6 +457,24 @@ mod tests {
     ];
 
     #[test]
+    fn handshake_size() {
+        let h = Handshake::new(
+            // ServerHelloDone has a 0 sized body.
+            MessageType::ServerHelloDone,
+            0,
+            0,
+            0,
+            0,
+            Body::ServerHelloDone,
+        );
+
+        let mut v = Vec::new();
+        h.serialize(&mut v);
+
+        assert_eq!(v.len(), 12);
+    }
+
+    #[test]
     fn roundtrip() {
         let mut serialized = Vec::new();
 
@@ -533,14 +553,8 @@ mod tests {
 
         // Defragment the fragments
         let mut defragmented_buffer = Vec::new();
-        let (defragmented_handshake, _next_type) = Handshake::defragment(
-            fragments.iter(),
-            &mut defragmented_buffer,
-            None,
-            true,
-            &mut StoreThenHash::new(),
-        )
-        .unwrap();
+        let (defragmented_handshake, _next_type) =
+            Handshake::defragment(fragments.iter(), &mut defragmented_buffer, None).unwrap();
 
         // Serialize and compare to MESSAGE
         defragmented_handshake.serialize(&mut serialized);

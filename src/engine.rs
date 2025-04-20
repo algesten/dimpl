@@ -280,13 +280,19 @@ impl Engine {
             // Handled in previous iteration
             .skip_while(|h| h.handled.get());
 
-        let (handshake, next_type) = Handshake::defragment(
-            iter,
-            defragment_buffer,
-            cipher_suite,
-            self.is_client,
-            &mut self.handshake_hash,
-        )?;
+        let (handshake, next_type) = Handshake::defragment(iter, defragment_buffer, cipher_suite)?;
+
+        let mut buffer = self.buffers_free.pop();
+        handshake.serialize(&mut buffer);
+
+        trace!(
+            "Updating handshake hash: {:?} {} bytes",
+            handshake.header.msg_type,
+            buffer.len()
+        );
+        self.handshake_hash.update(&buffer);
+
+        self.buffers_free.push(buffer);
 
         // Update the flight with the next message type, this eventually returns None
         // and that makes the flight complete.
@@ -344,11 +350,14 @@ impl Engine {
         // Let the callback fill the fragment
         let maybe_msg_type = f(&mut fragment);
 
-        // As long as we're handshaking, update the hash with the fragment. This
-        // becomes a no-op once we consumed the hashes.
+        // As long as we're handshaking, update the hash with the fragment.
         if let Some(msg_type) = maybe_msg_type {
-            self.handshake_hash
-                .update(self.is_client, msg_type, &fragment);
+            trace!(
+                "Updating handshake hash: {:?} {} bytes",
+                msg_type,
+                fragment.len()
+            );
+            self.handshake_hash.update(&fragment);
         }
 
         // Create the record
@@ -607,13 +616,7 @@ impl StoreThenHash {
         StoreThenHash::Store(Vec::new())
     }
 
-    pub fn update(&mut self, is_client: bool, msg_type: MessageType, data: &[u8]) {
-        trace!(
-            "Updating handshake hash: {}->{:?} {} bytes",
-            if is_client { "Client" } else { "Server" },
-            msg_type,
-            data.len()
-        );
+    pub fn update(&mut self, data: &[u8]) {
         match self {
             StoreThenHash::Store(vec) => vec.extend_from_slice(data),
             StoreThenHash::Hash(hash) => hash.update(data),
