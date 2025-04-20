@@ -65,6 +65,9 @@ pub struct Client {
 
     /// Buffer for defragmenting handshakes
     defragment_buffer: Vec<u8>,
+
+    /// Whether we requested a CertificateVerify
+    certificate_verify: bool,
 }
 
 /// Current state of the client.
@@ -121,6 +124,7 @@ impl Client {
             negotiated_srtp_profile: None,
             extension_data: Vec::with_capacity(256), // Pre-allocate extension data buffer
             defragment_buffer: Vec::new(),
+            certificate_verify: false,
         }
     }
 
@@ -190,7 +194,7 @@ impl Client {
         let mut cipher_suites = array_vec![[CipherSuite; 32]];
 
         // Get the client certificate type
-        let cert_type = self.engine.crypto_context().get_certificate_type();
+        let cert_type = self.engine.crypto_context().signature_algorithm();
 
         // Get compatible cipher suites
         let compatible_suites = CipherSuite::compatible_with_certificate(cert_type);
@@ -369,13 +373,12 @@ impl Client {
                     debug!("Received CertificateRequest with {} certificate types, {} signature algorithms",
                            cr.certificate_types.len(), cr.supported_signature_algorithms.len());
 
-                    // Check that the hash algorithm we selected in the ServerHello
+                    // Check that the hash algorithm that is default fo the PrivateKey in use
                     // is one of the supported by the CertificateRequest
-                    let hash_algorithm = self.cipher_suite.unwrap().hash_algorithm();
-                    debug!(
-                        "Checking if server supports our hash algorithm: {:?}",
-                        hash_algorithm
-                    );
+                    let hash_algorithm = self
+                        .engine
+                        .crypto_context()
+                        .private_key_default_hash_algorithm();
 
                     if !cr.supports_hash_algorithm(hash_algorithm) {
                         return Err(Error::CertificateError(format!(
@@ -384,7 +387,12 @@ impl Client {
                         )));
                     }
 
-                    debug!("Server supports our hash algorithm: {:?}", hash_algorithm);
+                    debug!(
+                        "Server supports CertificateVerify hash algorithm: {:?}",
+                        hash_algorithm
+                    );
+
+                    self.certificate_verify = true;
                 }
 
                 MessageType::ServerHelloDone => {
@@ -456,7 +464,9 @@ impl Client {
         debug!("Preparing to send client certificate and keys");
         self.send_client_certificate()?;
         self.send_client_key_exchange()?;
-        self.send_certificate_verify()?;
+        if self.certificate_verify {
+            self.send_certificate_verify()?;
+        }
 
         debug!("Client key exchange complete, deriving session keys");
         self.derive_and_send_keys()?;
@@ -791,16 +801,20 @@ impl Client {
     /// Send a CertificateVerify message to prove possession of the private key
     fn send_certificate_verify(&mut self) -> Result<(), Error> {
         debug!("Sending CertificateVerify to prove client certificate ownership");
-        // Get the cipher suite to determine the hash algorithm
-        // Unwrap because we should not be here without a ServerHello.
-        let cipher_suite = self.cipher_suite.unwrap();
 
-        // Get the hash algorithm from the cipher suite
-        let hash_alg = cipher_suite.hash_algorithm();
+        // The hash algorithm to use is the default for the private key type, not
+        // the one negotiated to use with the selected cipher suite. I.e.
+        // if we negotiate ECDHE_ECDSA_AES256_GCM_SHA384, we are gogin to use
+        // SHA384 for the signature of the main crypto, but not for CertificateVerify
+        // where a private key using P256 curve means we use SHA256.
+        let hash_alg = self
+            .engine
+            .crypto_context()
+            .private_key_default_hash_algorithm();
         debug!("Using hash algorithm for signature: {:?}", hash_alg);
 
         // Get the signature algorithm type
-        let sig_alg = self.engine.crypto_context().get_certificate_type();
+        let sig_alg = self.engine.crypto_context().signature_algorithm();
         debug!("Using signature algorithm: {:?}", sig_alg);
 
         // Create the signature algorithm

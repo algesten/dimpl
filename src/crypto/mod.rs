@@ -53,7 +53,7 @@ pub enum ParsedKey {
 
 impl ParsedKey {
     /// Get the signature algorithm type for this key
-    pub fn signature_algorithm_type(&self) -> SignatureAlgorithm {
+    pub fn signature_algorithm(&self) -> SignatureAlgorithm {
         match self {
             ParsedKey::P256(_) | ParsedKey::P384(_) => SignatureAlgorithm::ECDSA,
             ParsedKey::Rsa(_) => SignatureAlgorithm::RSA,
@@ -146,6 +146,14 @@ impl ParsedKey {
         }
 
         Err("Failed to parse private key in any supported format".to_string())
+    }
+
+    fn default_hash_algorithm(&self) -> HashAlgorithm {
+        match self {
+            ParsedKey::P256(_) => HashAlgorithm::SHA256,
+            ParsedKey::P384(_) => HashAlgorithm::SHA384,
+            ParsedKey::Rsa(_) => HashAlgorithm::SHA256,
+        }
     }
 }
 
@@ -538,8 +546,12 @@ impl CryptoContext {
         }
     }
 
-    pub fn get_certificate_type(&self) -> SignatureAlgorithm {
-        self.parsed_client_key.signature_algorithm_type()
+    pub fn signature_algorithm(&self) -> SignatureAlgorithm {
+        self.parsed_client_key.signature_algorithm()
+    }
+
+    pub fn private_key_default_hash_algorithm(&self) -> HashAlgorithm {
+        self.parsed_client_key.default_hash_algorithm()
     }
 
     /// Check if the client's private key is compatible with a given cipher suite

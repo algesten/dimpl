@@ -21,13 +21,15 @@ pub fn sign_rsa(
             let signing_key = RsaPkcs1v15SigningKey::<Sha256>::new(private_key.clone());
             let mut rng = thread_rng();
             let signature = signing_key.sign_with_rng(&mut rng, data);
-            Ok(signature.to_bytes().to_vec())
+            let sig_bytes = signature.to_bytes().to_vec();
+            Ok(sig_bytes)
         }
         HashAlgorithm::SHA384 => {
             let signing_key = RsaPkcs1v15SigningKey::<Sha384>::new(private_key.clone());
             let mut rng = thread_rng();
             let signature = signing_key.sign_with_rng(&mut rng, data);
-            Ok(signature.to_bytes().to_vec())
+            let sig_bytes = signature.to_bytes().to_vec();
+            Ok(sig_bytes)
         }
         _ => Err(format!(
             "Unsupported hash algorithm for RSA: {:?}",
@@ -39,14 +41,18 @@ pub fn sign_rsa(
 /// Sign data using ECDSA with the provided private key
 pub fn sign_ecdsa_p256(signing_key: &P256SigningKey, data: &[u8]) -> Result<Vec<u8>, String> {
     let signature: P256Signature = signing_key.sign(data);
-    // Use raw format (r || s) instead of DER for TLS compatibility
-    Ok(signature.to_bytes().to_vec())
+
+    // Use DER format for TLS 1.2 compatibility with OpenSSL
+    let sig_bytes = signature.to_der().to_vec();
+    Ok(sig_bytes)
 }
 
 pub fn sign_ecdsa_p384(signing_key: &P384SigningKey, data: &[u8]) -> Result<Vec<u8>, String> {
     let signature: P384Signature = signing_key.sign(data);
-    // Use raw format (r || s) instead of DER for TLS compatibility
-    Ok(signature.to_bytes().to_vec())
+
+    // Use DER format for TLS 1.2 compatibility with OpenSSL
+    let sig_bytes = signature.to_der().to_vec();
+    Ok(sig_bytes)
 }
 
 /// Sign data using the provided parsed key and hash algorithm
