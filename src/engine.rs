@@ -54,8 +54,8 @@ pub struct Engine {
     /// Next handshake message sequence number for sending
     next_handshake_seq_no: u16,
 
-    /// Hash of handshake messages.
-    handshake_hash: StoreThenHash,
+    /// Handshakes collected for hash computation.
+    handshakes: Vec<u8>,
 }
 
 impl Engine {
@@ -80,7 +80,7 @@ impl Engine {
             is_client,
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
-            handshake_hash: StoreThenHash::new(),
+            handshakes: Vec::with_capacity(10 * 1024),
         }
     }
 
@@ -282,17 +282,8 @@ impl Engine {
 
         let (handshake, next_type) = Handshake::defragment(iter, defragment_buffer, cipher_suite)?;
 
-        let mut buffer = self.buffers_free.pop();
-        handshake.serialize(&mut buffer);
-
-        trace!(
-            "Updating handshake hash: {:?} {} bytes",
-            handshake.header.msg_type,
-            buffer.len()
-        );
-        self.handshake_hash.update(&buffer);
-
-        self.buffers_free.push(buffer);
+        // Update the stored handshakes used for CertificateVerify and Finished
+        handshake.serialize(&mut self.handshakes);
 
         // Update the flight with the next message type, this eventually returns None
         // and that makes the flight complete.
@@ -351,13 +342,8 @@ impl Engine {
         let maybe_msg_type = f(&mut fragment);
 
         // As long as we're handshaking, update the hash with the fragment.
-        if let Some(msg_type) = maybe_msg_type {
-            trace!(
-                "Updating handshake hash: {:?} {} bytes",
-                msg_type,
-                fragment.len()
-            );
-            self.handshake_hash.update(&fragment);
+        if let Some(_) = maybe_msg_type {
+            self.handshakes.extend_from_slice(&fragment);
         }
 
         // Create the record
@@ -582,21 +568,24 @@ impl Engine {
         Ok(())
     }
 
-    pub fn handshake_hash_finalize(&self) -> Vec<u8> {
-        self.handshake_hash.finalize()
+    pub fn handshake_hash(&self, algorithm: HashAlgorithm) -> Vec<u8> {
+        trace!("Handshake hash with algorithm: {:?}", algorithm);
+
+        let mut hash = Hash::new(algorithm);
+        hash.update(&self.handshakes);
+        hash.clone_and_finalize()
     }
 
     pub(crate) fn init_cipher_suite(&mut self, cs: CipherSuite) -> Result<(), String> {
-        // Now that we know which hash to use, convert the hashes to hash as we go.
-        let algorithm = cs.hash_algorithm();
-        self.handshake_hash.convert_to_hash(algorithm);
-
-        // Initialize the cipher suite
         self.crypto_context.init_cipher_suite(cs)
     }
 
     pub(crate) fn reset_handshake_seq_no(&mut self) {
         self.next_handshake_seq_no = 0;
+    }
+
+    pub(crate) fn handshake_data(&self) -> &[u8] {
+        &self.handshakes
     }
 }
 
@@ -604,45 +593,4 @@ impl Engine {
 pub struct Flight {
     to: MessageType,
     current: Option<MessageType>,
-}
-
-pub(crate) enum StoreThenHash {
-    Store(Vec<u8>),
-    Hash(Hash),
-}
-
-impl StoreThenHash {
-    pub fn new() -> Self {
-        StoreThenHash::Store(Vec::new())
-    }
-
-    pub fn update(&mut self, data: &[u8]) {
-        match self {
-            StoreThenHash::Store(vec) => vec.extend_from_slice(data),
-            StoreThenHash::Hash(hash) => hash.update(data),
-        }
-    }
-
-    fn convert_to_hash(&mut self, algorithm: HashAlgorithm) {
-        let StoreThenHash::Store(vec) = self else {
-            panic!("StoreThenHash already converted to hash");
-        };
-
-        let mut hash = Hash::new(algorithm);
-
-        // Update the hash with the data stored up until this point.
-        hash.update(vec);
-
-        // Convert to hash
-        *self = StoreThenHash::Hash(hash);
-    }
-
-    fn finalize(&self) -> Vec<u8> {
-        trace!("Finalizing handshake hash");
-        let StoreThenHash::Hash(hash) = self else {
-            panic!("StoreThenHash not a hash");
-        };
-
-        hash.clone_and_finalize()
-    }
 }

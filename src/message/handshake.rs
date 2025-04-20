@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 use std::hash::DefaultHasher;
 use std::iter::Peekable;
 
-use crate::engine::StoreThenHash;
 use crate::incoming::Incoming;
 
 use super::{

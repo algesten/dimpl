@@ -672,7 +672,9 @@ impl Client {
             "Generating verify data for {}, using handshake hash",
             if is_client { "client" } else { "server" }
         );
-        let handshake_hash = self.engine.handshake_hash_finalize();
+
+        let algorithm = self.cipher_suite.unwrap().hash_algorithm();
+        let handshake_hash = self.engine.handshake_hash(algorithm);
 
         debug!("Handshake hash size: {} bytes", handshake_hash.len());
 
@@ -804,15 +806,13 @@ impl Client {
         // Create the signature algorithm
         let algorithm = SignatureAndHashAlgorithm::new(hash_alg, sig_alg);
 
-        // The handshake hash is all handshake up until before the CertificateVerify message
-        let handshake_hash = self.engine.handshake_hash_finalize();
-        debug!("Signing handshake hash ({} bytes)", handshake_hash.len());
+        let handshake_data = self.engine.handshake_data();
 
         // Sign all handshake messages
         let signature = self
             .engine
             .crypto_context()
-            .sign_data(&handshake_hash, hash_alg)
+            .sign_data(&handshake_data, hash_alg)
             .map_err(|e| Error::CryptoError(format!("Failed to sign handshake messages: {}", e)))?;
 
         debug!("Generated signature size: {} bytes", signature.len());
