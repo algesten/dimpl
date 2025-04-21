@@ -7,6 +7,9 @@ type HmacSha256 = Hmac<Sha256>;
 /// as specified in RFC 5246 Section 5.
 ///
 /// PRF(secret, label, seed) = P_<hash>(secret, label + seed)
+///
+/// NOTE: The seed parameter here is the actual seed data WITHOUT the label.
+/// The label will be prepended to form the full seed used in the PRF calculation.
 pub fn prf_tls12(
     secret: &[u8],
     label: &str,
@@ -16,24 +19,22 @@ pub fn prf_tls12(
     // In TLS 1.2, PRF uses HMAC-SHA256
     let mut result = Vec::with_capacity(output_len);
 
-    // A(0) = seed, A(i) = HMAC_hash(secret, A(i-1))
-    // We don't actually compute A(0) as it's just the label+seed
+    // A(0) = label + seed
+    // Create the full seed by prepending the label to the seed
+    let mut full_seed = Vec::with_capacity(label.len() + seed.len());
+    full_seed.extend_from_slice(label.as_bytes());
+    full_seed.extend_from_slice(seed);
 
-    // Create input seed for A(1)
-    let mut input = Vec::with_capacity(label.len() + seed.len());
-    input.extend_from_slice(label.as_bytes());
-    input.extend_from_slice(seed);
-
-    // Compute A(1) = HMAC_hash(secret, label + seed)
+    // Compute A(1) = HMAC_hash(secret, A(0))
     let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
-    hmac.update(&input);
+    hmac.update(&full_seed);
     let mut a = hmac.finalize().into_bytes();
 
     while result.len() < output_len {
         // P_hash = HMAC_hash(secret, A(i) + [label + seed])
         let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
         hmac.update(&a);
-        hmac.update(&input);
+        hmac.update(&full_seed);
         let output = hmac.finalize().into_bytes();
 
         // Add as much of the output as needed
@@ -65,6 +66,7 @@ pub fn calculate_master_secret(
     seed.extend_from_slice(server_random);
 
     // master_secret = PRF(pre_master_secret, "master secret", client_random + server_random, 48)
+    // The label "master secret" is passed separately and will be prepended to the seed by prf_tls12
     prf_tls12(pre_master_secret, "master secret", &seed, 48)
 }
 
@@ -82,5 +84,6 @@ pub fn key_expansion(
     seed.extend_from_slice(client_random);
 
     // key_block = PRF(master_secret, "key expansion", server_random + client_random, key_material_length)
+    // The label "key expansion" is passed separately and will be prepended to the seed by prf_tls12
     prf_tls12(master_secret, "key expansion", &seed, key_material_length)
 }

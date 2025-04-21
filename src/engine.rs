@@ -363,8 +363,13 @@ impl Engine {
 
         // Handle encryption if enabled and content type requires it
         if self.should_encrypt(content_type) {
-            // Create proper AAD for encryption
-            let aad = self.create_aad(content_type, &sequence, length);
+            // Encrypt the fragment in-place
+            let encrypted_length = length; // Start with plaintext length
+
+            // Create proper AAD for encryption - for encrypted records, we need to use
+            // the length after encryption (plaintext + 16 bytes tag for AES-GCM)
+            let final_length = encrypted_length + 16; // Add 16 bytes for auth tag
+            let aad = self.create_aad(content_type, &sequence, final_length);
 
             // Generate nonce
             let nonce = self.generate_nonce(&sequence)?;

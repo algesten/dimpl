@@ -93,9 +93,27 @@ impl KeyExchange for EcdhKeyExchange {
                     if public_key_opt.is_some().into() {
                         let public_key = public_key_opt.unwrap();
 
+                        // Compute the shared secret point
                         let shared_secret = secret.diffie_hellman(&public_key);
 
-                        Ok(shared_secret.raw_secret_bytes().as_slice().to_vec())
+                        // Extract the raw bytes from the shared secret
+                        let raw_bytes = shared_secret.raw_secret_bytes().as_slice();
+
+                        // Create a properly formatted buffer that matches OpenSSL's behavior
+                        // For P-384, ECDH shared secret is the x-coordinate of the resulting point
+                        // Ensure it's exactly 48 bytes with proper padding in big-endian format
+                        let mut formatted_secret = vec![0u8; 48];
+
+                        // Copy the raw bytes to the buffer with proper alignment
+                        // If raw_bytes.len() < 48, preserve leading zeros as needed
+                        // If raw_bytes.len() == 48, just copy the bytes
+                        let copy_len = std::cmp::min(raw_bytes.len(), 48);
+                        let start_idx = 48 - copy_len;
+                        formatted_secret[start_idx..]
+                            .copy_from_slice(&raw_bytes[raw_bytes.len() - copy_len..]);
+
+                        // Return the formatted secret
+                        Ok(formatted_secret)
                     } else {
                         Err("Invalid peer public key format for P-384".to_string())
                     }
