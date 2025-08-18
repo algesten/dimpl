@@ -520,7 +520,7 @@ impl CryptoContext {
         };
 
         // Generate 12 bytes of verify data using PRF
-        prf_tls12(master_secret, label, &handshake_hash, 12)
+        prf_tls12(master_secret, label, handshake_hash, 12)
     }
 
     /// Extract SRTP keying material from the master secret

@@ -187,8 +187,8 @@ impl Client {
     fn send_client_hello(&mut self) -> Result<(), Error> {
         debug!("Sending ClientHello");
         let client_version = ProtocolVersion::DTLS1_2;
-        let session_id = self.session_id.clone().unwrap_or_else(SessionId::empty);
-        let cookie = self.cookie.clone().unwrap_or_else(Cookie::empty);
+        let session_id = self.session_id.unwrap_or_else(SessionId::empty);
+        let cookie = self.cookie.unwrap_or_else(Cookie::empty);
 
         // Convert Vec<CipherSuite> to ArrayVec<[CipherSuite; 32]>
         let mut cipher_suites = array_vec![[CipherSuite; 32]];
@@ -224,7 +224,7 @@ impl Client {
         // Create ClientHello with all required extensions
         let client_hello = ClientHello::new(
             client_version,
-            self.random.clone(),
+            self.random,
             session_id,
             cookie,
             cipher_suites,
@@ -270,7 +270,7 @@ impl Client {
                         "Received HelloVerifyRequest with cookie length: {}",
                         hello_verify.cookie.len()
                     );
-                    self.cookie = Some(hello_verify.cookie.clone());
+                    self.cookie = Some(hello_verify.cookie);
                     self.state = ClientState::SendClientHello;
                     self.engine.reset_handshake_seq_no();
                     debug!(
@@ -291,8 +291,8 @@ impl Client {
                     );
                     let cs = server_hello.cipher_suite;
                     self.cipher_suite = Some(cs);
-                    self.session_id = Some(server_hello.session_id.clone());
-                    self.server_random = Some(server_hello.random.clone());
+                    self.session_id = Some(server_hello.session_id);
+                    self.server_random = Some(server_hello.random);
 
                     // Initialize the key exchange based on selected cipher suite
                     self.engine.init_cipher_suite(cs).map_err(|e| {
@@ -826,7 +826,7 @@ impl Client {
         let signature = self
             .engine
             .crypto_context()
-            .sign_data(&handshake_data, hash_alg)
+            .sign_data(handshake_data, hash_alg)
             .map_err(|e| Error::CryptoError(format!("Failed to sign handshake messages: {}", e)))?;
 
         debug!("Generated signature size: {} bytes", signature.len());

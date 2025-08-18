@@ -47,7 +47,7 @@ impl Buffer {
     }
 
     pub fn into_inner(mut self) -> Vec<u8> {
-        std::mem::replace(&mut self.0, Vec::new())
+        std::mem::take(&mut self.0)
     }
 
     pub fn reset(&mut self) {

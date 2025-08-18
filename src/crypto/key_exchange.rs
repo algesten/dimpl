@@ -157,7 +157,7 @@ impl DhKeyExchange {
 impl KeyExchange for DhKeyExchange {
     fn generate(&mut self) -> Vec<u8> {
         // Determine bit size of prime
-        let prime_bits = self.prime.bits() as u64;
+        let prime_bits = self.prime.bits();
 
         // Generate a random private key smaller than the prime
         let mut rng = rand::thread_rng();

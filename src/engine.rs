@@ -247,11 +247,10 @@ impl Engine {
                     }
 
                     // Check fragment contiguity
-                    if h.header.fragment_offset > 0 {
-                        if h.header.fragment_offset != last_fragment_end {
+                    if h.header.fragment_offset > 0
+                        && h.header.fragment_offset != last_fragment_end {
                             return None;
                         }
-                    }
                     last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
 
                     if h.header.msg_type == to {
@@ -288,8 +287,7 @@ impl Engine {
         let iter = self
             .queue_rx
             .iter()
-            .map(|i| i.records().iter().filter_map(|r| r.handshake.as_ref()))
-            .flatten()
+            .flat_map(|i| i.records().iter().filter_map(|r| r.handshake.as_ref()))
             // Handled in previous iteration
             .skip_while(|h| h.handled.get());
 
@@ -355,7 +353,7 @@ impl Engine {
         let maybe_msg_type = f(&mut fragment);
 
         // As long as we're handshaking, update the hash with the fragment.
-        if let Some(_) = maybe_msg_type {
+        if maybe_msg_type.is_some() {
             self.handshakes.extend_from_slice(&fragment);
         }
 

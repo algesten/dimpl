@@ -58,8 +58,8 @@ impl Incoming {
     /// * `into` the buffer in which we want to store the UDP data.
     ///
     /// Will surface parser errors.
-    pub fn parse_packet<'b>(
-        packet: &'b [u8],
+    pub fn parse_packet(
+        packet: &[u8],
         c: &mut Option<CipherSuite>,
         mut into: Buffer,
     ) -> Result<Self, Error> {
@@ -68,7 +68,7 @@ impl Incoming {
         into.copy_from_slice(packet);
 
         // håll i hatten
-        let inner = Inner::try_new(into, |data| Ok::<_, Error>(Records::parse(&data, c)?.1))?;
+        let inner = Inner::try_new(into, |data| Ok::<_, Error>(Records::parse(data, c)?.1))?;
 
         Ok(Incoming(inner))
     }
