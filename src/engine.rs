@@ -1,3 +1,4 @@
+use rand::RngCore;
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -363,19 +364,53 @@ impl Engine {
 
         // Handle encryption if enabled and content type requires it
         if self.should_encrypt(content_type) {
-            // Encrypt the fragment in-place
-            let encrypted_length = length; // Start with plaintext length
+            // Get the fixed part of the IV (4 bytes)
+            let iv = if self.is_client {
+                self.crypto_context.get_client_write_iv()
+            } else {
+                self.crypto_context.get_server_write_iv()
+            };
+
+            let Some(iv) = iv else {
+                return Err(Error::CryptoError(format!(
+                    "{} write IV not available",
+                    if self.is_client { "Client" } else { "Server" }
+                )));
+            };
+
+            // Check if we have the proper fixed IV length (should be 4 bytes)
+            if iv.len() != 4 {
+                return Err(Error::CryptoError(format!(
+                    "Invalid IV length: {}",
+                    iv.len()
+                )));
+            }
+
+            // Create partially random nonce: 4-byte fixed IV + 8 random bytes
+            let mut nonce = Vec::with_capacity(12);
+            nonce.extend_from_slice(iv);
+
+            // Generate 8 random bytes for the explicit part of the nonce
+            let mut explicit_nonce = vec![0u8; 8];
+            rand::thread_rng().fill_bytes(&mut explicit_nonce);
+            nonce.extend_from_slice(&explicit_nonce);
 
             // Create proper AAD for encryption - for encrypted records, we need to use
             // the length after encryption (plaintext + 16 bytes tag for AES-GCM)
-            let final_length = encrypted_length + 16; // Add 16 bytes for auth tag
+            let final_length = length + 16; // Add 16 bytes for auth tag
             let aad = self.create_aad(content_type, &sequence, final_length);
-
-            // Generate nonce
-            let nonce = self.generate_nonce(&sequence)?;
 
             // Encrypt the fragment in-place
             self.encrypt_data(&mut fragment, &aad, &nonce)?;
+
+            // Create a new buffer that includes the explicit nonce
+            let mut encrypted_fragment = Vec::with_capacity(explicit_nonce.len() + fragment.len());
+            encrypted_fragment.extend_from_slice(&explicit_nonce);
+            encrypted_fragment.extend_from_slice(&fragment);
+
+            // Replace the original fragment with the nonce + encrypted data
+            fragment.clear();
+            fragment.extend_from_slice(&encrypted_fragment);
         }
 
         let record = DTLSRecord {
@@ -440,9 +475,76 @@ impl Engine {
         })
     }
 
-    /// Generate nonce for encryption/decryption
-    /// For AES-GCM in DTLS, the nonce is constructed as:
-    /// IV_LENGTH (4 bytes from key derivation) || SEQUENCE_NUMBER (8 bytes)
+    /// Process application data packets from the incoming queue
+    pub fn process_application_data(&mut self) -> Result<(), Error> {
+        // Process any incoming packets with application data
+        while let Some(incoming) = self.next_incoming() {
+            let records = incoming.records();
+
+            for i in 0..records.len() {
+                let record = &records[i];
+                if record.record.content_type == ContentType::ApplicationData {
+                    // Check if we have enough data for the explicit nonce (8 bytes) plus some content
+                    if record.record.fragment.len() <= 8 {
+                        return Err(Error::CryptoError(
+                            "ApplicationData record too short to contain explicit nonce"
+                                .to_string(),
+                        ));
+                    }
+
+                    // Extract the explicit nonce from the beginning of the fragment
+                    let explicit_nonce = &record.record.fragment[..8];
+
+                    // Get the fixed part of the IV (4 bytes)
+                    let iv = if self.is_client {
+                        self.crypto_context.get_server_write_iv() // Server's write is client's read
+                    } else {
+                        self.crypto_context.get_client_write_iv() // Client's write is server's read
+                    };
+
+                    let Some(iv) = iv else {
+                        return Err(Error::CryptoError(format!(
+                            "{} read IV not available",
+                            if self.is_client { "Server" } else { "Client" }
+                        )));
+                    };
+
+                    // Create the complete nonce: 4-byte fixed IV + 8-byte explicit nonce
+                    let mut nonce = Vec::with_capacity(12);
+                    nonce.extend_from_slice(iv);
+                    nonce.extend_from_slice(explicit_nonce);
+
+                    // Get only the encrypted data (skip the explicit nonce)
+                    let ciphertext = record.record.fragment[8..].to_vec();
+
+                    // Create AAD for decryption
+                    // For decryption, the AAD length should be the ciphertext length minus the GCM tag (16 bytes)
+                    // This matches the working dtls implementation
+                    let payload_length = ciphertext.len().checked_sub(16).unwrap_or(0);
+
+                    let aad = self.create_aad(
+                        record.record.content_type,
+                        &record.record.sequence,
+                        payload_length as u16,
+                    );
+
+                    let mut buffer = Buffer::wrap(ciphertext);
+
+                    // Decrypt the application data
+                    self.decrypt_data(&mut buffer, &aad, &nonce)?;
+
+                    let plaintext = buffer.into_inner();
+
+                    // Push the decrypted data to the queue
+                    self.queue_events
+                        .push_back(Output::ApplicationData(plaintext));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Generate nonce for encryption/decryption - used only for decrypt path now
     fn generate_nonce(&self, sequence: &Sequence) -> Result<Vec<u8>, Error> {
         let iv = if self.is_client {
             self.crypto_context.get_client_write_iv()
@@ -471,10 +573,11 @@ impl Engine {
 
         // For the sequence number, we need 8 bytes (2 for epoch, 6 for sequence number)
         let epoch_bytes = sequence.epoch.to_be_bytes();
-        let seq_bytes = sequence.sequence_number.to_be_bytes();
-
         nonce.extend_from_slice(&epoch_bytes);
-        // Take the lower 6 bytes of sequence number
+
+        // The sequence number is 6 bytes (48 bits) - convert from u64 to exactly 6 bytes
+        let seq_bytes = sequence.sequence_number.to_be_bytes();
+        // Take the lower 6 bytes of the sequence number (last 6 bytes of 8-byte array)
         nonce.extend_from_slice(&seq_bytes[2..]);
 
         Ok(nonce)
@@ -487,10 +590,8 @@ impl Engine {
                 .encrypt_client_to_server(plaintext, aad, nonce)
                 .map_err(|e| Error::CryptoError(format!("Client encryption failed: {}", e)))
         } else {
-            // Server encrypting to client is equivalent to decrypting from client to server
-            // For server, we're going in the opposite direction
             self.crypto_context
-                .decrypt_server_to_client(plaintext, aad, nonce)
+                .encrypt_server_to_client(plaintext, aad, nonce)
                 .map_err(|e| Error::CryptoError(format!("Server encryption failed: {}", e)))
         }
     }
@@ -498,14 +599,12 @@ impl Engine {
     /// Decrypt data appropriate for the role (client or server)
     fn decrypt_data(&self, ciphertext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), Error> {
         if self.is_client {
-            // Client decrypting data from server
             self.crypto_context
                 .decrypt_server_to_client(ciphertext, aad, nonce)
                 .map_err(|e| Error::CryptoError(format!("Client decryption failed: {}", e)))
         } else {
-            // Server decrypting data from client
             self.crypto_context
-                .encrypt_client_to_server(ciphertext, aad, nonce)
+                .decrypt_client_to_server(ciphertext, aad, nonce)
                 .map_err(|e| Error::CryptoError(format!("Server decryption failed: {}", e)))
         }
     }
@@ -537,24 +636,24 @@ impl Engine {
         sequence: &Sequence,
         length: u16,
     ) -> Vec<u8> {
-        let mut aad = Vec::with_capacity(13);
+        // Exactly match the format used in the working dtls implementation
+        let mut aad = vec![0u8; 13];
 
-        // Content type (1 byte)
-        aad.push(content_type.as_u8());
+        // First set the full 8-byte sequence number
+        aad[..8].copy_from_slice(&sequence.sequence_number.to_be_bytes());
 
-        // Protocol version (2 bytes)
-        let version = ProtocolVersion::DTLS1_2;
-        aad.extend_from_slice(&version.as_u16().to_be_bytes());
+        // Then overwrite the first 2 bytes with epoch
+        aad[..2].copy_from_slice(&sequence.epoch.to_be_bytes());
 
-        // Epoch (2 bytes)
-        aad.extend_from_slice(&sequence.epoch.to_be_bytes());
+        // Content type at index 8
+        aad[8] = content_type.as_u8();
 
-        // Sequence number (6 bytes)
-        let seq_bytes = sequence.sequence_number.to_be_bytes();
-        aad.extend_from_slice(&seq_bytes[2..]); // Skip first 2 bytes for 6-byte sequence
+        // Protocol version bytes (major:minor) at indexes 9-10
+        aad[9] = 0xfe; // DTLS 1.2 major version
+        aad[10] = 0xfd; // DTLS 1.2 minor version
 
-        // Length (2 bytes)
-        aad.extend_from_slice(&length.to_be_bytes());
+        // Payload length (2 bytes) at indexes 11-12
+        aad[11..].copy_from_slice(&length.to_be_bytes());
 
         aad
     }
@@ -573,42 +672,6 @@ impl Engine {
     pub fn push_keying_material(&mut self, keying_material: KeyingMaterial, profile: SrtpProfile) {
         self.queue_events
             .push_back(Output::KeyingMaterial(keying_material, profile));
-    }
-
-    /// Process application data packets from the incoming queue
-    pub fn process_application_data(&mut self) -> Result<(), Error> {
-        // Process any incoming packets with application data
-        while let Some(incoming) = self.next_incoming() {
-            let records = incoming.records();
-
-            for i in 0..records.len() {
-                let record = &records[i];
-                if record.record.content_type == ContentType::ApplicationData {
-                    // Create AAD for decryption
-                    let aad = self.create_aad(
-                        record.record.content_type,
-                        &record.record.sequence,
-                        record.record.length,
-                    );
-
-                    // Generate appropriate nonce for decryption
-                    let nonce = self.generate_nonce(&record.record.sequence)?;
-
-                    let ciphertext = record.record.fragment.to_vec();
-                    let mut buffer = Buffer::wrap(ciphertext);
-
-                    // Decrypt the application data
-                    self.decrypt_data(&mut buffer, &aad, &nonce)?;
-
-                    let plaintext = buffer.into_inner();
-
-                    // Push the decrypted data to the queue
-                    self.queue_events
-                        .push_back(Output::ApplicationData(plaintext));
-                }
-            }
-        }
-        Ok(())
     }
 
     pub fn handshake_hash(&self, algorithm: HashAlgorithm) -> Vec<u8> {

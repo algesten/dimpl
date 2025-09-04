@@ -456,6 +456,32 @@ impl CryptoContext {
         }
     }
 
+    /// Encrypt data (server to client)
+    pub fn encrypt_server_to_client(
+        &self,
+        plaintext: &mut Buffer,
+        aad: &[u8],
+        nonce: &[u8],
+    ) -> Result<(), String> {
+        match &self.server_cipher {
+            Some(cipher) => cipher.encrypt(plaintext, aad, nonce),
+            None => Err("Server cipher not initialized".to_string()),
+        }
+    }
+
+    /// Decrypt data (client to server)
+    pub fn decrypt_client_to_server(
+        &self,
+        ciphertext: &mut Buffer,
+        aad: &[u8],
+        nonce: &[u8],
+    ) -> Result<(), String> {
+        match &self.client_cipher {
+            Some(cipher) => cipher.decrypt(ciphertext, aad, nonce),
+            None => Err("Client cipher not initialized".to_string()),
+        }
+    }
+
     /// Get client certificate for authentication
     pub fn get_client_certificate(&self) -> Certificate {
         // We validate in constructor, so we can assume we have a certificate
