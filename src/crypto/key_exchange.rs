@@ -45,10 +45,19 @@ impl KeyExchange for EcdhKeyExchange {
     fn generate(&mut self) -> Vec<u8> {
         match self {
             EcdhKeyExchange::P256 { private_key } => {
-                let secret = P256EphemeralSecret::random(&mut OsRng);
-                let public_key = P256PublicKey::from(&secret);
+                // makes us have the same pre master secret as ossl
+                let public_key = if let Some(secret) = private_key.as_ref() {
+                    eprintln!("reusing previous secret");
+                    P256PublicKey::from(secret)
+                } else {
+                    let secret = P256EphemeralSecret::random(&mut OsRng);
+                    let public_key = P256PublicKey::from(&secret);
+                    eprintln!("dimpl public key: {:x?}", public_key);
+                    eprintln!("dimpl public key encoded: {:x?}", public_key.to_encoded_point(false).as_bytes());
+                    *private_key = Some(secret);
+                    public_key
+                };
                 let encoded_point = public_key.to_encoded_point(false);
-                *private_key = Some(secret);
                 encoded_point.as_bytes().to_vec()
             }
             EcdhKeyExchange::P384 { private_key } => {
