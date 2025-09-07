@@ -1,7 +1,8 @@
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use sha2::{Sha256, Sha384};
 
 type HmacSha256 = Hmac<Sha256>;
+type HmacSha384 = Hmac<Sha384>;
 
 /// Implement TLS 1.2 PRF (Pseudorandom Function)
 /// as specified in RFC 5246 Section 5.
@@ -26,13 +27,13 @@ pub fn prf_tls12(
     full_seed.extend_from_slice(seed);
 
     // Compute A(1) = HMAC_hash(secret, A(0))
-    let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
+    let mut hmac = HmacSha384::new_from_slice(secret).map_err(|e| e.to_string())?;
     hmac.update(&full_seed);
     let mut a = hmac.finalize().into_bytes();
 
     while result.len() < output_len {
         // P_hash = HMAC_hash(secret, A(i) + [label + seed])
-        let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
+        let mut hmac = HmacSha384::new_from_slice(secret).map_err(|e| e.to_string())?;
         hmac.update(&a);
         hmac.update(&full_seed);
         let output = hmac.finalize().into_bytes();
@@ -44,7 +45,7 @@ pub fn prf_tls12(
 
         // If we need more, compute A(i+1) = HMAC_hash(secret, A(i))
         if result.len() < output_len {
-            let mut hmac = HmacSha256::new_from_slice(secret).map_err(|e| e.to_string())?;
+            let mut hmac = HmacSha384::new_from_slice(secret).map_err(|e| e.to_string())?;
             hmac.update(&a);
             a = hmac.finalize().into_bytes();
         }
