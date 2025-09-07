@@ -395,7 +395,7 @@ impl Engine {
 
             // Create proper AAD for encryption - for encrypted records, we need to use
             // the length after encryption (plaintext + 16 bytes tag for AES-GCM)
-            let final_length = length + 16; // Add 16 bytes for auth tag
+            let final_length = length;// + 16; // Add 16 bytes for auth tag
             let aad = self.create_aad(content_type, &sequence, final_length);
 
             // Encrypt the fragment in-place
