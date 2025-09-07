@@ -124,12 +124,12 @@ impl<'a> ClientHello<'a> {
         ));
 
         // Add extended_master_secret extension (empty)
-        let start_pos = extension_data.len();
+        /*let start_pos = extension_data.len();
         extension_ranges.push((
             ExtensionType::ExtendedMasterSecret,
             start_pos,
             start_pos, // No data at all
-        ));
+        ));*/
 
         // Now create all extensions using the written data
         for (extension_type, start, end) in extension_ranges {
