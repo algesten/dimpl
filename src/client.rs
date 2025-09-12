@@ -712,7 +712,7 @@ impl Client {
         // First check for ChangeCipherSpec record
         if let Some(incoming) = self.engine.next_incoming() {
             for record in incoming.records().iter() {
-                if record.record.content_type == ContentType::ChangeCipherSpec {
+                if record.record().content_type == ContentType::ChangeCipherSpec {
                     debug!("Received server ChangeCipherSpec, enabling server encryption");
                     // Server changed encryption state
                     self.engine.enable_server_encryption();

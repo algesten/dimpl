@@ -3,9 +3,38 @@ use std::cmp::Ordering;
 
 use super::ProtocolVersion;
 use crate::util::be_u48;
+use crate::Error;
 use nom::bytes::complete::take;
 use nom::number::complete::{be_u16, be_u8};
-use nom::IResult;
+use nom::{Err, IResult};
+
+pub struct DTLSRecordSlice<'a> {
+    pub slice: &'a mut [u8],
+    pub rest: &'a mut [u8],
+}
+
+impl<'a> DTLSRecordSlice<'a> {
+    pub fn try_read(input: &'a mut [u8]) -> Result<Option<DTLSRecordSlice<'a>>, Error> {
+        if input.is_empty() {
+            return Ok(None);
+        }
+
+        if input.len() < 13 {
+            return Err(Error::ParseIncomplete);
+        }
+
+        let length = u16::from_be_bytes([input[11], input[12]]) as usize;
+        let mid = 13 + length;
+
+        if input.len() < mid {
+            return Err(Error::ParseIncomplete);
+        }
+
+        let (slice, rest) = input.split_at_mut(mid);
+
+        Ok(Some(DTLSRecordSlice { slice, rest }))
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub struct DTLSRecord<'a> {
@@ -23,13 +52,13 @@ pub struct Sequence {
 }
 
 impl<'a> DTLSRecord<'a> {
-    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], DTLSRecord<'a>> {
-        let (input, content_type) = ContentType::parse(input)?;
-        let (input, version) = ProtocolVersion::parse(input)?;
-        let (input, epoch) = be_u16(input)?;
-        let (input, sequence_number) = be_u48(input)?;
-        let (input, length) = be_u16(input)?;
-        let (input, fragment) = take(length as usize)(input)?;
+    pub fn parse(input: &'a [u8]) -> IResult<&[u8], DTLSRecord<'a>> {
+        let (input, content_type) = ContentType::parse(input)?; // u8
+        let (input, version) = ProtocolVersion::parse(input)?; // u16
+        let (input, epoch) = be_u16(input)?; // u16
+        let (input, sequence_number) = be_u48(input)?; // u48
+        let (input, length) = be_u16(input)?; // u16
+        let (rest, fragment) = take(length as usize)(input)?;
 
         let sequence = Sequence {
             epoch,
@@ -37,7 +66,7 @@ impl<'a> DTLSRecord<'a> {
         };
 
         Ok((
-            input,
+            rest,
             DTLSRecord {
                 content_type,
                 version,
@@ -118,6 +147,8 @@ mod tests {
 
     #[test]
     fn roundtrip() {
+        let mut record: Vec<u8> = RECORD.to_vec();
+
         let record = DTLSRecord {
             content_type: ContentType::Handshake,
             version: ProtocolVersion::DTLS1_2,
@@ -126,7 +157,7 @@ mod tests {
                 sequence_number: 1,
             },
             length: 16,
-            fragment: &RECORD[13..],
+            fragment: &mut record[13..],
         };
 
         // Serialize and compare to RECORD
@@ -135,7 +166,7 @@ mod tests {
         assert_eq!(serialized, RECORD);
 
         // Parse and compare with original
-        let (rest, parsed) = DTLSRecord::parse(&serialized).unwrap();
+        let (rest, parsed) = DTLSRecord::parse(&mut serialized).unwrap();
         assert_eq!(parsed, record);
 
         assert!(rest.is_empty());

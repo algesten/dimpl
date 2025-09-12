@@ -1,5 +1,5 @@
-use crate::util::many0;
 use super::Asn1Cert;
+use crate::util::many0;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::Err;
