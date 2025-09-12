@@ -53,7 +53,10 @@ impl KeyExchange for EcdhKeyExchange {
                     let secret = P256EphemeralSecret::random(&mut OsRng);
                     let public_key = P256PublicKey::from(&secret);
                     eprintln!("dimpl public key: {:x?}", public_key);
-                    eprintln!("dimpl public key encoded: {:x?}", public_key.to_encoded_point(false).as_bytes());
+                    eprintln!(
+                        "dimpl public key encoded: {:x?}",
+                        public_key.to_encoded_point(false).as_bytes()
+                    );
                     *private_key = Some(secret);
                     public_key
                 };

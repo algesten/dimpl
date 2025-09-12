@@ -1,19 +1,16 @@
 use std::ops::Deref;
 
-use nom::error::{Error as NomError, ErrorKind};
-use nom::{Err, IResult};
-use self_cell::self_cell;
+use self_cell::{self_cell, MutBorrow};
+use std::fmt;
 use tinyvec::ArrayVec;
 
 use crate::buffer::Buffer;
-use crate::message::{Body, CipherSuite, ContentType, DTLSRecord, Handshake};
-use crate::util::many1;
+use crate::message::{Body, CipherSuite, ContentType, DTLSRecord, DTLSRecordSlice, Handshake};
 use crate::Error;
 
 /// Holds both the UDP packet and the parsed result of that packet.
 ///
 /// A self-referential struct.
-#[derive(Debug)]
 pub struct Incoming(Inner);
 
 impl Incoming {
@@ -39,12 +36,10 @@ impl Incoming {
 
 self_cell!(
     struct Inner {
-        owner: Buffer, // Buffer with UDP packet data
+        owner: MutBorrow<Buffer>, // Buffer with UDP packet data
         #[covariant]
         dependent: Records, // Parsed records from that UDP packet
     }
-
-    impl {Debug}
 );
 
 impl Incoming {
@@ -67,8 +62,12 @@ impl Incoming {
         into.resize(packet.len(), 0);
         into.copy_from_slice(packet);
 
+        let into = MutBorrow::new(into);
+
         // håll i hatten
-        let inner = Inner::try_new(into, |data| Ok::<_, Error>(Records::parse(data, c)?.1))?;
+        let inner = Inner::try_new(into, |data| {
+            Ok::<_, Error>(Records::parse(data.borrow_mut(), c)?)
+        })?;
 
         Ok(Incoming(inner))
     }
@@ -81,12 +80,19 @@ pub struct Records<'a> {
 }
 
 impl<'a> Records<'a> {
-    pub fn parse(input: &'a [u8], c: &mut Option<CipherSuite>) -> IResult<&'a [u8], Records<'a>> {
-        let (rest, records) = many1(|input| Record::parse(input, c))(input)?;
-        if !rest.is_empty() {
-            return Err(Err::Failure(NomError::new(rest, ErrorKind::LengthValue)));
+    pub fn parse(input: &'a mut [u8], c: &mut Option<CipherSuite>) -> Result<Records<'a>, Error> {
+        let mut records = ArrayVec::default();
+        let mut current = input;
+
+        // DTLSRecordSlice::try_read will end with None when cleanly chunking ends.
+        // Any extra bytes will cause an Error.
+        while let Some(dtls_rec) = DTLSRecordSlice::try_read(current)? {
+            let record = Record::parse(dtls_rec.slice, c)?;
+            records.push(record);
+            current = dtls_rec.rest;
         }
-        Ok((&[], Records { records }))
+
+        Ok(Records { records })
     }
 }
 
@@ -98,33 +104,93 @@ impl<'a> Deref for Records<'a> {
     }
 }
 
-/// One record parsed from a UDP packet.
-#[derive(Debug, Default)]
-pub struct Record<'a> {
-    /// The parsed DTLSRecord
-    pub record: DTLSRecord<'a>,
+pub struct Record<'a>(RecordInner<'a>);
 
-    /// If the DTLSRecord is of ContentType Handshake, this is the parsed handshake.
+impl<'a> Record<'a> {
+    pub fn parse(input: &'a mut [u8], c: &mut Option<CipherSuite>) -> Result<Record<'a>, Error> {
+        let inner = RecordInner::try_new(input, |borrowed| {
+            Ok::<_, Error>(ParsedRecord::parse(&borrowed, c)?)
+        })?;
+
+        Ok(Record(inner))
+    }
+
+    pub fn record(&self) -> &DTLSRecord {
+        &self.0.borrow_dependent().record
+    }
+
+    pub fn handshake(&self) -> Option<&Handshake> {
+        self.0.borrow_dependent().handshake.as_ref()
+    }
+}
+
+self_cell!(
+    pub struct RecordInner<'a> {
+        owner: &'a mut [u8],
+
+        #[covariant]
+        dependent: ParsedRecord,
+    }
+);
+
+pub struct ParsedRecord<'a> {
+    pub record: DTLSRecord<'a>,
     pub handshake: Option<Handshake<'a>>,
 }
 
-impl<'a> Record<'a> {
-    pub fn parse(input: &'a [u8], c: &mut Option<CipherSuite>) -> IResult<&'a [u8], Record<'a>> {
-        let (input, record) = DTLSRecord::parse(input)?;
-        let handshake = if record.content_type != ContentType::Handshake {
-            None
+impl<'a> ParsedRecord<'a> {
+    pub fn parse(input: &'a [u8], c: &mut Option<CipherSuite>) -> Result<ParsedRecord<'a>, Error> {
+        let (rest, record) = DTLSRecord::parse(input)?;
+
+        // invariant: the Record has been chunked to one DTLSRecord each.
+        assert!(rest.is_empty());
+
+        let handshake = if record.content_type == ContentType::Handshake {
+            // This will also return None on the encrypted Finished after ChangeCipherSpec.
+            // However we will then decrypt and try again.
+            maybe_handshake(input, c)
         } else {
-            // Parse incoming as fragments
-            let (_, handshake) = Handshake::parse(record.fragment, *c, true)?;
-
-            // When we get the ServerHello, we know which cipher suite was selected.
-            // Parsing further messages after this must be informed by that choice.
-            if let Body::ServerHello(server_hello) = &handshake.body {
-                *c = Some(server_hello.cipher_suite);
-            }
-
-            Some(handshake)
+            None
         };
-        Ok((input, Record { record, handshake }))
+
+        Ok(ParsedRecord { record, handshake })
+    }
+}
+
+fn maybe_handshake<'a>(input: &'a [u8], c: &mut Option<CipherSuite>) -> Option<Handshake<'a>> {
+    let (_, handshake) = Handshake::parse(input, *c, true).ok()?;
+
+    // When we get the ServerHello, we know which cipher suite was selected.
+    // Parsing further messages after this must be informed by that choice.
+    if let Body::ServerHello(server_hello) = &handshake.body {
+        *c = Some(server_hello.cipher_suite);
+    }
+
+    Some(handshake)
+}
+
+impl fmt::Debug for Incoming {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Incoming")
+            .field("records", &self.records())
+            .finish()
+    }
+}
+
+impl<'a> fmt::Debug for Record<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Record")
+            .field("record", &self.0.borrow_dependent().record)
+            .field("handshake", &self.0.borrow_dependent().handshake)
+            .finish()
+    }
+}
+
+impl<'a> Default for Record<'a> {
+    fn default() -> Self {
+        Record(RecordInner::new(&mut [], |_| ParsedRecord {
+            record: DTLSRecord::default(),
+            handshake: None,
+        }))
     }
 }

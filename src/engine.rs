@@ -144,11 +144,11 @@ impl Engine {
             return Err(Error::ReceiveQueueFull);
         }
 
-        if let Some(h) = &first.handshake {
+        if let Some(h) = first.handshake() {
             match self.queue_rx.binary_search_by(|i| {
                 let other = i
                     .first()
-                    .handshake
+                    .handshake()
                     .as_ref()
                     .map(|h| (h.header.message_seq, h.header.fragment_offset))
                     .unwrap_or((u16::MAX, u32::MAX));
@@ -171,10 +171,10 @@ impl Engine {
         } else {
             match self
                 .queue_rx
-                .binary_search_by_key(&first.record.sequence, |i| i.first().record.sequence)
+                .binary_search_by_key(&first.record().sequence, |i| i.first().record().sequence)
             {
                 Ok(_) => {
-                    debug!("Dupe record with sequence: {}", first.record.sequence);
+                    debug!("Dupe record with sequence: {}", first.record().sequence);
                 }
                 Err(index) => {
                     // Insert in order of sequence_number
@@ -225,7 +225,12 @@ impl Engine {
             return None;
         }
 
-        let first = self.queue_rx.front().unwrap().first().handshake.as_ref()?;
+        let first = self
+            .queue_rx
+            .front()
+            .unwrap()
+            .first()
+            .handshake()?;
 
         if first.header.message_seq != self.peer_handshake_seq_no {
             return None;
@@ -238,7 +243,7 @@ impl Engine {
         // Cap to MAX_DEFRAGMENT_PACKETS to avoid misbehaving peers
         for incoming in self.queue_rx.iter().take(MAX_DEFRAGMENT_PACKETS) {
             for record in incoming.records().iter() {
-                if let Some(h) = &record.handshake {
+                if let Some(h) = &record.handshake() {
                     // Check message sequence contiguity
                     if h.header.message_seq != current_seq {
                         // Reset fragment tracking for new message sequence
@@ -247,10 +252,10 @@ impl Engine {
                     }
 
                     // Check fragment contiguity
-                    if h.header.fragment_offset > 0
-                        && h.header.fragment_offset != last_fragment_end {
-                            return None;
-                        }
+                    if h.header.fragment_offset > 0 && h.header.fragment_offset != last_fragment_end
+                    {
+                        return None;
+                    }
                     last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
 
                     if h.header.msg_type == to {
@@ -287,7 +292,7 @@ impl Engine {
         let iter = self
             .queue_rx
             .iter()
-            .flat_map(|i| i.records().iter().filter_map(|r| r.handshake.as_ref()))
+            .flat_map(|i| i.records().iter().filter_map(|r| r.handshake()))
             // Handled in previous iteration
             .skip_while(|h| h.handled.get());
 
@@ -312,14 +317,14 @@ impl Engine {
             let all_handled = incoming
                 .records()
                 .iter()
-                .filter_map(|r| r.handshake.as_ref())
+                .filter_map(|r| r.handshake())
                 .all(|h| h.handled.get());
 
             if all_handled {
                 let incoming = self.queue_rx.pop_front().unwrap();
 
                 // The last handled handshake
-                let last_handshake = incoming.last().handshake.as_ref().unwrap();
+                let last_handshake = incoming.last().handshake().unwrap();
 
                 // Move the expected sequence number
                 self.peer_handshake_seq_no = last_handshake.header.message_seq + 1;
@@ -395,7 +400,7 @@ impl Engine {
 
             // Create proper AAD for encryption - for encrypted records, we need to use
             // the length after encryption (plaintext + 16 bytes tag for AES-GCM)
-            let final_length = length;// + 16; // Add 16 bytes for auth tag
+            let final_length = length; // + 16; // Add 16 bytes for auth tag
             let aad = self.create_aad(content_type, &sequence, final_length);
 
             // Encrypt the fragment in-place
@@ -416,7 +421,7 @@ impl Engine {
             version: ProtocolVersion::DTLS1_2,
             sequence,
             length: fragment.len() as u16,
-            fragment: &fragment,
+            fragment: &mut fragment,
         };
 
         // Increment the sequence number for the next transmission
@@ -481,9 +486,9 @@ impl Engine {
 
             for i in 0..records.len() {
                 let record = &records[i];
-                if record.record.content_type == ContentType::ApplicationData {
+                if record.record().content_type == ContentType::ApplicationData {
                     // Check if we have enough data for the explicit nonce (8 bytes) plus some content
-                    if record.record.fragment.len() <= 8 {
+                    if record.record().fragment.len() <= 8 {
                         return Err(Error::CryptoError(
                             "ApplicationData record too short to contain explicit nonce"
                                 .to_string(),
@@ -491,7 +496,7 @@ impl Engine {
                     }
 
                     // Extract the explicit nonce from the beginning of the fragment
-                    let explicit_nonce = &record.record.fragment[..8];
+                    let explicit_nonce = &record.record().fragment[..8];
 
                     // Get the fixed part of the IV (4 bytes)
                     let iv = if self.is_client {
@@ -513,7 +518,7 @@ impl Engine {
                     nonce.extend_from_slice(explicit_nonce);
 
                     // Get only the encrypted data (skip the explicit nonce)
-                    let ciphertext = record.record.fragment[8..].to_vec();
+                    let ciphertext = record.record().fragment[8..].to_vec();
 
                     // Create AAD for decryption
                     // For decryption, the AAD length should be the ciphertext length minus the GCM tag (16 bytes)
@@ -521,8 +526,8 @@ impl Engine {
                     let payload_length = ciphertext.len().checked_sub(16).unwrap_or(0);
 
                     let aad = self.create_aad(
-                        record.record.content_type,
-                        &record.record.sequence,
+                        record.record().content_type,
+                        &record.record().sequence,
                         payload_length as u16,
                     );
 
