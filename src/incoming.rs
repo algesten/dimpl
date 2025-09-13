@@ -6,6 +6,7 @@ use tinyvec::ArrayVec;
 use zeroize::Zeroize;
 
 use crate::buffer::Buffer;
+use crate::crypto::DTLS_EXPLICIT_NONCE_LEN;
 use crate::engine::Engine;
 use crate::message::{ContentType, DTLSRecord, DTLSRecordSlice, Handshake};
 use crate::Error;
@@ -130,10 +131,10 @@ impl<'a> Record<'a> {
             // Bring back the unparsed bytes.
             let input = record.0.into_owner();
 
-            // The encrypted part is after a 13 byte header and 8 byte nonce.
+            // The encrypted part is after the DTLS header and explicit nonce.
             // The entire buffer is only the single record, since we chunk
             // records up in Records::parse()
-            let ciphertext = &mut input[13 + 8..];
+            let ciphertext = &mut input[DTLSRecord::HEADER_LEN + DTLS_EXPLICIT_NONCE_LEN..];
 
             // TODO (martin): fix these friggin buffers.
             let mut buffer = Buffer::wrap(ciphertext.to_vec());
@@ -142,15 +143,15 @@ impl<'a> Record<'a> {
             engine.decrypt_data(&mut buffer, aad, nonce)?;
 
             // zero the encrypted buffer.
-            let fragment = &mut input[13..];
+            let fragment = &mut input[DTLSRecord::HEADER_LEN..];
             fragment.zeroize();
 
             // Update the length of the record.
             let len = buffer.len();
-            input[11..13].copy_from_slice(&(len as u16).to_be_bytes());
+            input[DTLSRecord::LENGTH_OFFSET].copy_from_slice(&(len as u16).to_be_bytes());
 
             // Copy the decrypted buffer into the record.
-            input[13..(13 + len)].copy_from_slice(&buffer);
+            input[DTLSRecord::HEADER_LEN..(DTLSRecord::HEADER_LEN + len)].copy_from_slice(&buffer);
 
             return Record::parse(input, engine, false);
         }

@@ -5,14 +5,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::buffer::{Buffer, BufferPool};
-use crate::crypto::{
-    Aad, CertVerifier, CryptoContext, Hash, Iv, KeyingMaterial, Nonce, SrtpProfile,
-};
+use crate::crypto::{Aad, CertVerifier, CryptoContext, Hash};
+use crate::crypto::{Iv, KeyingMaterial, DTLS_AEAD_OVERHEAD};
+use crate::crypto::{Nonce, SrtpProfile, DTLS_EXPLICIT_NONCE_LEN};
 use crate::incoming::Incoming;
-use crate::message::{
-    CipherSuite, ContentType, DTLSRecord, Handshake, HashAlgorithm, MessageType, ProtocolVersion,
-    Sequence,
-};
+use crate::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
+use crate::message::{HashAlgorithm, MessageType, ProtocolVersion, Sequence};
 use crate::{Config, Error, Output};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
@@ -390,16 +388,18 @@ impl Engine {
             // Combine the fixed IV and the explicit nonce
             let nonce = Nonce::new(iv, &explicit_nonce);
 
-            // Create proper AAD for encryption - for encrypted records, we need to use
-            // the length after encryption (plaintext + 16 bytes tag for AES-GCM)
-            let final_length = length; // + 16; // Add 16 bytes for auth tag
+            // DTLS 1.2 AEAD (AES-GCM): AAD uses the plaintext length (DTLSCompressed.length).
+            // See RFC 5246/5288 and RFC 6347. The record fragment on the wire will be:
+            // 8-byte explicit nonce || ciphertext(plaintext) || 16-byte GCM tag.
+            let final_length = length;
             let aad = Aad::new(content_type, sequence, final_length);
 
             // Encrypt the fragment in-place
             self.encrypt_data(&mut fragment, aad, nonce)?;
 
             // Create a new buffer that includes the explicit nonce
-            let mut encrypted_fragment = Vec::with_capacity(explicit_nonce.len() + fragment.len());
+            let mut encrypted_fragment =
+                Vec::with_capacity(DTLS_EXPLICIT_NONCE_LEN + fragment.len());
             encrypted_fragment.extend_from_slice(&explicit_nonce);
             encrypted_fragment.extend_from_slice(&fragment);
 
@@ -415,6 +415,14 @@ impl Engine {
             length: fragment.len() as u16,
             fragment: &mut fragment,
         };
+
+        // Debug-only sanity check for AEAD record sizing when encryption is enabled.
+        if self.should_encrypt(content_type) {
+            debug_assert!(
+                (record.length as usize) >= DTLS_EXPLICIT_NONCE_LEN,
+                "DTLS AEAD record too small"
+            );
+        }
 
         // Increment the sequence number for the next transmission
         self.next_sequence_tx.sequence_number += 1;
@@ -607,12 +615,10 @@ impl Engine {
     }
 
     pub fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord) -> (Aad, Nonce) {
-        // For AEAD (AES-GCM) in DTLS 1.2, the AAD length is the plaintext length,
-        // not the record fragment length. The fragment carries an 8-byte explicit
-        // nonce prefix and a 16-byte authentication tag suffix.
-        // See RFC 5246/5288 and RFC 6347.
-        let ciphertext_overhead = 8 /* explicit nonce */ + 16 /* GCM tag */;
-        let plaintext_len = dtls.length.saturating_sub(ciphertext_overhead);
+        // DTLS 1.2 AEAD (AES-GCM): AAD uses the plaintext length. The fragment on the wire is
+        // 8-byte explicit nonce || ciphertext || 16-byte GCM tag. Recover plaintext length from
+        // the record header's fragment length field.
+        let plaintext_len = dtls.length.saturating_sub(DTLS_AEAD_OVERHEAD as u16);
         let aad = Aad::new(dtls.content_type, dtls.sequence, plaintext_len);
         let iv = self.peer_iv();
         let nonce = Nonce::new(iv, dtls.nonce());

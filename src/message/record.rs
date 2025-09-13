@@ -1,5 +1,6 @@
 use core::fmt;
 use std::cmp::Ordering;
+use std::ops::Range;
 
 use super::ProtocolVersion;
 use crate::util::be_u48;
@@ -19,12 +20,13 @@ impl<'a> DTLSRecordSlice<'a> {
             return Ok(None);
         }
 
-        if input.len() < 13 {
+        if input.len() < DTLSRecord::HEADER_LEN {
             return Err(Error::ParseIncomplete);
         }
 
-        let length = u16::from_be_bytes([input[11], input[12]]) as usize;
-        let mid = 13 + length;
+        let length_bytes = input[DTLSRecord::LENGTH_OFFSET].try_into().unwrap();
+        let length = u16::from_be_bytes(length_bytes) as usize;
+        let mid = DTLSRecord::HEADER_LEN + length;
 
         if input.len() < mid {
             return Err(Error::ParseIncomplete);
@@ -52,6 +54,15 @@ pub struct Sequence {
 }
 
 impl<'a> DTLSRecord<'a> {
+    /// DTLS record header length: content_type(1) + version(2) + epoch(2) + seq(6) + length(2)
+    pub const HEADER_LEN: usize = 13;
+
+    /// Length of the explicit nonce prefix in AEAD ciphers (e.g., AES-GCM)
+    pub const EXPLICIT_NONCE_LEN: usize = 8;
+
+    /// Byte offset in the record header where the 2-byte length field is
+    pub const LENGTH_OFFSET: Range<usize> = 11..13;
+
     pub fn parse(input: &'a [u8]) -> IResult<&[u8], DTLSRecord<'a>> {
         let (input, content_type) = ContentType::parse(input)?; // u8
         let (input, version) = ProtocolVersion::parse(input)?; // u16
@@ -87,7 +98,7 @@ impl<'a> DTLSRecord<'a> {
     }
 
     pub fn nonce(&self) -> &[u8] {
-        &self.fragment[..8]
+        &self.fragment[..Self::EXPLICIT_NONCE_LEN]
     }
 }
 
@@ -161,7 +172,7 @@ mod tests {
                 sequence_number: 1,
             },
             length: 16,
-            fragment: &mut record[13..],
+            fragment: &mut record[DTLSRecord::HEADER_LEN..],
         };
 
         // Serialize and compare to RECORD

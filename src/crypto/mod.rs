@@ -41,6 +41,39 @@ use crate::message::{NamedCurve, Sequence, ServerKeyExchangeParams, SignatureAlg
 use sec1::der::Decode;
 use sec1::EcPrivateKey;
 
+/// DTLS 1.2 AEAD (AES-GCM) record formatting constants
+///
+/// For GCM ciphers in DTLS 1.2 (RFC 6347 + RFC 5288):
+/// - Each encrypted record fragment starts with an 8-byte explicit nonce
+/// - The GCM authentication tag is 16 bytes and appended to the ciphertext
+/// - The AAD length is the plaintext length (TLSCompressed.length / DTLSCompressed.length)
+pub const DTLS_EXPLICIT_NONCE_LEN: usize = 8;
+pub const GCM_TAG_LEN: usize = 16;
+pub const DTLS_AEAD_OVERHEAD: usize = DTLS_EXPLICIT_NONCE_LEN + GCM_TAG_LEN; // 24
+
+/// Return the AAD length given a plaintext length. For DTLS 1.2 AEAD this is the plaintext length.
+#[inline]
+#[allow(dead_code)]
+pub fn aad_len_from_plaintext_len(plaintext_len: u16) -> u16 {
+    plaintext_len
+}
+
+/// Compute the DTLS record fragment length given a plaintext length for AEAD ciphers.
+/// fragment_len = explicit_nonce(8) + ciphertext(plaintext_len + 16 tag)
+#[inline]
+#[allow(dead_code)]
+pub fn fragment_len_from_plaintext_len(plaintext_len: usize) -> usize {
+    DTLS_EXPLICIT_NONCE_LEN + plaintext_len + GCM_TAG_LEN
+}
+
+/// Compute the plaintext length from a DTLS AEAD record fragment length.
+/// Returns None if the fragment is smaller than the mandatory AEAD overhead.
+#[inline]
+#[allow(dead_code)]
+pub fn plaintext_len_from_fragment_len(fragment_len: usize) -> Option<usize> {
+    fragment_len.checked_sub(DTLS_AEAD_OVERHEAD)
+}
+
 /// A parsed private key with its associated signature algorithm
 pub enum ParsedKey {
     /// P-256 ECDSA key
@@ -679,5 +712,33 @@ impl Deref for Nonce {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aead_constants_and_length_helpers() {
+        assert_eq!(DTLS_EXPLICIT_NONCE_LEN, 8);
+        assert_eq!(GCM_TAG_LEN, 16);
+        assert_eq!(DTLS_AEAD_OVERHEAD, 24);
+
+        for &pt_len in &[0usize, 1, 37, 512, 1350, 16384] {
+            let aad_len = aad_len_from_plaintext_len(pt_len as u16);
+            assert_eq!(aad_len as usize, pt_len);
+
+            let frag_len = fragment_len_from_plaintext_len(pt_len);
+            assert_eq!(frag_len, DTLS_EXPLICIT_NONCE_LEN + pt_len + GCM_TAG_LEN);
+
+            let roundtrip =
+                plaintext_len_from_fragment_len(frag_len).expect("frag_len >= overhead");
+            assert_eq!(roundtrip, pt_len);
+        }
+
+        assert!(plaintext_len_from_fragment_len(0).is_none());
+        assert!(plaintext_len_from_fragment_len(3).is_none());
+        assert!(plaintext_len_from_fragment_len(DTLS_AEAD_OVERHEAD - 1).is_none());
     }
 }
