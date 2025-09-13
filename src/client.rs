@@ -704,25 +704,14 @@ impl Client {
         let expected = self.generate_verify_data(false)?;
         debug!("Generated expected server verify data, waiting for server Finished message");
 
-        // First check for ChangeCipherSpec record
-        if let Some(incoming) = self.engine.next_incoming() {
-            for record in incoming.records().iter() {
-                if record.record().content_type == ContentType::ChangeCipherSpec {
-                    debug!("Received server ChangeCipherSpec, enabling server encryption");
-                    // Server changed encryption state
-                    self.engine.enable_server_encryption();
-                }
-            }
-        }
-
         // Wait for server finished message
         let Some(mut flight) = self.engine.has_flight(MessageType::Finished) else {
             debug!("Waiting for server Finished message");
             return Ok(());
         };
 
-        // Start in HandshakePhaseComplete state since we've already received ServerHelloDone
-        let mut state = HandshakeState::HandshakePhaseComplete;
+        // Start in AwaitingFinished state since we already received ServerHelloDone
+        let mut state = HandshakeState::AwaitingFinished;
 
         while let Some(handshake) = self
             .engine
@@ -899,6 +888,9 @@ enum HandshakeState {
     /// Certificate request received, waiting for hello done
     AwaitingServerHelloDone,
 
+    /// Waiting for Finished message
+    AwaitingFinished,
+
     /// After ServerHelloDone, handshake is complete from server hello phase
     HandshakePhaseComplete,
 }
@@ -955,6 +947,11 @@ impl HandshakeState {
 
             // After CertificateRequest, must get ServerHelloDone
             (HandshakeState::AwaitingServerHelloDone, MessageType::ServerHelloDone) => {
+                Ok(HandshakeState::HandshakePhaseComplete)
+            }
+
+            // Waiting for the final Finished message
+            (HandshakeState::AwaitingFinished, MessageType::Finished) => {
                 Ok(HandshakeState::HandshakePhaseComplete)
             }
 

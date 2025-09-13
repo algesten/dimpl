@@ -165,7 +165,7 @@ impl<'a> Handshake<'a> {
 
         let (rest, body) = Body::parse(buffer, first.header.msg_type, cipher_suite)?;
 
-        if !rest.is_empty() {
+        if !rest.is_empty() && first.header.msg_type == MessageType::Finished {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
             return Err(crate::Error::ParseIncomplete);
         }
