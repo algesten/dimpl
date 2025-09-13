@@ -88,6 +88,24 @@ pub fn calculate_master_secret(
     prf_tls12(pre_master_secret, "master secret", &seed, 48, hash)
 }
 
+/// Extended Master Secret calculation for TLS 1.2 (RFC 7627)
+///
+/// master_secret = PRF(pre_master_secret, "extended master secret", session_hash, 48)
+pub fn calculate_extended_master_secret(
+    pre_master_secret: &[u8],
+    session_hash: &[u8],
+    hash: HashAlgorithm,
+)
+-> Result<Vec<u8>, String> {
+    prf_tls12(
+        pre_master_secret,
+        "extended master secret",
+        session_hash,
+        48,
+        hash,
+    )
+}
+
 /// Key expansion for TLS 1.2
 /// as specified in RFC 5246 Section 6.3
 pub fn key_expansion(

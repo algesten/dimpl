@@ -30,7 +30,7 @@ pub use encryption::{AesGcm, Cipher};
 pub use hash::Hash;
 pub use key_exchange::KeyExchange;
 pub use keying::{KeyingMaterial, SrtpProfile};
-pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
+pub use prf::{calculate_master_secret, calculate_extended_master_secret, key_expansion, prf_tls12};
 
 use crate::buffer::Buffer;
 // Message-related imports
@@ -515,6 +515,27 @@ impl CryptoContext {
                 Ok(())
             }
             _ => Err("Unsupported cipher suite".to_string()),
+        }
+    }
+
+    /// Derive master secret using Extended Master Secret (RFC 7627)
+    pub fn derive_extended_master_secret(
+        &mut self,
+        session_hash: &[u8],
+        hash: HashAlgorithm,
+    ) -> Result<(), String> {
+        match &self.pre_master_secret {
+            Some(pms) => {
+                self.master_secret = Some(calculate_extended_master_secret(
+                    pms,
+                    session_hash,
+                    hash,
+                )?);
+                // Clear pre-master secret after use (security measure)
+                self.pre_master_secret = None;
+                Ok(())
+            }
+            None => Err("Pre-master secret not available".to_string()),
         }
     }
 

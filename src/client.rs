@@ -65,6 +65,9 @@ pub struct Client {
 
     /// Whether we requested a CertificateVerify
     certificate_verify: bool,
+
+    /// Whether Extended Master Secret was negotiated
+    extended_master_secret: bool,
 }
 
 /// Current state of the client.
@@ -121,6 +124,7 @@ impl Client {
             extension_data: Vec::with_capacity(256), // Pre-allocate extension data buffer
             defragment_buffer: Vec::new(),
             certificate_verify: false,
+            extended_master_secret: false,
         }
     }
 
@@ -294,7 +298,7 @@ impl Client {
                         Error::CryptoError(format!("Failed to initialize key exchange: {}", e))
                     })?;
 
-                    // Check for use_srtp extension to get the negotiated SRTP profile
+                    // Check for use_srtp and extended_master_secret extensions
                     if let Some(extensions) = &server_hello.extensions {
                         for extension in extensions {
                             if extension.extension_type == ExtensionType::UseSrtp {
@@ -308,6 +312,13 @@ impl Client {
                                             Some(use_srtp.profiles[0].to_srtp_profile());
                                     }
                                 }
+                            }
+
+                            if extension.extension_type
+                                == ExtensionType::ExtendedMasterSecret
+                            {
+                                self.extended_master_secret = true;
+                                debug!("Server negotiated Extended Master Secret");
                             }
                         }
                     }
@@ -621,13 +632,27 @@ impl Client {
             server_random_vec.len()
         );
 
-        // Derive master secret
+        // Derive master secret (use EMS if negotiated)
         let suite_hash = cipher_suite.hash_algorithm();
-
-        self.engine
-            .crypto_context_mut()
-            .derive_master_secret(&client_random, &server_random_vec, suite_hash)
-            .map_err(|e| Error::CryptoError(format!("Failed to derive master secret: {}", e)))?;
+        if self.extended_master_secret {
+            let session_hash = self.engine.handshake_hash(suite_hash);
+            self.engine
+                .crypto_context_mut()
+                .derive_extended_master_secret(&session_hash, suite_hash)
+                .map_err(|e| Error::CryptoError(format!(
+                    "Failed to derive extended master secret: {}",
+                    e
+                )))?;
+        } else {
+            debug!("Extended Master Secret not negotiated; using legacy master secret");
+            self.engine
+                .crypto_context_mut()
+                .derive_master_secret(&client_random, &server_random_vec, suite_hash)
+                .map_err(|e| Error::CryptoError(format!(
+                    "Failed to derive master secret: {}",
+                    e
+                )))?;
+        }
 
         debug!("Master secret derived successfully");
 
