@@ -88,7 +88,7 @@ impl<'a> Records<'a> {
         // DTLSRecordSlice::try_read will end with None when cleanly chunking ends.
         // Any extra bytes will cause an Error.
         while let Some(dtls_rec) = DTLSRecordSlice::try_read(current)? {
-            let record = Record::parse(dtls_rec.slice, engine)?;
+            let record = Record::parse(dtls_rec.slice, engine, true)?;
             records.push(record);
             current = dtls_rec.rest;
         }
@@ -108,12 +108,38 @@ impl<'a> Deref for Records<'a> {
 pub struct Record<'a>(RecordInner<'a>);
 
 impl<'a> Record<'a> {
-    pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Record<'a>, Error> {
+    pub fn parse(input: &'a mut [u8], engine: &mut Engine, decrypt: bool) -> Result<Record<'a>, Error> {
         let inner = RecordInner::try_new(input, |borrowed| {
             Ok::<_, Error>(ParsedRecord::parse(&borrowed, engine)?)
         })?;
 
-        Ok(Record(inner))
+        let record = Record(inner);
+
+        if decrypt && engine.is_peer_encryption_enabled() {
+            // We need to decrypt the record and redo the parsing.
+            let dtls = record.record();
+            let (aad, nonce) = engine.aad_and_nonce(dtls)?;
+
+            // Bring back the unparsed bytes.
+            let input = inner.into_owner();
+
+            // The encrypted part is after a 13 byte header. The entire buffer is only the single
+            // record, since we chunk records up in Records::parse()
+            let fragment = &mut input[13..];
+
+            // To get the ciphertext we must strip off some stuff.
+            let ciphertext = engine.cipher_text_of(fragment);
+
+            // TODO (martin): fix these friggin buffers.
+            let mut buffer = Buffer::wrap(ciphertext.to_vec());
+
+            // This decrypt in place.
+            engine.decrypt_data(&mut buffer, aad, nonce)?;
+
+            return Record::parse(&mut buffer, engine, false);
+        }
+
+        Ok(record)
     }
 
     pub fn record(&self) -> &DTLSRecord {
@@ -146,7 +172,10 @@ impl<'a> ParsedRecord<'a> {
         // invariant: the Record has been chunked to one DTLSRecord each.
         assert!(rest.is_empty());
 
-        let handshake = if record.content_type == ContentType::Handshake {
+        let handshake = if record.content_type == ContentType::ChangeCipherSpec {
+            engine.enable_peer_encryption();
+            None
+        } else if record.content_type == ContentType::Handshake {
             // This will also return None on the encrypted Finished after ChangeCipherSpec.
             // However we will then decrypt and try again.
             maybe_handshake(input, engine)
