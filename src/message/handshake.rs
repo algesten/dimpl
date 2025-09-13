@@ -242,6 +242,7 @@ pub enum MessageType {
     ServerHelloDone, // empty
     CertificateVerify,
     ClientKeyExchange,
+    NewSessionTicket,
     Finished,
     Unknown(u8),
 }
@@ -265,6 +266,7 @@ impl MessageType {
             14 => MessageType::ServerHelloDone, // empty
             15 => MessageType::CertificateVerify,
             16 => MessageType::ClientKeyExchange,
+            4 => MessageType::NewSessionTicket,
             20 => MessageType::Finished,
             _ => MessageType::Unknown(value),
         }
@@ -282,6 +284,7 @@ impl MessageType {
             MessageType::ServerHelloDone => 14,
             MessageType::CertificateVerify => 15,
             MessageType::ClientKeyExchange => 16,
+            MessageType::NewSessionTicket => 4,
             MessageType::Finished => 20,
             MessageType::Unknown(value) => *value,
         }
@@ -306,6 +309,7 @@ pub enum Body<'a> {
     ServerHelloDone, // empty
     CertificateVerify(CertificateVerify<'a>),
     ClientKeyExchange(ClientKeyExchange<'a>),
+    NewSessionTicket(&'a [u8]),
     Finished(Finished<'a>),
     Unknown(u8),
     Fragment(&'a [u8]),
@@ -368,6 +372,10 @@ impl<'a> Body<'a> {
                 let (input, client_key_exchange) = ClientKeyExchange::parse(input, algo)?;
                 Ok((input, Body::ClientKeyExchange(client_key_exchange)))
             }
+            MessageType::NewSessionTicket => {
+                // Treat ticket as opaque per RFC 5077: lifetime_hint(4) + ticket (opaque vector)
+                Ok((&[], Body::NewSessionTicket(input)))
+            }
             MessageType::Finished => {
                 let cipher_suite =
                     c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
@@ -409,6 +417,9 @@ impl<'a> Body<'a> {
             }
             Body::ClientKeyExchange(client_key_exchange) => {
                 client_key_exchange.serialize(output);
+            }
+            Body::NewSessionTicket(bytes) => {
+                output.extend_from_slice(bytes);
             }
             Body::Finished(finished) => {
                 finished.serialize(output);
