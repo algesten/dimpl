@@ -526,8 +526,9 @@ impl Client {
         let public_key = self
             .engine
             .crypto_context_mut()
-            .generate_key_exchange()
-            .map_err(|e| Error::CryptoError(format!("Failed to generate key exchange: {}", e)))?;
+            .maybe_init_key_exchange()
+            .map_err(|e| Error::CryptoError(format!("Failed to generate key exchange: {}", e)))?
+            .to_vec();
 
         debug!("Generated public key size: {} bytes", public_key.len());
 

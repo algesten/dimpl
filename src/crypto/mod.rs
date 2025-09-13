@@ -28,7 +28,7 @@ mod signing;
 // Public re-exports
 pub use encryption::{AesGcm, Cipher};
 pub use hash::Hash;
-pub use key_exchange::{DhKeyExchange, EcdhKeyExchange, KeyExchange};
+pub use key_exchange::KeyExchange;
 pub use keying::{KeyingMaterial, SrtpProfile};
 pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
 
@@ -215,7 +215,7 @@ pub trait CertVerifier: Send + Sync {
 /// DTLS 1.2 crypto context
 pub struct CryptoContext {
     /// Key exchange mechanism
-    key_exchange: Option<Box<dyn KeyExchange>>,
+    key_exchange: Option<KeyExchange>,
 
     /// Client write key
     client_write_key: Option<Vec<u8>>,
@@ -300,14 +300,14 @@ impl CryptoContext {
         self.key_exchange = Some(match cipher_suite.as_key_exchange_algorithm() {
             KeyExchangeAlgorithm::EECDH => {
                 // Use P-256 as the default curve
-                Box::new(EcdhKeyExchange::new(NamedCurve::Secp256r1))
+                KeyExchange::new_ecdh(NamedCurve::Secp256r1)
             }
             KeyExchangeAlgorithm::EDH => {
                 // For DHE, we need prime and generator values (typically from server)
                 // This is a placeholder - real implementation would use values from ServerKeyExchange
                 let prime = vec![0u8; 256]; // Placeholder
                 let generator = vec![2]; // Common generator value g=2
-                Box::new(DhKeyExchange::new(prime, generator))
+                KeyExchange::new_dh(prime, generator)
             }
             _ => return Err("Unsupported key exchange algorithm".to_string()),
         });
@@ -316,9 +316,9 @@ impl CryptoContext {
     }
 
     /// Generate key exchange public key
-    pub fn generate_key_exchange(&mut self) -> Result<Vec<u8>, String> {
+    pub fn maybe_init_key_exchange(&mut self) -> Result<&[u8], String> {
         match &mut self.key_exchange {
-            Some(ke) => Ok(ke.generate()),
+            Some(ke) => Ok(ke.maybe_init()),
             None => Err("Key exchange not initialized".to_string()),
         }
     }
@@ -348,10 +348,10 @@ impl CryptoContext {
                 let server_public = dh_params.ys.to_vec();
 
                 // Update our key exchange
-                self.key_exchange = Some(Box::new(DhKeyExchange::new(prime, generator)));
+                self.key_exchange = Some(KeyExchange::new_dh(prime, generator));
 
                 // Generate our keypair
-                let _our_public = self.generate_key_exchange()?;
+                let _our_public = self.maybe_init_key_exchange()?;
 
                 // Compute shared secret with the server's public key
                 self.compute_shared_secret(&server_public)?;
@@ -364,10 +364,10 @@ impl CryptoContext {
                 let server_public = ecdh_params.public_key.to_vec();
 
                 // Update our key exchange
-                self.key_exchange = Some(Box::new(EcdhKeyExchange::new(curve)));
+                self.key_exchange = Some(KeyExchange::new_ecdh(curve));
 
                 // Generate our keypair
-                let _our_public = self.generate_key_exchange()?;
+                let _our_public = self.maybe_init_key_exchange()?;
 
                 // Compute shared secret with the server's public key
                 self.compute_shared_secret(&server_public)?;

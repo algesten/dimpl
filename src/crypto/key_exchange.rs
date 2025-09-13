@@ -7,17 +7,62 @@ use p384::{ecdh::EphemeralSecret as P384EphemeralSecret, PublicKey as P384Public
 use rand::distributions::Distribution;
 use rand::rngs::OsRng;
 
+pub struct KeyExchange {
+    inner: Inner,
+    cached_public_key: Option<Vec<u8>>,
+}
+
 /// Trait for key exchange mechanisms
-pub trait KeyExchange {
+enum Inner {
+    Ecdh(EcdhKeyExchange),
+    Dh(DhKeyExchange),
+}
+
+impl KeyExchange {
+    pub fn new_ecdh(curve: NamedCurve) -> Self {
+        Self::new(Inner::Ecdh(EcdhKeyExchange::new(curve)))
+    }
+
+    pub fn new_dh(prime: Vec<u8>, generator: Vec<u8>) -> Self {
+        Self::new(Inner::Dh(DhKeyExchange::new(prime, generator)))
+    }
+
+    fn new(inner: Inner) -> Self {
+        Self {
+            inner,
+            cached_public_key: None,
+        }
+    }
+
     /// Generate new ephemeral keys and return the public key
-    fn generate(&mut self) -> Vec<u8>;
+    pub fn maybe_init(&mut self) -> &[u8] {
+        // First time we generate the exchange.
+        if self.cached_public_key.is_none() {
+            let public_key = match &mut self.inner {
+                Inner::Ecdh(ecdh) => ecdh.maybe_init(),
+                Inner::Dh(dh) => dh.maybe_init(),
+            };
+            self.cached_public_key = Some(public_key.to_vec());
+        }
+
+        // Return the cached public key.
+        self.cached_public_key.as_ref().unwrap()
+    }
 
     /// Compute shared secret using peer's public key
-    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Vec<u8>, String>;
+    pub fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Vec<u8>, String> {
+        match &self.inner {
+            Inner::Ecdh(ecdh) => ecdh.compute_shared_secret(peer_public_key),
+            Inner::Dh(dh) => dh.compute_shared_secret(peer_public_key),
+        }
+    }
 
     /// Get curve info for ECDHE
-    fn get_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
-        None
+    pub fn get_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
+        match &self.inner {
+            Inner::Ecdh(ecdh) => ecdh.get_curve_info(),
+            Inner::Dh(dh) => dh.get_curve_info(),
+        }
     }
 }
 
@@ -41,33 +86,27 @@ impl EcdhKeyExchange {
     }
 }
 
-impl KeyExchange for EcdhKeyExchange {
-    fn generate(&mut self) -> Vec<u8> {
+impl EcdhKeyExchange {
+    fn maybe_init(&mut self) -> Vec<u8> {
         match self {
             EcdhKeyExchange::P256 { private_key } => {
-                // makes us have the same pre master secret as ossl
-                let public_key = if let Some(secret) = private_key.as_ref() {
-                    eprintln!("reusing previous secret");
-                    P256PublicKey::from(secret)
-                } else {
+                if private_key.is_none() {
                     let secret = P256EphemeralSecret::random(&mut OsRng);
-                    let public_key = P256PublicKey::from(&secret);
-                    eprintln!("dimpl public key: {:x?}", public_key);
-                    eprintln!(
-                        "dimpl public key encoded: {:x?}",
-                        public_key.to_encoded_point(false).as_bytes()
-                    );
                     *private_key = Some(secret);
-                    public_key
-                };
+                }
+                let secret = private_key.as_ref().unwrap();
+                let public_key = P256PublicKey::from(secret);
                 let encoded_point = public_key.to_encoded_point(false);
                 encoded_point.as_bytes().to_vec()
             }
             EcdhKeyExchange::P384 { private_key } => {
-                let secret = P384EphemeralSecret::random(&mut OsRng);
-                let public_key = P384PublicKey::from(&secret);
+                if private_key.is_none() {
+                    let secret = P384EphemeralSecret::random(&mut OsRng);
+                    *private_key = Some(secret);
+                }
+                let secret = private_key.as_ref().unwrap();
+                let public_key = P384PublicKey::from(secret);
                 let encoded_point = public_key.to_encoded_point(false);
-                *private_key = Some(secret);
                 encoded_point.as_bytes().to_vec()
             }
         }
@@ -166,8 +205,8 @@ impl DhKeyExchange {
     }
 }
 
-impl KeyExchange for DhKeyExchange {
-    fn generate(&mut self) -> Vec<u8> {
+impl DhKeyExchange {
+    fn maybe_init(&mut self) -> Vec<u8> {
         // Determine bit size of prime
         let prime_bits = self.prime.bits();
 
