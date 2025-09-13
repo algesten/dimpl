@@ -1,6 +1,7 @@
 use std::ops::Deref;
 
 use self_cell::{self_cell, MutBorrow};
+use zeroize::Zeroize;
 use std::fmt;
 use tinyvec::ArrayVec;
 
@@ -118,17 +119,15 @@ impl<'a> Record<'a> {
         if decrypt && engine.is_peer_encryption_enabled() {
             // We need to decrypt the record and redo the parsing.
             let dtls = record.record();
-            let (aad, nonce) = engine.aad_and_nonce(dtls)?;
+            let (aad, nonce) = engine.decryption_aad_and_nonce(dtls);
 
             // Bring back the unparsed bytes.
-            let input = inner.into_owner();
+            let input = record.0.into_owner();
 
-            // The encrypted part is after a 13 byte header. The entire buffer is only the single
-            // record, since we chunk records up in Records::parse()
-            let fragment = &mut input[13..];
-
-            // To get the ciphertext we must strip off some stuff.
-            let ciphertext = engine.cipher_text_of(fragment);
+            // The encrypted part is after a 13 byte header and 8 byte nonce. 
+            // The entire buffer is only the single record, since we chunk
+            // records up in Records::parse()
+            let ciphertext = &mut input[13 + 8..];
 
             // TODO (martin): fix these friggin buffers.
             let mut buffer = Buffer::wrap(ciphertext.to_vec());
@@ -136,7 +135,18 @@ impl<'a> Record<'a> {
             // This decrypt in place.
             engine.decrypt_data(&mut buffer, aad, nonce)?;
 
-            return Record::parse(&mut buffer, engine, false);
+            // zero the encrypted buffer.
+            let fragment = &mut input[13..];
+            fragment.zeroize();
+
+            // Update the length of the record.
+            let len = buffer.len();
+            input[11..13].copy_from_slice(&(len as u16).to_be_bytes());
+            
+            // Copy the decrypted buffer into the record.
+            input[13..(13 + len)].copy_from_slice(&buffer);
+
+            return Record::parse(input, engine, false);
         }
 
         Ok(record)
@@ -178,7 +188,7 @@ impl<'a> ParsedRecord<'a> {
         } else if record.content_type == ContentType::Handshake {
             // This will also return None on the encrypted Finished after ChangeCipherSpec.
             // However we will then decrypt and try again.
-            maybe_handshake(input, engine)
+            maybe_handshake(record.fragment, engine)
         } else {
             None
         };
