@@ -1,10 +1,12 @@
+use crate::message::HashAlgorithm;
+use hmac::digest::KeyInit;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha384};
 
 type HmacSha256 = Hmac<Sha256>;
 type HmacSha384 = Hmac<Sha384>;
 
-/// Implement TLS 1.2 PRF (Pseudorandom Function)
+/// PRF for TLS 1.2
 /// as specified in RFC 5246 Section 5.
 ///
 /// PRF(secret, label, seed) = P_<hash>(secret, label + seed)
@@ -16,36 +18,50 @@ pub fn prf_tls12(
     label: &str,
     seed: &[u8],
     output_len: usize,
+    hash: HashAlgorithm,
 ) -> Result<Vec<u8>, String> {
-    // In TLS 1.2, PRF uses HMAC-SHA256
-    let mut result = Vec::with_capacity(output_len);
+    let full_seed = compute_full_seed(label, seed);
 
-    // A(0) = label + seed
-    // Create the full seed by prepending the label to the seed
+    match hash {
+        HashAlgorithm::SHA256 => p_hash::<HmacSha256>(secret, &full_seed, output_len),
+        HashAlgorithm::SHA384 => p_hash::<HmacSha384>(secret, &full_seed, output_len),
+        _ => Err(format!("Unsupported PRF hash for TLS1.2: {:?}", hash)),
+    }
+}
+
+fn compute_full_seed(label: &str, seed: &[u8]) -> Vec<u8> {
     let mut full_seed = Vec::with_capacity(label.len() + seed.len());
     full_seed.extend_from_slice(label.as_bytes());
     full_seed.extend_from_slice(seed);
+    full_seed
+}
 
-    // Compute A(1) = HMAC_hash(secret, A(0))
-    let mut hmac = HmacSha384::new_from_slice(secret).map_err(|e| e.to_string())?;
-    hmac.update(&full_seed);
+fn p_hash<M: Mac + KeyInit>(
+    secret: &[u8],
+    full_seed: &[u8],
+    output_len: usize,
+) -> Result<Vec<u8>, String> {
+    let mut result = Vec::with_capacity(output_len);
+
+    // A(1) = HMAC_hash(secret, A(0)) where A(0) = seed
+    let mut hmac = <M as KeyInit>::new_from_slice(secret).map_err(|e| e.to_string())?;
+    hmac.update(full_seed);
     let mut a = hmac.finalize().into_bytes();
 
     while result.len() < output_len {
-        // P_hash = HMAC_hash(secret, A(i) + [label + seed])
-        let mut hmac = HmacSha384::new_from_slice(secret).map_err(|e| e.to_string())?;
+        // HMAC_hash(secret, A(i) + seed)
+        let mut hmac = <M as KeyInit>::new_from_slice(secret).map_err(|e| e.to_string())?;
         hmac.update(&a);
-        hmac.update(&full_seed);
+        hmac.update(full_seed);
         let output = hmac.finalize().into_bytes();
 
-        // Add as much of the output as needed
         let remaining = output_len - result.len();
         let to_copy = std::cmp::min(remaining, output.len());
         result.extend_from_slice(&output[..to_copy]);
 
-        // If we need more, compute A(i+1) = HMAC_hash(secret, A(i))
         if result.len() < output_len {
-            let mut hmac = HmacSha384::new_from_slice(secret).map_err(|e| e.to_string())?;
+            // A(i+1) = HMAC_hash(secret, A(i))
+            let mut hmac = <M as KeyInit>::new_from_slice(secret).map_err(|e| e.to_string())?;
             hmac.update(&a);
             a = hmac.finalize().into_bytes();
         }
@@ -60,6 +76,7 @@ pub fn calculate_master_secret(
     pre_master_secret: &[u8],
     client_random: &[u8],
     server_random: &[u8],
+    hash: HashAlgorithm,
 ) -> Result<Vec<u8>, String> {
     // Concatenate client_random and server_random for seed
     let mut seed = Vec::with_capacity(client_random.len() + server_random.len());
@@ -68,7 +85,7 @@ pub fn calculate_master_secret(
 
     // master_secret = PRF(pre_master_secret, "master secret", client_random + server_random, 48)
     // The label "master secret" is passed separately and will be prepended to the seed by prf_tls12
-    prf_tls12(pre_master_secret, "master secret", &seed, 48)
+    prf_tls12(pre_master_secret, "master secret", &seed, 48, hash)
 }
 
 /// Key expansion for TLS 1.2
@@ -78,6 +95,7 @@ pub fn key_expansion(
     client_random: &[u8],
     server_random: &[u8],
     key_material_length: usize,
+    hash: HashAlgorithm,
 ) -> Result<Vec<u8>, String> {
     // For key expansion, the seed is server_random + client_random
     let mut seed = Vec::with_capacity(client_random.len() + server_random.len());
@@ -86,5 +104,11 @@ pub fn key_expansion(
 
     // key_block = PRF(master_secret, "key expansion", server_random + client_random, key_material_length)
     // The label "key expansion" is passed separately and will be prepended to the seed by prf_tls12
-    prf_tls12(master_secret, "key expansion", &seed, key_material_length)
+    prf_tls12(
+        master_secret,
+        "key expansion",
+        &seed,
+        key_material_length,
+        hash,
+    )
 }

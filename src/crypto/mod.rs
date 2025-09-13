@@ -382,11 +382,16 @@ impl CryptoContext {
         &mut self,
         client_random: &[u8],
         server_random: &[u8],
+        hash: HashAlgorithm,
     ) -> Result<(), String> {
         match &self.pre_master_secret {
             Some(pms) => {
-                self.master_secret =
-                    Some(calculate_master_secret(pms, client_random, server_random)?);
+                self.master_secret = Some(calculate_master_secret(
+                    pms,
+                    client_random,
+                    server_random,
+                    hash,
+                )?);
                 // Clear pre-master secret after use (security measure)
                 self.pre_master_secret = None;
                 Ok(())
@@ -431,6 +436,7 @@ impl CryptoContext {
             client_random,
             server_random,
             key_material_len,
+            cipher_suite.hash_algorithm(),
         )?;
 
         // Split key material
@@ -556,6 +562,7 @@ impl CryptoContext {
         &self,
         handshake_hash: &[u8],
         is_client: bool,
+        hash: HashAlgorithm,
     ) -> Result<Vec<u8>, String> {
         let master_secret = match &self.master_secret {
             Some(ms) => ms,
@@ -569,7 +576,7 @@ impl CryptoContext {
         };
 
         // Generate 12 bytes of verify data using PRF
-        prf_tls12(master_secret, label, handshake_hash, 12)
+        prf_tls12(master_secret, label, handshake_hash, 12, hash)
     }
 
     /// Extract SRTP keying material from the master secret
@@ -577,6 +584,7 @@ impl CryptoContext {
     pub fn extract_srtp_keying_material(
         &self,
         profile: SrtpProfile,
+        hash: HashAlgorithm,
     ) -> Result<KeyingMaterial, String> {
         const DTLS_SRTP_KEY_LABEL: &str = "EXTRACTOR-dtls_srtp";
 
@@ -592,6 +600,7 @@ impl CryptoContext {
             DTLS_SRTP_KEY_LABEL,
             &[],
             profile.keying_material_len(),
+            hash,
         )?;
 
         Ok(KeyingMaterial::new(keying_material))

@@ -622,9 +622,11 @@ impl Client {
         );
 
         // Derive master secret
+        let suite_hash = cipher_suite.hash_algorithm();
+
         self.engine
             .crypto_context_mut()
-            .derive_master_secret(&client_random, &server_random_vec)
+            .derive_master_secret(&client_random, &server_random_vec, suite_hash)
             .map_err(|e| Error::CryptoError(format!("Failed to derive master secret: {}", e)))?;
 
         debug!("Master secret derived successfully");
@@ -684,10 +686,11 @@ impl Client {
 
         debug!("Handshake hash size: {} bytes", handshake_hash.len());
 
+        let suite_hash = self.engine.cipher_suite().unwrap().hash_algorithm();
         let verify_data_vec = self
             .engine
             .crypto_context()
-            .generate_verify_data(&handshake_hash, is_client)
+            .generate_verify_data(&handshake_hash, is_client, suite_hash)
             .map_err(|e| Error::CryptoError(format!("Failed to generate verify data: {}", e)))?;
 
         if verify_data_vec.len() != 12 {
@@ -771,10 +774,11 @@ impl Client {
             // Extract and emit SRTP keying material if we have a negotiated profile
             if let Some(profile) = self.negotiated_srtp_profile {
                 debug!("Extracting SRTP keying material for profile: {:?}", profile);
+                let suite_hash = self.engine.cipher_suite().unwrap().hash_algorithm();
                 if let Ok(keying_material) = self
                     .engine
                     .crypto_context()
-                    .extract_srtp_keying_material(profile)
+                    .extract_srtp_keying_material(profile, suite_hash)
                 {
                     // Emit the keying material event with the negotiated profile
                     debug!(
