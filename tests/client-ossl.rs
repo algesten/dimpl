@@ -87,11 +87,11 @@ fn client_ossl() {
             let output = client.poll_output();
             match output {
                 Output::Packet(data) => {
-                    println!(
-                        "Client -> Server packet ({} bytes): {:02x?}",
-                        data.len(),
-                        data
-                    );
+                    // println!(
+                    //     "Client -> Server packet ({} bytes): {:02x?}",
+                    //     data.len(),
+                    //     data
+                    // );
                     // Client data goes to server
                     if let Err(e) = server.handle_receive(data, &mut server_events) {
                         panic!("Server failed to handle client packet: {:?}", e);
@@ -163,11 +163,11 @@ fn client_ossl() {
 
         // Send server datagrams to client
         while let Some(datagram) = server.poll_datagram() {
-            println!(
-                "Server -> Client packet ({} bytes): {:02x?}",
-                datagram.len(),
-                datagram
-            );
+            // println!(
+            //     "Server -> Client packet ({} bytes): {:02x?}",
+            //     datagram.len(),
+            //     datagram
+            // );
             client
                 .handle_packet(&datagram)
                 .expect("Failed to handle server packet");

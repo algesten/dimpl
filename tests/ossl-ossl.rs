@@ -96,11 +96,11 @@ fn ossl_ossl() {
     for _ in 0..20 {
         // Poll client for datagrams
         while let Some(datagram) = client.poll_datagram() {
-            println!(
-                "Client -> Server packet ({} bytes): {:02x?}",
-                datagram.len(),
-                datagram
-            );
+            // println!(
+            //     "Client -> Server packet ({} bytes): {:02x?}",
+            //     datagram.len(),
+            //     datagram
+            // );
             // Save client->server datagram
             let filename = format!("tests/datagrams/client_to_server_{}.bin", datagram_counter);
             fs::write(&filename, &*datagram).expect("Failed to write client datagram");
@@ -145,11 +145,11 @@ fn ossl_ossl() {
 
         // Poll server for datagrams
         while let Some(datagram) = server.poll_datagram() {
-            println!(
-                "Server -> Client packet ({} bytes): {:02x?}",
-                datagram.len(),
-                datagram
-            );
+            // println!(
+            //     "Server -> Client packet ({} bytes): {:02x?}",
+            //     datagram.len(),
+            //     datagram
+            // );
             // Save server->client datagram
             let filename = format!("tests/datagrams/server_to_client_{}.bin", datagram_counter);
             fs::write(&filename, &*datagram).expect("Failed to write server datagram");
