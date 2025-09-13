@@ -126,13 +126,10 @@ impl Engine {
         }
     }
 
-    pub fn parse_packet(
-        &mut self,
-        packet: &[u8],
-    ) -> Result<(), Error> {
+    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         let buffer = self.buffers_free.pop();
 
-        let incoming = Incoming::parse_packet(packet, &mut self.cipher_suite, buffer)?;
+        let incoming = Incoming::parse_packet(packet, self, buffer)?;
 
         self.insert_incoming(incoming)?;
 
@@ -298,7 +295,8 @@ impl Engine {
             // Handled in previous iteration
             .skip_while(|h| h.handled.get());
 
-        let (handshake, next_type) = Handshake::defragment(iter, defragment_buffer, self.cipher_suite)?;
+        let (handshake, next_type) =
+            Handshake::defragment(iter, defragment_buffer, self.cipher_suite)?;
 
         // Update the stored handshakes used for CertificateVerify and Finished
         handshake.serialize(&mut self.handshakes);
@@ -617,6 +615,10 @@ impl Engine {
 
     pub(crate) fn handshake_data(&self) -> &[u8] {
         &self.handshakes
+    }
+
+    pub(crate) fn set_cipher_suite(&mut self, cipher_suite: CipherSuite) {
+        self.cipher_suite = Some(cipher_suite);
     }
 }
 

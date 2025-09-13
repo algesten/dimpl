@@ -5,7 +5,8 @@ use std::fmt;
 use tinyvec::ArrayVec;
 
 use crate::buffer::Buffer;
-use crate::message::{Body, CipherSuite, ContentType, DTLSRecord, DTLSRecordSlice, Handshake};
+use crate::engine::Engine;
+use crate::message::{Body, ContentType, DTLSRecord, DTLSRecordSlice, Handshake};
 use crate::Error;
 
 /// Holds both the UDP packet and the parsed result of that packet.
@@ -55,7 +56,7 @@ impl Incoming {
     /// Will surface parser errors.
     pub fn parse_packet(
         packet: &[u8],
-        c: &mut Option<CipherSuite>,
+        engine: &mut Engine,
         mut into: Buffer,
     ) -> Result<Self, Error> {
         // The Buffer is where we store the raw packet data.
@@ -66,7 +67,7 @@ impl Incoming {
 
         // håll i hatten
         let inner = Inner::try_new(into, |data| {
-            Ok::<_, Error>(Records::parse(data.borrow_mut(), c)?)
+            Ok::<_, Error>(Records::parse(data.borrow_mut(), engine)?)
         })?;
 
         Ok(Incoming(inner))
@@ -80,14 +81,14 @@ pub struct Records<'a> {
 }
 
 impl<'a> Records<'a> {
-    pub fn parse(input: &'a mut [u8], c: &mut Option<CipherSuite>) -> Result<Records<'a>, Error> {
+    pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Records<'a>, Error> {
         let mut records = ArrayVec::default();
         let mut current = input;
 
         // DTLSRecordSlice::try_read will end with None when cleanly chunking ends.
         // Any extra bytes will cause an Error.
         while let Some(dtls_rec) = DTLSRecordSlice::try_read(current)? {
-            let record = Record::parse(dtls_rec.slice, c)?;
+            let record = Record::parse(dtls_rec.slice, engine)?;
             records.push(record);
             current = dtls_rec.rest;
         }
@@ -107,9 +108,9 @@ impl<'a> Deref for Records<'a> {
 pub struct Record<'a>(RecordInner<'a>);
 
 impl<'a> Record<'a> {
-    pub fn parse(input: &'a mut [u8], c: &mut Option<CipherSuite>) -> Result<Record<'a>, Error> {
+    pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Record<'a>, Error> {
         let inner = RecordInner::try_new(input, |borrowed| {
-            Ok::<_, Error>(ParsedRecord::parse(&borrowed, c)?)
+            Ok::<_, Error>(ParsedRecord::parse(&borrowed, engine)?)
         })?;
 
         Ok(Record(inner))
@@ -139,7 +140,7 @@ pub struct ParsedRecord<'a> {
 }
 
 impl<'a> ParsedRecord<'a> {
-    pub fn parse(input: &'a [u8], c: &mut Option<CipherSuite>) -> Result<ParsedRecord<'a>, Error> {
+    pub fn parse(input: &'a [u8], engine: &mut Engine) -> Result<ParsedRecord<'a>, Error> {
         let (rest, record) = DTLSRecord::parse(input)?;
 
         // invariant: the Record has been chunked to one DTLSRecord each.
@@ -148,7 +149,7 @@ impl<'a> ParsedRecord<'a> {
         let handshake = if record.content_type == ContentType::Handshake {
             // This will also return None on the encrypted Finished after ChangeCipherSpec.
             // However we will then decrypt and try again.
-            maybe_handshake(input, c)
+            maybe_handshake(input, engine)
         } else {
             None
         };
@@ -157,13 +158,13 @@ impl<'a> ParsedRecord<'a> {
     }
 }
 
-fn maybe_handshake<'a>(input: &'a [u8], c: &mut Option<CipherSuite>) -> Option<Handshake<'a>> {
-    let (_, handshake) = Handshake::parse(input, *c, true).ok()?;
+fn maybe_handshake<'a>(input: &'a [u8], engine: &mut Engine) -> Option<Handshake<'a>> {
+    let (_, handshake) = Handshake::parse(input, engine.cipher_suite(), true).ok()?;
 
     // When we get the ServerHello, we know which cipher suite was selected.
     // Parsing further messages after this must be informed by that choice.
     if let Body::ServerHello(server_hello) = &handshake.body {
-        *c = Some(server_hello.cipher_suite);
+        engine.set_cipher_suite(server_hello.cipher_suite);
     }
 
     Some(handshake)
