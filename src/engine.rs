@@ -479,54 +479,8 @@ impl Engine {
             for i in 0..records.len() {
                 let record = &records[i];
                 if record.record().content_type == ContentType::ApplicationData {
-                    // Check if we have enough data for the explicit nonce (8 bytes) plus some content
-                    if record.record().fragment.len() <= 8 {
-                        return Err(Error::CryptoError(
-                            "ApplicationData record too short to contain explicit nonce"
-                                .to_string(),
-                        ));
-                    }
-
-                    // Extract the explicit nonce from the beginning of the fragment
-                    let explicit_nonce = &record.record().fragment[..8];
-
-                    // Get the fixed part of the IV (4 bytes)
-                    let iv = if self.is_client {
-                        self.crypto_context.get_server_write_iv() // Server's write is client's read
-                    } else {
-                        self.crypto_context.get_client_write_iv() // Client's write is server's read
-                    };
-
-                    let Some(iv) = iv else {
-                        return Err(Error::CryptoError(format!(
-                            "{} read IV not available",
-                            if self.is_client { "Server" } else { "Client" }
-                        )));
-                    };
-
-                    // Create the complete nonce: 4-byte fixed IV + 8-byte explicit nonce
-                    let nonce = Nonce::new(iv, explicit_nonce);
-
-                    // Get only the encrypted data (skip the explicit nonce)
-                    let ciphertext = record.record().fragment[8..].to_vec();
-
-                    // Create AAD for decryption
-                    // For decryption, the AAD length should be the ciphertext length minus the GCM tag (16 bytes)
-                    // This matches the working dtls implementation
-                    let payload_length = ciphertext.len().checked_sub(16).unwrap_or(0);
-
-                    let aad = Aad::new(
-                        record.record().content_type,
-                        record.record().sequence,
-                        payload_length as u16,
-                    );
-
-                    let mut buffer = Buffer::wrap(ciphertext);
-
-                    // Decrypt the application data
-                    self.decrypt_data(&mut buffer, aad, nonce)?;
-
-                    let plaintext = buffer.into_inner();
+                    // This is already decrypted as part of the parsing.
+                    let plaintext = record.record().fragment.to_vec();
 
                     // Push the decrypted data to the queue
                     self.queue_events
