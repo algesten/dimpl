@@ -120,7 +120,9 @@ impl<'a> Record<'a> {
 
         let record = Record(inner);
 
-        if decrypt && engine.is_peer_encryption_enabled() {
+        if record.record().content_type == ContentType::ChangeCipherSpec {
+            engine.enable_peer_encryption();
+        } else if decrypt && engine.is_peer_encryption_enabled() {
             // We need to decrypt the record and redo the parsing.
             let dtls = record.record();
             let (aad, nonce) = engine.decryption_aad_and_nonce(dtls);
@@ -186,10 +188,7 @@ impl<'a> ParsedRecord<'a> {
         // invariant: the Record has been chunked to one DTLSRecord each.
         assert!(rest.is_empty());
 
-        let handshake = if record.content_type == ContentType::ChangeCipherSpec {
-            engine.enable_peer_encryption();
-            None
-        } else if record.content_type == ContentType::Handshake {
+        let handshake = if record.content_type == ContentType::Handshake {
             // This will also return None on the encrypted Finished after ChangeCipherSpec.
             // However we will then decrypt and try again.
             maybe_handshake(record.fragment, engine)
