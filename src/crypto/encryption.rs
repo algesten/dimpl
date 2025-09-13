@@ -1,17 +1,18 @@
 use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
-    Aes128Gcm, Aes256Gcm, Nonce,
+    Aes128Gcm, Aes256Gcm,
 };
 
 use crate::buffer::Buffer;
+use crate::crypto::{Aad, Nonce};
 
 /// Cipher trait for DTLS encryption and decryption
 pub trait Cipher: Send + Sync {
     /// Encrypt plaintext in-place
-    fn encrypt(&self, plaintext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), String>;
+    fn encrypt(&self, plaintext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), String>;
 
     /// Decrypt ciphertext in-place
-    fn decrypt(&self, ciphertext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), String>;
+    fn decrypt(&self, ciphertext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), String>;
 }
 
 /// AES-GCM implementation with different key sizes
@@ -40,12 +41,8 @@ impl AesGcm {
 }
 
 impl Cipher for AesGcm {
-    fn encrypt(&self, plaintext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), String> {
-        if nonce.len() != 12 {
-            return Err(format!("Invalid nonce length: {}", nonce.len()));
-        }
-
-        let nonce = Nonce::from_slice(nonce);
+    fn encrypt(&self, plaintext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), String> {
+        let nonce = aes_gcm::Nonce::from_slice(&nonce);
         let plaintext_data = plaintext.as_slice();
 
         // Perform encryption based on the cipher variant
@@ -56,7 +53,7 @@ impl Cipher for AesGcm {
                         nonce,
                         Payload {
                             msg: plaintext_data,
-                            aad,
+                            aad: &aad,
                         },
                     )
                     .map_err(|e| format!("AES-GCM encryption failed: {:?}", e))?;
@@ -72,7 +69,7 @@ impl Cipher for AesGcm {
                         nonce,
                         Payload {
                             msg: plaintext_data,
-                            aad,
+                            aad: &aad,
                         },
                     )
                     .map_err(|e| format!("AES-GCM encryption failed: {:?}", e))?;
@@ -87,17 +84,13 @@ impl Cipher for AesGcm {
         result
     }
 
-    fn decrypt(&self, ciphertext: &mut Buffer, aad: &[u8], nonce: &[u8]) -> Result<(), String> {
-        if nonce.len() != 12 {
-            return Err(format!("Invalid nonce length: {}", nonce.len()));
-        }
-
+    fn decrypt(&self, ciphertext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), String> {
         // Make sure we have enough data for the tag (16 bytes)
         if ciphertext.len() < 16 {
             return Err(format!("Ciphertext too short: {}", ciphertext.len()));
         }
 
-        let nonce = Nonce::from_slice(nonce);
+        let nonce = aes_gcm::Nonce::from_slice(&nonce);
         let ciphertext_data = ciphertext.as_slice();
 
         // Perform decryption based on the cipher variant
@@ -108,7 +101,7 @@ impl Cipher for AesGcm {
                         nonce,
                         Payload {
                             msg: ciphertext_data,
-                            aad,
+                            aad: &aad,
                         },
                     )
                     .map_err(|e| format!("AES-GCM decryption failed: {:?}", e))?;
@@ -124,7 +117,7 @@ impl Cipher for AesGcm {
                         nonce,
                         Payload {
                             msg: ciphertext_data,
-                            aad,
+                            aad: &aad,
                         },
                     )
                     .map_err(|e| format!("AES-GCM decryption failed: {:?}", e))?;

@@ -85,6 +85,10 @@ impl<'a> DTLSRecord<'a> {
         output.extend_from_slice(&self.length.to_be_bytes());
         output.extend_from_slice(self.fragment);
     }
+
+    pub fn nonce(&self) -> &[u8] {
+        &self.fragment[..8]
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

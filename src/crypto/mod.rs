@@ -5,6 +5,7 @@
 // - ECDHE+AES256 (AES256_EECDH)
 // - DHE+AES256 (AES256_EDH)
 
+use std::ops::Deref;
 use std::str;
 
 use elliptic_curve::generic_array::GenericArray;
@@ -33,10 +34,9 @@ pub use prf::{calculate_master_secret, key_expansion, prf_tls12};
 
 use crate::buffer::Buffer;
 // Message-related imports
-use crate::message::{
-    Asn1Cert, Certificate, CipherSuite, CurveType, HashAlgorithm, KeyExchangeAlgorithm, NamedCurve,
-    ServerKeyExchangeParams, SignatureAlgorithm,
-};
+use crate::message::{Asn1Cert, Certificate, CipherSuite, ContentType, CurveType};
+use crate::message::{HashAlgorithm, KeyExchangeAlgorithm};
+use crate::message::{NamedCurve, Sequence, ServerKeyExchangeParams, SignatureAlgorithm};
 
 use sec1::der::Decode;
 use sec1::EcPrivateKey;
@@ -49,6 +49,55 @@ pub enum ParsedKey {
     P384(P384SigningKey),
     /// RSA key
     Rsa(RsaPrivateKey),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Iv(pub [u8; 4]);
+impl Iv {
+    fn new(iv: &[u8]) -> Self {
+        // invariant: the iv is 4 bytes.
+        Self(iv.try_into().unwrap())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Nonce(pub [u8; 12]);
+
+impl Nonce {
+    pub fn new(iv: Iv, explicit_nonce: &[u8]) -> Self {
+        let mut nonce = [0u8; 12];
+        nonce[..4].copy_from_slice(&iv.0);
+        nonce[4..8].copy_from_slice(explicit_nonce);
+        Self(nonce.try_into().unwrap())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Aad(pub [u8; 13]);
+
+impl Aad {
+    pub fn new(content_type: ContentType, sequence: Sequence, length: u16) -> Self {
+        // Exactly match the format used in the working dtls implementation
+        let mut aad = [0u8; 13];
+
+        // First set the full 8-byte sequence number
+        aad[..8].copy_from_slice(&sequence.sequence_number.to_be_bytes());
+
+        // Then overwrite the first 2 bytes with epoch
+        aad[..2].copy_from_slice(&sequence.epoch.to_be_bytes());
+
+        // Content type at index 8
+        aad[8] = content_type.as_u8();
+
+        // Protocol version bytes (major:minor) at indexes 9-10
+        aad[9] = 0xfe; // DTLS 1.2 major version
+        aad[10] = 0xfd; // DTLS 1.2 minor version
+
+        // Payload length (2 bytes) at indexes 11-12
+        aad[11..].copy_from_slice(&length.to_be_bytes());
+
+        Aad(aad)
+    }
 }
 
 impl ParsedKey {
@@ -175,10 +224,10 @@ pub struct CryptoContext {
     server_write_key: Option<Vec<u8>>,
 
     /// Client write IV (for AES-GCM)
-    client_write_iv: Option<Vec<u8>>,
+    client_write_iv: Option<Iv>,
 
     /// Server write IV (for AES-GCM)
-    server_write_iv: Option<Vec<u8>>,
+    server_write_iv: Option<Iv>,
 
     /// Client MAC key (not used for AEAD ciphers)
     client_mac_key: Option<Vec<u8>>,
@@ -402,9 +451,9 @@ impl CryptoContext {
         offset += enc_key_len;
 
         // Extract IVs
-        self.client_write_iv = Some(key_block[offset..offset + fixed_iv_len].to_vec());
+        self.client_write_iv = Some(Iv::new(&key_block[offset..offset + fixed_iv_len]));
         offset += fixed_iv_len;
-        self.server_write_iv = Some(key_block[offset..offset + fixed_iv_len].to_vec());
+        self.server_write_iv = Some(Iv::new(&key_block[offset..offset + fixed_iv_len]));
 
         // Initialize ciphers
         match cipher_suite {
@@ -434,8 +483,8 @@ impl CryptoContext {
     pub fn encrypt_client_to_server(
         &self,
         plaintext: &mut Buffer,
-        aad: &[u8],
-        nonce: &[u8],
+        aad: Aad,
+        nonce: Nonce,
     ) -> Result<(), String> {
         match &self.client_cipher {
             Some(cipher) => cipher.encrypt(plaintext, aad, nonce),
@@ -447,8 +496,8 @@ impl CryptoContext {
     pub fn decrypt_server_to_client(
         &self,
         ciphertext: &mut Buffer,
-        aad: &[u8],
-        nonce: &[u8],
+        aad: Aad,
+        nonce: Nonce,
     ) -> Result<(), String> {
         match &self.server_cipher {
             Some(cipher) => cipher.decrypt(ciphertext, aad, nonce),
@@ -460,8 +509,8 @@ impl CryptoContext {
     pub fn encrypt_server_to_client(
         &self,
         plaintext: &mut Buffer,
-        aad: &[u8],
-        nonce: &[u8],
+        aad: Aad,
+        nonce: Nonce,
     ) -> Result<(), String> {
         match &self.server_cipher {
             Some(cipher) => cipher.encrypt(plaintext, aad, nonce),
@@ -473,8 +522,8 @@ impl CryptoContext {
     pub fn decrypt_client_to_server(
         &self,
         ciphertext: &mut Buffer,
-        aad: &[u8],
-        nonce: &[u8],
+        aad: Aad,
+        nonce: Nonce,
     ) -> Result<(), String> {
         match &self.client_cipher {
             Some(cipher) => cipher.decrypt(ciphertext, aad, nonce),
@@ -570,13 +619,13 @@ impl CryptoContext {
     }
 
     /// Get client write IV
-    pub fn get_client_write_iv(&self) -> Option<&Vec<u8>> {
-        self.client_write_iv.as_ref()
+    pub fn get_client_write_iv(&self) -> Option<Iv> {
+        self.client_write_iv
     }
 
     /// Get server write IV
-    pub fn get_server_write_iv(&self) -> Option<&Vec<u8>> {
-        self.server_write_iv.as_ref()
+    pub fn get_server_write_iv(&self) -> Option<Iv> {
+        self.server_write_iv
     }
 }
 
@@ -607,5 +656,19 @@ impl CipherSuite {
                 | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
                 | CipherSuite::DHE_RSA_AES256_GCM_SHA384
         )
+    }
+}
+
+impl Deref for Aad {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Deref for Nonce {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
