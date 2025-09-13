@@ -285,6 +285,7 @@ impl Client {
                         server_hello.cipher_suite
                     );
                     let cs = server_hello.cipher_suite;
+                    self.engine.set_cipher_suite(cs);
                     self.session_id = Some(server_hello.session_id);
                     self.server_random = Some(server_hello.random);
 

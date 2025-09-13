@@ -67,7 +67,7 @@ impl Nonce {
     pub fn new(iv: Iv, explicit_nonce: &[u8]) -> Self {
         let mut nonce = [0u8; 12];
         nonce[..4].copy_from_slice(&iv.0);
-        nonce[4..8].copy_from_slice(explicit_nonce);
+        nonce[4..].copy_from_slice(explicit_nonce);
         Self(nonce.try_into().unwrap())
     }
 }

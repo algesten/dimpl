@@ -1,13 +1,13 @@
 use std::ops::Deref;
 
 use self_cell::{self_cell, MutBorrow};
-use zeroize::Zeroize;
 use std::fmt;
 use tinyvec::ArrayVec;
+use zeroize::Zeroize;
 
 use crate::buffer::Buffer;
 use crate::engine::Engine;
-use crate::message::{Body, ContentType, DTLSRecord, DTLSRecordSlice, Handshake};
+use crate::message::{ContentType, DTLSRecord, DTLSRecordSlice, Handshake};
 use crate::Error;
 
 /// Holds both the UDP packet and the parsed result of that packet.
@@ -109,7 +109,11 @@ impl<'a> Deref for Records<'a> {
 pub struct Record<'a>(RecordInner<'a>);
 
 impl<'a> Record<'a> {
-    pub fn parse(input: &'a mut [u8], engine: &mut Engine, decrypt: bool) -> Result<Record<'a>, Error> {
+    pub fn parse(
+        input: &'a mut [u8],
+        engine: &mut Engine,
+        decrypt: bool,
+    ) -> Result<Record<'a>, Error> {
         let inner = RecordInner::try_new(input, |borrowed| {
             Ok::<_, Error>(ParsedRecord::parse(&borrowed, engine)?)
         })?;
@@ -124,7 +128,7 @@ impl<'a> Record<'a> {
             // Bring back the unparsed bytes.
             let input = record.0.into_owner();
 
-            // The encrypted part is after a 13 byte header and 8 byte nonce. 
+            // The encrypted part is after a 13 byte header and 8 byte nonce.
             // The entire buffer is only the single record, since we chunk
             // records up in Records::parse()
             let ciphertext = &mut input[13 + 8..];
@@ -142,7 +146,7 @@ impl<'a> Record<'a> {
             // Update the length of the record.
             let len = buffer.len();
             input[11..13].copy_from_slice(&(len as u16).to_be_bytes());
-            
+
             // Copy the decrypted buffer into the record.
             input[13..(13 + len)].copy_from_slice(&buffer);
 
@@ -197,15 +201,8 @@ impl<'a> ParsedRecord<'a> {
     }
 }
 
-fn maybe_handshake<'a>(input: &'a [u8], engine: &mut Engine) -> Option<Handshake<'a>> {
+fn maybe_handshake<'a>(input: &'a [u8], engine: &Engine) -> Option<Handshake<'a>> {
     let (_, handshake) = Handshake::parse(input, engine.cipher_suite(), true).ok()?;
-
-    // When we get the ServerHello, we know which cipher suite was selected.
-    // Parsing further messages after this must be informed by that choice.
-    if let Body::ServerHello(server_hello) = &handshake.body {
-        engine.set_cipher_suite(server_hello.cipher_suite);
-    }
-
     Some(handshake)
 }
 

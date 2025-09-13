@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::buffer::{Buffer, BufferPool};
-use crate::crypto::{Aad, CertVerifier, CryptoContext, Hash, Iv, KeyingMaterial, Nonce, SrtpProfile};
+use crate::crypto::{
+    Aad, CertVerifier, CryptoContext, Hash, Iv, KeyingMaterial, Nonce, SrtpProfile,
+};
 use crate::incoming::Incoming;
 use crate::message::{
     CipherSuite, ContentType, DTLSRecord, Handshake, HashAlgorithm, MessageType, ProtocolVersion,
@@ -549,7 +551,12 @@ impl Engine {
     }
 
     /// Decrypt data appropriate for the role (client or server)
-    pub fn decrypt_data(&self, ciphertext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), Error> {
+    pub fn decrypt_data(
+        &self,
+        ciphertext: &mut Buffer,
+        aad: Aad,
+        nonce: Nonce,
+    ) -> Result<(), Error> {
         if self.is_client {
             self.crypto_context
                 .decrypt_server_to_client(ciphertext, aad, nonce)
@@ -636,7 +643,7 @@ impl Engine {
             self.client_encryption_enabled
         }
     }
-    
+
     fn peer_iv(&self) -> Iv {
         if self.is_client {
             self.crypto_context.get_server_write_iv().unwrap()
