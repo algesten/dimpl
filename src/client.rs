@@ -68,6 +68,10 @@ pub struct Client {
 
     /// Whether Extended Master Secret was negotiated
     extended_master_secret: bool,
+
+    /// Captured session hash for Extended Master Secret (RFC 7627)
+    /// This is captured after ServerHelloDone to include the correct handshake messages
+    captured_session_hash: Option<Vec<u8>>,
 }
 
 /// Current state of the client.
@@ -125,6 +129,7 @@ impl Client {
             defragment_buffer: Vec::new(),
             certificate_verify: false,
             extended_master_secret: false,
+            captured_session_hash: None,
         }
     }
 
@@ -591,6 +596,20 @@ impl Client {
                 client_key_exchange.serialize(body);
             })?;
 
+        // Capture session hash now for Extended Master Secret (RFC 7627)
+        // At this point, the session hash includes: ClientHello, ServerHello, Certificate,
+        // ServerKeyExchange, CertificateRequest, ServerHelloDone, Certificate, ClientKeyExchange
+        // This is correct per RFC 7627 - session hash should include messages up to and including ClientKeyExchange
+        if self.extended_master_secret {
+            let cipher_suite = self
+                .engine
+                .cipher_suite()
+                .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+            let suite_hash = cipher_suite.hash_algorithm();
+            self.captured_session_hash = Some(self.engine.handshake_hash(suite_hash));
+            debug!("Captured session hash for Extended Master Secret after ClientKeyExchange (length: {})", self.captured_session_hash.as_ref().unwrap().len());
+        }
+
         Ok(())
     }
 
@@ -633,10 +652,19 @@ impl Client {
         // Derive master secret (use EMS if negotiated)
         let suite_hash = cipher_suite.hash_algorithm();
         if self.extended_master_secret {
-            let session_hash = self.engine.handshake_hash(suite_hash);
+            // Use the captured session hash from when ServerHelloDone was received
+            let session_hash = self.captured_session_hash.as_ref().ok_or_else(|| {
+                Error::CryptoError(
+                    "Extended Master Secret negotiated but session hash not captured".to_string(),
+                )
+            })?;
+            debug!(
+                "Using captured session hash for Extended Master Secret (length: {})",
+                session_hash.len()
+            );
             self.engine
                 .crypto_context_mut()
-                .derive_extended_master_secret(&session_hash, suite_hash)
+                .derive_extended_master_secret(session_hash, suite_hash)
                 .map_err(|e| {
                     Error::CryptoError(format!("Failed to derive extended master secret: {}", e))
                 })?;
