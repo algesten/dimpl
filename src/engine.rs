@@ -191,7 +191,7 @@ impl Engine {
         Ok(())
     }
 
-    pub(crate) fn poll_packet_tx(&mut self) -> Option<&[u8]> {
+    pub fn poll_packet_tx(&mut self) -> Option<&[u8]> {
         // If there is a previous packet, return it to the pool.
         if let Some(last) = self.last_packet.take() {
             self.buffers_free.push(last);
@@ -206,7 +206,7 @@ impl Engine {
         Some(p.as_slice())
     }
 
-    pub(crate) fn poll_output(&mut self) -> Output {
+    pub fn poll_output(&mut self) -> Output {
         // First check if we have any events
         if let Some(event) = self.queue_events.pop_front() {
             return event;
@@ -549,7 +549,7 @@ impl Engine {
     }
 
     /// Decrypt data appropriate for the role (client or server)
-    fn decrypt_data(&self, ciphertext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), Error> {
+    pub fn decrypt_data(&self, ciphertext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), Error> {
         if self.is_client {
             self.crypto_context
                 .decrypt_server_to_client(ciphertext, aad, nonce)
@@ -605,20 +605,36 @@ impl Engine {
         hash.clone_and_finalize()
     }
 
-    pub(crate) fn init_cipher_suite(&mut self, cs: CipherSuite) -> Result<(), String> {
+    pub fn init_cipher_suite(&mut self, cs: CipherSuite) -> Result<(), String> {
         self.crypto_context.init_cipher_suite(cs)
     }
 
-    pub(crate) fn reset_handshake_seq_no(&mut self) {
+    pub fn reset_handshake_seq_no(&mut self) {
         self.next_handshake_seq_no = 0;
     }
 
-    pub(crate) fn handshake_data(&self) -> &[u8] {
+    pub fn handshake_data(&self) -> &[u8] {
         &self.handshakes
     }
 
-    pub(crate) fn set_cipher_suite(&mut self, cipher_suite: CipherSuite) {
+    pub fn set_cipher_suite(&mut self, cipher_suite: CipherSuite) {
         self.cipher_suite = Some(cipher_suite);
+    }
+
+    pub fn enable_peer_encryption(&mut self) {
+        if self.is_client {
+            self.server_encryption_enabled = true;
+        } else {
+            self.client_encryption_enabled = true;
+        }
+    }
+
+    pub fn is_peer_encryption_enabled(&self) -> bool {
+        if self.is_client {
+            self.server_encryption_enabled
+        } else {
+            self.client_encryption_enabled
+        }
     }
 }
 
