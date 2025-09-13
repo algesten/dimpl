@@ -700,8 +700,10 @@ impl Client {
     }
 
     fn process_server_finished(&mut self) -> Result<(), Error> {
-        // Generate expected verify data before the loop to avoid borrow issues
-        let expected = self.generate_verify_data(false)?;
+        // Generate expected verify data based on current transcript. This may
+        // be recomputed if additional handshake messages (e.g., NewSessionTicket)
+        // are received before the server's Finished.
+        let mut expected = self.generate_verify_data(false)?;
         debug!("Generated expected server verify data, waiting for server Finished message");
 
         // Wait for server finished message
@@ -726,7 +728,9 @@ impl Client {
             );
 
             if matches!(handshake.header.msg_type, MessageType::NewSessionTicket) {
-                debug!("Received NewSessionTicket message, skipping");
+                debug!("Received NewSessionTicket message, updating expected verify data");
+                // Recompute expected verify data now that the transcript includes the ticket
+                expected = self.generate_verify_data(false)?;
                 continue;
             }
 
