@@ -607,7 +607,13 @@ impl Engine {
     }
 
     pub fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord) -> (Aad, Nonce) {
-        let aad = Aad::new(dtls.content_type, dtls.sequence, dtls.length);
+        // For AEAD (AES-GCM) in DTLS 1.2, the AAD length is the plaintext length,
+        // not the record fragment length. The fragment carries an 8-byte explicit
+        // nonce prefix and a 16-byte authentication tag suffix.
+        // See RFC 5246/5288 and RFC 6347.
+        let ciphertext_overhead = 8 /* explicit nonce */ + 16 /* GCM tag */;
+        let plaintext_len = dtls.length.saturating_sub(ciphertext_overhead);
+        let aad = Aad::new(dtls.content_type, dtls.sequence, plaintext_len);
         let iv = self.peer_iv();
         let nonce = Nonce::new(iv, dtls.nonce());
         (aad, nonce)

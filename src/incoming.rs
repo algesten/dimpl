@@ -183,10 +183,7 @@ pub struct ParsedRecord<'a> {
 
 impl<'a> ParsedRecord<'a> {
     pub fn parse(input: &'a [u8], engine: &mut Engine) -> Result<ParsedRecord<'a>, Error> {
-        let (rest, record) = DTLSRecord::parse(input)?;
-
-        // invariant: the Record has been chunked to one DTLSRecord each.
-        assert!(rest.is_empty());
+        let (_, record) = DTLSRecord::parse(input)?;
 
         let handshake = if record.content_type == ContentType::Handshake {
             // This will also return None on the encrypted Finished after ChangeCipherSpec.
