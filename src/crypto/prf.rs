@@ -95,8 +95,7 @@ pub fn calculate_extended_master_secret(
     pre_master_secret: &[u8],
     session_hash: &[u8],
     hash: HashAlgorithm,
-)
--> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, String> {
     prf_tls12(
         pre_master_secret,
         "extended master secret",

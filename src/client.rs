@@ -314,9 +314,7 @@ impl Client {
                                 }
                             }
 
-                            if extension.extension_type
-                                == ExtensionType::ExtendedMasterSecret
-                            {
+                            if extension.extension_type == ExtensionType::ExtendedMasterSecret {
                                 self.extended_master_secret = true;
                                 debug!("Server negotiated Extended Master Secret");
                             }
@@ -639,19 +637,16 @@ impl Client {
             self.engine
                 .crypto_context_mut()
                 .derive_extended_master_secret(&session_hash, suite_hash)
-                .map_err(|e| Error::CryptoError(format!(
-                    "Failed to derive extended master secret: {}",
-                    e
-                )))?;
+                .map_err(|e| {
+                    Error::CryptoError(format!("Failed to derive extended master secret: {}", e))
+                })?;
         } else {
-            debug!("Extended Master Secret not negotiated; using legacy master secret");
             self.engine
                 .crypto_context_mut()
                 .derive_master_secret(&client_random, &server_random_vec, suite_hash)
-                .map_err(|e| Error::CryptoError(format!(
-                    "Failed to derive master secret: {}",
-                    e
-                )))?;
+                .map_err(|e| {
+                    Error::CryptoError(format!("Failed to derive master secret: {}", e))
+                })?;
         }
 
         debug!("Master secret derived successfully");
