@@ -725,6 +725,11 @@ impl Client {
                 handshake.header.msg_type, handshake.header.message_seq
             );
 
+            if matches!(handshake.header.msg_type, MessageType::NewSessionTicket) {
+                debug!("Received NewSessionTicket message, skipping");
+                continue;
+            }
+
             if !matches!(handshake.header.msg_type, MessageType::Finished) {
                 debug!(
                     "Expected Finished message, got: {:?}",
@@ -951,6 +956,9 @@ impl HandshakeState {
             }
 
             // Waiting for the final Finished message
+            (HandshakeState::AwaitingFinished, MessageType::NewSessionTicket) => {
+                Ok(HandshakeState::AwaitingFinished)
+            }
             (HandshakeState::AwaitingFinished, MessageType::Finished) => {
                 Ok(HandshakeState::HandshakePhaseComplete)
             }
