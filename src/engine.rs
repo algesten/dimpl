@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::buffer::{Buffer, BufferPool};
-use crate::crypto::{Aad, CertVerifier, CryptoContext, Hash, KeyingMaterial, Nonce, SrtpProfile};
+use crate::crypto::{Aad, CertVerifier, CryptoContext, Hash, Iv, KeyingMaterial, Nonce, SrtpProfile};
 use crate::incoming::Incoming;
 use crate::message::{
     CipherSuite, ContentType, DTLSRecord, Handshake, HashAlgorithm, MessageType, ProtocolVersion,
@@ -203,7 +203,7 @@ impl Engine {
         // unwrap is ok because we set it right now.
         let p = self.last_packet.as_ref().unwrap();
 
-        Some(p.as_slice())
+        Some(p)
     }
 
     pub fn poll_output(&mut self) -> Output {
@@ -635,6 +635,21 @@ impl Engine {
         } else {
             self.client_encryption_enabled
         }
+    }
+    
+    fn peer_iv(&self) -> Iv {
+        if self.is_client {
+            self.crypto_context.get_server_write_iv().unwrap()
+        } else {
+            self.crypto_context.get_client_write_iv().unwrap()
+        }
+    }
+
+    pub fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord) -> (Aad, Nonce) {
+        let aad = Aad::new(dtls.content_type, dtls.sequence, dtls.length);
+        let iv = self.peer_iv();
+        let nonce = Nonce::new(iv, dtls.nonce());
+        (aad, nonce)
     }
 }
 
