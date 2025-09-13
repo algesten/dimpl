@@ -37,6 +37,9 @@ pub struct Engine {
     /// Holder of last packet. To be able to return a reference.
     last_packet: Option<Buffer>,
 
+    /// The cipher suite in use. Set by ServerHello.
+    cipher_suite: Option<CipherSuite>,
+
     /// Cryptographic context for handling encryption/decryption
     crypto_context: CryptoContext,
 
@@ -75,6 +78,7 @@ impl Engine {
             queue_tx: VecDeque::new(),
             queue_events: VecDeque::new(),
             last_packet: None,
+            cipher_suite: None,
             crypto_context: CryptoContext::new(certificate, private_key, cert_verifier),
             server_encryption_enabled: false,
             client_encryption_enabled: false,
@@ -83,6 +87,11 @@ impl Engine {
             next_handshake_seq_no: 0,
             handshakes: Vec::with_capacity(10 * 1024),
         }
+    }
+
+    /// Get a reference to the cipher suite
+    pub fn cipher_suite(&self) -> Option<CipherSuite> {
+        self.cipher_suite
     }
 
     /// Get a reference to the crypto context
@@ -120,11 +129,10 @@ impl Engine {
     pub fn parse_packet(
         &mut self,
         packet: &[u8],
-        c: &mut Option<CipherSuite>,
     ) -> Result<(), Error> {
         let buffer = self.buffers_free.pop();
 
-        let incoming = Incoming::parse_packet(packet, c, buffer)?;
+        let incoming = Incoming::parse_packet(packet, &mut self.cipher_suite, buffer)?;
 
         self.insert_incoming(incoming)?;
 
@@ -278,7 +286,6 @@ impl Engine {
         &mut self,
         flight: &mut Flight,
         defragment_buffer: &'b mut Vec<u8>,
-        cipher_suite: Option<CipherSuite>,
     ) -> Result<Option<Handshake<'b>>, Error> {
         if flight.current.is_none() {
             return Ok(None);
@@ -291,7 +298,7 @@ impl Engine {
             // Handled in previous iteration
             .skip_while(|h| h.handled.get());
 
-        let (handshake, next_type) = Handshake::defragment(iter, defragment_buffer, cipher_suite)?;
+        let (handshake, next_type) = Handshake::defragment(iter, defragment_buffer, self.cipher_suite)?;
 
         // Update the stored handshakes used for CertificateVerify and Finished
         handshake.serialize(&mut self.handshakes);

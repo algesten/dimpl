@@ -42,9 +42,6 @@ pub struct Client {
     /// It might remain null if there is no HelloVerifyRequest.
     cookie: Option<Cookie>,
 
-    /// The cipher suite in use. Set by ServerHello.
-    cipher_suite: Option<CipherSuite>,
-
     /// Storage for extension data
     extension_data: Vec<u8>,
 
@@ -116,7 +113,6 @@ impl Client {
             random: Random::new(now),
             session_id: None,
             cookie: None,
-            cipher_suite: None,
             state: ClientState::SendClientHello,
             engine,
             server_random: None,
@@ -129,7 +125,7 @@ impl Client {
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        self.engine.parse_packet(packet, &mut self.cipher_suite)?;
+        self.engine.parse_packet(packet)?;
         self.process_input()?;
         Ok(())
     }
@@ -255,7 +251,6 @@ impl Client {
         while let Some(handshake) = self.engine.next_from_flight(
             &mut flight,
             &mut self.defragment_buffer,
-            self.cipher_suite,
         )? {
             // Validate transition using our FSM
             state = state.handle(handshake.header.msg_type)?;
@@ -290,7 +285,6 @@ impl Client {
                         server_hello.cipher_suite
                     );
                     let cs = server_hello.cipher_suite;
-                    self.cipher_suite = Some(cs);
                     self.session_id = Some(server_hello.session_id);
                     self.server_random = Some(server_hello.random);
 
@@ -346,7 +340,7 @@ impl Client {
                     debug!("Received ServerKeyExchange");
 
                     // Get key exchange algorithm for better logging
-                    let key_exchange_alg = match self.cipher_suite {
+                    let key_exchange_alg = match self.engine.cipher_suite() {
                         Some(cs) => cs.as_key_exchange_algorithm(),
                         None => KeyExchangeAlgorithm::Unknown,
                     };
@@ -501,13 +495,13 @@ impl Client {
     fn send_client_key_exchange(&mut self) -> Result<(), Error> {
         debug!("Sending ClientKeyExchange");
         // Just check that a cipher suite exists without binding to unused variable
-        if self.cipher_suite.is_none() {
+        if self.engine.cipher_suite().is_none() {
             return Err(Error::UnexpectedMessage(
                 "No cipher suite selected".to_string(),
             ));
         }
 
-        let cipher_suite = self.cipher_suite.unwrap();
+        let cipher_suite = self.engine.cipher_suite().unwrap();
         let key_exchange_algorithm = cipher_suite.as_key_exchange_algorithm();
 
         debug!("Using key exchange algorithm: {:?}", key_exchange_algorithm);
@@ -591,7 +585,7 @@ impl Client {
 
     fn derive_and_send_keys(&mut self) -> Result<(), Error> {
         debug!("Deriving keys and sending ChangeCipherSpec");
-        let cipher_suite = match self.cipher_suite {
+        let cipher_suite = match self.engine.cipher_suite() {
             Some(cs) => cs,
             None => {
                 return Err(Error::UnexpectedMessage(
@@ -683,7 +677,7 @@ impl Client {
             if is_client { "client" } else { "server" }
         );
 
-        let algorithm = self.cipher_suite.unwrap().hash_algorithm();
+        let algorithm = self.engine.cipher_suite().unwrap().hash_algorithm();
         let handshake_hash = self.engine.handshake_hash(algorithm);
 
         debug!("Handshake hash size: {} bytes", handshake_hash.len());
@@ -732,7 +726,6 @@ impl Client {
         while let Some(handshake) = self.engine.next_from_flight(
             &mut flight,
             &mut self.defragment_buffer,
-            self.cipher_suite,
         )? {
             // Update state based on message type
             state = state.handle(handshake.header.msg_type)?;
@@ -862,7 +855,7 @@ impl Client {
         debug!(
             "Sending application data: {} bytes with cipher suite: {:?}",
             data.len(),
-            self.cipher_suite.unwrap_or(CipherSuite::Unknown(0))
+            self.engine.cipher_suite().unwrap_or(CipherSuite::Unknown(0))
         );
 
         // Use the engine's create_record to send application data
