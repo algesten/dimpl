@@ -248,10 +248,10 @@ impl Client {
             return Ok(());
         };
 
-        while let Some(handshake) = self.engine.next_from_flight(
-            &mut flight,
-            &mut self.defragment_buffer,
-        )? {
+        while let Some(handshake) = self
+            .engine
+            .next_from_flight(&mut flight, &mut self.defragment_buffer)?
+        {
             // Validate transition using our FSM
             state = state.handle(handshake.header.msg_type)?;
 
@@ -723,10 +723,10 @@ impl Client {
         // Start in HandshakePhaseComplete state since we've already received ServerHelloDone
         let mut state = HandshakeState::HandshakePhaseComplete;
 
-        while let Some(handshake) = self.engine.next_from_flight(
-            &mut flight,
-            &mut self.defragment_buffer,
-        )? {
+        while let Some(handshake) = self
+            .engine
+            .next_from_flight(&mut flight, &mut self.defragment_buffer)?
+        {
             // Update state based on message type
             state = state.handle(handshake.header.msg_type)?;
 
@@ -855,7 +855,9 @@ impl Client {
         debug!(
             "Sending application data: {} bytes with cipher suite: {:?}",
             data.len(),
-            self.engine.cipher_suite().unwrap_or(CipherSuite::Unknown(0))
+            self.engine
+                .cipher_suite()
+                .unwrap_or(CipherSuite::Unknown(0))
         );
 
         // Use the engine's create_record to send application data
