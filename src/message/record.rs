@@ -1,5 +1,5 @@
-use core::fmt;
 use std::cmp::Ordering;
+use std::fmt;
 use std::ops::Range;
 
 use super::ProtocolVersion;
@@ -39,7 +39,7 @@ impl<'a> DTLSRecordSlice<'a> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(PartialEq, Eq, Default)]
 pub struct DTLSRecord<'a> {
     pub content_type: ContentType,
     pub version: ProtocolVersion,
@@ -215,5 +215,17 @@ impl Ord for Sequence {
 impl PartialOrd for Sequence {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+impl<'a> fmt::Debug for DTLSRecord<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DTLSRecord")
+            .field("content_type", &self.content_type)
+            .field("version", &self.version)
+            .field("sequence", &self.sequence)
+            .field("length", &self.length)
+            .field("fragment", &self.fragment.len())
+            .finish()
     }
 }

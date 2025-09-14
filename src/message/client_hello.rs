@@ -85,10 +85,10 @@ impl<'a> ClientHello<'a> {
         use_srtp.serialize(buf);
         ranges.push((ExtensionType::UseSrtp, start_pos, buf.len()));
 
-        // Add session_ticket extension (empty)
-        let start_pos = buf.len();
-        buf.extend_from_slice(&[0x00]); // Empty extension data
-        ranges.push((ExtensionType::SessionTicket, start_pos, buf.len()));
+        // // Add session_ticket extension (empty)
+        // let start_pos = buf.len();
+        // buf.extend_from_slice(&[0x00]); // Empty extension data
+        // ranges.push((ExtensionType::SessionTicket, start_pos, buf.len()));
 
         let need_etm = self
             .cipher_suites

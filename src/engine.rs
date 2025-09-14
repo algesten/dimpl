@@ -230,7 +230,14 @@ impl Engine {
             return None;
         }
 
-        let first = self.queue_rx.front().unwrap().first().handshake()?;
+        // ChangeCipherSpec is not a handshake, and might be first in the incoming queue.
+        let first = self
+            .queue_rx
+            .front()
+            .unwrap()
+            .records()
+            .iter()
+            .find_map(|r| r.handshake())?;
 
         if first.header.message_seq != self.peer_handshake_seq_no {
             return None;
@@ -248,7 +255,7 @@ impl Engine {
                     if h.header.message_seq != current_seq {
                         // Reset fragment tracking for new message sequence
                         last_fragment_end = 0;
-                        current_seq = h.header.message_seq;
+                        current_seq += 1;
                     }
 
                     // Check fragment contiguity
