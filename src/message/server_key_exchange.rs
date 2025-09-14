@@ -1,4 +1,4 @@
-use super::{CurveType, KeyExchangeAlgorithm, NamedCurve};
+use super::{CurveType, DigitallySigned, KeyExchangeAlgorithm, NamedCurve};
 use crate::buffer::Buf;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u16, be_u8};
@@ -49,11 +49,12 @@ pub struct DhParams<'a> {
     pub p: &'a [u8],
     pub g: &'a [u8],
     pub ys: &'a [u8],
+    pub signature: Option<DigitallySigned<'a>>,
 }
 
 impl<'a> DhParams<'a> {
-    pub fn new(p: &'a [u8], g: &'a [u8], ys: &'a [u8]) -> Self {
-        DhParams { p, g, ys }
+    pub fn new(p: &'a [u8], g: &'a [u8], ys: &'a [u8], signature: Option<DigitallySigned<'a>>) -> Self {
+        DhParams { p, g, ys, signature }
     }
 
     pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], DhParams<'a>> {
@@ -73,7 +74,15 @@ impl<'a> DhParams<'a> {
         }
         let (input, ys) = take(ys_len)(input)?;
 
-        Ok((input, DhParams { p, g, ys }))
+        // Optionally parse a trailing DigitallySigned structure
+        let (input, signature) = if !input.is_empty() {
+            let (input_after_sig, signed) = DigitallySigned::parse(input)?;
+            (input_after_sig, Some(signed))
+        } else {
+            (input, None)
+        };
+
+        Ok((input, DhParams { p, g, ys, signature }))
     }
 
     pub fn serialize(&self, output: &mut Buf<'static>) {
@@ -83,6 +92,9 @@ impl<'a> DhParams<'a> {
         output.extend_from_slice(self.g);
         output.extend_from_slice(&(self.ys.len() as u16).to_be_bytes());
         output.extend_from_slice(self.ys);
+        if let Some(signed) = &self.signature {
+            signed.serialize(output);
+        }
     }
 }
 
@@ -91,7 +103,7 @@ pub struct EcdhParams<'a> {
     pub curve_type: CurveType,
     pub named_curve: NamedCurve,
     pub public_key: &'a [u8],
-    pub signature: Option<&'a [u8]>,
+    pub signature: Option<DigitallySigned<'a>>,
 }
 
 impl<'a> EcdhParams<'a> {
@@ -99,7 +111,7 @@ impl<'a> EcdhParams<'a> {
         curve_type: CurveType,
         named_curve: NamedCurve,
         public_key: &'a [u8],
-        signature: Option<&'a [u8]>,
+        signature: Option<DigitallySigned<'a>>,
     ) -> Self {
         EcdhParams {
             curve_type,
@@ -117,11 +129,10 @@ impl<'a> EcdhParams<'a> {
         let (input, public_key_len) = be_u8(input)?;
         let (input, public_key) = take(public_key_len as usize)(input)?;
 
-        // The signature is in ASN.1 DER format
-        // It starts with 0x30 (SEQUENCE) followed by length
+        // Optionally parse a trailing DigitallySigned structure
         let (input, signature) = if !input.is_empty() {
-            // Take the entire remaining input as the signature
-            (&b""[..], Some(input))
+            let (rest, signed) = DigitallySigned::parse(input)?;
+            (rest, Some(signed))
         } else {
             (input, None)
         };
@@ -142,8 +153,8 @@ impl<'a> EcdhParams<'a> {
         output.extend_from_slice(&self.named_curve.as_u16().to_be_bytes());
         output.push(self.public_key.len() as u8);
         output.extend_from_slice(self.public_key);
-        if let Some(signature) = self.signature {
-            output.extend_from_slice(signature);
+        if let Some(signed) = &self.signature {
+            signed.serialize(output);
         }
     }
 }
@@ -152,6 +163,7 @@ impl<'a> EcdhParams<'a> {
 mod test {
     use super::*;
     use crate::buffer::Buf;
+    use crate::message::{HashAlgorithm, SignatureAlgorithm, SignatureAndHashAlgorithm};
 
     const MESSAGE_DH: &[u8] = &[
         0x00, 0x04, // p length
@@ -162,20 +174,23 @@ mod test {
         0x07, 0x08, // ys
     ];
 
-    const MESSAGE_ECDH: &[u8] = &[
+    const MESSAGE_ECDH_PUBKEY: &[u8] = &[
         0x03, // curve_type
         0x00, 0x17, // named_curve
         0x04, // public_key length
         0x01, 0x02, 0x03, 0x04, // public_key
-        0x00, 0x04, // signature length
-        0x05, 0x06, 0x07, 0x08, // signature
     ];
 
     #[test]
     fn roundtrip_dh() {
         let mut serialized = Buf::new();
 
-        let dh_params = DhParams::new(&MESSAGE_DH[2..6], &MESSAGE_DH[8..10], &MESSAGE_DH[12..14]);
+        let dh_params = DhParams::new(
+            &MESSAGE_DH[2..6],
+            &MESSAGE_DH[8..10],
+            &MESSAGE_DH[12..14],
+            None,
+        );
 
         let server_key_exchange = ServerKeyExchange {
             params: ServerKeyExchangeParams::Dh(dh_params),
@@ -194,23 +209,72 @@ mod test {
     }
 
     #[test]
+    fn roundtrip_dh_with_signature() {
+        // Build a message with params followed by a DigitallySigned block
+        let algorithm = SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA);
+        let signature_bytes: &[u8] = &[0x0A, 0x0B, 0x0C, 0x0D];
+
+        let mut expected = Buf::new();
+        // params
+        expected.extend_from_slice(&[0x00, 0x04]);
+        expected.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+        expected.extend_from_slice(&[0x00, 0x02]);
+        expected.extend_from_slice(&[0x05, 0x06]);
+        expected.extend_from_slice(&[0x00, 0x02]);
+        expected.extend_from_slice(&[0x07, 0x08]);
+        // DigitallySigned
+        expected.extend_from_slice(&algorithm.as_u16().to_be_bytes());
+        expected.extend_from_slice(&(signature_bytes.len() as u16).to_be_bytes());
+        expected.extend_from_slice(signature_bytes);
+
+        let signed = DigitallySigned::new(algorithm, signature_bytes);
+        let dh_params = DhParams::new(&[1, 2, 3, 4], &[5, 6], &[7, 8], Some(signed));
+
+        // Serialize
+        let mut serialized = Buf::new();
+        let ske = ServerKeyExchange {
+            params: ServerKeyExchangeParams::Dh(dh_params),
+        };
+        ske.serialize(&mut serialized);
+        assert_eq!(&*serialized, &*expected);
+
+        // Parse
+        let (rest, parsed) = ServerKeyExchange::parse(&serialized, KeyExchangeAlgorithm::EDH).unwrap();
+        assert_eq!(rest.len(), 0);
+        assert_eq!(parsed, ske);
+    }
+
+    #[test]
     fn roundtrip_ecdh() {
         let mut serialized = Buf::new();
+
+        // Build expected message dynamically with DigitallySigned
+        let algorithm = SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA);
+        let signature_bytes: &[u8] = &[0x05, 0x06, 0x07, 0x08];
+
+        let signed = DigitallySigned::new(algorithm, signature_bytes);
 
         let ecdh_params = EcdhParams::new(
             CurveType::NamedCurve,
             NamedCurve::Secp256r1,
-            &MESSAGE_ECDH[4..8],
-            Some(&MESSAGE_ECDH[8..14]),
+            &MESSAGE_ECDH_PUBKEY[4..8],
+            Some(signed),
         );
 
         let server_key_exchange = ServerKeyExchange {
             params: ServerKeyExchangeParams::Ecdh(ecdh_params),
         };
 
-        // Serialize and compare to ECDH_MESSAGE
+        // Serialize and compare to expected bytes
         server_key_exchange.serialize(&mut serialized);
-        assert_eq!(&*serialized, MESSAGE_ECDH);
+
+        let mut expected = Buf::new();
+        expected.extend_from_slice(MESSAGE_ECDH_PUBKEY);
+        expected.extend_from_slice(&algorithm.as_u16().to_be_bytes());
+        expected.extend_from_slice(&(signature_bytes.len() as u16).to_be_bytes());
+        expected.extend_from_slice(signature_bytes);
+
+        assert_eq!(&*serialized, &*expected);
 
         // Parse and compare with original
         let (rest, parsed) =
