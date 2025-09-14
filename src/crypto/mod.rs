@@ -1,9 +1,4 @@
 // Crypto functionality for DTLS 1.2
-// Implements support for:
-// - ECDHE+AESGCM (EECDH_AESGCM)
-// - DHE+AESGCM (EDH_AESGCM)
-// - ECDHE+AES256 (AES256_EECDH)
-// - DHE+AES256 (AES256_EDH)
 
 use std::ops::Deref;
 use std::str;
@@ -16,6 +11,7 @@ use tinyvec::array_vec;
 use p256::ecdsa::SigningKey as P256SigningKey;
 use p384::ecdsa::SigningKey as P384SigningKey;
 use rsa::RsaPrivateKey;
+use rsa::pkcs1::DecodeRsaPrivateKey;
 
 // Internal module imports
 mod encryption;
@@ -227,6 +223,10 @@ impl ParsedKey {
 
         // Try as PKCS#8 DER format
         if let Ok(private_key) = RsaPrivateKey::from_pkcs8_der(key_data) {
+            return Ok(ParsedKey::Rsa(private_key));
+        }
+        // Try as PKCS#1 DER format (OpenSSL may export this)
+        if let Ok(private_key) = RsaPrivateKey::from_pkcs1_der(key_data) {
             return Ok(ParsedKey::Rsa(private_key));
         }
         if let Ok(signing_key) = P256SigningKey::from_pkcs8_der(key_data) {

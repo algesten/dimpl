@@ -17,6 +17,7 @@ use std::time::Instant;
 pub use client::Client;
 
 mod message;
+pub use message::{CipherSuite, SignatureAlgorithm};
 
 mod time_tricks;
 

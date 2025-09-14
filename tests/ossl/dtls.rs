@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use dimpl::SrtpProfile;
 use openssl::ssl::{Ssl, SslContext, SslContextBuilder, SslMethod, SslOptions, SslVerifyMode};
+use openssl::dh::Dh;
 
 use super::cert::OsslDtlsCert;
 use super::io_buf::IoBuffer;
@@ -160,6 +161,11 @@ pub fn dtls_create_ctx(cert: &OsslDtlsCert) -> Result<SslContext, CryptoError> {
     options.insert(SslOptions::SINGLE_ECDH_USE);
     options.insert(SslOptions::NO_DTLSV1);
     ctx.set_options(options);
+
+    // Enable DHE cipher suites by setting temporary DH parameters
+    if let Ok(dh) = Dh::get_2048_256() {
+        ctx.set_tmp_dh(dh.as_ref())?;
+    }
 
     let ctx = ctx.build();
 

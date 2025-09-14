@@ -891,15 +891,16 @@ fn handshake_create_client_hello(
     // Get the client certificate type
     let cert_type = engine.crypto_context().signature_algorithm();
 
-    // Get compatible cipher suites
+    // Get compatible cipher suites for our certificate type
     let compatible_suites = CipherSuite::compatible_with_certificate(cert_type);
 
-    // Filter cipher suites based on the client's private key
+    // Offer only suites that are both allowed by Config and compatible with our key
     let cipher_suites: ArrayVec<[CipherSuite; 32]> = compatible_suites
         .iter()
-        .filter(|suite| engine.crypto_context().is_cipher_suite_compatible(**suite))
+        .copied()
+        .filter(|suite| engine.is_cipher_suite_allowed(*suite))
+        .filter(|suite| engine.crypto_context().is_cipher_suite_compatible(*suite))
         .take(32)
-        .cloned()
         .collect();
 
     debug!(
