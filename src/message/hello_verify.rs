@@ -1,5 +1,6 @@
 use super::id::Cookie;
 use super::ProtocolVersion;
+use crate::buffer::Buf;
 use nom::error::{Error, ErrorKind};
 use nom::IResult;
 
@@ -34,7 +35,7 @@ impl HelloVerifyRequest {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.extend_from_slice(&self.server_version.as_u16().to_be_bytes());
         output.push(self.cookie.len() as u8);
         output.extend_from_slice(&self.cookie);
@@ -44,6 +45,7 @@ impl HelloVerifyRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::Buf;
 
     const MESSAGE: &[u8] = &[
         0xFE, 0xFD, // ProtocolVersion::DTLS1_2
@@ -58,9 +60,9 @@ mod tests {
         let hello_verify_request = HelloVerifyRequest::new(ProtocolVersion::DTLS1_2, cookie);
 
         // Serialize and compare to MESSAGE
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         hello_verify_request.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
+        assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) = HelloVerifyRequest::parse(&serialized).unwrap();

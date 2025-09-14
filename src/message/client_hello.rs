@@ -13,6 +13,7 @@ use nom::{
 };
 use tinyvec::ArrayVec;
 
+use crate::buffer::Buf;
 use crate::util::many1;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -47,7 +48,7 @@ impl<'a> ClientHello<'a> {
     }
 
     /// Add all required extensions for DTLS handshake
-    pub fn with_extensions(mut self, extension_data: &'a mut Vec<u8>) -> Self {
+    pub fn with_extensions(mut self, extension_data: &'a mut Buf<'static>) -> Self {
         // Clear the extension data buffer
         extension_data.clear();
 
@@ -207,7 +208,7 @@ impl<'a> ClientHello<'a> {
         Ok((remaining, extensions))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.extend_from_slice(&self.client_version.as_u16().to_be_bytes());
         self.random.serialize(output);
         output.push(self.session_id.len() as u8);
@@ -248,6 +249,7 @@ mod tests {
     use tinyvec::array_vec;
 
     use super::*;
+    use crate::buffer::Buf;
 
     const MESSAGE: &[u8] = &[
         0xFE, 0xFD, // ProtocolVersion::DTLS1_2
@@ -287,9 +289,9 @@ mod tests {
         );
 
         // Serialize and compare to MESSAGE
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         client_hello.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
+        assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) = ClientHello::parse(&serialized).unwrap();

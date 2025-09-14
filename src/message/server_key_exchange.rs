@@ -1,4 +1,5 @@
 use super::{CurveType, KeyExchangeAlgorithm, NamedCurve};
+use crate::buffer::Buf;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u16, be_u8};
 use nom::Err;
@@ -35,7 +36,7 @@ impl<'a> ServerKeyExchange<'a> {
         Ok((input, ServerKeyExchange { params }))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         match &self.params {
             ServerKeyExchangeParams::Dh(dh_params) => dh_params.serialize(output),
             ServerKeyExchangeParams::Ecdh(ecdh_params) => ecdh_params.serialize(output),
@@ -75,7 +76,7 @@ impl<'a> DhParams<'a> {
         Ok((input, DhParams { p, g, ys }))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.extend_from_slice(&(self.p.len() as u16).to_be_bytes());
         output.extend_from_slice(self.p);
         output.extend_from_slice(&(self.g.len() as u16).to_be_bytes());
@@ -136,7 +137,7 @@ impl<'a> EcdhParams<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.push(self.curve_type.as_u8());
         output.extend_from_slice(&self.named_curve.as_u16().to_be_bytes());
         output.push(self.public_key.len() as u8);
@@ -150,6 +151,7 @@ impl<'a> EcdhParams<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::buffer::Buf;
 
     const MESSAGE_DH: &[u8] = &[
         0x00, 0x04, // p length
@@ -171,7 +173,7 @@ mod test {
 
     #[test]
     fn roundtrip_dh() {
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
 
         let dh_params = DhParams::new(&MESSAGE_DH[2..6], &MESSAGE_DH[8..10], &MESSAGE_DH[12..14]);
 
@@ -181,7 +183,7 @@ mod test {
 
         // Serialize and compare to DH_MESSAGE
         server_key_exchange.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE_DH);
+        assert_eq!(&*serialized, MESSAGE_DH);
 
         // Parse and compare with original
         let (rest, parsed) =
@@ -193,7 +195,7 @@ mod test {
 
     #[test]
     fn roundtrip_ecdh() {
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
 
         let ecdh_params = EcdhParams::new(
             CurveType::NamedCurve,
@@ -208,7 +210,7 @@ mod test {
 
         // Serialize and compare to ECDH_MESSAGE
         server_key_exchange.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE_ECDH);
+        assert_eq!(&*serialized, MESSAGE_ECDH);
 
         // Parse and compare with original
         let (rest, parsed) =

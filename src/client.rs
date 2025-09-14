@@ -16,8 +16,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use log::debug;
-use tinyvec::array_vec;
+use tinyvec::{array_vec, ArrayVec};
 
+use crate::buffer::Buf;
 use crate::crypto::{CertVerifier, SrtpProfile};
 use crate::engine::Engine;
 use crate::message::{
@@ -43,7 +44,7 @@ pub struct Client {
     cookie: Option<Cookie>,
 
     /// Storage for extension data
-    extension_data: Vec<u8>,
+    extension_data: Buf<'static>,
 
     /// The negotiated SRTP profile (if any)
     negotiated_srtp_profile: Option<SrtpProfile>,
@@ -125,7 +126,7 @@ impl Client {
             server_random: None,
             server_certificates: Vec::new(),
             negotiated_srtp_profile: None,
-            extension_data: Vec::with_capacity(256), // Pre-allocate extension data buffer
+            extension_data: Buf::new(),
             defragment_buffer: Vec::new(),
             certificate_verify: false,
             extended_master_secret: false,
@@ -191,56 +192,15 @@ impl Client {
 
     fn send_client_hello(&mut self) -> Result<(), Error> {
         debug!("Sending ClientHello");
-        let client_version = ProtocolVersion::DTLS1_2;
+
         let session_id = self.session_id.unwrap_or_else(SessionId::empty);
         let cookie = self.cookie.unwrap_or_else(Cookie::empty);
-
-        // Convert Vec<CipherSuite> to ArrayVec<[CipherSuite; 32]>
-        let mut cipher_suites = array_vec![[CipherSuite; 32]];
-
-        // Get the client certificate type
-        let cert_type = self.engine.crypto_context().signature_algorithm();
-
-        // Get compatible cipher suites
-        let compatible_suites = CipherSuite::compatible_with_certificate(cert_type);
-
-        // Filter cipher suites based on the client's private key
-        let filtered_suites: Vec<CipherSuite> = compatible_suites
-            .iter()
-            .filter(|suite| {
-                self.engine
-                    .crypto_context()
-                    .is_cipher_suite_compatible(**suite)
-            })
-            .cloned()
-            .collect();
-
-        cipher_suites.extend(filtered_suites.into_iter().take(32));
-
-        debug!(
-            "Sending ClientHello: DTLS version={:?}, cookie_len={}, offering {} cipher suites",
-            client_version,
-            cookie.len(),
-            cipher_suites.len()
-        );
-
-        let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
-
-        // Create ClientHello with all required extensions
-        let client_hello = ClientHello::new(
-            client_version,
-            self.random,
-            session_id,
-            cookie,
-            cipher_suites,
-            compression_methods,
-        )
-        .with_extensions(&mut self.extension_data);
+        let random = self.random;
 
         self.engine
-            .create_handshake(MessageType::ClientHello, |body| {
-                client_hello.serialize(body);
-            })?;
+            .create_handshake(MessageType::ClientHello, |body, engine|
+                handshake_create_client_hello(body, engine, cookie, random, session_id, &mut self.extension_data)
+            )?;
 
         Ok(())
     }
@@ -480,116 +440,22 @@ impl Client {
 
     fn send_client_certificate(&mut self) -> Result<(), Error> {
         debug!("Sending Certificate");
-        // Get the client certificate
-        let crypto = self.engine.crypto_context();
-        let client_cert = crypto.get_client_certificate();
-
-        // Get certificate size for logging
-        let mut temp_buf = Vec::new();
-        client_cert.serialize(&mut temp_buf);
-        debug!("Client certificate size: {} bytes", temp_buf.len());
-
-        // Store the client certificate data for sending
-        let mut cert_data = Vec::new();
-        client_cert.serialize(&mut cert_data);
 
         // Now use the engine with the stored data
         self.engine
-            .create_handshake(MessageType::Certificate, |body| {
-                body.extend_from_slice(&cert_data);
-            })?;
+            .create_handshake(MessageType::Certificate, handshake_create_certificate)?;
 
         Ok(())
     }
 
     fn send_client_key_exchange(&mut self) -> Result<(), Error> {
         debug!("Sending ClientKeyExchange");
-        // Just check that a cipher suite exists without binding to unused variable
-        if self.engine.cipher_suite().is_none() {
-            return Err(Error::UnexpectedMessage(
-                "No cipher suite selected".to_string(),
-            ));
-        }
-
-        let cipher_suite = self.engine.cipher_suite().unwrap();
-        let key_exchange_algorithm = cipher_suite.as_key_exchange_algorithm();
-
-        debug!("Using key exchange algorithm: {:?}", key_exchange_algorithm);
-
-        // For ECDHE, get curve info before we create the handshake (to avoid borrow issues)
-        let curve_info = if key_exchange_algorithm == KeyExchangeAlgorithm::EECDH {
-            self.engine.crypto_context().get_key_exchange_curve_info()
-        } else {
-            None
-        };
-
-        if let Some((curve_type, named_curve)) = &curve_info {
-            debug!(
-                "Using ECDHE curve info: {:?}, curve: {:?}",
-                curve_type, named_curve
-            );
-        }
-
-        // Generate key exchange data
-        debug!("Generating key exchange data");
-        let public_key = self
-            .engine
-            .crypto_context_mut()
-            .maybe_init_key_exchange()
-            .map_err(|e| Error::CryptoError(format!("Failed to generate key exchange: {}", e)))?
-            .to_vec();
-
-        debug!("Generated public key size: {} bytes", public_key.len());
 
         // Send client key exchange message
-        self.engine
-            .create_handshake(MessageType::ClientKeyExchange, |body| {
-                // Create a properly formatted ClientKeyExchange message based on the key exchange algorithm
-                let exchange_keys = match key_exchange_algorithm {
-                    KeyExchangeAlgorithm::EECDH => {
-                        // For ECDHE, use the curve information we retrieved earlier
-                        if let Some((curve_type, named_curve)) = curve_info {
-                            debug!(
-                                "Using ECDHE curve info: {:?}, {:?}",
-                                curve_type, named_curve
-                            );
-
-                            // Create ClientEcdhKeys with the proper curve information and public key
-                            let ecdh_keys =
-                                ClientEcdhKeys::new(curve_type, named_curve, &public_key);
-                            ExchangeKeys::Ecdh(ecdh_keys)
-                        } else {
-                            // Fallback if no curve info is available (shouldn't happen)
-                            warn!("No curve info available for ECDHE, using fallback");
-                            let dh_public = ClientDiffieHellmanPublic::new(
-                                PublicValueEncoding::Explicit,
-                                &public_key,
-                            );
-                            ExchangeKeys::DhAnon(dh_public)
-                        }
-                    }
-                    KeyExchangeAlgorithm::EDH => {
-                        // For DHE, use the standard encoding
-                        let dh_public = ClientDiffieHellmanPublic::new(
-                            PublicValueEncoding::Explicit,
-                            &public_key,
-                        );
-                        ExchangeKeys::DhAnon(dh_public)
-                    }
-                    _ => {
-                        // Create a default format for unknown algorithms
-                        let dh_public = ClientDiffieHellmanPublic::new(
-                            PublicValueEncoding::Explicit,
-                            &public_key,
-                        );
-                        ExchangeKeys::DhAnon(dh_public)
-                    }
-                };
-
-                // Wrap in ClientKeyExchange and serialize
-                let client_key_exchange = ClientKeyExchange::new(exchange_keys);
-                client_key_exchange.serialize(body);
-            })?;
+        self.engine.create_handshake(
+            MessageType::ClientKeyExchange,
+            handshake_create_client_key_exchange,
+        )?;
 
         // Capture session hash now for Extended Master Secret (RFC 7627)
         // At this point, the session hash includes: ClientHello, ServerHello, Certificate,
@@ -631,12 +497,14 @@ impl Client {
         };
 
         // Extract and format the random values for key derivation
-        let mut client_random_buf = Vec::with_capacity(32);
-        let mut server_random_buf = Vec::with_capacity(32);
+        let mut client_random_buf_b = crate::buffer::Buf::new();
+        let mut server_random_buf_b = crate::buffer::Buf::new();
 
         // Serialize the random values to raw bytes
-        self.random.serialize(&mut client_random_buf);
-        server_random.serialize(&mut server_random_buf);
+        self.random.serialize(&mut client_random_buf_b);
+        server_random.serialize(&mut server_random_buf_b);
+        let client_random_buf = client_random_buf_b.into_vec();
+        let server_random_buf = server_random_buf_b.into_vec();
 
         debug!(
             "Deriving master secret using client random ({} bytes) and server random ({} bytes)",
@@ -703,54 +571,29 @@ impl Client {
 
     fn send_finished_message(&mut self) -> Result<(), Error> {
         debug!("Sending Finished message to complete handshake");
-        // Calculate verify data for Finished message using PRF
-        let verify_data = self.generate_verify_data(true)?;
 
-        debug!("Generated verify data for Finished message (12 bytes)");
-
-        // Send finished message
-        let finished = Finished::new(&verify_data);
         self.engine
-            .create_handshake(MessageType::Finished, |body| {
+            .create_handshake(MessageType::Finished, |body, engine| {
+                // Calculate verify data for Finished message using PRF
+                let verify_data = engine.generate_verify_data(true)?;
+
+                // Send finished message
+                let finished = Finished::new(&verify_data);
+
+                debug!("Generated verify data for Finished message (12 bytes)");
+
                 finished.serialize(body);
+                Ok(())
             })?;
 
         Ok(())
-    }
-
-    fn generate_verify_data(&self, is_client: bool) -> Result<[u8; 12], Error> {
-        debug!(
-            "Generating verify data for {}, using handshake hash",
-            if is_client { "client" } else { "server" }
-        );
-
-        let algorithm = self.engine.cipher_suite().unwrap().hash_algorithm();
-        let handshake_hash = self.engine.handshake_hash(algorithm);
-
-        debug!("Handshake hash size: {} bytes", handshake_hash.len());
-
-        let suite_hash = self.engine.cipher_suite().unwrap().hash_algorithm();
-        let verify_data_vec = self
-            .engine
-            .crypto_context()
-            .generate_verify_data(&handshake_hash, is_client, suite_hash)
-            .map_err(|e| Error::CryptoError(format!("Failed to generate verify data: {}", e)))?;
-
-        if verify_data_vec.len() != 12 {
-            return Err(Error::CryptoError("Invalid verify data length".to_string()));
-        }
-
-        let mut verify_data = [0u8; 12];
-        verify_data.copy_from_slice(&verify_data_vec);
-
-        Ok(verify_data)
     }
 
     fn process_server_finished(&mut self) -> Result<(), Error> {
         // Generate expected verify data based on current transcript. This may
         // be recomputed if additional handshake messages (e.g., NewSessionTicket)
         // are received before the server's Finished.
-        let mut expected = self.generate_verify_data(false)?;
+        let mut expected = self.engine.generate_verify_data(false)?;
         debug!("Generated expected server verify data, waiting for server Finished message");
 
         // Wait for server finished message
@@ -777,7 +620,7 @@ impl Client {
             if matches!(handshake.header.msg_type, MessageType::NewSessionTicket) {
                 debug!("Received NewSessionTicket message, updating expected verify data");
                 // Recompute expected verify data now that the transcript includes the ticket
-                expected = self.generate_verify_data(false)?;
+                expected = self.engine.generate_verify_data(false)?;
                 continue;
             }
 
@@ -842,46 +685,11 @@ impl Client {
     fn send_certificate_verify(&mut self) -> Result<(), Error> {
         debug!("Sending CertificateVerify to prove client certificate ownership");
 
-        // The hash algorithm to use is the default for the private key type, not
-        // the one negotiated to use with the selected cipher suite. I.e.
-        // if we negotiate ECDHE_ECDSA_AES256_GCM_SHA384, we are gogin to use
-        // SHA384 for the signature of the main crypto, but not for CertificateVerify
-        // where a private key using P256 curve means we use SHA256.
-        let hash_alg = self
-            .engine
-            .crypto_context()
-            .private_key_default_hash_algorithm();
-        debug!("Using hash algorithm for signature: {:?}", hash_alg);
-
-        // Get the signature algorithm type
-        let sig_alg = self.engine.crypto_context().signature_algorithm();
-        debug!("Using signature algorithm: {:?}", sig_alg);
-
-        // Create the signature algorithm
-        let algorithm = SignatureAndHashAlgorithm::new(hash_alg, sig_alg);
-
-        let handshake_data = self.engine.handshake_data();
-
-        // Sign all handshake messages
-        let signature = self
-            .engine
-            .crypto_context()
-            .sign_data(handshake_data, hash_alg)
-            .map_err(|e| Error::CryptoError(format!("Failed to sign handshake messages: {}", e)))?;
-
-        debug!("Generated signature size: {} bytes", signature.len());
-
-        // Create the digitally signed structure
-        let digitally_signed = DigitallySigned::new(algorithm, &signature);
-
-        // Create the certificate verify message
-        let certificate_verify = CertificateVerify::new(digitally_signed);
-
         // Send the certificate verify message
-        self.engine
-            .create_handshake(MessageType::CertificateVerify, |body| {
-                certificate_verify.serialize(body);
-            })?;
+        self.engine.create_handshake(
+            MessageType::CertificateVerify,
+            handshake_create_certificate_verify,
+        )?;
 
         Ok(())
     }
@@ -1041,4 +849,169 @@ impl CipherSuite {
             CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
         }
     }
+}
+
+fn handshake_create_client_hello(
+    body: &mut Buf<'static>,
+    engine: &mut Engine,
+    cookie: Cookie,
+    random: Random,
+    session_id: SessionId,
+    extension_data: &mut Buf<'static>,
+) -> Result<(), Error> {
+    let client_version = ProtocolVersion::DTLS1_2;
+
+    // Get the client certificate type
+    let cert_type = engine.crypto_context().signature_algorithm();
+
+    // Get compatible cipher suites
+    let compatible_suites = CipherSuite::compatible_with_certificate(cert_type);
+
+    // Filter cipher suites based on the client's private key
+    let cipher_suites: ArrayVec<[CipherSuite; 32]> = compatible_suites
+        .iter()
+        .filter(|suite| engine.crypto_context().is_cipher_suite_compatible(**suite))
+        .take(32)
+        .cloned()
+        .collect();
+
+    debug!(
+        "Sending ClientHello: DTLS version={:?}, cookie_len={}, offering {} cipher suites",
+        client_version,
+        cookie.len(),
+        cipher_suites.len()
+    );
+
+    let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
+
+    // Create ClientHello with all required extensions
+    let client_hello = ClientHello::new(
+        client_version,
+        random,
+        session_id,
+        cookie,
+        cipher_suites,
+        compression_methods,
+    )
+    .with_extensions(extension_data);
+    client_hello.serialize(body);
+    Ok(())
+}
+
+fn handshake_create_certificate(body: &mut Buf<'static>, engine: &mut Engine) -> Result<(), Error> {
+    let crypto = engine.crypto_context();
+    let client_cert = crypto.get_client_certificate();
+    client_cert.serialize(body);
+    Ok(())
+}
+
+fn handshake_create_client_key_exchange(
+    body: &mut Buf<'static>,
+    engine: &mut Engine,
+) -> Result<(), Error> {
+    // Just check that a cipher suite exists without binding to unused variable
+    if engine.cipher_suite().is_none() {
+        return Err(Error::UnexpectedMessage(
+            "No cipher suite selected".to_string(),
+        ));
+    }
+
+    let cipher_suite = engine.cipher_suite().unwrap();
+    let key_exchange_algorithm = cipher_suite.as_key_exchange_algorithm();
+
+    debug!("Using key exchange algorithm: {:?}", key_exchange_algorithm);
+
+    // For ECDHE, get curve info before we create the handshake (to avoid borrow issues)
+    let curve_info = if key_exchange_algorithm == KeyExchangeAlgorithm::EECDH {
+        engine.crypto_context().get_key_exchange_curve_info()
+    } else {
+        None
+    };
+
+    // Generate key exchange data
+    debug!("Generating key exchange data");
+    let public_key = engine
+        .crypto_context_mut()
+        .maybe_init_key_exchange()
+        .map_err(|e| Error::CryptoError(format!("Failed to generate key exchange: {}", e)))?
+        .to_vec();
+
+    debug!("Generated public key size: {} bytes", public_key.len());
+
+    // Create a properly formatted ClientKeyExchange message based on the key exchange algorithm
+    let exchange_keys = match key_exchange_algorithm {
+        KeyExchangeAlgorithm::EECDH => {
+            // For ECDHE, use the curve information we retrieved earlier
+            let Some((curve_type, named_curve)) = curve_info else {
+                unreachable!("No curve info available for ECDHE");
+            };
+
+            debug!(
+                "Using ECDHE curve info: {:?}, {:?}",
+                curve_type, named_curve
+            );
+
+            // Create ClientEcdhKeys with the proper curve information and public key
+            let ecdh_keys = ClientEcdhKeys::new(curve_type, named_curve, &public_key);
+            ExchangeKeys::Ecdh(ecdh_keys)
+        }
+        KeyExchangeAlgorithm::EDH => {
+            // For DHE, use the standard encoding
+            let dh_public =
+                ClientDiffieHellmanPublic::new(PublicValueEncoding::Explicit, &public_key);
+            ExchangeKeys::DhAnon(dh_public)
+        }
+        _ => {
+            // Create a default format for unknown algorithms
+            let dh_public =
+                ClientDiffieHellmanPublic::new(PublicValueEncoding::Explicit, &public_key);
+            ExchangeKeys::DhAnon(dh_public)
+        }
+    };
+
+    // Wrap in ClientKeyExchange and serialize
+    let client_key_exchange = ClientKeyExchange::new(exchange_keys);
+
+    client_key_exchange.serialize(body);
+
+    Ok(())
+}
+
+fn handshake_create_certificate_verify(
+    body: &mut Buf<'static>,
+    engine: &mut Engine,
+) -> Result<(), Error> {
+    // The hash algorithm to use is the default for the private key type, not
+    // the one negotiated to use with the selected cipher suite. I.e.
+    // if we negotiate ECDHE_ECDSA_AES256_GCM_SHA384, we are gogin to use
+    // SHA384 for the signature of the main crypto, but not for CertificateVerify
+    // where a private key using P256 curve means we use SHA256.
+    let hash_alg = engine.crypto_context().private_key_default_hash_algorithm();
+    debug!("Using hash algorithm for signature: {:?}", hash_alg);
+
+    // Get the signature algorithm type
+    let sig_alg = engine.crypto_context().signature_algorithm();
+    debug!("Using signature algorithm: {:?}", sig_alg);
+
+    // Create the signature algorithm
+    let algorithm = SignatureAndHashAlgorithm::new(hash_alg, sig_alg);
+
+    let handshake_data = engine.handshake_data();
+
+    // Sign all handshake messages
+    let signature = engine
+        .crypto_context()
+        .sign_data(handshake_data, hash_alg)
+        .map_err(|e| Error::CryptoError(format!("Failed to sign handshake messages: {}", e)))?;
+
+    debug!("Generated signature size: {} bytes", signature.len());
+
+    // Create the digitally signed structure
+    let digitally_signed = DigitallySigned::new(algorithm, &signature);
+
+    // Create the certificate verify message
+    let certificate_verify = CertificateVerify::new(digitally_signed);
+
+    certificate_verify.serialize(body);
+    Ok(())
 }

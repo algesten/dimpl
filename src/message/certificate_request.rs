@@ -1,4 +1,5 @@
 use super::{ClientCertificateType, DistinguishedName, SignatureAndHashAlgorithm};
+use crate::buffer::Buf;
 use crate::util::{many0, many1};
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u16, be_u8};
@@ -59,7 +60,7 @@ impl<'a> CertificateRequest<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.push(self.certificate_types.len() as u8);
         for cert_type in &self.certificate_types {
             output.push(cert_type.as_u8());
@@ -98,6 +99,7 @@ mod test {
     use crate::message::{HashAlgorithm, SignatureAlgorithm};
 
     use super::*;
+    use crate::buffer::Buf;
 
     const MESSAGE: &[u8] = &[
         0x02, // Certificate types length
@@ -113,7 +115,7 @@ mod test {
 
     #[test]
     fn roundtrip() {
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
 
         let certificate_types = array_vec![
             ClientCertificateType::RSA_SIGN,
@@ -135,7 +137,7 @@ mod test {
 
         // Serialize and compare to MESSAGE
         certificate_request.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
+        assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) = CertificateRequest::parse(&serialized).unwrap();

@@ -9,6 +9,7 @@ use super::{
     Certificate, CertificateRequest, CertificateVerify, CipherSuite, ClientHello,
     ClientKeyExchange, Finished, HelloVerifyRequest, ServerHello, ServerKeyExchange,
 };
+use crate::buffer::Buf;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
@@ -115,7 +116,7 @@ impl<'a> Handshake<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.push(self.header.msg_type.as_u8());
         output.extend_from_slice(&self.header.length.to_be_bytes()[1..]);
         output.extend_from_slice(&self.header.message_seq.to_be_bytes());
@@ -203,7 +204,7 @@ impl<'a> Handshake<'a> {
     pub fn fragment<'b>(
         &self,
         max: usize,
-        buffer: &'b mut Vec<u8>,
+        buffer: &'b mut Buf<'static>,
     ) -> impl Iterator<Item = Handshake<'b>> {
         // Must be called with an empty buffer.
         assert!(buffer.is_empty());
@@ -386,7 +387,7 @@ impl<'a> Body<'a> {
         }
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         match self {
             Body::HelloRequest => {
                 // Serialize HelloRequest (empty)
@@ -439,6 +440,7 @@ mod tests {
     use tinyvec::array_vec;
 
     use super::*;
+    use crate::buffer::Buf;
     use crate::message::{
         CipherSuite, ClientHello, CompressionMethod, Cookie, ProtocolVersion, Random, SessionId,
     };
@@ -478,7 +480,7 @@ mod tests {
             Body::ServerHelloDone,
         );
 
-        let mut v = Vec::new();
+        let mut v = Buf::new();
         h.serialize(&mut v);
 
         assert_eq!(v.len(), 12);
@@ -486,7 +488,7 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
 
         let random = Random::parse(&MESSAGE[14..46]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
@@ -517,7 +519,7 @@ mod tests {
 
         // Serialize and compare to MESSAGE
         handshake.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
+        assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) = Handshake::parse(&serialized, None, false).unwrap();
@@ -528,8 +530,8 @@ mod tests {
 
     #[test]
     fn roundtrip_fragment() {
-        let mut serialized = Vec::new();
-        let mut buffer = Vec::new();
+        let mut serialized = Buf::new();
+        let mut buffer = Buf::new();
 
         let random = Random::parse(&MESSAGE[14..46]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
@@ -568,7 +570,7 @@ mod tests {
 
         // Serialize and compare to MESSAGE
         defragmented_handshake.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
+        assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) = Handshake::parse(&serialized, None, false).unwrap();

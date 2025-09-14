@@ -59,7 +59,7 @@ pub struct Engine {
     next_handshake_seq_no: u16,
 
     /// Handshakes collected for hash computation.
-    handshakes: Vec<u8>,
+    handshakes: Buf<'static>,
 }
 
 impl Engine {
@@ -85,7 +85,7 @@ impl Engine {
             is_client,
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
-            handshakes: Vec::with_capacity(10 * 1024),
+            handshakes: Buf::new(),
         }
     }
 
@@ -428,7 +428,7 @@ impl Engine {
         self.next_sequence_tx.sequence_number += 1;
 
         // Serialize the record into the buffer
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         record.serialize(&mut serialized);
 
         // Copy the serialized data to the buffer
@@ -447,13 +447,13 @@ impl Engine {
     /// Create a handshake message and wrap it in a DTLS record
     pub fn create_handshake<F>(&mut self, msg_type: MessageType, f: F) -> Result<(), Error>
     where
-        F: FnOnce(&mut Vec<u8>),
+        F: FnOnce(&mut Buf<'static>, &mut Self) -> Result<(), Error>,
     {
         // Create a buffer for the handshake body
-        let mut body_buffer = Vec::new();
+        let mut body_buffer = Buf::new();
 
         // Let the callback fill the handshake body
-        f(&mut body_buffer);
+        f(&mut body_buffer, self)?;
 
         // Create the handshake header with the next sequence number
         let handshake = Handshake {
@@ -473,7 +473,7 @@ impl Engine {
 
         // Now create the record with the serialized handshake
         self.create_record(ContentType::Handshake, |fragment| {
-            handshake.serialize(fragment.as_vec_mut());
+            handshake.serialize(fragment);
             Some(msg_type)
         })
     }
@@ -619,6 +619,33 @@ impl Engine {
         let iv = self.peer_iv();
         let nonce = Nonce::new(iv, dtls.nonce());
         (aad, nonce)
+    }
+
+    pub fn generate_verify_data(&self, is_client: bool) -> Result<[u8; 12], Error> {
+        debug!(
+            "Generating verify data for {}, using handshake hash",
+            if is_client { "client" } else { "server" }
+        );
+
+        let algorithm = self.cipher_suite().unwrap().hash_algorithm();
+        let handshake_hash = self.handshake_hash(algorithm);
+
+        debug!("Handshake hash size: {} bytes", handshake_hash.len());
+
+        let suite_hash = self.cipher_suite().unwrap().hash_algorithm();
+        let verify_data_vec = self
+            .crypto_context()
+            .generate_verify_data(&handshake_hash, is_client, suite_hash)
+            .map_err(|e| Error::CryptoError(format!("Failed to generate verify data: {}", e)))?;
+
+        if verify_data_vec.len() != 12 {
+            return Err(Error::CryptoError("Invalid verify data length".to_string()));
+        }
+
+        let mut verify_data = [0u8; 12];
+        verify_data.copy_from_slice(&verify_data_vec);
+
+        Ok(verify_data)
     }
 }
 

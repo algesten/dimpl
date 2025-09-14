@@ -1,3 +1,4 @@
+use crate::buffer::Buf;
 use crate::crypto::SrtpProfile;
 use nom::{
     bytes::complete::take,
@@ -96,7 +97,7 @@ impl UseSrtpExtension {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         // Length of all profiles (2 bytes per profile)
         output.extend_from_slice(&((self.profiles.len() * 2) as u16).to_be_bytes());
 
@@ -114,6 +115,7 @@ impl UseSrtpExtension {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::Buf;
     use tinyvec::array_vec;
 
     #[test]
@@ -127,7 +129,7 @@ mod tests {
 
         let ext = UseSrtpExtension::new(profiles.clone(), mki.clone());
 
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         ext.serialize(&mut serialized);
 
         let expected = [
@@ -138,7 +140,7 @@ mod tests {
             0x01, 0x02, 0x03, // MKI
         ];
 
-        assert_eq!(serialized, expected);
+        assert_eq!(&*serialized, expected);
 
         let (_, parsed) = UseSrtpExtension::parse(&serialized).unwrap();
 

@@ -1,3 +1,4 @@
+use crate::buffer::Buf;
 use nom::{bytes::complete::take, number::complete::be_u16, IResult};
 
 #[derive(Debug, PartialEq, Eq, Default)]
@@ -32,7 +33,7 @@ impl<'a> Extension<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.extend_from_slice(&self.extension_type.as_u16().to_be_bytes());
         output.extend_from_slice(&(self.extension_data.len() as u16).to_be_bytes());
         if !self.extension_data.is_empty() {
@@ -185,6 +186,7 @@ impl ExtensionType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::Buf;
 
     const MESSAGE: &[u8] = &[
         0x00, 0x0A, // ExtensionType::SupportedGroups
@@ -198,9 +200,9 @@ mod tests {
         let extension = Extension::new(ExtensionType::SupportedGroups, extension_data);
 
         // Serialize and compare to MESSAGE
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         extension.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
+        assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) = Extension::parse(&serialized).unwrap();

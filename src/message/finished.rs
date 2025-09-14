@@ -1,3 +1,4 @@
+use crate::buffer::Buf;
 use crate::message::CipherSuite;
 use nom::bytes::complete::take;
 use nom::IResult;
@@ -18,7 +19,7 @@ impl<'a> Finished<'a> {
         Ok((input, Finished { verify_data }))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.extend_from_slice(self.verify_data);
     }
 }
@@ -26,6 +27,7 @@ impl<'a> Finished<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::buffer::Buf;
     use crate::message::CipherSuite;
 
     const MESSAGE: &[u8] = &[
@@ -40,7 +42,7 @@ mod test {
         let finished = Finished::new(&verify_data);
 
         // Serialize and compare to MESSAGE
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         finished.serialize(&mut serialized);
 
         // Parse and compare with original

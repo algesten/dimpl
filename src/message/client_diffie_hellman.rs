@@ -1,4 +1,5 @@
 use super::PublicValueEncoding;
+use crate::buffer::Buf;
 use nom::number::complete::be_u16;
 use nom::{
     bytes::complete::take,
@@ -44,7 +45,7 @@ impl<'a> ClientDiffieHellmanPublic<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.push(self.encoding.as_u8());
         output.extend_from_slice(&(self.public_value.len() as u16).to_be_bytes());
         output.extend_from_slice(self.public_value);
@@ -54,6 +55,7 @@ impl<'a> ClientDiffieHellmanPublic<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::buffer::Buf;
 
     const MESSAGE: &[u8] = &[
         0x01, // PublicValueEncoding::Explicit
@@ -69,9 +71,9 @@ mod test {
         let client_diffie_hellman_public = ClientDiffieHellmanPublic::new(encoding, public_value);
 
         // Serialize and compare to MESSAGE
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         client_diffie_hellman_public.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
+        assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) = ClientDiffieHellmanPublic::parse(&serialized).unwrap();
@@ -93,9 +95,9 @@ mod test {
         let client_diffie_hellman_public = ClientDiffieHellmanPublic::new(encoding, public_value);
 
         // Serialize and compare to message
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         client_diffie_hellman_public.serialize(&mut serialized);
-        assert_eq!(serialized, message);
+        assert_eq!(&*serialized, message);
 
         // Parse and compare with original
         let (rest, parsed) = ClientDiffieHellmanPublic::parse(&serialized).unwrap();

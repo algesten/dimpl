@@ -1,4 +1,5 @@
 use super::DigitallySigned;
+use crate::buffer::Buf;
 use nom::IResult;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -16,7 +17,7 @@ impl<'a> CertificateVerify<'a> {
         Ok((input, CertificateVerify { signed }))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         self.signed.serialize(output);
     }
 }
@@ -24,6 +25,7 @@ impl<'a> CertificateVerify<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::buffer::Buf;
     use crate::message::{HashAlgorithm, SignatureAlgorithm, SignatureAndHashAlgorithm};
 
     const MESSAGE: &[u8] = &[
@@ -42,9 +44,9 @@ mod test {
         let certificate_verify = CertificateVerify::new(digitally_signed);
 
         // Serialize and compare to MESSAGE
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         certificate_verify.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
+        assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) = CertificateVerify::parse(&serialized).unwrap();

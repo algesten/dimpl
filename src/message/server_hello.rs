@@ -1,4 +1,5 @@
 use super::{CipherSuite, CompressionMethod, Extension, ProtocolVersion, Random, SessionId};
+use crate::buffer::Buf;
 use crate::util::many0;
 use nom::error::{Error, ErrorKind};
 use nom::Err;
@@ -85,7 +86,7 @@ impl<'a> ServerHello<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.extend_from_slice(&self.server_version.as_u16().to_be_bytes());
         self.random.serialize(output);
         output.push(self.session_id.len() as u8);
@@ -118,6 +119,7 @@ mod test {
     use crate::message::ExtensionType;
 
     use super::*;
+    use crate::buffer::Buf;
 
     const MESSAGE: &[u8] = &[
         0xFE, 0xFD, // ProtocolVersion::DTLS1_2
@@ -140,7 +142,7 @@ mod test {
 
     #[test]
     fn roundtrip() {
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
 
         let random = Random::parse(&MESSAGE[2..34]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
@@ -162,7 +164,7 @@ mod test {
 
         // Serialize and compare to MESSAGE
         server_hello.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
+        assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) = ServerHello::parse(&serialized).unwrap();

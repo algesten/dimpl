@@ -1,3 +1,4 @@
+use crate::buffer::Buf;
 use nom::{number::complete::be_u8, IResult};
 use tinyvec::ArrayVec;
 
@@ -91,7 +92,7 @@ impl SignatureAndHashAlgorithm {
         Ok((input, SignatureAndHashAlgorithm { hash, signature }))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.push(self.hash.as_u8());
         output.push(self.signature.as_u8());
     }
@@ -157,7 +158,7 @@ impl SignatureAlgorithmsExtension {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         // Write the total length of all algorithms (2 bytes per algorithm)
         output.extend_from_slice(
             &((self.supported_signature_algorithms.len() * 2) as u16).to_be_bytes(),
@@ -188,7 +189,7 @@ mod tests {
 
         let ext = SignatureAlgorithmsExtension::new(algorithms.clone());
 
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         ext.serialize(&mut serialized);
 
         let expected = [
@@ -197,7 +198,7 @@ mod tests {
             0x04, 0x01, // SHA256/RSA
         ];
 
-        assert_eq!(serialized, expected);
+        assert_eq!(&*serialized, expected);
 
         let (_, parsed) = SignatureAlgorithmsExtension::parse(&serialized).unwrap();
 

@@ -1,3 +1,4 @@
+use crate::buffer::Buf;
 use nom::{number::complete::be_u16, IResult};
 use tinyvec::ArrayVec;
 
@@ -72,7 +73,7 @@ impl SupportedGroupsExtension {
         Ok((current_input, SupportedGroupsExtension { groups }))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         // Write the total length of all groups (2 bytes per group)
         output.extend_from_slice(&((self.groups.len() * 2) as u16).to_be_bytes());
 
@@ -86,6 +87,7 @@ impl SupportedGroupsExtension {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::Buf;
     use tinyvec::array_vec;
 
     #[test]
@@ -94,7 +96,7 @@ mod tests {
 
         let ext = SupportedGroupsExtension::new(groups.clone());
 
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         ext.serialize(&mut serialized);
 
         let expected = [
@@ -103,7 +105,7 @@ mod tests {
             0x00, 0x17, // secp256r1 (0x0017)
         ];
 
-        assert_eq!(serialized, expected);
+        assert_eq!(&*serialized, expected);
 
         let (_, parsed) = SupportedGroupsExtension::parse(&serialized).unwrap();
 

@@ -1,3 +1,4 @@
+use crate::buffer::Buf;
 use nom::{number::complete::be_u8, IResult};
 use tinyvec::ArrayVec;
 
@@ -68,7 +69,7 @@ impl ECPointFormatsExtension {
         Ok((current_input, ECPointFormatsExtension { formats }))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         // Write the number of formats
         output.push(self.formats.len() as u8);
 
@@ -82,6 +83,7 @@ impl ECPointFormatsExtension {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::Buf;
     use tinyvec::array_vec;
 
     #[test]
@@ -93,7 +95,7 @@ mod tests {
 
         let ext = ECPointFormatsExtension::new(formats.clone());
 
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         ext.serialize(&mut serialized);
 
         let expected = [
@@ -102,7 +104,7 @@ mod tests {
             0x01, // ANSI X9.62 compressed prime (0x01)
         ];
 
-        assert_eq!(serialized, expected);
+        assert_eq!(&*serialized, expected);
 
         let (_, parsed) = ECPointFormatsExtension::parse(&serialized).unwrap();
 

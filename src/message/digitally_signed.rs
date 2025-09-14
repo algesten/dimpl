@@ -1,4 +1,5 @@
 use super::SignatureAndHashAlgorithm;
+use crate::buffer::Buf;
 use nom::number::complete::be_u16;
 use nom::{bytes::complete::take, IResult};
 
@@ -29,7 +30,7 @@ impl<'a> DigitallySigned<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.extend_from_slice(&self.algorithm.as_u16().to_be_bytes());
         output.extend_from_slice(&(self.signature.len() as u16).to_be_bytes());
         output.extend_from_slice(self.signature);
@@ -39,6 +40,7 @@ impl<'a> DigitallySigned<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::buffer::Buf;
     use crate::message::{HashAlgorithm, SignatureAlgorithm};
 
     const MESSAGE: &[u8] = &[
@@ -56,9 +58,9 @@ mod test {
         let digitally_signed = DigitallySigned::new(algorithm, signature);
 
         // Serialize and compare to MESSAGE
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         digitally_signed.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
+        assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) = DigitallySigned::parse(&serialized).unwrap();

@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use std::ops::Range;
 
 use super::ProtocolVersion;
+use crate::buffer::Buf;
 use crate::util::be_u48;
 use crate::Error;
 use nom::bytes::complete::take;
@@ -88,7 +89,7 @@ impl<'a> DTLSRecord<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.push(self.content_type.as_u8());
         self.version.serialize(output);
         output.extend_from_slice(&self.sequence.epoch.to_be_bytes());
@@ -147,6 +148,7 @@ impl ContentType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::Buf;
     use crate::message::ProtocolVersion;
 
     const RECORD: &[u8] = &[
@@ -176,9 +178,9 @@ mod tests {
         };
 
         // Serialize and compare to RECORD
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         record.serialize(&mut serialized);
-        assert_eq!(serialized, RECORD);
+        assert_eq!(&*serialized, RECORD);
 
         // Parse and compare with original
         let (rest, parsed) = DTLSRecord::parse(&mut serialized).unwrap();

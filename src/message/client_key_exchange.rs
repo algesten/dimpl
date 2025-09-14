@@ -1,5 +1,6 @@
 use super::KeyExchangeAlgorithm;
 use super::{ClientDiffieHellmanPublic, CurveType, NamedCurve};
+use crate::buffer::Buf;
 use nom::bytes::complete::take;
 use nom::error::Error;
 use nom::number::complete::be_u8;
@@ -53,7 +54,7 @@ impl<'a> ClientEcdhKeys<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         // For client key exchange, we only need to include the public key length and value
         // The curve_type and named_curve are already established during ServerKeyExchange
         output.push(self.public_key_length);
@@ -85,7 +86,7 @@ impl<'a> ClientKeyExchange<'a> {
         Ok((input, ClientKeyExchange { exchange_keys }))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         match &self.exchange_keys {
             ExchangeKeys::DhAnon(dh_anon) => dh_anon.serialize(output),
             ExchangeKeys::Ecdh(ecdh_keys) => ecdh_keys.serialize(output),
@@ -96,6 +97,7 @@ impl<'a> ClientKeyExchange<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::buffer::Buf;
     use crate::message::{KeyExchangeAlgorithm, PublicValueEncoding};
 
     const DH_MESSAGE: &[u8] = &[
@@ -118,9 +120,9 @@ mod test {
         let client_key_exchange = ClientKeyExchange::new(ExchangeKeys::DhAnon(dh_anon));
 
         // Serialize and compare to DH_MESSAGE
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         client_key_exchange.serialize(&mut serialized);
-        assert_eq!(serialized, DH_MESSAGE);
+        assert_eq!(&*serialized, DH_MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) =
@@ -139,9 +141,9 @@ mod test {
         let client_key_exchange = ClientKeyExchange::new(ExchangeKeys::Ecdh(ecdh_keys));
 
         // Serialize and compare to ECDH_MESSAGE
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         client_key_exchange.serialize(&mut serialized);
-        assert_eq!(serialized, ECDH_MESSAGE);
+        assert_eq!(&*serialized, ECDH_MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) =

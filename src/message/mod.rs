@@ -44,6 +44,7 @@ pub use server_key_exchange::{DhParams, EcdhParams, ServerKeyExchange, ServerKey
 use tinyvec::{array_vec, ArrayVec};
 pub use wrapped::{Asn1Cert, DistinguishedName};
 
+use crate::buffer::Buf;
 use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
 
@@ -91,7 +92,7 @@ impl ProtocolVersion {
         Ok((input, protocol_version))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.extend_from_slice(&self.as_u16().to_be_bytes());
     }
 }

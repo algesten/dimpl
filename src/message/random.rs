@@ -7,6 +7,7 @@ use nom::number::complete::be_u32;
 use nom::IResult;
 use rand::Rng;
 
+use crate::buffer::Buf;
 use crate::time_tricks::InstantExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +45,7 @@ impl Random {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         output.extend_from_slice(&self.gmt_unix_time.to_be_bytes());
         output.extend_from_slice(&self.random_bytes);
     }
@@ -53,6 +54,7 @@ impl Random {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::Buf;
 
     #[test]
     fn random_parse() {
@@ -85,7 +87,7 @@ mod tests {
             ],
         };
 
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
         random.serialize(&mut serialized);
 
         let expected = [
@@ -94,6 +96,6 @@ mod tests {
             0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
         ];
 
-        assert_eq!(serialized, expected);
+        assert_eq!(&*serialized, expected);
     }
 }

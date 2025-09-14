@@ -1,4 +1,5 @@
 use super::Asn1Cert;
+use crate::buffer::Buf;
 use crate::util::many0;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
@@ -28,7 +29,7 @@ impl<'a> Certificate<'a> {
         Ok((input, Certificate { certificate_list }))
     }
 
-    pub fn serialize(&self, output: &mut Vec<u8>) {
+    pub fn serialize(&self, output: &mut Buf<'static>) {
         let total_len: usize = self
             .certificate_list
             .iter()
@@ -48,6 +49,7 @@ mod tests {
     use tinyvec::array_vec;
 
     use super::*;
+    use crate::buffer::Buf;
 
     const MESSAGE: &[u8] = &[
         0x00, 0x00, 0x0C, // Total length
@@ -59,7 +61,7 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let mut serialized = Vec::new();
+        let mut serialized = Buf::new();
 
         let c1 = &MESSAGE[6..10];
         let c2 = &MESSAGE[13..15];
@@ -69,7 +71,7 @@ mod tests {
 
         // Serialize and compare to MESSAGE
         certificate.serialize(&mut serialized);
-        assert_eq!(serialized, MESSAGE);
+        assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
         let (rest, parsed) = Certificate::parse(&serialized).unwrap();
