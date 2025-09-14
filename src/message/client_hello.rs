@@ -48,21 +48,12 @@ impl<'a> ClientHello<'a> {
     }
 
     /// Add all required extensions for DTLS handshake
-    pub fn with_extensions(mut self, extension_data: &'a mut Buf<'static>) -> Self {
+    pub fn with_extensions(mut self, buf: &'a mut Buf<'static>) -> Self {
         // Clear the extension data buffer
-        extension_data.clear();
+        buf.clear();
 
         // First write all extension data
-        let mut extension_ranges = ArrayVec::<[(ExtensionType, usize, usize); 8]>::new();
-
-        // Add renegotiation_info extension (empty)
-        let start_pos = extension_data.len();
-        extension_data.extend_from_slice(&[0x00]); // Empty extension data
-        extension_ranges.push((
-            ExtensionType::Unknown(0xff01), // renegotiation_info
-            start_pos,
-            extension_data.len(),
-        ));
+        let mut ranges = ArrayVec::<[(ExtensionType, usize, usize); 8]>::new();
 
         // Check if we have any ECC-based cipher suites
         let has_ecc = self.cipher_suites.iter().any(|suite| suite.has_ecc());
@@ -71,70 +62,70 @@ impl<'a> ClientHello<'a> {
         if has_ecc {
             // Add supported groups extension
             let supported_groups = SupportedGroupsExtension::default();
-            let start_pos = extension_data.len();
-            supported_groups.serialize(extension_data);
-            extension_ranges.push((
+            let start_pos = buf.len();
+            supported_groups.serialize(buf);
+            ranges.push((
                 ExtensionType::SupportedGroups,
                 start_pos,
-                extension_data.len(),
+                buf.len(),
             ));
 
             // Add EC point formats extension
             let ec_point_formats = ECPointFormatsExtension::default();
-            let start_pos = extension_data.len();
-            ec_point_formats.serialize(extension_data);
-            extension_ranges.push((
+            let start_pos = buf.len();
+            ec_point_formats.serialize(buf);
+            ranges.push((
                 ExtensionType::EcPointFormats,
                 start_pos,
-                extension_data.len(),
+                buf.len(),
             ));
         }
 
         // Add signature algorithms extension (required for TLS 1.2+)
         let signature_algorithms = SignatureAlgorithmsExtension::default();
-        let start_pos = extension_data.len();
-        signature_algorithms.serialize(extension_data);
-        extension_ranges.push((
+        let start_pos = buf.len();
+        signature_algorithms.serialize(buf);
+        ranges.push((
             ExtensionType::SignatureAlgorithms,
             start_pos,
-            extension_data.len(),
+            buf.len(),
         ));
 
         // Add use_srtp extension for DTLS-SRTP support
         let use_srtp = UseSrtpExtension::default();
-        let start_pos = extension_data.len();
-        use_srtp.serialize(extension_data);
-        extension_ranges.push((ExtensionType::UseSrtp, start_pos, extension_data.len()));
+        let start_pos = buf.len();
+        use_srtp.serialize(buf);
+        ranges.push((ExtensionType::UseSrtp, start_pos, buf.len()));
 
         // Add session_ticket extension (empty)
-        let start_pos = extension_data.len();
-        extension_data.extend_from_slice(&[0x00]); // Empty extension data
-        extension_ranges.push((
+        let start_pos = buf.len();
+        buf.extend_from_slice(&[0x00]); // Empty extension data
+        ranges.push((
             ExtensionType::SessionTicket,
             start_pos,
-            extension_data.len(),
+            buf.len(),
         ));
 
         // Add encrypt_then_mac extension (empty)
-        let start_pos = extension_data.len();
-        extension_data.extend_from_slice(&[0x00]); // Empty extension data
-        extension_ranges.push((
+        let start_pos = buf.len();
+        buf.extend_from_slice(&[0x00]); // Empty extension data
+        ranges.push((
             ExtensionType::EncryptThenMac,
             start_pos,
-            extension_data.len(),
+            buf.len(),
         ));
 
-        let start_pos = extension_data.len();
-        extension_ranges.push((
+        let start_pos = buf.len();
+        ranges.push((
             ExtensionType::ExtendedMasterSecret,
             start_pos,
             start_pos, // No data at all
         ));
 
         // Now create all extensions using the written data
-        for (extension_type, start, end) in extension_ranges {
+        for (extension_type, start, end) in ranges {
             self.extensions
-                .push(Extension::new(extension_type, &extension_data[start..end]));
+                .push(Extension::new(extension_type, &buf[start..end]));
         }
 
         self

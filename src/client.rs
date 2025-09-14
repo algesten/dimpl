@@ -894,6 +894,7 @@ fn handshake_create_client_hello(
         compression_methods,
     )
     .with_extensions(extension_data);
+
     client_hello.serialize(body);
     Ok(())
 }
