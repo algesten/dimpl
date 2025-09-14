@@ -209,8 +209,18 @@ impl<'a> DerefMut for Inner<'a> {
     }
 }
 
-impl From<Vec<u8>> for Buf<'static> {
-    fn from(v: Vec<u8>) -> Self {
-        Buf(Inner::Owned(v), ZeroOnDrop::Yes)
+pub trait ToBuf {
+    fn to_buf(self) -> Buf<'static>;
+}
+
+impl ToBuf for Vec<u8> {
+    fn to_buf(self) -> Buf<'static> {
+        Buf(Inner::Owned(self), ZeroOnDrop::Yes)
+    }
+}
+
+impl<'a> ToBuf for &'a [u8] {
+    fn to_buf(self) -> Buf<'static> {
+        self.to_vec().to_buf()
     }
 }

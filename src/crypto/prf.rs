@@ -2,6 +2,7 @@ use crate::message::HashAlgorithm;
 use hmac::digest::KeyInit;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha384};
+use tinyvec::ArrayVec;
 
 type HmacSha256 = Hmac<Sha256>;
 type HmacSha384 = Hmac<Sha384>;
@@ -19,7 +20,7 @@ pub fn prf_tls12(
     seed: &[u8],
     output_len: usize,
     hash: HashAlgorithm,
-) -> Result<Vec<u8>, String> {
+) -> Result<ArrayVec<[u8; 128]>, String> {
     let full_seed = compute_full_seed(label, seed);
 
     match hash {
@@ -29,8 +30,9 @@ pub fn prf_tls12(
     }
 }
 
-fn compute_full_seed(label: &str, seed: &[u8]) -> Vec<u8> {
-    let mut full_seed = Vec::with_capacity(label.len() + seed.len());
+fn compute_full_seed(label: &str, seed: &[u8]) -> ArrayVec<[u8; 128]> {
+    assert!(label.is_ascii());
+    let mut full_seed = ArrayVec::default();
     full_seed.extend_from_slice(label.as_bytes());
     full_seed.extend_from_slice(seed);
     full_seed
@@ -40,8 +42,8 @@ fn p_hash<M: Mac + KeyInit>(
     secret: &[u8],
     full_seed: &[u8],
     output_len: usize,
-) -> Result<Vec<u8>, String> {
-    let mut result = Vec::with_capacity(output_len);
+) -> Result<ArrayVec<[u8; 128]>, String> {
+    let mut result = ArrayVec::default();
 
     // A(1) = HMAC_hash(secret, A(0)) where A(0) = seed
     let mut hmac = <M as KeyInit>::new_from_slice(secret).map_err(|e| e.to_string())?;
@@ -77,7 +79,7 @@ pub fn calculate_extended_master_secret(
     pre_master_secret: &[u8],
     session_hash: &[u8],
     hash: HashAlgorithm,
-) -> Result<Vec<u8>, String> {
+) -> Result<ArrayVec<[u8; 128]>, String> {
     prf_tls12(
         pre_master_secret,
         "extended master secret",
@@ -95,9 +97,9 @@ pub fn key_expansion(
     server_random: &[u8],
     key_material_length: usize,
     hash: HashAlgorithm,
-) -> Result<Vec<u8>, String> {
+) -> Result<ArrayVec<[u8; 128]>, String> {
     // For key expansion, the seed is server_random + client_random
-    let mut seed = Vec::with_capacity(client_random.len() + server_random.len());
+    let mut seed: ArrayVec<[u8; 128]> = ArrayVec::default();
     seed.extend_from_slice(server_random);
     seed.extend_from_slice(client_random);
 

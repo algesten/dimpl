@@ -18,7 +18,7 @@ use std::time::Instant;
 use log::debug;
 use tinyvec::{array_vec, ArrayVec};
 
-use crate::buffer::Buf;
+use crate::buffer::{Buf, ToBuf};
 use crate::crypto::{CertVerifier, SrtpProfile};
 use crate::engine::Engine;
 use crate::message::CipherSuite;
@@ -353,7 +353,7 @@ impl Client {
                     for (i, cert) in certificate.certificate_list.iter().enumerate() {
                         let cert_data = cert.0.to_vec();
                         trace!("Certificate #{} size: {} bytes", i + 1, cert_data.len());
-                        self.server_certificates.push(cert_data.into());
+                        self.server_certificates.push(cert_data.to_buf());
                     }
                 }
 

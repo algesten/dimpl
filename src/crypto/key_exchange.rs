@@ -1,3 +1,4 @@
+use crate::buffer::{Buf, ToBuf};
 use crate::message::{CurveType, NamedCurve};
 use elliptic_curve::sec1::FromEncodedPoint;
 use elliptic_curve::sec1::ToEncodedPoint;
@@ -50,7 +51,7 @@ impl KeyExchange {
     }
 
     /// Compute shared secret using peer's public key
-    pub fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Vec<u8>, String> {
+    pub fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf<'static>, String> {
         match &self.inner {
             Inner::Ecdh(ecdh) => ecdh.compute_shared_secret(peer_public_key),
             Inner::Dh(dh) => dh.compute_shared_secret(peer_public_key),
@@ -112,7 +113,7 @@ impl EcdhKeyExchange {
         }
     }
 
-    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Vec<u8>, String> {
+    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf<'static>, String> {
         match self {
             EcdhKeyExchange::P256 { private_key } => {
                 let Some(secret) = private_key else {
@@ -128,7 +129,7 @@ impl EcdhKeyExchange {
                 };
 
                 let shared_secret = secret.diffie_hellman(&public_key);
-                Ok(shared_secret.raw_secret_bytes().as_slice().to_vec())
+                Ok(shared_secret.raw_secret_bytes().as_slice().to_buf())
             }
             EcdhKeyExchange::P384 { private_key } => {
                 let Some(secret) = private_key else {
@@ -152,7 +153,8 @@ impl EcdhKeyExchange {
                 // Create a properly formatted buffer that matches OpenSSL's behavior
                 // For P-384, ECDH shared secret is the x-coordinate of the resulting point
                 // Ensure it's exactly 48 bytes with proper padding in big-endian format
-                let mut formatted_secret = vec![0u8; 48];
+                let mut formatted_secret = Buf::new();
+                formatted_secret.resize(48, 0);
 
                 // Copy the raw bytes to the buffer with proper alignment
                 // If raw_bytes.len() < 48, preserve leading zeros as needed
@@ -218,7 +220,7 @@ impl DhKeyExchange {
         public_key.to_bytes_be()
     }
 
-    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Vec<u8>, String> {
+    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf<'static>, String> {
         // Convert peer's public key to BigUint
         let peer_public = BigUint::from_bytes_be(peer_public_key);
 
@@ -231,7 +233,7 @@ impl DhKeyExchange {
         let shared_secret = peer_public.modpow(private_key, &self.prime);
 
         // Return shared secret as big-endian bytes
-        Ok(shared_secret.to_bytes_be())
+        Ok(shared_secret.to_bytes_be().to_buf())
     }
 
     fn get_curve_info(&self) -> Option<(CurveType, NamedCurve)> {

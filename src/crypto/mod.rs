@@ -5,7 +5,7 @@ use std::str;
 
 use elliptic_curve::generic_array::GenericArray;
 use pkcs8::DecodePrivateKey;
-use tinyvec::array_vec;
+use tinyvec::{array_vec, ArrayVec};
 
 // Crypto-related imports
 use p256::ecdsa::SigningKey as P256SigningKey;
@@ -29,7 +29,7 @@ pub use keying::{KeyingMaterial, SrtpProfile};
 pub use prf::calculate_extended_master_secret;
 pub use prf::{key_expansion, prf_tls12};
 
-use crate::buffer::Buf;
+use crate::buffer::{Buf, ToBuf};
 // Message-related imports
 use crate::message::{Asn1Cert, Certificate, CipherSuite, ContentType, CurveType};
 use crate::message::{DigitallySigned, HashAlgorithm};
@@ -260,10 +260,10 @@ pub struct CryptoContext {
     key_exchange: Option<KeyExchange>,
 
     /// Client write key
-    client_write_key: Option<Vec<u8>>,
+    client_write_key: Option<Buf<'static>>,
 
     /// Server write key
-    server_write_key: Option<Vec<u8>>,
+    server_write_key: Option<Buf<'static>>,
 
     /// Client write IV (for AES-GCM)
     client_write_iv: Option<Iv>,
@@ -272,16 +272,16 @@ pub struct CryptoContext {
     server_write_iv: Option<Iv>,
 
     /// Client MAC key (not used for AEAD ciphers)
-    client_mac_key: Option<Vec<u8>>,
+    client_mac_key: Option<Buf<'static>>,
 
     /// Server MAC key (not used for AEAD ciphers)
-    server_mac_key: Option<Vec<u8>>,
+    server_mac_key: Option<Buf<'static>>,
 
     /// Master secret
-    master_secret: Option<Vec<u8>>,
+    master_secret: Option<ArrayVec<[u8; 128]>>,
 
     /// Pre-master secret (temporary)
-    pre_master_secret: Option<Vec<u8>>,
+    pre_master_secret: Option<Buf<'static>>,
 
     /// Client cipher
     client_cipher: Option<Box<dyn Cipher>>,
@@ -467,16 +467,16 @@ impl CryptoContext {
 
         // Extract MAC keys (if used)
         if mac_key_len > 0 {
-            self.client_mac_key = Some(key_block[offset..offset + mac_key_len].to_vec());
+            self.client_mac_key = Some(key_block[offset..offset + mac_key_len].to_buf());
             offset += mac_key_len;
-            self.server_mac_key = Some(key_block[offset..offset + mac_key_len].to_vec());
+            self.server_mac_key = Some(key_block[offset..offset + mac_key_len].to_buf());
             offset += mac_key_len;
         }
 
         // Extract encryption keys
-        self.client_write_key = Some(key_block[offset..offset + enc_key_len].to_vec());
+        self.client_write_key = Some(key_block[offset..offset + enc_key_len].to_buf());
         offset += enc_key_len;
-        self.server_write_key = Some(key_block[offset..offset + enc_key_len].to_vec());
+        self.server_write_key = Some(key_block[offset..offset + enc_key_len].to_buf());
         offset += enc_key_len;
 
         // Extract IVs
@@ -586,7 +586,7 @@ impl CryptoContext {
         handshake_hash: &[u8],
         is_client: bool,
         hash: HashAlgorithm,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<ArrayVec<[u8; 128]>, String> {
         let master_secret = match &self.master_secret {
             Some(ms) => ms,
             None => return Err("No master secret available".to_string()),
@@ -625,6 +625,8 @@ impl CryptoContext {
             profile.keying_material_len(),
             hash,
         )?;
+
+        let keying_material = keying_material.as_slice().to_vec();
 
         Ok(KeyingMaterial::new(keying_material))
     }
