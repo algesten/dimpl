@@ -3,8 +3,8 @@ use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};
 
 use dimpl::SrtpProfile;
-use openssl::ssl::{Ssl, SslContext, SslContextBuilder, SslMethod, SslOptions, SslVerifyMode};
 use openssl::dh::Dh;
+use openssl::ssl::{Ssl, SslContext, SslContextBuilder, SslMethod, SslOptions, SslVerifyMode};
 
 use super::cert::OsslDtlsCert;
 use super::io_buf::IoBuffer;

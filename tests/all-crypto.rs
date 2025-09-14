@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{CertVerifier, Client, Config, Output, CipherSuite, SignatureAlgorithm};
+use dimpl::{CertVerifier, CipherSuite, Client, Config, Output, SignatureAlgorithm};
 use ossl::{DtlsCertOptions, DtlsEvent, DtlsPKeyType, OsslDtlsCert};
 
 #[test]
@@ -116,9 +116,15 @@ fn all_crypto() {
             }
         }
 
-        assert!(client_connected, "Client should connect for suite {:?}", suite);
-        assert!(server_connected, "Server should connect for suite {:?}", suite);
+        assert!(
+            client_connected,
+            "Client should connect for suite {:?}",
+            suite
+        );
+        assert!(
+            server_connected,
+            "Server should connect for suite {:?}",
+            suite
+        );
     }
 }
-
-

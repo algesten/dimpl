@@ -204,7 +204,7 @@ impl DhKeyExchange {
         let prime_bits = self.prime.bits();
 
         // Generate a random private key smaller than the prime
-        let mut rng = rand::thread_rng();
+        let mut rng = OsRng;
         let distribution = RandomBits::new(prime_bits - 1); // One bit less than prime
         let private_key: BigUint = distribution.sample(&mut rng);
 

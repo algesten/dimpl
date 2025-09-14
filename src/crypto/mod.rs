@@ -10,8 +10,8 @@ use tinyvec::array_vec;
 // Crypto-related imports
 use p256::ecdsa::SigningKey as P256SigningKey;
 use p384::ecdsa::SigningKey as P384SigningKey;
-use rsa::RsaPrivateKey;
 use rsa::pkcs1::DecodeRsaPrivateKey;
+use rsa::RsaPrivateKey;
 
 // Internal module imports
 mod encryption;

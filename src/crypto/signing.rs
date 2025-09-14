@@ -1,6 +1,6 @@
 use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
 use p384::ecdsa::{Signature as P384Signature, SigningKey as P384SigningKey};
-use rand::thread_rng;
+use rand::rngs::OsRng;
 use rsa::pkcs1v15::SigningKey as RsaPkcs1v15SigningKey;
 use rsa::RsaPrivateKey;
 use sha2::{Sha256, Sha384};
@@ -19,14 +19,14 @@ pub fn sign_rsa(
     match hash_alg {
         HashAlgorithm::SHA256 => {
             let signing_key = RsaPkcs1v15SigningKey::<Sha256>::new(private_key.clone());
-            let mut rng = thread_rng();
+            let mut rng = OsRng;
             let signature = signing_key.sign_with_rng(&mut rng, data);
             let sig_bytes = signature.to_bytes().to_vec();
             Ok(sig_bytes)
         }
         HashAlgorithm::SHA384 => {
             let signing_key = RsaPkcs1v15SigningKey::<Sha384>::new(private_key.clone());
-            let mut rng = thread_rng();
+            let mut rng = OsRng;
             let signature = signing_key.sign_with_rng(&mut rng, data);
             let sig_bytes = signature.to_bytes().to_vec();
             Ok(sig_bytes)

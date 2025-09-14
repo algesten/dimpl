@@ -1,4 +1,4 @@
-use rand::RngCore;
+use rand::{rngs::OsRng, RngCore};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -397,7 +397,7 @@ impl Engine {
 
             // Generate 8 random bytes for the explicit part of the nonce
             let mut explicit_nonce = [0u8; 8];
-            rand::thread_rng().fill_bytes(&mut explicit_nonce);
+            OsRng.fill_bytes(&mut explicit_nonce);
 
             // Combine the fixed IV and the explicit nonce
             let nonce = Nonce::new(iv, &explicit_nonce);

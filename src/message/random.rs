@@ -5,7 +5,7 @@ use std::time::Instant;
 use nom::bytes::complete::take;
 use nom::number::complete::be_u32;
 use nom::IResult;
-use rand::Rng;
+use rand::{rngs::OsRng, Rng};
 
 use crate::buffer::Buf;
 use crate::time_tricks::InstantExt;
@@ -22,11 +22,11 @@ impl Random {
         // This is valid until yaer 2106, at which point I will be beyond caring.
         let gmt_unix_time = gmt_duration.as_secs() as u32;
 
-        let mut t = rand::thread_rng();
+        let mut rng = OsRng;
 
         Self {
             gmt_unix_time,
-            random_bytes: from_fn(|_| t.gen()),
+            random_bytes: from_fn(|_| rng.gen()),
         }
     }
 

@@ -2,7 +2,7 @@ use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
 use nom::{Err, IResult};
-use rand::Rng;
+use rand::{rngs::OsRng, Rng};
 use std::ops::Deref;
 use std::{array, fmt};
 
@@ -67,7 +67,7 @@ macro_rules! var_array {
             }
 
             pub fn random(len: usize) -> $name {
-                let mut t = rand::thread_rng();
+                let mut rng = OsRng;
                 #[allow(unused_comparisons)]
                 {
                     assert!(len >= $min);
@@ -75,7 +75,7 @@ macro_rules! var_array {
                 }
                 let mut arr = [0; $max];
                 for a in &mut arr[..len] {
-                    *a = t.gen();
+                    *a = rng.gen();
                 }
                 Self(arr, len)
             }
