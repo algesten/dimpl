@@ -33,7 +33,7 @@ pub use keying::{KeyingMaterial, SrtpProfile};
 pub use prf::{calculate_extended_master_secret, calculate_master_secret};
 pub use prf::{key_expansion, prf_tls12};
 
-use crate::buffer::Buffer;
+use crate::buffer::Buf;
 // Message-related imports
 use crate::message::{Asn1Cert, Certificate, CipherSuite, ContentType, CurveType};
 use crate::message::{HashAlgorithm, KeyExchangeAlgorithm};
@@ -541,12 +541,12 @@ impl CryptoContext {
 
     /// Encrypt data (client to server)
     pub fn encrypt_client_to_server(
-        &self,
-        plaintext: &mut Buffer,
+        &mut self,
+        plaintext: &mut Buf,
         aad: Aad,
         nonce: Nonce,
     ) -> Result<(), String> {
-        match &self.client_cipher {
+        match &mut self.client_cipher {
             Some(cipher) => cipher.encrypt(plaintext, aad, nonce),
             None => Err("Client cipher not initialized".to_string()),
         }
@@ -554,12 +554,12 @@ impl CryptoContext {
 
     /// Decrypt data (server to client)
     pub fn decrypt_server_to_client(
-        &self,
-        ciphertext: &mut Buffer,
+        &mut self,
+        ciphertext: &mut Buf,
         aad: Aad,
         nonce: Nonce,
     ) -> Result<(), String> {
-        match &self.server_cipher {
+        match &mut self.server_cipher {
             Some(cipher) => cipher.decrypt(ciphertext, aad, nonce),
             None => Err("Server cipher not initialized".to_string()),
         }
@@ -567,12 +567,12 @@ impl CryptoContext {
 
     /// Encrypt data (server to client)
     pub fn encrypt_server_to_client(
-        &self,
-        plaintext: &mut Buffer,
+        &mut self,
+        plaintext: &mut Buf,
         aad: Aad,
         nonce: Nonce,
     ) -> Result<(), String> {
-        match &self.server_cipher {
+        match &mut self.server_cipher {
             Some(cipher) => cipher.encrypt(plaintext, aad, nonce),
             None => Err("Server cipher not initialized".to_string()),
         }
@@ -580,12 +580,12 @@ impl CryptoContext {
 
     /// Decrypt data (client to server)
     pub fn decrypt_client_to_server(
-        &self,
-        ciphertext: &mut Buffer,
+        &mut self,
+        ciphertext: &mut Buf,
         aad: Aad,
         nonce: Nonce,
     ) -> Result<(), String> {
-        match &self.client_cipher {
+        match &mut self.client_cipher {
             Some(cipher) => cipher.decrypt(ciphertext, aad, nonce),
             None => Err("Client cipher not initialized".to_string()),
         }

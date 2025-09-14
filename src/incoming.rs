@@ -5,7 +5,7 @@ use std::fmt;
 use tinyvec::ArrayVec;
 use zeroize::Zeroize;
 
-use crate::buffer::Buffer;
+use crate::buffer::Buf;
 use crate::crypto::DTLS_EXPLICIT_NONCE_LEN;
 use crate::engine::Engine;
 use crate::message::{ContentType, DTLSRecord, DTLSRecordSlice, Handshake};
@@ -39,7 +39,7 @@ impl Incoming {
 
 self_cell!(
     struct Inner {
-        owner: MutBorrow<Buffer>, // Buffer with UDP packet data
+        owner: MutBorrow<Buf<'static>>, // Buffer with UDP packet data
         #[covariant]
         dependent: Records, // Parsed records from that UDP packet
     }
@@ -59,7 +59,7 @@ impl Incoming {
     pub fn parse_packet(
         packet: &[u8],
         engine: &mut Engine,
-        mut into: Buffer,
+        mut into: Buf<'static>,
     ) -> Result<Self, Error> {
         // The Buffer is where we store the raw packet data.
         into.resize(packet.len(), 0);
@@ -136,8 +136,9 @@ impl<'a> Record<'a> {
             // records up in Records::parse()
             let ciphertext = &mut input[DTLSRecord::HEADER_LEN + DTLS_EXPLICIT_NONCE_LEN..];
 
-            // TODO (martin): fix these friggin buffers.
-            let mut buffer = Buffer::wrap(ciphertext.to_vec());
+            // TODO(martin): fix these friggin buffers.
+            let mut buffer = Buf::new();
+            buffer.extend_from_slice(ciphertext);
 
             // This decrypt in place.
             engine.decrypt_data(&mut buffer, aad, nonce)?;

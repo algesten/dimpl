@@ -4,7 +4,7 @@
 #![allow(mismatched_lifetime_syntaxes)]
 // #![deny(missing_docs)]
 
-const MAX_MTU: usize = 2200;
+// const MAX_MTU: usize = 2200;
 
 #[macro_use]
 extern crate log;

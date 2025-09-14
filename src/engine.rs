@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::buffer::{Buffer, BufferPool};
+use crate::buffer::{Buf, BufferPool};
 use crate::crypto::{Aad, CertVerifier, CryptoContext, Hash};
 use crate::crypto::{Iv, KeyingMaterial, DTLS_AEAD_OVERHEAD};
 use crate::crypto::{Nonce, SrtpProfile, DTLS_EXPLICIT_NONCE_LEN};
@@ -29,13 +29,13 @@ pub struct Engine {
     queue_rx: VecDeque<Incoming>,
 
     /// Queue of outgoing packets.
-    queue_tx: VecDeque<Buffer>,
+    queue_tx: VecDeque<Buf<'static>>,
 
     /// Queue of Output events
     queue_events: VecDeque<Output<'static>>,
 
     /// Holder of last packet. To be able to return a reference.
-    last_packet: Option<Buffer>,
+    last_packet: Option<Buf<'static>>,
 
     /// The cipher suite in use. Set by ServerHello.
     cipher_suite: Option<CipherSuite>,
@@ -344,7 +344,7 @@ impl Engine {
     /// Create a DTLS record and serialize it into a buffer
     pub fn create_record<F>(&mut self, content_type: ContentType, f: F) -> Result<(), Error>
     where
-        F: FnOnce(&mut Vec<u8>) -> Option<MessageType>,
+        F: FnOnce(&mut Buf<'static>) -> Option<MessageType>,
     {
         // Check if the queue has reached the maximum size before creating a new buffer
         if self.queue_tx.len() >= self.config.max_queue_tx {
@@ -473,7 +473,7 @@ impl Engine {
 
         // Now create the record with the serialized handshake
         self.create_record(ContentType::Handshake, |fragment| {
-            handshake.serialize(fragment);
+            handshake.serialize(fragment.as_vec_mut());
             Some(msg_type)
         })
     }
@@ -500,7 +500,7 @@ impl Engine {
     }
 
     /// Encrypt data appropriate for the role (client or server)
-    fn encrypt_data(&self, plaintext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), Error> {
+    fn encrypt_data(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), Error> {
         if self.is_client {
             self.crypto_context
                 .encrypt_client_to_server(plaintext, aad, nonce)
@@ -514,8 +514,8 @@ impl Engine {
 
     /// Decrypt data appropriate for the role (client or server)
     pub fn decrypt_data(
-        &self,
-        ciphertext: &mut Buffer,
+        &mut self,
+        ciphertext: &mut Buf,
         aad: Aad,
         nonce: Nonce,
     ) -> Result<(), Error> {

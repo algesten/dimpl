@@ -1,18 +1,16 @@
-use aes_gcm::{
-    aead::{Aead, KeyInit, Payload},
-    Aes128Gcm, Aes256Gcm,
-};
+use aes_gcm::aead::AeadMutInPlace;
+use aes_gcm::{aead::KeyInit, Aes128Gcm, Aes256Gcm};
 
-use crate::buffer::Buffer;
+use crate::buffer::Buf;
 use crate::crypto::{Aad, Nonce};
 
 /// Cipher trait for DTLS encryption and decryption
 pub trait Cipher: Send + Sync {
     /// Encrypt plaintext in-place
-    fn encrypt(&self, plaintext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), String>;
+    fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String>;
 
     /// Decrypt ciphertext in-place
-    fn decrypt(&self, ciphertext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), String>;
+    fn decrypt(&mut self, ciphertext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String>;
 }
 
 /// AES-GCM implementation with different key sizes
@@ -41,42 +39,21 @@ impl AesGcm {
 }
 
 impl Cipher for AesGcm {
-    fn encrypt(&self, plaintext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), String> {
+    fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String> {
         let nonce = aes_gcm::Nonce::from_slice(&nonce);
-        let plaintext_data = plaintext.as_slice();
 
         // Perform encryption based on the cipher variant
         let result = match self {
             AesGcm::Aes128(cipher) => {
-                let ciphertext = cipher
-                    .encrypt(
-                        nonce,
-                        Payload {
-                            msg: plaintext_data,
-                            aad: &aad,
-                        },
-                    )
+                cipher
+                    .encrypt_in_place(nonce, &aad, plaintext)
                     .map_err(|e| format!("AES-GCM encryption failed: {:?}", e))?;
-
-                // Replace plaintext with ciphertext
-                plaintext.clear();
-                plaintext.extend_from_slice(&ciphertext);
                 Ok(())
             }
             AesGcm::Aes256(cipher) => {
-                let ciphertext = cipher
-                    .encrypt(
-                        nonce,
-                        Payload {
-                            msg: plaintext_data,
-                            aad: &aad,
-                        },
-                    )
+                cipher
+                    .encrypt_in_place(nonce, &aad, plaintext)
                     .map_err(|e| format!("AES-GCM encryption failed: {:?}", e))?;
-
-                // Replace plaintext with ciphertext
-                plaintext.clear();
-                plaintext.extend_from_slice(&ciphertext);
                 Ok(())
             }
         };
@@ -84,47 +61,26 @@ impl Cipher for AesGcm {
         result
     }
 
-    fn decrypt(&self, ciphertext: &mut Buffer, aad: Aad, nonce: Nonce) -> Result<(), String> {
+    fn decrypt(&mut self, ciphertext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String> {
         // Make sure we have enough data for the tag (16 bytes)
         if ciphertext.len() < 16 {
             return Err(format!("Ciphertext too short: {}", ciphertext.len()));
         }
 
         let nonce = aes_gcm::Nonce::from_slice(&nonce);
-        let ciphertext_data = ciphertext.as_slice();
 
         // Perform decryption based on the cipher variant
         let result = match self {
             AesGcm::Aes128(cipher) => {
-                let plaintext = cipher
-                    .decrypt(
-                        nonce,
-                        Payload {
-                            msg: ciphertext_data,
-                            aad: &aad,
-                        },
-                    )
+                cipher
+                    .decrypt_in_place(nonce, &aad, ciphertext)
                     .map_err(|e| format!("AES-GCM decryption failed: {:?}", e))?;
-
-                // Replace ciphertext with plaintext
-                ciphertext.clear();
-                ciphertext.extend_from_slice(&plaintext);
                 Ok(())
             }
             AesGcm::Aes256(cipher) => {
-                let plaintext = cipher
-                    .decrypt(
-                        nonce,
-                        Payload {
-                            msg: ciphertext_data,
-                            aad: &aad,
-                        },
-                    )
+                cipher
+                    .decrypt_in_place(nonce, &aad, ciphertext)
                     .map_err(|e| format!("AES-GCM decryption failed: {:?}", e))?;
-
-                // Replace ciphertext with plaintext
-                ciphertext.clear();
-                ciphertext.extend_from_slice(&plaintext);
                 Ok(())
             }
         };
