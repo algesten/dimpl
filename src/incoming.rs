@@ -89,8 +89,17 @@ impl<'a> Records<'a> {
         // DTLSRecordSlice::try_read will end with None when cleanly chunking ends.
         // Any extra bytes will cause an Error.
         while let Some(dtls_rec) = DTLSRecordSlice::try_read(current)? {
-            let record = Record::parse(dtls_rec.slice, engine, true)?;
-            records.push(record);
+            match Record::parse(dtls_rec.slice, engine, true) {
+                Ok(record) => {
+                    if let Some(record) = record {
+                        records.push(record);
+                    } else {
+                        // Silently drop duplicate/too-old records per RFC 6347
+                        trace!("Drop replayed record");
+                    }
+                }
+                Err(e) => return Err(e),
+            }
             current = dtls_rec.rest;
         }
 
@@ -113,7 +122,7 @@ impl<'a> Record<'a> {
         input: &'a mut [u8],
         engine: &mut Engine,
         decrypt: bool,
-    ) -> Result<Record<'a>, Error> {
+    ) -> Result<Option<Record<'a>>, Error> {
         let inner = RecordInner::try_new(input, |borrowed| {
             Ok::<_, Error>(ParsedRecord::parse(&borrowed, engine)?)
         })?;
@@ -121,10 +130,23 @@ impl<'a> Record<'a> {
         let record = Record(inner);
 
         if record.record().content_type == ContentType::ChangeCipherSpec {
+            // Validate CCS payload value (single byte 0x01)
+            let dtls = record.record();
+            if dtls.fragment.len() != 1 || dtls.fragment[0] != 0x01 {
+                return Err(Error::SecurityError(
+                    "Invalid ChangeCipherSpec payload".to_string(),
+                ));
+            }
             engine.enable_peer_encryption();
         } else if decrypt && engine.is_peer_encryption_enabled() {
             // We need to decrypt the record and redo the parsing.
             let dtls = record.record();
+
+            // Anti-replay check
+            if !engine.replay_check_and_update(dtls.sequence) {
+                return Ok(None);
+            }
+
             let (aad, nonce) = engine.decryption_aad_and_nonce(dtls);
 
             // Bring back the unparsed bytes.
@@ -156,7 +178,7 @@ impl<'a> Record<'a> {
             return Record::parse(input, engine, false);
         }
 
-        Ok(record)
+        Ok(Some(record))
     }
 
     pub fn record(&self) -> &DTLSRecord {

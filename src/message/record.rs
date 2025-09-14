@@ -67,6 +67,15 @@ impl<'a> DTLSRecord<'a> {
     pub fn parse(input: &'a [u8]) -> IResult<&[u8], DTLSRecord<'a>> {
         let (input, content_type) = ContentType::parse(input)?; // u8
         let (input, version) = ProtocolVersion::parse(input)?; // u16
+
+        // Enforce DTLS 1.2 at parse-time to reduce error surface downstream
+        if version != ProtocolVersion::DTLS1_2 {
+            return Err(Err::Failure(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+
         let (input, epoch) = be_u16(input)?; // u16
         let (input, sequence_number) = be_u48(input)?; // u48
         let (input, length) = be_u16(input)?; // u16

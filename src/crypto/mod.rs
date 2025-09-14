@@ -46,6 +46,7 @@ use signature::{DigestVerifier, Verifier};
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 // RSA verification
+use num_bigint::BigUint;
 use rsa::pkcs1v15::{Signature as RsaPkcs1v15Signature, VerifyingKey as RsaPkcs1v15VerifyingKey};
 use rsa::RsaPublicKey;
 
@@ -368,6 +369,9 @@ impl CryptoContext {
                 let generator = dh_params.g.to_vec();
                 let server_public = dh_params.ys.to_vec();
 
+                // Validate DH parameters (size and ranges)
+                validate_dh_parameters(&prime, &generator, &server_public)?;
+
                 // Update our key exchange
                 self.key_exchange = Some(KeyExchange::new_dh(prime, generator));
 
@@ -383,6 +387,12 @@ impl CryptoContext {
                 // For ECDHE, create a new EcdhKeyExchange with the specified curve
                 let curve = ecdh_params.named_curve;
                 let server_public = ecdh_params.public_key.to_vec();
+
+                // Only support P-256 and P-384
+                match curve {
+                    NamedCurve::Secp256r1 | NamedCurve::Secp384r1 => {}
+                    _ => return Err("Unsupported ECDHE named curve".to_string()),
+                }
 
                 // Update our key exchange
                 self.key_exchange = Some(KeyExchange::new_ecdh(curve));
@@ -787,6 +797,33 @@ impl CryptoContext {
             )),
         }
     }
+}
+
+/// Validate DHE parameters per basic safety rules
+fn validate_dh_parameters(p: &[u8], g: &[u8], ys: &[u8]) -> Result<(), String> {
+    let p = BigUint::from_bytes_be(p);
+    let g = BigUint::from_bytes_be(g);
+    let ys = BigUint::from_bytes_be(ys);
+
+    // p must be large enough and odd and > 2
+    if p.bits() < 2048 {
+        return Err("DH prime too small; require >= 2048 bits".to_string());
+    }
+    if p <= BigUint::from(2u32) || (&p & BigUint::from(1u32)) == BigUint::from(0u32) {
+        return Err("DH prime invalid".to_string());
+    }
+
+    // g in [2, p-2]
+    if g < BigUint::from(2u32) || g >= (&p - BigUint::from(1u32)) {
+        return Err("DH generator out of range".to_string());
+    }
+
+    // ys in [2, p-2]
+    if ys < BigUint::from(2u32) || ys >= (&p - BigUint::from(1u32)) {
+        return Err("DH public value out of range".to_string());
+    }
+
+    Ok(())
 }
 
 impl CipherSuite {

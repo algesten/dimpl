@@ -260,7 +260,47 @@ impl Client {
                         "Received ServerHello with cipher suite: {:?}",
                         server_hello.cipher_suite
                     );
+                    // Enforce DTLS1.2 version
+                    if server_hello.server_version != ProtocolVersion::DTLS1_2 {
+                        return Err(Error::SecurityError(format!(
+                            "Unsupported DTLS version from server: {:?}",
+                            server_hello.server_version
+                        )));
+                    }
+
+                    // Enforce Null compression only
+                    if server_hello.compression_method != CompressionMethod::Null {
+                        return Err(Error::SecurityError(format!(
+                            "Unsupported compression from server: {:?}",
+                            server_hello.compression_method
+                        )));
+                    }
+
+                    // Enforce cipher suite is known and allowed
                     let cs = server_hello.cipher_suite;
+                    if matches!(cs, CipherSuite::Unknown(_)) {
+                        return Err(Error::SecurityError(
+                            "Server selected unknown cipher suite".to_string(),
+                        ));
+                    }
+
+                    // Enforce cipher suite is compatible with our private key and allowed by config
+                    if !self.engine.crypto_context().is_cipher_suite_compatible(cs) {
+                        return Err(Error::SecurityError(format!(
+                            "Server selected incompatible cipher suite: {:?}",
+                            cs
+                        )));
+                    }
+
+                    if !self.engine.is_cipher_suite_allowed(cs) {
+                        return Err(Error::SecurityError(format!(
+                            "Server selected disallowed cipher suite: {:?}",
+                            cs
+                        )));
+                    }
+
+                    // Note: we keep offered suites local; we don't enforce echo here
+
                     self.engine.set_cipher_suite(cs);
                     self.session_id = Some(server_hello.session_id);
                     self.server_random = Some(server_hello.random);

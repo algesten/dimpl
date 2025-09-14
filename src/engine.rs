@@ -60,6 +60,11 @@ pub struct Engine {
 
     /// Handshakes collected for hash computation.
     handshakes: Buf<'static>,
+
+    /// Anti-replay window state (per current epoch)
+    replay_epoch: u16,
+    replay_max_seq: u64,
+    replay_window: u64,
 }
 
 impl Engine {
@@ -86,12 +91,20 @@ impl Engine {
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
             handshakes: Buf::new(),
+            replay_epoch: 0,
+            replay_max_seq: 0,
+            replay_window: 0,
         }
     }
 
     /// Get a reference to the cipher suite
     pub fn cipher_suite(&self) -> Option<CipherSuite> {
         self.cipher_suite
+    }
+
+    /// Is the given cipher suite allowed by configuration
+    pub fn is_cipher_suite_allowed(&self, suite: CipherSuite) -> bool {
+        self.config.cipher_suites.iter().any(|s| *s == suite)
     }
 
     /// Get a reference to the crypto context
@@ -549,6 +562,42 @@ impl Engine {
 
         // Other message types are not encrypted
         false
+    }
+
+    /// Anti-replay check and update state. Returns true if record is fresh/acceptable.
+    pub fn replay_check_and_update(&mut self, seq: Sequence) -> bool {
+        // Epoch handling
+        if seq.epoch != self.replay_epoch {
+            if seq.epoch < self.replay_epoch {
+                // Old epoch: reject
+                return false;
+            }
+            // New epoch: reset window
+            self.replay_epoch = seq.epoch;
+            self.replay_max_seq = 0;
+            self.replay_window = 0;
+        }
+
+        let seqno = seq.sequence_number;
+        if seqno > self.replay_max_seq {
+            let delta = seqno - self.replay_max_seq;
+            let shift = core::cmp::min(delta, 63);
+            self.replay_window <<= shift;
+            self.replay_window |= 1; // mark newest as seen
+            self.replay_max_seq = seqno;
+            true
+        } else {
+            let offset = self.replay_max_seq - seqno;
+            if offset >= 64 {
+                return false; // too old
+            }
+            let mask = 1u64 << offset;
+            if (self.replay_window & mask) != 0 {
+                return false; // duplicate
+            }
+            self.replay_window |= mask;
+            true
+        }
     }
 
     /// Push a Connected event to the queue
