@@ -586,31 +586,23 @@ impl Client {
 
         // Derive master secret (use EMS if negotiated)
         let suite_hash = cipher_suite.hash_algorithm();
-        if self.extended_master_secret {
-            // Use the captured session hash from when ServerHelloDone was received
-            let session_hash = self.captured_session_hash.as_ref().ok_or_else(|| {
-                Error::CryptoError(
-                    "Extended Master Secret negotiated but session hash not captured".to_string(),
-                )
+
+        // Use the captured session hash from when ServerHelloDone was received
+        let session_hash = self.captured_session_hash.as_ref().ok_or_else(|| {
+            Error::CryptoError(
+                "Extended Master Secret negotiated but session hash not captured".to_string(),
+            )
+        })?;
+        debug!(
+            "Using captured session hash for Extended Master Secret (length: {})",
+            session_hash.len()
+        );
+        self.engine
+            .crypto_context_mut()
+            .derive_extended_master_secret(session_hash, suite_hash)
+            .map_err(|e| {
+                Error::CryptoError(format!("Failed to derive extended master secret: {}", e))
             })?;
-            debug!(
-                "Using captured session hash for Extended Master Secret (length: {})",
-                session_hash.len()
-            );
-            self.engine
-                .crypto_context_mut()
-                .derive_extended_master_secret(session_hash, suite_hash)
-                .map_err(|e| {
-                    Error::CryptoError(format!("Failed to derive extended master secret: {}", e))
-                })?;
-        } else {
-            self.engine
-                .crypto_context_mut()
-                .derive_master_secret(&client_random_buf, &server_random_buf, suite_hash)
-                .map_err(|e| {
-                    Error::CryptoError(format!("Failed to derive master secret: {}", e))
-                })?;
-        }
 
         // Derive the encryption/decryption keys
         self.engine

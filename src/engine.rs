@@ -410,16 +410,14 @@ impl Engine {
 
             // Encrypt the fragment in-place
             self.encrypt_data(&mut fragment, aad, nonce)?;
+            let ctext_len = fragment.len();
 
-            // Create a new buffer that includes the explicit nonce
-            let mut encrypted_fragment =
-                Vec::with_capacity(DTLS_EXPLICIT_NONCE_LEN + fragment.len());
-            encrypted_fragment.extend_from_slice(&explicit_nonce);
-            encrypted_fragment.extend_from_slice(&fragment);
+            // Increase the size to make space for the nonce.
+            fragment.resize(DTLS_EXPLICIT_NONCE_LEN + ctext_len, 0);
 
-            // Replace the original fragment with the nonce + encrypted data
-            fragment.clear();
-            fragment.extend_from_slice(&encrypted_fragment);
+            // Shift the encrypted data to make space for the nonce.
+            fragment.copy_within(0..ctext_len, DTLS_EXPLICIT_NONCE_LEN);
+            fragment[..DTLS_EXPLICIT_NONCE_LEN].copy_from_slice(&explicit_nonce);
         }
 
         let record = DTLSRecord {

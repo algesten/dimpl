@@ -70,24 +70,6 @@ fn p_hash<M: Mac + KeyInit>(
     Ok(result)
 }
 
-/// Master secret calculation for TLS 1.2
-/// as specified in RFC 5246 Section 8.1
-pub fn calculate_master_secret(
-    pre_master_secret: &[u8],
-    client_random: &[u8],
-    server_random: &[u8],
-    hash: HashAlgorithm,
-) -> Result<Vec<u8>, String> {
-    // Concatenate client_random and server_random for seed
-    let mut seed = Vec::with_capacity(client_random.len() + server_random.len());
-    seed.extend_from_slice(client_random);
-    seed.extend_from_slice(server_random);
-
-    // master_secret = PRF(pre_master_secret, "master secret", client_random + server_random, 48)
-    // The label "master secret" is passed separately and will be prepended to the seed by prf_tls12
-    prf_tls12(pre_master_secret, "master secret", &seed, 48, hash)
-}
-
 /// Extended Master Secret calculation for TLS 1.2 (RFC 7627)
 ///
 /// master_secret = PRF(pre_master_secret, "extended master secret", session_hash, 48)

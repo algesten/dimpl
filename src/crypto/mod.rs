@@ -26,7 +26,7 @@ pub use encryption::{AesGcm, Cipher};
 pub use hash::Hash;
 pub use key_exchange::KeyExchange;
 pub use keying::{KeyingMaterial, SrtpProfile};
-pub use prf::{calculate_extended_master_secret, calculate_master_secret};
+pub use prf::calculate_extended_master_secret;
 pub use prf::{key_expansion, prf_tls12};
 
 use crate::buffer::Buf;
@@ -406,28 +406,6 @@ impl CryptoContext {
                 Ok(())
             }
         }
-    }
-
-    /// Derive master secret from pre-master secret
-    pub fn derive_master_secret(
-        &mut self,
-        client_random: &[u8],
-        server_random: &[u8],
-        hash: HashAlgorithm,
-    ) -> Result<(), String> {
-        trace!("Deriving master secret");
-        let Some(pms) = &self.pre_master_secret else {
-            return Err("Pre-master secret not available".to_string());
-        };
-        self.master_secret = Some(calculate_master_secret(
-            pms,
-            client_random,
-            server_random,
-            hash,
-        )?);
-        // Clear pre-master secret after use (security measure)
-        self.pre_master_secret = None;
-        Ok(())
     }
 
     /// Derive master secret using Extended Master Secret (RFC 7627)
