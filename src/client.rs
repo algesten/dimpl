@@ -21,13 +21,13 @@ use tinyvec::{array_vec, ArrayVec};
 use crate::buffer::Buf;
 use crate::crypto::{CertVerifier, SrtpProfile};
 use crate::engine::Engine;
+use crate::message::CipherSuite;
 use crate::message::{
     Body, CertificateVerify, ClientDiffieHellmanPublic, ClientEcdhKeys, ClientHello,
     ClientKeyExchange, CompressionMethod, ContentType, Cookie, DigitallySigned, ExchangeKeys,
     ExtensionType, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion,
     PublicValueEncoding, Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension,
 };
-use crate::message::{CipherSuite, HashAlgorithm};
 use crate::{Config, Error, Output};
 
 /// DTLS client
@@ -281,6 +281,7 @@ impl Client {
                                 }
                             }
 
+                            // We are to use extended master secret
                             if extension.extension_type == ExtensionType::ExtendedMasterSecret {
                                 self.extended_master_secret = true;
                                 trace!("Server negotiated Extended Master Secret");
@@ -318,13 +319,54 @@ impl Client {
                         return Ok(());
                     };
 
-                    // Get key exchange algorithm for better logging
-                    let key_exchange_alg = match self.engine.cipher_suite() {
-                        Some(cs) => cs.as_key_exchange_algorithm(),
-                        None => KeyExchangeAlgorithm::Unknown,
+                    let Some(d_signed) = server_key_exchange.signature() else {
+                        // We do not support anonymous key exchange
+                        return Err(Error::UnexpectedMessage(
+                            "ServerKeyExchange without signature".to_string(),
+                        ));
                     };
 
-                    debug!("ServerKeyExchange using algorithm: {:?}", key_exchange_alg);
+                    // unwrap: is ok because we verify the order of the flight
+                    let client_random = self.random;
+                    let server_random = self.server_random.unwrap();
+
+                    let mut signed_data = Buf::new();
+                    client_random.serialize(&mut signed_data);
+                    server_random.serialize(&mut signed_data);
+                    server_key_exchange.serialize(&mut signed_data, false);
+
+                    let cipher_suite = self.engine.cipher_suite().ok_or_else(|| {
+                        Error::UnexpectedMessage("No cipher suite selected".to_string())
+                    })?;
+
+                    // Ensure the server's (hash, signature) pair was offered by the client
+                    let offered = SignatureAndHashAlgorithm::supported()
+                        .iter()
+                        .any(|alg| *alg == d_signed.algorithm);
+                    if !offered {
+                        return Err(Error::CryptoError(
+                            "Signature algorithm not offered by client".to_string(),
+                        ));
+                    }
+
+                    // Ensure the signature algorithm is compatible with the cipher suite
+                    if d_signed.algorithm.signature != cipher_suite.signature_algorithm() {
+                        return Err(Error::CryptoError(format!(
+                            "Signature algorithm mismatch: {:?} != {:?}",
+                            d_signed.algorithm.signature,
+                            cipher_suite.signature_algorithm()
+                        )));
+                    }
+
+                    self.engine
+                        .crypto_context_mut()
+                        .verify_signature(&signed_data, d_signed, &self.server_certificates)
+                        .map_err(|e| {
+                            Error::CryptoError(format!(
+                                "Failed to verify server key exchange signature: {}",
+                                e
+                            ))
+                        })?;
 
                     // Process the server key exchange message
                     self.engine
@@ -798,20 +840,6 @@ impl HandshakeState {
                 "Unexpected message {:?} in state {:?}",
                 message, state
             ))),
-        }
-    }
-}
-
-impl CipherSuite {
-    pub fn hash_algorithm(&self) -> HashAlgorithm {
-        match self {
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
-            CipherSuite::ECDHE_RSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
-            CipherSuite::ECDHE_RSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
-            CipherSuite::DHE_RSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
-            CipherSuite::DHE_RSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
-            CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
         }
     }
 }

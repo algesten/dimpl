@@ -36,10 +36,19 @@ impl<'a> ServerKeyExchange<'a> {
         Ok((input, ServerKeyExchange { params }))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf<'static>, with_signature: bool) {
         match &self.params {
-            ServerKeyExchangeParams::Dh(dh_params) => dh_params.serialize(output),
-            ServerKeyExchangeParams::Ecdh(ecdh_params) => ecdh_params.serialize(output),
+            ServerKeyExchangeParams::Dh(dh_params) => dh_params.serialize(output, with_signature),
+            ServerKeyExchangeParams::Ecdh(ecdh_params) => {
+                ecdh_params.serialize(output, with_signature)
+            }
+        }
+    }
+
+    pub fn signature(&self) -> Option<&DigitallySigned<'a>> {
+        match &self.params {
+            ServerKeyExchangeParams::Dh(dh_params) => dh_params.signature.as_ref(),
+            ServerKeyExchangeParams::Ecdh(ecdh_params) => ecdh_params.signature.as_ref(),
         }
     }
 }
@@ -53,8 +62,18 @@ pub struct DhParams<'a> {
 }
 
 impl<'a> DhParams<'a> {
-    pub fn new(p: &'a [u8], g: &'a [u8], ys: &'a [u8], signature: Option<DigitallySigned<'a>>) -> Self {
-        DhParams { p, g, ys, signature }
+    pub fn new(
+        p: &'a [u8],
+        g: &'a [u8],
+        ys: &'a [u8],
+        signature: Option<DigitallySigned<'a>>,
+    ) -> Self {
+        DhParams {
+            p,
+            g,
+            ys,
+            signature,
+        }
     }
 
     pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], DhParams<'a>> {
@@ -82,18 +101,29 @@ impl<'a> DhParams<'a> {
             (input, None)
         };
 
-        Ok((input, DhParams { p, g, ys, signature }))
+        Ok((
+            input,
+            DhParams {
+                p,
+                g,
+                ys,
+                signature,
+            },
+        ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf<'static>, with_signature: bool) {
         output.extend_from_slice(&(self.p.len() as u16).to_be_bytes());
         output.extend_from_slice(self.p);
         output.extend_from_slice(&(self.g.len() as u16).to_be_bytes());
         output.extend_from_slice(self.g);
         output.extend_from_slice(&(self.ys.len() as u16).to_be_bytes());
         output.extend_from_slice(self.ys);
-        if let Some(signed) = &self.signature {
-            signed.serialize(output);
+
+        if with_signature {
+            if let Some(signed) = &self.signature {
+                signed.serialize(output);
+            }
         }
     }
 }
@@ -148,13 +178,16 @@ impl<'a> EcdhParams<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf<'static>, with_signature: bool) {
         output.push(self.curve_type.as_u8());
         output.extend_from_slice(&self.named_curve.as_u16().to_be_bytes());
         output.push(self.public_key.len() as u8);
         output.extend_from_slice(self.public_key);
-        if let Some(signed) = &self.signature {
-            signed.serialize(output);
+
+        if with_signature {
+            if let Some(signed) = &self.signature {
+                signed.serialize(output);
+            }
         }
     }
 }
@@ -197,7 +230,7 @@ mod test {
         };
 
         // Serialize and compare to DH_MESSAGE
-        server_key_exchange.serialize(&mut serialized);
+        server_key_exchange.serialize(&mut serialized, false);
         assert_eq!(&*serialized, MESSAGE_DH);
 
         // Parse and compare with original
@@ -211,7 +244,8 @@ mod test {
     #[test]
     fn roundtrip_dh_with_signature() {
         // Build a message with params followed by a DigitallySigned block
-        let algorithm = SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA);
+        let algorithm =
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA);
         let signature_bytes: &[u8] = &[0x0A, 0x0B, 0x0C, 0x0D];
 
         let mut expected = Buf::new();
@@ -235,11 +269,12 @@ mod test {
         let ske = ServerKeyExchange {
             params: ServerKeyExchangeParams::Dh(dh_params),
         };
-        ske.serialize(&mut serialized);
+        ske.serialize(&mut serialized, true);
         assert_eq!(&*serialized, &*expected);
 
         // Parse
-        let (rest, parsed) = ServerKeyExchange::parse(&serialized, KeyExchangeAlgorithm::EDH).unwrap();
+        let (rest, parsed) =
+            ServerKeyExchange::parse(&serialized, KeyExchangeAlgorithm::EDH).unwrap();
         assert_eq!(rest.len(), 0);
         assert_eq!(parsed, ske);
     }
@@ -249,7 +284,8 @@ mod test {
         let mut serialized = Buf::new();
 
         // Build expected message dynamically with DigitallySigned
-        let algorithm = SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA);
+        let algorithm =
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA);
         let signature_bytes: &[u8] = &[0x05, 0x06, 0x07, 0x08];
 
         let signed = DigitallySigned::new(algorithm, signature_bytes);
@@ -266,7 +302,7 @@ mod test {
         };
 
         // Serialize and compare to expected bytes
-        server_key_exchange.serialize(&mut serialized);
+        server_key_exchange.serialize(&mut serialized, true);
 
         let mut expected = Buf::new();
         expected.extend_from_slice(MESSAGE_ECDH_PUBKEY);

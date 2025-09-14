@@ -35,12 +35,19 @@ pub use prf::{key_expansion, prf_tls12};
 
 use crate::buffer::Buf;
 // Message-related imports
-use crate::message::HashAlgorithm;
 use crate::message::{Asn1Cert, Certificate, CipherSuite, ContentType, CurveType};
+use crate::message::{DigitallySigned, HashAlgorithm};
 use crate::message::{NamedCurve, Sequence, ServerKeyExchangeParams, SignatureAlgorithm};
 
 use sec1::der::Decode;
 use sec1::EcPrivateKey;
+use sha2::{Digest, Sha256, Sha384};
+use signature::{DigestVerifier, Verifier};
+use spki::ObjectIdentifier;
+use x509_cert::Certificate as X509Certificate;
+// RSA verification
+use rsa::pkcs1v15::{Signature as RsaPkcs1v15Signature, VerifyingKey as RsaPkcs1v15VerifyingKey};
+use rsa::RsaPublicKey;
 
 /// DTLS 1.2 AEAD (AES-GCM) record formatting constants
 ///
@@ -669,6 +676,122 @@ impl CryptoContext {
     /// Get server write IV
     pub fn get_server_write_iv(&self) -> Option<Iv> {
         self.server_write_iv
+    }
+
+    pub fn verify_signature(
+        &self,
+        data: &Buf<'static>,
+        signature: &DigitallySigned<'_>,
+        certs: &[Vec<u8>],
+    ) -> Result<(), String> {
+        // Require at least one certificate (server end-entity cert)
+        let Some(server_cert_der) = certs.first() else {
+            return Err("No server certificate available for signature verification".to_string());
+        };
+
+        // Parse the server certificate to extract SubjectPublicKeyInfo
+        let cert = X509Certificate::from_der(server_cert_der)
+            .map_err(|e| format!("Failed to parse server certificate: {e}"))?;
+        let spki = &cert.tbs_certificate.subject_public_key_info;
+
+        // OIDs we care about
+        // rsaEncryption: 1.2.840.113549.1.1.1
+        const OID_RSA_ENCRYPTION: ObjectIdentifier =
+            ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
+        // id-ecPublicKey: 1.2.840.10045.2.1
+        const OID_EC_PUBLIC_KEY: ObjectIdentifier =
+            ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
+
+        let alg_oid = spki.algorithm.oid;
+
+        match alg_oid {
+            OID_RSA_ENCRYPTION => {
+                // Signature type must be RSA
+                if signature.algorithm.signature != SignatureAlgorithm::RSA {
+                    return Err("Signature algorithm mismatch: expected RSA".to_string());
+                }
+
+                // SubjectPublicKey is a BIT STRING containing a DER-encoded RSAPublicKey (PKCS#1)
+                let pk_der = spki
+                    .subject_public_key
+                    .as_bytes()
+                    .ok_or_else(|| "Invalid RSA subject_public_key bitstring".to_string())?;
+
+                // Parse RSAPublicKey directly to RsaPublicKey
+                use rsa::pkcs1::DecodeRsaPublicKey;
+                let rsa_pub = RsaPublicKey::from_pkcs1_der(pk_der)
+                    .map_err(|e| format!("Failed to parse RSA public key: {e}"))?;
+
+                // Build verifying key for the negotiated hash
+                match signature.algorithm.hash {
+                    HashAlgorithm::SHA256 => {
+                        let vk = RsaPkcs1v15VerifyingKey::<Sha256>::new(rsa_pub);
+                        let sig = RsaPkcs1v15Signature::try_from(signature.signature)
+                            .map_err(|e| format!("Invalid RSA signature encoding: {e}"))?;
+                        // Verify over the raw data (hasher is internal to the verifier via DigestVerifier)
+                        let mut hasher = Sha256::new();
+                        hasher.update(&**data);
+                        vk.verify_digest(hasher, &sig)
+                            .map_err(|_| "RSA/SHA256 signature verification failed".to_string())
+                    }
+                    HashAlgorithm::SHA384 => {
+                        let vk = RsaPkcs1v15VerifyingKey::<Sha384>::new(rsa_pub);
+                        let sig = RsaPkcs1v15Signature::try_from(signature.signature)
+                            .map_err(|e| format!("Invalid RSA signature encoding: {e}"))?;
+                        let mut hasher = Sha384::new();
+                        hasher.update(&**data);
+                        vk.verify_digest(hasher, &sig)
+                            .map_err(|_| "RSA/SHA384 signature verification failed".to_string())
+                    }
+                    other => Err(format!("Unsupported RSA hash algorithm: {:?}", other)),
+                }
+            }
+            OID_EC_PUBLIC_KEY => {
+                // Signature type must be ECDSA
+                if signature.algorithm.signature != SignatureAlgorithm::ECDSA {
+                    return Err("Signature algorithm mismatch: expected ECDSA".to_string());
+                }
+
+                // Extract uncompressed EC point bytes
+                let pubkey_bytes = spki
+                    .subject_public_key
+                    .as_bytes()
+                    .ok_or_else(|| "Invalid EC subject_public_key bitstring".to_string())?;
+
+                // Try P-256 first
+                if let Ok(encoded) = p256::EncodedPoint::from_bytes(pubkey_bytes) {
+                    if signature.algorithm.hash != HashAlgorithm::SHA256 {
+                        return Err("ECDSA P-256 must use SHA256".to_string());
+                    }
+                    let vk = p256::ecdsa::VerifyingKey::from_encoded_point(&encoded)
+                        .map_err(|e| format!("Failed to build P-256 verifying key: {e}"))?;
+                    let sig = p256::ecdsa::Signature::from_der(signature.signature)
+                        .map_err(|e| format!("Invalid ECDSA P-256 signature DER: {e}"))?;
+                    return vk
+                        .verify(&**data, &sig)
+                        .map_err(|_| "ECDSA P-256 signature verification failed".to_string());
+                }
+
+                // Then try P-384
+                if let Ok(encoded) = p384::EncodedPoint::from_bytes(pubkey_bytes) {
+                    if signature.algorithm.hash != HashAlgorithm::SHA384 {
+                        return Err("ECDSA P-384 must use SHA384".to_string());
+                    }
+                    let vk = p384::ecdsa::VerifyingKey::from_encoded_point(&encoded)
+                        .map_err(|e| format!("Failed to build P-384 verifying key: {e}"))?;
+                    let sig = p384::ecdsa::Signature::from_der(signature.signature)
+                        .map_err(|e| format!("Invalid ECDSA P-384 signature DER: {e}"))?;
+                    return vk
+                        .verify(&**data, &sig)
+                        .map_err(|_| "ECDSA P-384 signature verification failed".to_string());
+                }
+
+                Err("Unsupported or invalid ECDSA public key".to_string())
+            }
+            other => Err(format!(
+                "Unsupported public key algorithm OID in certificate: {other}"
+            )),
+        }
     }
 }
 

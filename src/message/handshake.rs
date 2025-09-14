@@ -405,7 +405,7 @@ impl<'a> Body<'a> {
                 certificate.serialize(output);
             }
             Body::ServerKeyExchange(server_key_exchange) => {
-                server_key_exchange.serialize(output);
+                server_key_exchange.serialize(output, true);
             }
             Body::CertificateRequest(certificate_request) => {
                 certificate_request.serialize(output);

@@ -1,102 +1,7 @@
 use crate::buffer::Buf;
-use nom::{number::complete::be_u8, IResult};
-use tinyvec::ArrayVec;
-
-/// Hash algorithms for signatures as defined in RFC 5246 Section 7.4.1.4.1
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HashAlgorithm {
-    #[default]
-    None = 0,
-    MD5 = 1,
-    SHA1 = 2,
-    SHA224 = 3,
-    SHA256 = 4,
-    SHA384 = 5,
-    SHA512 = 6,
-}
-
-impl HashAlgorithm {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], HashAlgorithm> {
-        let (input, value) = be_u8(input)?;
-        let hash = match value {
-            0 => HashAlgorithm::None,
-            1 => HashAlgorithm::MD5,
-            2 => HashAlgorithm::SHA1,
-            3 => HashAlgorithm::SHA224,
-            4 => HashAlgorithm::SHA256,
-            5 => HashAlgorithm::SHA384,
-            6 => HashAlgorithm::SHA512,
-            _ => {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    input,
-                    nom::error::ErrorKind::Switch,
-                )))
-            }
-        };
-        Ok((input, hash))
-    }
-
-    pub fn as_u8(&self) -> u8 {
-        *self as u8
-    }
-}
-
-/// Signature algorithms as defined in RFC 5246 Section 7.4.1.4.1
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SignatureAlgorithm {
-    #[default]
-    Anonymous = 0,
-    RSA = 1,
-    DSA = 2,
-    ECDSA = 3,
-}
-
-impl SignatureAlgorithm {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAlgorithm> {
-        let (input, value) = be_u8(input)?;
-        let sig = match value {
-            0 => SignatureAlgorithm::Anonymous,
-            1 => SignatureAlgorithm::RSA,
-            2 => SignatureAlgorithm::DSA,
-            3 => SignatureAlgorithm::ECDSA,
-            _ => {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    input,
-                    nom::error::ErrorKind::Switch,
-                )))
-            }
-        };
-        Ok((input, sig))
-    }
-
-    pub fn as_u8(&self) -> u8 {
-        *self as u8
-    }
-}
-
-/// SignatureAndHashAlgorithm as defined in RFC 5246
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct SignatureAndHashAlgorithm {
-    pub hash: HashAlgorithm,
-    pub signature: SignatureAlgorithm,
-}
-
-impl SignatureAndHashAlgorithm {
-    pub fn new(hash: HashAlgorithm, signature: SignatureAlgorithm) -> Self {
-        SignatureAndHashAlgorithm { hash, signature }
-    }
-
-    pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAndHashAlgorithm> {
-        let (input, hash) = HashAlgorithm::parse(input)?;
-        let (input, signature) = SignatureAlgorithm::parse(input)?;
-        Ok((input, SignatureAndHashAlgorithm { hash, signature }))
-    }
-
-    pub fn serialize(&self, output: &mut Buf<'static>) {
-        output.push(self.hash.as_u8());
-        output.push(self.signature.as_u8());
-    }
-}
+use crate::message::{HashAlgorithm, SignatureAlgorithm, SignatureAndHashAlgorithm};
+use nom::IResult;
+use tinyvec::{array_vec, ArrayVec};
 
 /// SignatureAlgorithms extension as defined in RFC 5246
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,27 +18,8 @@ impl SignatureAlgorithmsExtension {
 
     /// Create a default SignatureAlgorithmsExtension with standard algorithms
     pub fn default() -> Self {
-        let mut algorithms = ArrayVec::new();
-        // Add algorithms in order of preference (most secure first)
-        algorithms.push(SignatureAndHashAlgorithm::new(
-            HashAlgorithm::SHA256,
-            SignatureAlgorithm::ECDSA,
-        ));
-        algorithms.push(SignatureAndHashAlgorithm::new(
-            HashAlgorithm::SHA384,
-            SignatureAlgorithm::ECDSA,
-        ));
-        algorithms.push(SignatureAndHashAlgorithm::new(
-            HashAlgorithm::SHA256,
-            SignatureAlgorithm::RSA,
-        ));
-        algorithms.push(SignatureAndHashAlgorithm::new(
-            HashAlgorithm::SHA384,
-            SignatureAlgorithm::RSA,
-        ));
-
         SignatureAlgorithmsExtension {
-            supported_signature_algorithms: algorithms,
+            supported_signature_algorithms: SignatureAndHashAlgorithm::supported(),
         }
     }
 
@@ -166,7 +52,7 @@ impl SignatureAlgorithmsExtension {
 
         // Write each algorithm
         for alg in &self.supported_signature_algorithms {
-            alg.serialize(output);
+            output.extend_from_slice(&alg.as_u16().to_be_bytes());
         }
     }
 }

@@ -30,6 +30,7 @@ pub use client_hello::ClientHello;
 pub use client_key_exchange::{ClientEcdhKeys, ClientKeyExchange, ExchangeKeys};
 pub use digitally_signed::DigitallySigned;
 pub use extension::{Extension, ExtensionType};
+pub use extensions::signature_algorithms::SignatureAlgorithmsExtension;
 pub use extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
 pub use finished::Finished;
 pub use handshake::{Body, Handshake, Header, MessageType};
@@ -234,6 +235,30 @@ impl CipherSuite {
         // DHE-RSA-AES128-SHA256
         false
     }
+
+    pub fn hash_algorithm(&self) -> HashAlgorithm {
+        match self {
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
+            CipherSuite::ECDHE_RSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
+            CipherSuite::ECDHE_RSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
+            CipherSuite::DHE_RSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
+            CipherSuite::DHE_RSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
+            CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
+        }
+    }
+
+    pub fn signature_algorithm(&self) -> SignatureAlgorithm {
+        match self {
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => SignatureAlgorithm::ECDSA,
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => SignatureAlgorithm::ECDSA,
+            CipherSuite::ECDHE_RSA_AES256_GCM_SHA384 => SignatureAlgorithm::RSA,
+            CipherSuite::ECDHE_RSA_AES128_GCM_SHA256 => SignatureAlgorithm::RSA,
+            CipherSuite::DHE_RSA_AES256_GCM_SHA384 => SignatureAlgorithm::RSA,
+            CipherSuite::DHE_RSA_AES128_GCM_SHA256 => SignatureAlgorithm::RSA,
+            CipherSuite::Unknown(_) => SignatureAlgorithm::Unknown(0),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -437,7 +462,7 @@ pub struct SignatureAndHashAlgorithm {
 }
 
 impl SignatureAndHashAlgorithm {
-    pub fn new(hash: HashAlgorithm, signature: SignatureAlgorithm) -> Self {
+    pub const fn new(hash: HashAlgorithm, signature: SignatureAlgorithm) -> Self {
         SignatureAndHashAlgorithm { hash, signature }
     }
 
@@ -454,6 +479,15 @@ impl SignatureAndHashAlgorithm {
     pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAndHashAlgorithm> {
         let (input, value) = be_u16(input)?;
         Ok((input, SignatureAndHashAlgorithm::from_u16(value)))
+    }
+
+    pub fn supported() -> ArrayVec<[SignatureAndHashAlgorithm; 8]> {
+        array_vec![
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA),
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::ECDSA),
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA),
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::RSA)
+        ]
     }
 }
 
