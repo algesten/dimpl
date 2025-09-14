@@ -208,3 +208,9 @@ impl<'a> DerefMut for Inner<'a> {
         }
     }
 }
+
+impl From<Vec<u8>> for Buf<'static> {
+    fn from(v: Vec<u8>) -> Self {
+        Buf(Inner::Owned(v), ZeroOnDrop::Yes)
+    }
+}

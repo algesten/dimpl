@@ -59,10 +59,10 @@ pub struct Client {
     server_random: Option<Random>,
 
     /// Server certificates
-    server_certificates: Vec<Vec<u8>>,
+    server_certificates: Vec<Buf<'static>>,
 
     /// Buffer for defragmenting handshakes
-    defragment_buffer: Vec<u8>,
+    defragment_buffer: Buf<'static>,
 
     /// Whether we requested a CertificateVerify
     certificate_verify: bool,
@@ -124,10 +124,10 @@ impl Client {
             state: ClientState::SendClientHello,
             engine,
             server_random: None,
-            server_certificates: Vec::new(),
+            server_certificates: Vec::with_capacity(3),
             negotiated_srtp_profile: None,
             extension_data: Buf::new(),
-            defragment_buffer: Vec::new(),
+            defragment_buffer: Buf::new(),
             certificate_verify: false,
             extended_master_secret: false,
             captured_session_hash: None,
@@ -343,14 +343,17 @@ impl Client {
                         return Ok(());
                     };
 
-                    // Store the certificate chain for validation
-                    self.server_certificates.clear();
+                    if certificate.certificate_list.is_empty() {
+                        return Err(Error::UnexpectedMessage(
+                            "No server certificate received".to_string(),
+                        ));
+                    }
 
                     // Convert ASN.1 certificates to byte arrays
                     for (i, cert) in certificate.certificate_list.iter().enumerate() {
                         let cert_data = cert.0.to_vec();
                         trace!("Certificate #{} size: {} bytes", i + 1, cert_data.len());
-                        self.server_certificates.push(cert_data);
+                        self.server_certificates.push(cert_data.into());
                     }
                 }
 
@@ -398,9 +401,12 @@ impl Client {
                         )));
                     }
 
+                    // unwrap: is ok because we verify the order of the flight
+                    let cert_der = self.server_certificates.first().unwrap();
+
                     self.engine
                         .crypto_context_mut()
-                        .verify_signature(&signed_data, d_signed, &self.server_certificates)
+                        .verify_signature(&signed_data, d_signed, cert_der)
                         .map_err(|e| {
                             Error::CryptoError(format!(
                                 "Failed to verify server key exchange signature: {}",
@@ -496,7 +502,7 @@ impl Client {
 
         // Send the server certificate as an event
         if !self.server_certificates.is_empty() {
-            let cert_data = self.server_certificates[0].clone();
+            let cert_data = self.server_certificates[0].to_vec();
             self.engine.push_peer_cert(cert_data);
         }
 
@@ -569,8 +575,8 @@ impl Client {
         };
 
         // Extract and format the random values for key derivation
-        let mut client_random_buf_b = crate::buffer::Buf::new();
-        let mut server_random_buf_b = crate::buffer::Buf::new();
+        let mut client_random_buf_b = Buf::new();
+        let mut server_random_buf_b = Buf::new();
 
         // Serialize the random values to raw bytes
         self.random.serialize(&mut client_random_buf_b);

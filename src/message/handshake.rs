@@ -128,7 +128,7 @@ impl<'a> Handshake<'a> {
     #[allow(private_interfaces)]
     pub fn defragment<'b, 'c: 'b>(
         mut iter: impl Iterator<Item = &'b Handshake<'c>>,
-        buffer: &'a mut Vec<u8>,
+        buffer: &'a mut Buf<'static>,
         cipher_suite: Option<CipherSuite>,
     ) -> Result<(Handshake<'a>, Option<MessageType>), crate::Error> {
         buffer.clear();
@@ -564,7 +564,7 @@ mod tests {
         let mut fragments: VecDeque<_> = handshake.fragment(10, &mut buffer).collect();
 
         // Defragment the fragments
-        let mut defragmented_buffer = Vec::new();
+        let mut defragmented_buffer = Buf::new();
         let (defragmented_handshake, _next_type) =
             Handshake::defragment(fragments.iter(), &mut defragmented_buffer, None).unwrap();
 

@@ -682,19 +682,14 @@ impl CryptoContext {
         self.server_write_iv
     }
 
-    pub fn verify_signature(
+    pub fn verify_signature<'a>(
         &self,
         data: &Buf<'static>,
         signature: &DigitallySigned<'_>,
-        certs: &[Vec<u8>],
+        cert_der: &[u8],
     ) -> Result<(), String> {
-        // Require at least one certificate (server end-entity cert)
-        let Some(server_cert_der) = certs.first() else {
-            return Err("No server certificate available for signature verification".to_string());
-        };
-
         // Parse the server certificate to extract SubjectPublicKeyInfo
-        let cert = X509Certificate::from_der(server_cert_der)
+        let cert = X509Certificate::from_der(cert_der)
             .map_err(|e| format!("Failed to parse server certificate: {e}"))?;
         let spki = &cert.tbs_certificate.subject_public_key_info;
 

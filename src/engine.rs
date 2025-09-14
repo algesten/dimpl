@@ -296,7 +296,7 @@ impl Engine {
     pub fn next_from_flight<'b>(
         &mut self,
         flight: &mut Flight,
-        defragment_buffer: &'b mut Vec<u8>,
+        defragment_buffer: &'b mut Buf<'static>,
     ) -> Result<Option<Handshake<'b>>, Error> {
         if flight.current.is_none() {
             return Ok(None);
@@ -442,12 +442,10 @@ impl Engine {
         self.next_sequence_tx.sequence_number += 1;
 
         // Serialize the record into the buffer
-        let mut serialized = Buf::new();
-        record.serialize(&mut serialized);
+        buffer.clear();
 
-        // Copy the serialized data to the buffer
-        buffer.resize(serialized.len(), 0);
-        buffer.copy_from_slice(&serialized);
+        // Serialize the record into the buffer
+        record.serialize(&mut buffer);
 
         // Add to the outgoing queue
         self.queue_tx.push_back(buffer);
@@ -463,8 +461,8 @@ impl Engine {
     where
         F: FnOnce(&mut Buf<'static>, &mut Self) -> Result<(), Error>,
     {
-        // Create a buffer for the handshake body
-        let mut body_buffer = Buf::new();
+        // Get a buffer for the handshake body
+        let mut body_buffer = self.buffers_free.pop();
 
         // Let the callback fill the handshake body
         f(&mut body_buffer, self)?;
@@ -486,10 +484,15 @@ impl Engine {
         self.next_handshake_seq_no += 1;
 
         // Now create the record with the serialized handshake
-        self.create_record(ContentType::Handshake, |fragment| {
+        let rec = self.create_record(ContentType::Handshake, |fragment| {
             handshake.serialize(fragment);
             Some(msg_type)
-        })
+        })?;
+
+        // Return the buffer
+        self.buffers_free.push(body_buffer);
+
+        Ok(rec)
     }
 
     /// Process application data packets from the incoming queue
