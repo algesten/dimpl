@@ -3,7 +3,6 @@ use std::ops::Deref;
 use self_cell::{self_cell, MutBorrow};
 use std::fmt;
 use tinyvec::ArrayVec;
-use zeroize::Zeroize;
 
 use crate::buffer::Buf;
 use crate::crypto::DTLS_EXPLICIT_NONCE_LEN;
@@ -131,28 +130,28 @@ impl<'a> Record<'a> {
             // Bring back the unparsed bytes.
             let input = record.0.into_owner();
 
+            // Local shorthand for where the encrypted ciphertext starts
+            const CIPH: usize = DTLSRecord::HEADER_LEN + DTLS_EXPLICIT_NONCE_LEN;
+
             // The encrypted part is after the DTLS header and explicit nonce.
             // The entire buffer is only the single record, since we chunk
             // records up in Records::parse()
-            let ciphertext = &mut input[DTLSRecord::HEADER_LEN + DTLS_EXPLICIT_NONCE_LEN..];
+            let ciphertext = &mut input[CIPH..];
 
-            // TODO(martin): fix these friggin buffers.
-            let mut buffer = Buf::new();
-            buffer.extend_from_slice(ciphertext);
+            let new_len = {
+                let mut buffer = Buf::wrap(ciphertext).keep_on_drop();
 
-            // This decrypt in place.
-            engine.decrypt_data(&mut buffer, aad, nonce)?;
+                // This decrypts in place.
+                engine.decrypt_data(&mut buffer, aad, nonce)?;
 
-            // zero the encrypted buffer.
-            let fragment = &mut input[DTLSRecord::HEADER_LEN..];
-            fragment.zeroize();
+                buffer.len()
+            };
 
             // Update the length of the record.
-            let len = buffer.len();
-            input[DTLSRecord::LENGTH_OFFSET].copy_from_slice(&(len as u16).to_be_bytes());
+            input[DTLSRecord::LENGTH_OFFSET].copy_from_slice(&(new_len as u16).to_be_bytes());
 
-            // Copy the decrypted buffer into the record.
-            input[DTLSRecord::HEADER_LEN..(DTLSRecord::HEADER_LEN + len)].copy_from_slice(&buffer);
+            // Shift the decrypted buffer to the start of the record.
+            input.copy_within(CIPH..(CIPH + new_len), DTLSRecord::HEADER_LEN);
 
             return Record::parse(input, engine, false);
         }

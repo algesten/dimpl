@@ -35,11 +35,17 @@ impl fmt::Debug for BufferPool {
     }
 }
 
-pub struct Buf<'a>(Inner<'a>);
+pub struct Buf<'a>(Inner<'a>, ZeroOnDrop);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ZeroOnDrop {
+    Yes,
+    No,
+}
 
 enum Inner<'a> {
     Owned(Vec<u8>),
-    Borrowed(&'a mut [u8]),
+    Borrowed(&'a mut [u8], usize),
 }
 
 impl Buf<'static> {
@@ -85,15 +91,15 @@ impl Buf<'static> {
 
 impl<'a> Buf<'a> {
     pub fn wrap(v: &'a mut [u8]) -> Self {
-        Buf(Inner::Borrowed(v))
+        Buf(Inner::Borrowed(v, v.len()), ZeroOnDrop::Yes)
     }
 
     pub fn into_vec(mut self) -> Vec<u8> {
         let inner = std::mem::take(&mut self.0);
         match inner {
             Inner::Owned(v) => v,
-            Inner::Borrowed(v) => {
-                let vec = v.to_vec();
+            Inner::Borrowed(v, len) => {
+                let vec = v[..len].to_vec();
 
                 // The slice will be dropped, so we zero it explicitly.
                 v.zeroize();
@@ -102,11 +108,16 @@ impl<'a> Buf<'a> {
             }
         }
     }
+
+    pub fn keep_on_drop(mut self) -> Self {
+        self.1 = ZeroOnDrop::No;
+        self
+    }
 }
 
 impl<'a> Default for Buf<'a> {
     fn default() -> Self {
-        Buf(Inner::default())
+        Buf(Inner::default(), ZeroOnDrop::Yes)
     }
 }
 
@@ -132,7 +143,9 @@ impl<'a> DerefMut for Buf<'a> {
 
 impl<'a> Drop for Buf<'a> {
     fn drop(&mut self) {
-        self.0.zeroize();
+        if self.1 == ZeroOnDrop::Yes {
+            self.0.zeroize();
+        }
     }
 }
 
@@ -144,14 +157,15 @@ impl<'a> aes_gcm::aead::Buffer for Buf<'a> {
     fn extend_from_slice(&mut self, other: &[u8]) -> aes_gcm::aead::Result<()> {
         let mut this = std::mem::take(self).into_vec();
         this.extend_from_slice(other);
-        *self = Buf(Inner::Owned(this));
+        *self = Buf(Inner::Owned(this), self.1);
         Ok(())
     }
 
     fn truncate(&mut self, len: usize) {
-        let mut this = std::mem::take(self).into_vec();
-        this.truncate(len);
-        *self = Buf(Inner::Owned(this));
+        match &mut self.0 {
+            Inner::Owned(v) => v.truncate(len),
+            Inner::Borrowed(_, l) => *l = len.min(*l),
+        }
     }
 }
 
@@ -179,7 +193,7 @@ impl<'a> Deref for Inner<'a> {
     fn deref(&self) -> &Self::Target {
         match self {
             Inner::Owned(v) => v.as_slice(),
-            Inner::Borrowed(v) => v,
+            Inner::Borrowed(v, len) => &v[..*len],
         }
     }
 }
@@ -188,7 +202,7 @@ impl<'a> DerefMut for Inner<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
             Inner::Owned(v) => v.as_mut_slice(),
-            Inner::Borrowed(v) => v,
+            Inner::Borrowed(v, len) => &mut v[..*len],
         }
     }
 }
