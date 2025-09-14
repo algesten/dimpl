@@ -398,7 +398,7 @@ impl CryptoContext {
         server_random: &[u8],
         hash: HashAlgorithm,
     ) -> Result<(), String> {
-        debug!("Deriving master secret");
+        trace!("Deriving master secret");
         match &self.pre_master_secret {
             Some(pms) => {
                 self.master_secret = Some(calculate_master_secret(
@@ -421,7 +421,7 @@ impl CryptoContext {
         session_hash: &[u8],
         hash: HashAlgorithm,
     ) -> Result<(), String> {
-        debug!("Deriving extended master secret");
+        trace!("Deriving extended master secret");
         match &self.pre_master_secret {
             Some(pms) => {
                 self.master_secret =

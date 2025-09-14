@@ -64,32 +64,20 @@ impl<'a> ClientHello<'a> {
             let supported_groups = SupportedGroupsExtension::default();
             let start_pos = buf.len();
             supported_groups.serialize(buf);
-            ranges.push((
-                ExtensionType::SupportedGroups,
-                start_pos,
-                buf.len(),
-            ));
+            ranges.push((ExtensionType::SupportedGroups, start_pos, buf.len()));
 
             // Add EC point formats extension
             let ec_point_formats = ECPointFormatsExtension::default();
             let start_pos = buf.len();
             ec_point_formats.serialize(buf);
-            ranges.push((
-                ExtensionType::EcPointFormats,
-                start_pos,
-                buf.len(),
-            ));
+            ranges.push((ExtensionType::EcPointFormats, start_pos, buf.len()));
         }
 
         // Add signature algorithms extension (required for TLS 1.2+)
         let signature_algorithms = SignatureAlgorithmsExtension::default();
         let start_pos = buf.len();
         signature_algorithms.serialize(buf);
-        ranges.push((
-            ExtensionType::SignatureAlgorithms,
-            start_pos,
-            buf.len(),
-        ));
+        ranges.push((ExtensionType::SignatureAlgorithms, start_pos, buf.len()));
 
         // Add use_srtp extension for DTLS-SRTP support
         let use_srtp = UseSrtpExtension::default();
@@ -100,20 +88,18 @@ impl<'a> ClientHello<'a> {
         // Add session_ticket extension (empty)
         let start_pos = buf.len();
         buf.extend_from_slice(&[0x00]); // Empty extension data
-        ranges.push((
-            ExtensionType::SessionTicket,
-            start_pos,
-            buf.len(),
-        ));
+        ranges.push((ExtensionType::SessionTicket, start_pos, buf.len()));
 
-        // Add encrypt_then_mac extension (empty)
-        let start_pos = buf.len();
-        buf.extend_from_slice(&[0x00]); // Empty extension data
-        ranges.push((
-            ExtensionType::EncryptThenMac,
-            start_pos,
-            buf.len(),
-        ));
+        let need_etm = self
+            .cipher_suites
+            .iter()
+            .any(|suite| suite.need_encrypt_then_mac());
+        if need_etm {
+            // Add encrypt_then_mac extension (empty)
+            let start_pos = buf.len();
+            buf.extend_from_slice(&[0x00]); // Empty extension data
+            ranges.push((ExtensionType::EncryptThenMac, start_pos, buf.len()));
+        }
 
         let start_pos = buf.len();
         ranges.push((

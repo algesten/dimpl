@@ -567,8 +567,6 @@ impl Engine {
     }
 
     pub fn handshake_hash(&self, algorithm: HashAlgorithm) -> Vec<u8> {
-        trace!("Handshake hash with algorithm: {:?}", algorithm);
-
         let mut hash = Hash::new(algorithm);
         hash.update(&self.handshakes);
         hash.clone_and_finalize()
@@ -588,8 +586,10 @@ impl Engine {
 
     pub fn enable_peer_encryption(&mut self) {
         if self.is_client {
+            debug!("Server encryption enabled");
             self.server_encryption_enabled = true;
         } else {
+            debug!("Client encryption enabled");
             self.client_encryption_enabled = true;
         }
     }
@@ -622,15 +622,8 @@ impl Engine {
     }
 
     pub fn generate_verify_data(&self, is_client: bool) -> Result<[u8; 12], Error> {
-        debug!(
-            "Generating verify data for {}, using handshake hash",
-            if is_client { "client" } else { "server" }
-        );
-
         let algorithm = self.cipher_suite().unwrap().hash_algorithm();
         let handshake_hash = self.handshake_hash(algorithm);
-
-        debug!("Handshake hash size: {} bytes", handshake_hash.len());
 
         let suite_hash = self.cipher_suite().unwrap().hash_algorithm();
         let verify_data_vec = self

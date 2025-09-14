@@ -226,6 +226,14 @@ impl CipherSuite {
             _ => panic!("Need either RSA or ECDSA certificate"),
         }
     }
+
+    fn need_encrypt_then_mac(&self) -> bool {
+        // We do not support and ciphers such as:
+        // ECDHE-RSA-AES128-SHA
+        // ECDHE-RSA-AES256-SHA
+        // DHE-RSA-AES128-SHA256
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
