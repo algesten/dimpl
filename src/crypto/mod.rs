@@ -35,8 +35,8 @@ pub use prf::{key_expansion, prf_tls12};
 
 use crate::buffer::Buf;
 // Message-related imports
+use crate::message::HashAlgorithm;
 use crate::message::{Asn1Cert, Certificate, CipherSuite, ContentType, CurveType};
-use crate::message::{HashAlgorithm, KeyExchangeAlgorithm};
 use crate::message::{NamedCurve, Sequence, ServerKeyExchangeParams, SignatureAlgorithm};
 
 use sec1::der::Decode;
@@ -327,26 +327,6 @@ impl CryptoContext {
             cert_verifier,
             parsed_client_key,
         }
-    }
-
-    /// Initialize engine based on cipher suite
-    pub fn init_cipher_suite(&mut self, cipher_suite: CipherSuite) -> Result<(), String> {
-        self.key_exchange = Some(match cipher_suite.as_key_exchange_algorithm() {
-            KeyExchangeAlgorithm::EECDH => {
-                // Use P-256 as the default curve
-                KeyExchange::new_ecdh(NamedCurve::Secp256r1)
-            }
-            KeyExchangeAlgorithm::EDH => {
-                // For DHE, we need prime and generator values (typically from server)
-                // This is a placeholder - real implementation would use values from ServerKeyExchange
-                let prime = vec![0u8; 256]; // Placeholder
-                let generator = vec![2]; // Common generator value g=2
-                KeyExchange::new_dh(prime, generator)
-            }
-            _ => return Err("Unsupported key exchange algorithm".to_string()),
-        });
-
-        Ok(())
     }
 
     /// Generate key exchange public key

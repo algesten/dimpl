@@ -298,11 +298,6 @@ impl Client {
                     self.session_id = Some(server_hello.session_id);
                     self.server_random = Some(server_hello.random);
 
-                    // Initialize the key exchange based on selected cipher suite
-                    self.engine.init_cipher_suite(cs).map_err(|e| {
-                        Error::CryptoError(format!("Failed to initialize key exchange: {}", e))
-                    })?;
-
                     // Check for use_srtp and extended_master_secret extensions
                     if let Some(extensions) = &server_hello.extensions {
                         for extension in extensions {

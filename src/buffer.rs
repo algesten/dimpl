@@ -129,7 +129,6 @@ impl<'a> Default for Inner<'a> {
     }
 }
 
-
 impl<'a> Drop for Buf<'a> {
     fn drop(&mut self) {
         if self.1 == ZeroOnDrop::Yes {

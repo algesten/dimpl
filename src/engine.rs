@@ -574,10 +574,6 @@ impl Engine {
         hash.clone_and_finalize()
     }
 
-    pub fn init_cipher_suite(&mut self, cs: CipherSuite) -> Result<(), String> {
-        self.crypto_context.init_cipher_suite(cs)
-    }
-
     pub fn reset_handshake_seq_no(&mut self) {
         self.next_handshake_seq_no = 0;
     }
