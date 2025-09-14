@@ -150,7 +150,7 @@ impl Engine {
         }
 
         if let Some(h) = first.handshake() {
-            match self.queue_rx.binary_search_by(|i| {
+            if let Err(index) = self.queue_rx.binary_search_by(|i| {
                 let other = i
                     .first()
                     .handshake()
@@ -160,31 +160,25 @@ impl Engine {
                 let current = (h.header.message_seq, h.header.fragment_offset);
                 other.cmp(&current)
             }) {
-                Ok(_) => {
-                    // We have already received this exact handshake packet.
-                    // Ignore the new one.
-                    debug!(
-                        "Dupe handshake with message_seq: {} and offset: {}",
-                        h.header.message_seq, h.header.fragment_offset
-                    );
-                }
-                Err(index) => {
-                    // Insert in order of handshake
-                    self.queue_rx.insert(index, incoming);
-                }
+                // Insert in order of handshake
+                self.queue_rx.insert(index, incoming);
+            } else {
+                // We have already received this exact handshake packet.
+                // Ignore the new one.
+                debug!(
+                    "Dupe handshake with message_seq: {} and offset: {}",
+                    h.header.message_seq, h.header.fragment_offset
+                );
             }
         } else {
-            match self
+            if let Err(index) = self
                 .queue_rx
                 .binary_search_by_key(&first.record().sequence, |i| i.first().record().sequence)
             {
-                Ok(_) => {
-                    debug!("Dupe record with sequence: {}", first.record().sequence);
-                }
-                Err(index) => {
-                    // Insert in order of sequence_number
-                    self.queue_rx.insert(index, incoming);
-                }
+                // Insert in order of sequence_number
+                self.queue_rx.insert(index, incoming);
+            } else {
+                debug!("Dupe record with sequence: {}", first.record().sequence);
             }
         }
 
@@ -629,10 +623,15 @@ impl Engine {
     }
 
     pub fn generate_verify_data(&self, is_client: bool) -> Result<[u8; 12], Error> {
-        let algorithm = self.cipher_suite().unwrap().hash_algorithm();
+        let Some(suite) = self.cipher_suite() else {
+            return Err(Error::UnexpectedMessage(
+                "No cipher suite selected".to_string(),
+            ));
+        };
+        let algorithm = suite.hash_algorithm();
         let handshake_hash = self.handshake_hash(algorithm);
 
-        let suite_hash = self.cipher_suite().unwrap().hash_algorithm();
+        let suite_hash = suite.hash_algorithm();
         let verify_data_vec = self
             .crypto_context()
             .generate_verify_data(&handshake_hash, is_client, suite_hash)

@@ -406,20 +406,18 @@ impl CryptoContext {
         hash: HashAlgorithm,
     ) -> Result<(), String> {
         trace!("Deriving master secret");
-        match &self.pre_master_secret {
-            Some(pms) => {
-                self.master_secret = Some(calculate_master_secret(
-                    pms,
-                    client_random,
-                    server_random,
-                    hash,
-                )?);
-                // Clear pre-master secret after use (security measure)
-                self.pre_master_secret = None;
-                Ok(())
-            }
-            None => Err("Pre-master secret not available".to_string()),
-        }
+        let Some(pms) = &self.pre_master_secret else {
+            return Err("Pre-master secret not available".to_string());
+        };
+        self.master_secret = Some(calculate_master_secret(
+            pms,
+            client_random,
+            server_random,
+            hash,
+        )?);
+        // Clear pre-master secret after use (security measure)
+        self.pre_master_secret = None;
+        Ok(())
     }
 
     /// Derive master secret using Extended Master Secret (RFC 7627)
@@ -429,16 +427,13 @@ impl CryptoContext {
         hash: HashAlgorithm,
     ) -> Result<(), String> {
         trace!("Deriving extended master secret");
-        match &self.pre_master_secret {
-            Some(pms) => {
-                self.master_secret =
-                    Some(calculate_extended_master_secret(pms, session_hash, hash)?);
-                // Clear pre-master secret after use (security measure)
-                self.pre_master_secret = None;
-                Ok(())
-            }
-            None => Err("Pre-master secret not available".to_string()),
-        }
+        let Some(pms) = &self.pre_master_secret else {
+            return Err("Pre-master secret not available".to_string());
+        };
+        self.master_secret = Some(calculate_extended_master_secret(pms, session_hash, hash)?);
+        // Clear pre-master secret after use (security measure)
+        self.pre_master_secret = None;
+        Ok(())
     }
 
     /// Derive keys for encryption/decryption
@@ -448,9 +443,8 @@ impl CryptoContext {
         client_random: &[u8],
         server_random: &[u8],
     ) -> Result<(), String> {
-        let master_secret = match &self.master_secret {
-            Some(ms) => ms,
-            None => return Err("Master secret not available".to_string()),
+        let Some(master_secret) = &self.master_secret else {
+            return Err("Master secret not available".to_string());
         };
 
         // Key sizes depend on the cipher suite
@@ -649,10 +643,10 @@ impl CryptoContext {
 
     /// Get curve info for ECDHE key exchange
     pub fn get_key_exchange_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
-        match &self.key_exchange {
-            Some(ke) => ke.get_curve_info(),
-            None => None,
-        }
+        let Some(ke) = &self.key_exchange else {
+            return None;
+        };
+        ke.get_curve_info()
     }
 
     pub fn signature_algorithm(&self) -> SignatureAlgorithm {

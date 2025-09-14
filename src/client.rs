@@ -514,24 +514,18 @@ impl Client {
 
     fn derive_and_send_keys(&mut self) -> Result<(), Error> {
         debug!("Deriving keys and sending ChangeCipherSpec");
-        let cipher_suite = match self.engine.cipher_suite() {
-            Some(cs) => cs,
-            None => {
-                return Err(Error::UnexpectedMessage(
-                    "No cipher suite selected".to_string(),
-                ))
-            }
+        let Some(cipher_suite) = self.engine.cipher_suite() else {
+            return Err(Error::UnexpectedMessage(
+                "No cipher suite selected".to_string(),
+            ));
         };
 
         debug!("Using cipher suite for key derivation: {:?}", cipher_suite);
 
-        let server_random = match &self.server_random {
-            Some(sr) => sr,
-            None => {
-                return Err(Error::UnexpectedMessage(
-                    "No server random available".to_string(),
-                ))
-            }
+        let Some(server_random) = &self.server_random else {
+            return Err(Error::UnexpectedMessage(
+                "No server random available".to_string(),
+            ));
         };
 
         // Extract and format the random values for key derivation
@@ -904,13 +898,11 @@ fn handshake_create_client_key_exchange(
     engine: &mut Engine,
 ) -> Result<(), Error> {
     // Just check that a cipher suite exists without binding to unused variable
-    if engine.cipher_suite().is_none() {
+    let Some(cipher_suite) = engine.cipher_suite() else {
         return Err(Error::UnexpectedMessage(
             "No cipher suite selected".to_string(),
         ));
-    }
-
-    let cipher_suite = engine.cipher_suite().unwrap();
+    };
     let key_exchange_algorithm = cipher_suite.as_key_exchange_algorithm();
 
     debug!("Using key exchange algorithm: {:?}", key_exchange_algorithm);

@@ -115,62 +115,55 @@ impl EcdhKeyExchange {
     fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Vec<u8>, String> {
         match self {
             EcdhKeyExchange::P256 { private_key } => {
-                if let Some(secret) = private_key {
-                    let encoded_point = p256::EncodedPoint::from_bytes(peer_public_key)
-                        .map_err(|_| "Invalid peer public key for P-256".to_string())?;
+                let Some(secret) = private_key else {
+                    return Err("Private key not generated".to_string());
+                };
 
-                    let public_key_opt = P256PublicKey::from_encoded_point(&encoded_point);
+                let encoded_point = p256::EncodedPoint::from_bytes(peer_public_key)
+                    .map_err(|_| "Invalid peer public key for P-256".to_string())?;
 
-                    if public_key_opt.is_some().into() {
-                        let public_key = public_key_opt.unwrap();
+                let public_key_opt = P256PublicKey::from_encoded_point(&encoded_point);
+                let Some(public_key) = Option::<P256PublicKey>::from(public_key_opt) else {
+                    return Err("Invalid peer public key format for P-256".to_string());
+                };
 
-                        let shared_secret = secret.diffie_hellman(&public_key);
-
-                        Ok(shared_secret.raw_secret_bytes().as_slice().to_vec())
-                    } else {
-                        Err("Invalid peer public key format for P-256".to_string())
-                    }
-                } else {
-                    Err("Private key not generated".to_string())
-                }
+                let shared_secret = secret.diffie_hellman(&public_key);
+                Ok(shared_secret.raw_secret_bytes().as_slice().to_vec())
             }
             EcdhKeyExchange::P384 { private_key } => {
-                if let Some(secret) = private_key {
-                    let encoded_point = p384::EncodedPoint::from_bytes(peer_public_key)
-                        .map_err(|_| "Invalid peer public key for P-384".to_string())?;
+                let Some(secret) = private_key else {
+                    return Err("Private key not generated".to_string());
+                };
 
-                    let public_key_opt = P384PublicKey::from_encoded_point(&encoded_point);
+                let encoded_point = p384::EncodedPoint::from_bytes(peer_public_key)
+                    .map_err(|_| "Invalid peer public key for P-384".to_string())?;
 
-                    if public_key_opt.is_some().into() {
-                        let public_key = public_key_opt.unwrap();
+                let public_key_opt = P384PublicKey::from_encoded_point(&encoded_point);
+                let Some(public_key) = Option::<P384PublicKey>::from(public_key_opt) else {
+                    return Err("Invalid peer public key format for P-384".to_string());
+                };
 
-                        // Compute the shared secret point
-                        let shared_secret = secret.diffie_hellman(&public_key);
+                // Compute the shared secret point
+                let shared_secret = secret.diffie_hellman(&public_key);
 
-                        // Extract the raw bytes from the shared secret
-                        let raw_bytes = shared_secret.raw_secret_bytes().as_slice();
+                // Extract the raw bytes from the shared secret
+                let raw_bytes = shared_secret.raw_secret_bytes().as_slice();
 
-                        // Create a properly formatted buffer that matches OpenSSL's behavior
-                        // For P-384, ECDH shared secret is the x-coordinate of the resulting point
-                        // Ensure it's exactly 48 bytes with proper padding in big-endian format
-                        let mut formatted_secret = vec![0u8; 48];
+                // Create a properly formatted buffer that matches OpenSSL's behavior
+                // For P-384, ECDH shared secret is the x-coordinate of the resulting point
+                // Ensure it's exactly 48 bytes with proper padding in big-endian format
+                let mut formatted_secret = vec![0u8; 48];
 
-                        // Copy the raw bytes to the buffer with proper alignment
-                        // If raw_bytes.len() < 48, preserve leading zeros as needed
-                        // If raw_bytes.len() == 48, just copy the bytes
-                        let copy_len = std::cmp::min(raw_bytes.len(), 48);
-                        let start_idx = 48 - copy_len;
-                        formatted_secret[start_idx..]
-                            .copy_from_slice(&raw_bytes[raw_bytes.len() - copy_len..]);
+                // Copy the raw bytes to the buffer with proper alignment
+                // If raw_bytes.len() < 48, preserve leading zeros as needed
+                // If raw_bytes.len() == 48, just copy the bytes
+                let copy_len = std::cmp::min(raw_bytes.len(), 48);
+                let start_idx = 48 - copy_len;
+                formatted_secret[start_idx..]
+                    .copy_from_slice(&raw_bytes[raw_bytes.len() - copy_len..]);
 
-                        // Return the formatted secret
-                        Ok(formatted_secret)
-                    } else {
-                        Err("Invalid peer public key format for P-384".to_string())
-                    }
-                } else {
-                    Err("Private key not generated".to_string())
-                }
+                // Return the formatted secret
+                Ok(formatted_secret)
             }
         }
     }
@@ -230,16 +223,15 @@ impl DhKeyExchange {
         let peer_public = BigUint::from_bytes_be(peer_public_key);
 
         // Get our private key
-        match &self.private_key {
-            Some(private_key) => {
-                // Compute shared secret as peer_public^private_key mod p
-                let shared_secret = peer_public.modpow(private_key, &self.prime);
+        let Some(private_key) = &self.private_key else {
+            return Err("DH private key not generated".to_string());
+        };
 
-                // Return shared secret as big-endian bytes
-                Ok(shared_secret.to_bytes_be())
-            }
-            None => Err("DH private key not generated".to_string()),
-        }
+        // Compute shared secret as peer_public^private_key mod p
+        let shared_secret = peer_public.modpow(private_key, &self.prime);
+
+        // Return shared secret as big-endian bytes
+        Ok(shared_secret.to_bytes_be())
     }
 
     fn get_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
