@@ -636,17 +636,17 @@ impl Client {
         };
 
         // Extract and format the random values for key derivation
-        let mut client_random = Vec::with_capacity(32);
-        let mut server_random_vec = Vec::with_capacity(32);
+        let mut client_random_buf = Vec::with_capacity(32);
+        let mut server_random_buf = Vec::with_capacity(32);
 
         // Serialize the random values to raw bytes
-        self.random.serialize(&mut client_random);
-        server_random.serialize(&mut server_random_vec);
+        self.random.serialize(&mut client_random_buf);
+        server_random.serialize(&mut server_random_buf);
 
         debug!(
             "Deriving master secret using client random ({} bytes) and server random ({} bytes)",
-            client_random.len(),
-            server_random_vec.len()
+            client_random_buf.len(),
+            server_random_buf.len()
         );
 
         // Derive master secret (use EMS if negotiated)
@@ -671,7 +671,7 @@ impl Client {
         } else {
             self.engine
                 .crypto_context_mut()
-                .derive_master_secret(&client_random, &server_random_vec, suite_hash)
+                .derive_master_secret(&client_random_buf, &server_random_buf, suite_hash)
                 .map_err(|e| {
                     Error::CryptoError(format!("Failed to derive master secret: {}", e))
                 })?;
@@ -683,7 +683,7 @@ impl Client {
         debug!("Deriving encryption/decryption keys");
         self.engine
             .crypto_context_mut()
-            .derive_keys(cipher_suite, &client_random, &server_random_vec)
+            .derive_keys(cipher_suite, &client_random_buf, &server_random_buf)
             .map_err(|e| Error::CryptoError(format!("Failed to derive keys: {}", e)))?;
 
         debug!("Encryption/decryption keys derived successfully, sending ChangeCipherSpec");

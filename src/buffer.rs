@@ -15,7 +15,7 @@ impl BufferPool {
     /// Creates a new buffer if none is free.
     pub fn pop(&mut self) -> Buf<'static> {
         if self.free.is_empty() {
-            self.free.push_back(Buf::default());
+            self.free.push_back(Buf::new());
         }
         // Unwrap is OK see above handling of empty.
         self.free.pop_front().unwrap()
@@ -101,8 +101,10 @@ impl<'a> Buf<'a> {
             Inner::Borrowed(v, len) => {
                 let vec = v[..len].to_vec();
 
-                // The slice will be dropped, so we zero it explicitly.
-                v.zeroize();
+                if self.1 == ZeroOnDrop::Yes {
+                    // The slice will be dropped, so we zero it explicitly.
+                    v.zeroize();
+                }
 
                 vec
             }
@@ -127,19 +129,6 @@ impl<'a> Default for Inner<'a> {
     }
 }
 
-impl<'a> Deref for Buf<'a> {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<'a> DerefMut for Buf<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
 
 impl<'a> Drop for Buf<'a> {
     fn drop(&mut self) {
@@ -166,6 +155,20 @@ impl<'a> aes_gcm::aead::Buffer for Buf<'a> {
             Inner::Owned(v) => v.truncate(len),
             Inner::Borrowed(_, l) => *l = len.min(*l),
         }
+    }
+}
+
+impl<'a> Deref for Buf<'a> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> DerefMut for Buf<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
