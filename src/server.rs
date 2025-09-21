@@ -28,9 +28,10 @@ use crate::message::{
     Body, CertificateRequest, CipherSuite, ClientCertificateType, ClientEcdhKeys,
     CompressionMethod, ContentType, Cookie, CurveType, DhParams, DigitallySigned,
     DistinguishedName, EcdhParams, ExchangeKeys, ExtensionType, Finished, HashAlgorithm,
-    HelloVerifyRequest, KeyExchangeAlgorithm, MessageType, NamedCurve, ProtocolVersion, Random,
-    ServerHello, ServerKeyExchange, ServerKeyExchangeParams, SessionId, SignatureAlgorithm,
-    SignatureAndHashAlgorithm, SrtpProfileId, UseSrtpExtension,
+    HelloVerifyRequest, KeyExchangeAlgorithm, MessageType, NamedCurve, NamedGroup, ProtocolVersion,
+    Random, ServerHello, ServerKeyExchange, ServerKeyExchangeParams, SessionId, SignatureAlgorithm,
+    SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId,
+    SupportedGroupsExtension, UseSrtpExtension,
 };
 use crate::{Config, Error, Output};
 
@@ -58,6 +59,12 @@ pub struct Server {
 
     /// The negotiated SRTP profile (if any)
     negotiated_srtp_profile: Option<SrtpProfile>,
+
+    /// Client's offered supported_groups (if any)
+    client_supported_groups: Option<ArrayVec<[NamedGroup; 16]>>,
+
+    /// Client's offered signature_algorithms (if any)
+    client_signature_algorithms: Option<ArrayVec<[SignatureAndHashAlgorithm; 32]>>,
 
     /// Client random. Set by ClientHello.
     client_random: Option<Random>,
@@ -113,6 +120,8 @@ impl Server {
             cookie_secret,
             extension_data: Buf::new(),
             negotiated_srtp_profile: None,
+            client_supported_groups: None,
+            client_signature_algorithms: None,
             client_random: None,
             client_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
@@ -198,7 +207,7 @@ impl State {
             return Ok(self);
         };
 
-        let Body::ClientHello(ch) = &handshake.body else {
+        let Body::ClientHello(ch) = handshake.body else {
             unreachable!()
         };
 
@@ -266,18 +275,31 @@ impl State {
         server.engine.set_cipher_suite(cs);
         server.client_random = Some(client_random);
 
-        // Process client extensions: SRTP and EMS
+        // Process client extensions: SRTP, EMS, SupportedGroups and SignatureAlgorithms
         let mut client_offers_ems = false;
         let mut client_srtp_profiles: Option<ArrayVec<[SrtpProfileId; 32]>> = None;
-        for ext in &ch.extensions {
+        let mut client_supported_groups: Option<ArrayVec<[NamedGroup; 16]>> = None;
+        let mut client_signature_algorithms: Option<ArrayVec<[SignatureAndHashAlgorithm; 32]>> =
+            None;
+        for ext in ch.extensions {
             match ext.extension_type {
                 ExtensionType::UseSrtp => {
                     if let Ok((_, use_srtp)) = UseSrtpExtension::parse(ext.extension_data) {
-                        client_srtp_profiles = Some(use_srtp.profiles.clone());
+                        client_srtp_profiles = Some(use_srtp.profiles);
                     }
                 }
                 ExtensionType::ExtendedMasterSecret => {
                     client_offers_ems = true;
+                }
+                ExtensionType::SupportedGroups => {
+                    if let Ok((_, groups)) = SupportedGroupsExtension::parse(ext.extension_data) {
+                        client_supported_groups = Some(groups.groups);
+                    }
+                }
+                ExtensionType::SignatureAlgorithms => {
+                    if let Ok((_, sigs)) = SignatureAlgorithmsExtension::parse(ext.extension_data) {
+                        client_signature_algorithms = Some(sigs.supported_signature_algorithms);
+                    }
                 }
                 _ => {}
             }
@@ -302,6 +324,10 @@ impl State {
             }
             server.negotiated_srtp_profile = selected_profile;
         }
+
+        // Store client's offers for later selection
+        server.client_supported_groups = client_supported_groups;
+        server.client_signature_algorithms = client_signature_algorithms;
 
         // Proceed to send the server flight
         Ok(Self::SendServerHello)
@@ -350,22 +376,46 @@ impl State {
             .ok_or_else(|| Error::UnexpectedMessage("No client random".to_string()))?;
         let server_random = server.random;
 
+        // Select ECDHE curve from client offers (prefer P-256, then P-384). If none present, default to P-256.
+        let selected_named_curve = select_named_curve(server.client_supported_groups.as_ref());
+
+        // Select signature/hash for SKE by intersecting client's list with our key type (prefer SHA256, then SHA384)
+        let selected_signature = select_ske_signature_algorithm(
+            server.client_signature_algorithms.as_ref(),
+            server.engine.crypto_context().signature_algorithm(),
+        );
+
         server
             .engine
             .create_handshake(MessageType::ServerKeyExchange, |body, engine| {
-                handshake_create_server_key_exchange(body, engine, client_random, server_random)
+                handshake_create_server_key_exchange(
+                    body,
+                    engine,
+                    client_random,
+                    server_random,
+                    selected_named_curve,
+                    selected_signature,
+                )
             })?;
 
-        Ok(Self::SendCertificateRequest)
+        if server.engine.config().require_client_certificate {
+            Ok(Self::SendCertificateRequest)
+        } else {
+            Ok(Self::SendServerHelloDone)
+        }
     }
 
     fn send_certificate_request(self, server: &mut Server) -> Result<Self, Error> {
         debug!("Sending CertificateRequest");
+        // Select CertificateRequest.signature_algorithms as intersection of client's list and our supported
+        let sig_algs =
+            select_certificate_request_sig_algs(server.client_signature_algorithms.as_ref());
 
-        server.engine.create_handshake(
-            MessageType::CertificateRequest,
-            handshake_create_certificate_request,
-        )?;
+        server
+            .engine
+            .create_handshake(MessageType::CertificateRequest, move |body, _| {
+                handshake_serialize_certificate_request(body, &sig_algs)
+            })?;
 
         Ok(Self::SendServerHelloDone)
     }
@@ -383,18 +433,14 @@ impl State {
                 Ok(())
             })?;
 
-        Ok(Self::AwaitCertificate)
+        if server.engine.config().require_client_certificate {
+            Ok(Self::AwaitCertificate)
+        } else {
+            Ok(Self::AwaitClientKeyExchange)
+        }
     }
 
     fn await_certificate(self, server: &mut Server) -> Result<Self, Error> {
-        let has_ckx = server
-            .engine
-            .has_complete_handshake(MessageType::ClientKeyExchange);
-
-        if has_ckx {
-            return Ok(Self::AwaitClientKeyExchange);
-        }
-
         let maybe = server
             .engine
             .next_handshake(MessageType::Certificate, &mut server.defragment_buffer)?;
@@ -422,11 +468,11 @@ impl State {
                 server.client_certificates.push(cert_data.to_buf());
             }
 
-            // Verify leaf certificate
+            // Verify leaf certificate (client auth policy)
             if let Err(err) = server
                 .engine
                 .crypto_context()
-                .verify_server_certificate(&server.client_certificates[0])
+                .verify_peer_certificate(&server.client_certificates[0])
             {
                 return Err(Error::CertificateError(format!(
                     "Certificate verification failed: {}",
@@ -519,14 +565,6 @@ impl State {
     }
 
     fn await_certificate_verify(self, server: &mut Server) -> Result<Self, Error> {
-        // Check if we have ChangeCipherSpec instead of CertificateVerify
-        let has_ccs = server.engine.next_record(ContentType::ChangeCipherSpec);
-        if has_ccs.is_some() {
-            // Enable peer encryption right away and proceed to finished
-            server.engine.enable_peer_encryption()?;
-            return Ok(Self::AwaitFinished);
-        }
-
         // Get handshake data BEFORE processing CertificateVerify message
         // According to TLS spec, signature is over all handshake messages up to but not including CertificateVerify
         let data = server.engine.handshake_data().to_buf();
@@ -732,6 +770,8 @@ fn handshake_create_server_key_exchange(
     engine: &mut Engine,
     client_random: Random,
     server_random: Random,
+    named_curve: NamedCurve,
+    algorithm: SignatureAndHashAlgorithm,
 ) -> Result<(), Error> {
     let Some(cipher_suite) = engine.cipher_suite() else {
         return Err(Error::UnexpectedMessage(
@@ -742,16 +782,12 @@ fn handshake_create_server_key_exchange(
     let key_exchange_algorithm = cipher_suite.as_key_exchange_algorithm();
     debug!("Using key exchange algorithm: {:?}", key_exchange_algorithm);
 
-    // Select signature/hash algorithm compatible with our key and client's offers (we assume client default set)
-    let hash_alg = engine.crypto_context().private_key_default_hash_algorithm();
-    let sig_alg = engine.crypto_context().signature_algorithm();
-    let algorithm = SignatureAndHashAlgorithm::new(hash_alg, sig_alg);
+    // Use hash part from selected algorithm
+    let hash_alg = algorithm.hash;
 
-    // Initialize KE and get our public key
     match key_exchange_algorithm {
         KeyExchangeAlgorithm::EECDH => {
-            // Prefer P-256 then P-384 (client must have offered one; selection validated earlier)
-            let (curve_type, named_curve) = (CurveType::NamedCurve, NamedCurve::Secp256r1);
+            let (curve_type, named_curve) = (CurveType::NamedCurve, named_curve);
             let pubkey = engine
                 .crypto_context_mut()
                 .init_ecdh_server(named_curve)
@@ -772,6 +808,8 @@ fn handshake_create_server_key_exchange(
                     Error::CryptoError(format!("Failed to sign server key exchange: {}", e))
                 })?;
 
+            // unwrap: safe because init_ecdh_server() above sets key_exchange = Some(...).
+            // If that failed, we returned Err earlier and never reach this point.
             let pubkey = engine
                 .crypto_context_mut()
                 .maybe_init_key_exchange()
@@ -801,11 +839,13 @@ fn handshake_create_server_key_exchange(
 
             let signature = engine
                 .crypto_context()
-                .sign_data(&signed_data, hash_alg)
+                .sign_data(&signed_data, algorithm.hash)
                 .map_err(|e| {
                     Error::CryptoError(format!("Failed to sign server key exchange: {}", e))
                 })?;
 
+            // unwrap: safe because init_dh_server() above sets key_exchange = Some(...).
+            // If that failed, we returned Err earlier and never reach this point.
             let pubkey = engine
                 .crypto_context_mut()
                 .maybe_init_key_exchange()
@@ -827,31 +867,108 @@ fn handshake_create_server_key_exchange(
     }
 }
 
-fn handshake_create_certificate_request(
+fn handshake_serialize_certificate_request(
     body: &mut Buf<'static>,
-    _engine: &mut Engine,
+    sig_algs: &ArrayVec<[SignatureAndHashAlgorithm; 32]>,
 ) -> Result<(), Error> {
-    // Advertise RSA_SIGN and ECDSA_SIGN; empty CA list; support SHA256/384 for RSA & ECDSA
+    // Advertise RSA_SIGN and ECDSA_SIGN; empty CA list
     let mut cert_types = ArrayVec::new();
     cert_types.push(ClientCertificateType::RSA_SIGN);
     cert_types.push(ClientCertificateType::ECDSA_SIGN);
 
-    let supported = SignatureAndHashAlgorithm::supported();
-    let mut sig_algs = ArrayVec::new();
-    for alg in supported.iter() {
-        // Limit to RSA/ECDSA with SHA256/384 (already the default set)
-        match (alg.hash, alg.signature) {
-            (HashAlgorithm::SHA256, SignatureAlgorithm::RSA)
-            | (HashAlgorithm::SHA384, SignatureAlgorithm::RSA)
-            | (HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA)
-            | (HashAlgorithm::SHA384, SignatureAlgorithm::ECDSA) => sig_algs.push(*alg),
-            _ => {}
+    // If intersection is empty (e.g., client didn't advertise), fall back to our supported set
+    // Build the selected list with the capacity expected by CertificateRequest
+    let mut selected: ArrayVec<[SignatureAndHashAlgorithm; 32]> = ArrayVec::new();
+    if sig_algs.is_empty() {
+        let fallback = SignatureAndHashAlgorithm::supported();
+        for alg in fallback.iter() {
+            selected.push(*alg);
+        }
+    } else {
+        for alg in sig_algs.iter() {
+            selected.push(*alg);
         }
     }
 
     let cert_auths: ArrayVec<[DistinguishedName<'static>; 32]> = ArrayVec::new();
 
-    let cr = CertificateRequest::new(cert_types, sig_algs, cert_auths);
+    let cr = CertificateRequest::new(cert_types, selected, cert_auths);
     cr.serialize(body);
     Ok(())
+}
+
+fn select_named_curve(client_groups: Option<&ArrayVec<[NamedGroup; 16]>>) -> NamedCurve {
+    // Server preference order
+    let preferred = [NamedGroup::Secp256r1, NamedGroup::Secp384r1];
+    if let Some(groups) = client_groups {
+        for p in preferred.iter() {
+            if groups.iter().any(|g| g == p) {
+                if let Some(curve) = map_named_group_to_named_curve(*p) {
+                    return curve;
+                }
+            }
+        }
+    }
+    // Fallback if client did not advertise groups or only unsupported ones
+    NamedCurve::Secp256r1
+}
+
+fn map_named_group_to_named_curve(group: NamedGroup) -> Option<NamedCurve> {
+    match group {
+        NamedGroup::Secp256r1 => Some(NamedCurve::Secp256r1),
+        NamedGroup::Secp384r1 => Some(NamedCurve::Secp384r1),
+        _ => None,
+    }
+}
+
+fn select_ske_signature_algorithm(
+    client_algs: Option<&ArrayVec<[SignatureAndHashAlgorithm; 32]>>,
+    our_sig: SignatureAlgorithm,
+) -> SignatureAndHashAlgorithm {
+    // Our hash preference order
+    let hash_pref = [HashAlgorithm::SHA256, HashAlgorithm::SHA384];
+
+    if let Some(list) = client_algs {
+        for h in hash_pref.iter() {
+            if let Some(chosen) = list
+                .iter()
+                .find(|alg| alg.signature == our_sig && alg.hash == *h)
+            {
+                return *chosen;
+            }
+        }
+    }
+
+    // Fallback to our default hash for our key type
+    let hash = engine_default_hash_for_sig(our_sig);
+    SignatureAndHashAlgorithm::new(hash, our_sig)
+}
+
+fn engine_default_hash_for_sig(sig: SignatureAlgorithm) -> HashAlgorithm {
+    match sig {
+        SignatureAlgorithm::RSA => HashAlgorithm::SHA256,
+        SignatureAlgorithm::ECDSA => HashAlgorithm::SHA256,
+        _ => HashAlgorithm::SHA256,
+    }
+}
+
+fn select_certificate_request_sig_algs(
+    client_algs: Option<&ArrayVec<[SignatureAndHashAlgorithm; 32]>>,
+) -> ArrayVec<[SignatureAndHashAlgorithm; 32]> {
+    // Our supported set (RSA/ECDSA with SHA256/384)
+    let ours = SignatureAndHashAlgorithm::supported();
+
+    // Build intersection preserving client preference order
+    let mut out = ArrayVec::new();
+    if let Some(list) = client_algs {
+        for alg in list.iter() {
+            if ours
+                .iter()
+                .any(|a| a.hash == alg.hash && a.signature == alg.signature)
+            {
+                out.push(*alg);
+            }
+        }
+    }
+    out
 }

@@ -6,11 +6,11 @@ use tinyvec::{array_vec, ArrayVec};
 /// SignatureAlgorithms extension as defined in RFC 5246
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureAlgorithmsExtension {
-    pub supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 8]>,
+    pub supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 32]>,
 }
 
 impl SignatureAlgorithmsExtension {
-    pub fn new(supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 8]>) -> Self {
+    pub fn new(supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 32]>) -> Self {
         SignatureAlgorithmsExtension {
             supported_signature_algorithms,
         }
@@ -18,8 +18,14 @@ impl SignatureAlgorithmsExtension {
 
     /// Create a default SignatureAlgorithmsExtension with standard algorithms
     pub fn default() -> Self {
+        // Convert from the smaller-capacity helper to our larger-capacity storage
+        let src = SignatureAndHashAlgorithm::supported();
+        let mut dst: ArrayVec<[SignatureAndHashAlgorithm; 32]> = ArrayVec::new();
+        for alg in src.iter() {
+            dst.push(*alg);
+        }
         SignatureAlgorithmsExtension {
-            supported_signature_algorithms: SignatureAndHashAlgorithm::supported(),
+            supported_signature_algorithms: dst,
         }
     }
 
@@ -63,7 +69,7 @@ mod tests {
 
     #[test]
     fn test_signature_algorithms_extension() {
-        let mut algorithms = ArrayVec::new();
+        let mut algorithms: ArrayVec<[SignatureAndHashAlgorithm; 32]> = ArrayVec::new();
         algorithms.push(SignatureAndHashAlgorithm::new(
             HashAlgorithm::SHA256,
             SignatureAlgorithm::ECDSA,

@@ -622,8 +622,12 @@ impl CryptoContext {
         signing::sign_data(&self.private_key, data, hash_alg)
     }
 
-    /// Verify a server certificate
-    pub fn verify_server_certificate(&self, der: &[u8]) -> Result<(), String> {
+    /// Verify the peer's certificate
+    ///
+    /// This delegates to the application's `CertVerifier` policy. The server
+    /// is responsible for enforcing appropriate EKUs and chain validation in
+    /// the verifier implementation.
+    pub fn verify_peer_certificate(&self, der: &[u8]) -> Result<(), String> {
         self.cert_verifier.verify_certificate(der)
     }
 

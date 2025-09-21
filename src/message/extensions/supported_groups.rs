@@ -41,11 +41,11 @@ impl NamedGroup {
 /// SupportedGroups extension as defined in RFC 8422
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupportedGroupsExtension {
-    pub groups: ArrayVec<[NamedGroup; 5]>,
+    pub groups: ArrayVec<[NamedGroup; 16]>,
 }
 
 impl SupportedGroupsExtension {
-    pub fn new(groups: ArrayVec<[NamedGroup; 5]>) -> Self {
+    pub fn new(groups: ArrayVec<[NamedGroup; 16]>) -> Self {
         SupportedGroupsExtension { groups }
     }
 

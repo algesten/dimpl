@@ -99,6 +99,10 @@ impl Engine {
         }
     }
 
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
     /// Get a reference to the cipher suite
     pub fn cipher_suite(&self) -> Option<CipherSuite> {
         self.cipher_suite

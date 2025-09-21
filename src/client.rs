@@ -556,7 +556,7 @@ impl State {
         if let Err(err) = client
             .engine
             .crypto_context()
-            .verify_server_certificate(&client.server_certificates[0])
+            .verify_peer_certificate(&client.server_certificates[0])
         {
             return Err(Error::CertificateError(format!(
                 "Certificate verification failed: {}",

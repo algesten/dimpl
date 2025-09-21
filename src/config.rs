@@ -11,6 +11,12 @@ pub struct Config {
 
     /// The allowed cipher suites.
     pub cipher_suites: Vec<CipherSuite>,
+
+    /// For a server, require a client certificate.
+    ///
+    /// This will cause the server to send a CertificateRequest message.
+    /// Makes the server fail if the client does not send a certificate.
+    pub require_client_certificate: bool,
 }
 
 impl Default for Config {
@@ -19,6 +25,7 @@ impl Default for Config {
             max_queue_rx: 30,
             max_queue_tx: 10,
             cipher_suites: CipherSuite::all().iter().cloned().collect(),
+            require_client_certificate: true,
         }
     }
 }

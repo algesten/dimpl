@@ -31,6 +31,7 @@ pub use client_key_exchange::{ClientEcdhKeys, ClientKeyExchange, ExchangeKeys};
 pub use digitally_signed::DigitallySigned;
 pub use extension::{Extension, ExtensionType};
 pub use extensions::signature_algorithms::SignatureAlgorithmsExtension;
+pub use extensions::supported_groups::{NamedGroup, SupportedGroupsExtension};
 pub use extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
 pub use finished::Finished;
 pub use handshake::{Body, Handshake, Header, MessageType};
