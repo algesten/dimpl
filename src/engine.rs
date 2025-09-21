@@ -26,6 +26,8 @@ pub struct Engine {
     next_sequence_tx: Sequence,
 
     /// Queue of incoming packets.
+    ///
+    /// Not decrypted but handshakes are parsed.
     queue_rx: VecDeque<Incoming>,
 
     /// Queue of outgoing packets.
@@ -143,7 +145,6 @@ impl Engine {
         let buffer = self.buffers_free.pop();
 
         let incoming = Incoming::parse_packet(packet, self, buffer)?;
-
         self.insert_incoming(incoming)?;
 
         Ok(())
@@ -232,7 +233,7 @@ impl Engine {
         Instant::now()
     }
 
-    pub fn has_flight(&mut self, to: MessageType) -> Option<Flight> {
+    pub fn has_complete_message(&mut self, to: MessageType) -> Option<CompleteMessage> {
         if self.queue_rx.is_empty() {
             return None;
         }
@@ -287,18 +288,18 @@ impl Engine {
             return None;
         }
 
-        Some(Flight {
+        Some(CompleteMessage {
             to,
             current: Some(first.header.msg_type),
         })
     }
 
-    pub fn next_from_flight<'b>(
+    pub fn next_message<'b>(
         &mut self,
-        flight: &mut Flight,
+        complete_message: &mut CompleteMessage,
         defragment_buffer: &'b mut Buf<'static>,
     ) -> Result<Option<Handshake<'b>>, Error> {
-        if flight.current.is_none() {
+        if complete_message.current.is_none() {
             return Ok(None);
         }
 
@@ -317,7 +318,7 @@ impl Engine {
 
         // Update the flight with the next message type, this eventually returns None
         // and that makes the flight complete.
-        flight.current = if flight.current == Some(flight.to) {
+        complete_message.current = if complete_message.current == Some(complete_message.to) {
             // We reached the end condition
             None
         } else {
@@ -655,9 +656,13 @@ impl Engine {
 
     fn peer_iv(&self) -> Iv {
         if self.is_client {
-            self.crypto_context.get_server_write_iv().expect("Server write IV not available - keys not derived yet")
+            self.crypto_context
+                .get_server_write_iv()
+                .expect("Server write IV not available - keys not derived yet")
         } else {
-            self.crypto_context.get_client_write_iv().expect("Client write IV not available - keys not derived yet")
+            self.crypto_context
+                .get_client_write_iv()
+                .expect("Client write IV not available - keys not derived yet")
         }
     }
 
@@ -699,7 +704,7 @@ impl Engine {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Flight {
+pub struct CompleteMessage {
     to: MessageType,
     current: Option<MessageType>,
 }

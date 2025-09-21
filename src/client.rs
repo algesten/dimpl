@@ -220,13 +220,13 @@ impl Client {
             HandshakeState::AwaitingServerHelloAfterVerify
         };
 
-        let Some(mut flight) = self.engine.has_flight(MessageType::ServerHelloDone) else {
+        let Some(mut flight) = self.engine.has_complete_message(MessageType::ServerHelloDone) else {
             return Ok(());
         };
 
         while let Some(handshake) = self
             .engine
-            .next_from_flight(&mut flight, &mut self.defragment_buffer)?
+            .next_message(&mut flight, &mut self.defragment_buffer)?
         {
             // Validate transition using our FSM
             state = state.handle(handshake.header.msg_type)?;
@@ -663,7 +663,7 @@ impl Client {
         let mut expected = self.engine.generate_verify_data(false)?;
 
         // Wait for server finished message
-        let Some(mut flight) = self.engine.has_flight(MessageType::Finished) else {
+        let Some(mut flight) = self.engine.has_complete_message(MessageType::Finished) else {
             return Ok(());
         };
 
@@ -672,7 +672,7 @@ impl Client {
 
         while let Some(handshake) = self
             .engine
-            .next_from_flight(&mut flight, &mut self.defragment_buffer)?
+            .next_message(&mut flight, &mut self.defragment_buffer)?
         {
             // Update state based on message type
             state = state.handle(handshake.header.msg_type)?;

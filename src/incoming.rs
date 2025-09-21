@@ -16,10 +16,6 @@ use crate::Error;
 pub struct Incoming(Inner);
 
 impl Incoming {
-    // pub fn into_inner(self) -> Buffer {
-    //     self.0.into_owner()
-    // }
-
     pub fn records(&self) -> &Records {
         self.0.borrow_dependent()
     }
@@ -57,7 +53,7 @@ impl Incoming {
     /// Will surface parser errors.
     pub fn parse_packet(
         packet: &[u8],
-        engine: &mut Engine,
+        engine: &Engine,
         mut into: Buf<'static>,
     ) -> Result<Self, Error> {
         // The Buffer is where we store the raw packet data.
@@ -82,21 +78,16 @@ pub struct Records<'a> {
 }
 
 impl<'a> Records<'a> {
-    pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Records<'a>, Error> {
+    pub fn parse(input: &'a mut [u8], engine: &Engine) -> Result<Records<'a>, Error> {
         let mut records = ArrayVec::default();
         let mut current = input;
 
         // DTLSRecordSlice::try_read will end with None when cleanly chunking ends.
         // Any extra bytes will cause an Error.
         while let Some(dtls_rec) = DTLSRecordSlice::try_read(current)? {
-            match Record::parse(dtls_rec.slice, engine, true) {
+            match Record::parse(dtls_rec.slice, engine) {
                 Ok(record) => {
-                    if let Some(record) = record {
-                        records.push(record);
-                    } else {
-                        // Silently drop duplicate/too-old records per RFC 6347
-                        trace!("Drop replayed record");
-                    }
+                    records.push(record);
                 }
                 Err(e) => return Err(e),
             }
@@ -118,67 +109,60 @@ impl<'a> Deref for Records<'a> {
 pub struct Record<'a>(RecordInner<'a>);
 
 impl<'a> Record<'a> {
-    pub fn parse(
-        input: &'a mut [u8],
-        engine: &mut Engine,
-        decrypt: bool,
-    ) -> Result<Option<Record<'a>>, Error> {
+    /// The first parse pass only parses the DTLSRecord header which is unencrypted.
+    pub fn parse(input: &'a mut [u8], engine: &Engine) -> Result<Record<'a>, Error> {
         let inner = RecordInner::try_new(input, |borrowed| {
             Ok::<_, Error>(ParsedRecord::parse(&borrowed, engine)?)
         })?;
 
         let record = Record(inner);
 
-        if record.record().content_type == ContentType::ChangeCipherSpec {
-            // Validate CCS payload value (single byte 0x01)
-            let dtls = record.record();
-            if dtls.fragment.len() != 1 || dtls.fragment[0] != 0x01 {
-                return Err(Error::SecurityError(
-                    "Invalid ChangeCipherSpec payload".to_string(),
-                ));
-            }
-            engine.enable_peer_encryption();
-        } else if decrypt && engine.is_peer_encryption_enabled() {
-            // We need to decrypt the record and redo the parsing.
-            let dtls = record.record();
+        Ok(record)
+    }
 
-            // Anti-replay check
-            if !engine.replay_check_and_update(dtls.sequence) {
-                return Ok(None);
-            }
+    /// The second parse pass decrypts the record, parses potential Handshake or ApplicationData.
+    pub fn decrypt_and_reparse(self, engine: &mut Engine) -> Result<Record<'a>, Error> {
+        // We need to decrypt the record and redo the parsing.
+        let dtls = self.record();
 
-            let (aad, nonce) = engine.decryption_aad_and_nonce(dtls);
+        // Anti-replay check
+        // if !engine.replay_check_and_update(dtls.sequence) {
+        //     return Ok(None);
+        // }
 
-            // Bring back the unparsed bytes.
-            let input = record.0.into_owner();
+        let (aad, nonce) = engine.decryption_aad_and_nonce(dtls);
 
-            // Local shorthand for where the encrypted ciphertext starts
-            const CIPH: usize = DTLSRecord::HEADER_LEN + DTLS_EXPLICIT_NONCE_LEN;
+        // Bring back the unparsed bytes.
+        let input = self.0.into_owner();
 
-            // The encrypted part is after the DTLS header and explicit nonce.
-            // The entire buffer is only the single record, since we chunk
-            // records up in Records::parse()
-            let ciphertext = &mut input[CIPH..];
+        // Local shorthand for where the encrypted ciphertext starts
+        const CIPH: usize = DTLSRecord::HEADER_LEN + DTLS_EXPLICIT_NONCE_LEN;
 
-            let new_len = {
-                let mut buffer = Buf::wrap(ciphertext).keep_on_drop();
+        // The encrypted part is after the DTLS header and explicit nonce.
+        // The entire buffer is only the single record, since we chunk
+        // records up in Records::parse()
+        let ciphertext = &mut input[CIPH..];
 
-                // This decrypts in place.
-                engine.decrypt_data(&mut buffer, aad, nonce)?;
+        let new_len = {
+            let mut buffer = Buf::wrap(ciphertext).keep_on_drop();
 
-                buffer.len()
-            };
+            // This decrypts in place.
+            engine.decrypt_data(&mut buffer, aad, nonce)?;
 
-            // Update the length of the record.
-            input[DTLSRecord::LENGTH_OFFSET].copy_from_slice(&(new_len as u16).to_be_bytes());
+            buffer.len()
+        };
 
-            // Shift the decrypted buffer to the start of the record.
-            input.copy_within(CIPH..(CIPH + new_len), DTLSRecord::HEADER_LEN);
+        // Update the length of the record.
+        input[DTLSRecord::LENGTH_OFFSET].copy_from_slice(&(new_len as u16).to_be_bytes());
 
-            return Record::parse(input, engine, false);
-        }
+        // Shift the decrypted buffer to the start of the record.
+        input.copy_within(CIPH..(CIPH + new_len), DTLSRecord::HEADER_LEN);
 
-        Ok(Some(record))
+        let inner = RecordInner::try_new(input, |borrowed| {
+            Ok::<_, Error>(ParsedRecord::parse(&borrowed, engine)?)
+        })?;
+
+        Ok(Record(inner))
     }
 
     pub fn record(&self) -> &DTLSRecord {
@@ -205,7 +189,7 @@ pub struct ParsedRecord<'a> {
 }
 
 impl<'a> ParsedRecord<'a> {
-    pub fn parse(input: &'a [u8], engine: &mut Engine) -> Result<ParsedRecord<'a>, Error> {
+    pub fn parse(input: &'a [u8], engine: &Engine) -> Result<ParsedRecord<'a>, Error> {
         let (_, record) = DTLSRecord::parse(input)?;
 
         let handshake = if record.content_type == ContentType::Handshake {
