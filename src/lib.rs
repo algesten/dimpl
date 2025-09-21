@@ -9,12 +9,15 @@
 #[macro_use]
 extern crate log;
 
+use std::time::Instant;
+
 pub mod state;
 
 mod client;
-use std::time::Instant;
-
 pub use client::Client;
+
+mod server;
+pub use server::Server;
 
 mod message;
 pub use message::{CipherSuite, SignatureAlgorithm};

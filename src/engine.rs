@@ -9,8 +9,8 @@ use crate::crypto::{Aad, CertVerifier, CryptoContext, Hash};
 use crate::crypto::{Iv, KeyingMaterial, DTLS_AEAD_OVERHEAD};
 use crate::crypto::{Nonce, SrtpProfile, DTLS_EXPLICIT_NONCE_LEN};
 use crate::incoming::Incoming;
+use crate::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
-use crate::message::{HashAlgorithm, MessageType, ProtocolVersion, Sequence};
 use crate::{Config, Error, Output};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
@@ -467,14 +467,14 @@ impl Engine {
 
         // Create the handshake header with the next sequence number
         let handshake = Handshake {
-            header: crate::message::Header {
+            header: Header {
                 msg_type,
                 length: body_buffer.len() as u32,
                 message_seq: self.next_handshake_seq_no,
                 fragment_offset: 0,
                 fragment_length: body_buffer.len() as u32,
             },
-            body: crate::message::Body::Fragment(&body_buffer),
+            body: Body::Fragment(&body_buffer),
             handled: Cell::new(false),
         };
 

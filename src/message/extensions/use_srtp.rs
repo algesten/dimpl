@@ -1,5 +1,5 @@
 use crate::buffer::Buf;
-use crate::crypto::SrtpProfile;
+use crate::SrtpProfile;
 use nom::{
     bytes::complete::take,
     number::complete::{be_u16, be_u8},
@@ -35,10 +35,20 @@ impl SrtpProfileId {
     pub fn as_u16(&self) -> u16 {
         *self as u16
     }
+}
 
-    /// Convert SrtpProfileId to SrtpProfile
-    pub fn to_srtp_profile(&self) -> SrtpProfile {
-        match self {
+impl From<SrtpProfile> for SrtpProfileId {
+    fn from(profile: SrtpProfile) -> Self {
+        match profile {
+            SrtpProfile::Aes128CmSha1_80 => SrtpProfileId::SrtpAes128CmSha1_80,
+            SrtpProfile::AeadAes128Gcm => SrtpProfileId::SrtpAeadAes128Gcm,
+        }
+    }
+}
+
+impl From<SrtpProfileId> for SrtpProfile {
+    fn from(profile: SrtpProfileId) -> Self {
+        match profile {
             SrtpProfileId::SrtpAes128CmSha1_80 => SrtpProfile::Aes128CmSha1_80,
             SrtpProfileId::SrtpAeadAes128Gcm => SrtpProfile::AeadAes128Gcm,
         }

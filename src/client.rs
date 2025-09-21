@@ -316,7 +316,7 @@ impl Client {
                                     // Store the first profile as our negotiated profile
                                     if !use_srtp.profiles.is_empty() {
                                         self.negotiated_srtp_profile =
-                                            Some(use_srtp.profiles[0].to_srtp_profile());
+                                            Some(use_srtp.profiles[0].into());
                                     }
                                 }
                             }

@@ -1,4 +1,5 @@
 use crate::buffer::{Buf, ToBuf};
+use crate::crypto::DhDomainParams;
 use crate::message::{CurveType, NamedCurve};
 use elliptic_curve::sec1::FromEncodedPoint;
 use elliptic_curve::sec1::ToEncodedPoint;
@@ -24,7 +25,8 @@ impl KeyExchange {
         Self::new(Inner::Ecdh(EcdhKeyExchange::new(curve)))
     }
 
-    pub fn new_dh(prime: Vec<u8>, generator: Vec<u8>) -> Self {
+    pub fn new_dh(params: impl DhDomainParams) -> Self {
+        let (prime, generator) = params.into_p_g();
         Self::new(Inner::Dh(DhKeyExchange::new(prime, generator)))
     }
 

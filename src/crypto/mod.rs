@@ -15,6 +15,7 @@ use rsa::RsaPrivateKey;
 
 // Internal module imports
 mod encryption;
+pub mod ffdhe2048;
 mod hash;
 mod key_exchange;
 mod keying;
@@ -31,7 +32,9 @@ pub use prf::{key_expansion, prf_tls12};
 
 use crate::buffer::{Buf, ToBuf};
 // Message-related imports
-use crate::message::{Asn1Cert, Certificate, CipherSuite, ContentType, CurveType};
+use crate::message::{
+    Asn1Cert, Certificate, CipherSuite, ContentType, CurveType, ServerKeyExchange,
+};
 use crate::message::{DigitallySigned, HashAlgorithm};
 use crate::message::{NamedCurve, Sequence, ServerKeyExchangeParams, SignatureAlgorithm};
 
@@ -254,6 +257,12 @@ pub trait CertVerifier: Send + Sync {
     fn verify_certificate(&self, der: &[u8]) -> Result<(), String>;
 }
 
+pub trait DhDomainParams {
+    fn p(&self) -> &[u8];
+    fn g(&self) -> &[u8];
+    fn into_p_g(self) -> (Vec<u8>, Vec<u8>);
+}
+
 /// DTLS 1.2 crypto context
 pub struct CryptoContext {
     /// Key exchange mechanism
@@ -289,35 +298,35 @@ pub struct CryptoContext {
     /// Server cipher
     server_cipher: Option<Box<dyn Cipher>>,
 
-    /// Client certificate (DER format)
-    client_cert: Vec<u8>,
+    /// Certificate (DER format)
+    certificate: Vec<u8>,
+
+    /// Parsed private key for the certificate with signature algorithm
+    private_key: ParsedKey,
 
     /// Certificate verifier
     cert_verifier: Box<dyn CertVerifier>,
-
-    /// Parsed client private key with signature algorithm
-    parsed_client_key: ParsedKey,
 }
 
 impl CryptoContext {
     /// Create a new crypto context
     pub fn new(
-        client_cert: Vec<u8>,
-        client_private_key: Vec<u8>,
+        certificate: Vec<u8>,
+        private_key: Vec<u8>,
         cert_verifier: Box<dyn CertVerifier>,
     ) -> Self {
         // Validate that we have a certificate and private key
-        if client_cert.is_empty() {
+        if certificate.is_empty() {
             panic!("Client certificate cannot be empty");
         }
 
-        if client_private_key.is_empty() {
+        if private_key.is_empty() {
             panic!("Client private key cannot be empty");
         }
 
         // Parse the private key
-        let parsed_client_key = ParsedKey::try_parse_key(&client_private_key)
-            .expect("Failed to parse client private key");
+        let private_key =
+            ParsedKey::try_parse_key(&private_key).expect("Failed to parse client private key");
 
         CryptoContext {
             key_exchange: None,
@@ -331,9 +340,9 @@ impl CryptoContext {
             pre_master_secret: None,
             client_cipher: None,
             server_cipher: None,
-            client_cert,
+            certificate,
+            private_key,
             cert_verifier,
-            parsed_client_key,
         }
     }
 
@@ -356,24 +365,62 @@ impl CryptoContext {
         }
     }
 
+    /// Initialize ECDHE key exchange (server role) and return our ephemeral public key
+    pub fn init_ecdh_server(&mut self, named_curve: NamedCurve) -> Result<&[u8], String> {
+        // Only support P-256 and P-384 for now
+        match named_curve {
+            NamedCurve::Secp256r1 | NamedCurve::Secp384r1 => {}
+            _ => return Err("Unsupported ECDHE named curve".to_string()),
+        }
+
+        self.key_exchange = Some(KeyExchange::new_ecdh(named_curve));
+        self.maybe_init_key_exchange()
+    }
+
+    /// Initialize DHE key exchange (server role) with provided prime and generator
+    /// and return our ephemeral public key
+    pub fn init_dh_server(&mut self, params: impl DhDomainParams) -> Result<&[u8], String> {
+        self.key_exchange = Some(KeyExchange::new_dh(params));
+        self.maybe_init_key_exchange()
+    }
+
     /// Process a ServerKeyExchange message and set up key exchange accordingly
-    pub fn process_server_key_exchange(
-        &mut self,
-        server_key_exchange: &crate::message::ServerKeyExchange,
-    ) -> Result<(), String> {
+    pub fn process_server_key_exchange(&mut self, ske: &ServerKeyExchange) -> Result<(), String> {
         // Process the server key exchange message based on the parameter type
-        match &server_key_exchange.params {
+        match &ske.params {
             ServerKeyExchangeParams::Dh(dh_params) => {
                 // For DHE, create a new DhKeyExchange with server parameters
                 let prime = dh_params.p.to_vec();
                 let generator = dh_params.g.to_vec();
                 let server_public = dh_params.ys.to_vec();
 
+                struct ClientDhDomainParams {
+                    p: Vec<u8>,
+                    g: Vec<u8>,
+                }
+
+                let params = ClientDhDomainParams {
+                    p: prime,
+                    g: generator,
+                };
+
+                impl DhDomainParams for ClientDhDomainParams {
+                    fn p(&self) -> &[u8] {
+                        &self.p
+                    }
+                    fn g(&self) -> &[u8] {
+                        &self.g
+                    }
+                    fn into_p_g(self) -> (Vec<u8>, Vec<u8>) {
+                        (self.p, self.g)
+                    }
+                }
+
                 // Validate DH parameters (size and ranges)
-                validate_dh_parameters(&prime, &generator, &server_public)?;
+                validate_dh_parameters(&params, &server_public)?;
 
                 // Update our key exchange
-                self.key_exchange = Some(KeyExchange::new_dh(prime, generator));
+                self.key_exchange = Some(KeyExchange::new_dh(params));
 
                 // Generate our keypair
                 let _our_public = self.maybe_init_key_exchange()?;
@@ -563,7 +610,7 @@ impl CryptoContext {
     /// Get client certificate for authentication
     pub fn get_client_certificate(&self) -> Certificate {
         // We validate in constructor, so we can assume we have a certificate
-        let cert = Asn1Cert(self.client_cert.as_slice());
+        let cert = Asn1Cert(self.certificate.as_slice());
         let certs = array_vec![[Asn1Cert; 32] => cert];
         Certificate::new(certs)
     }
@@ -572,7 +619,7 @@ impl CryptoContext {
     /// Returns the signature or an error if signing fails
     pub fn sign_data(&self, data: &[u8], hash_alg: HashAlgorithm) -> Result<Vec<u8>, String> {
         // Use the signing module to sign the data
-        signing::sign_data(&self.parsed_client_key, data, hash_alg)
+        signing::sign_data(&self.private_key, data, hash_alg)
     }
 
     /// Verify a server certificate
@@ -640,16 +687,16 @@ impl CryptoContext {
     }
 
     pub fn signature_algorithm(&self) -> SignatureAlgorithm {
-        self.parsed_client_key.signature_algorithm()
+        self.private_key.signature_algorithm()
     }
 
     pub fn private_key_default_hash_algorithm(&self) -> HashAlgorithm {
-        self.parsed_client_key.default_hash_algorithm()
+        self.private_key.default_hash_algorithm()
     }
 
     /// Check if the client's private key is compatible with a given cipher suite
     pub fn is_cipher_suite_compatible(&self, cipher_suite: CipherSuite) -> bool {
-        self.parsed_client_key.is_compatible(cipher_suite)
+        self.private_key.is_compatible(cipher_suite)
     }
 
     /// Get client write IV
@@ -775,9 +822,9 @@ impl CryptoContext {
 }
 
 /// Validate DHE parameters per basic safety rules
-fn validate_dh_parameters(p: &[u8], g: &[u8], ys: &[u8]) -> Result<(), String> {
-    let p = BigUint::from_bytes_be(p);
-    let g = BigUint::from_bytes_be(g);
+fn validate_dh_parameters(params: &dyn DhDomainParams, ys: &[u8]) -> Result<(), String> {
+    let p = BigUint::from_bytes_be(params.p());
+    let g = BigUint::from_bytes_be(params.g());
     let ys = BigUint::from_bytes_be(ys);
 
     // p must be large enough and odd and > 2

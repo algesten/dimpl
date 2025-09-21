@@ -1,4 +1,6 @@
-use super::{CipherSuite, CompressionMethod, Extension, ProtocolVersion, Random, SessionId};
+use super::extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
+use super::{CipherSuite, CompressionMethod, Extension, ExtensionType};
+use super::{ProtocolVersion, Random, SessionId};
 use crate::buffer::Buf;
 use crate::util::many0;
 use nom::error::{Error, ErrorKind};
@@ -37,6 +39,44 @@ impl<'a> ServerHello<'a> {
             compression_method,
             extensions,
         }
+    }
+
+    /// Add extensions to ServerHello using a builder-style API, mirroring ClientHello::with_extensions
+    ///
+    /// - Uses the provided buffer to stage extension bytes and then stores slice references
+    /// - Includes UseSRTP if a profile is provided
+    /// - Includes Extended Master Secret if the flag is set
+    pub fn with_extensions(
+        mut self,
+        buf: &'a mut Buf<'static>,
+        srtp_profile: Option<SrtpProfileId>,
+    ) -> Self {
+        // Clear the buffer and collect extension byte ranges
+        buf.clear();
+
+        let mut ranges: ArrayVec<[(ExtensionType, usize, usize); 8]> = ArrayVec::new();
+
+        // UseSRTP (if negotiated)
+        if let Some(pid) = srtp_profile {
+            let start = buf.len();
+            let mut profiles = ArrayVec::new();
+            profiles.push(pid);
+            let ext = UseSrtpExtension::new(profiles, Vec::new());
+            ext.serialize(buf);
+            ranges.push((ExtensionType::UseSrtp, start, buf.len()));
+        }
+
+        // Extended Master Secret (mandatory)
+        let start = buf.len();
+        ranges.push((ExtensionType::ExtendedMasterSecret, start, start));
+
+        let mut extensions: ArrayVec<[Extension<'a>; 32]> = ArrayVec::new();
+        for (t, s, e) in ranges {
+            extensions.push(Extension::new(t, &buf[s..e]));
+        }
+        self.extensions = Some(extensions);
+
+        self
     }
 
     pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], ServerHello<'a>> {
