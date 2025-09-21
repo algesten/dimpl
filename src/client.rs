@@ -10,7 +10,7 @@
 // 5. Server sends ChangeCipherSpec, Finished
 // 6. Handshake complete, application data can flow
 //
-// This implementation is a Sans-IO DTLS 1.2 client.
+// This implementation is a Sans-IO DTLS client.
 
 use std::time::Instant;
 
@@ -280,7 +280,7 @@ impl State {
             server_hello.cipher_suite
         );
 
-        // Enforce DTLS1.2 version
+        // Enforce DTLS version
         if server_hello.server_version != ProtocolVersion::DTLS1_2 {
             return Err(Error::SecurityError(format!(
                 "Unsupported DTLS version from server: {:?}",

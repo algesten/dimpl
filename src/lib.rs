@@ -19,8 +19,6 @@ extern crate log;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub mod state;
-
 mod client;
 use client::Client;
 
@@ -146,7 +144,7 @@ impl Dtls {
     }
 }
 
-// This is the full DTLS1.2 flow
+// This is the full DTLS 1.2 handshake flow
 //
 // Client                                               Server
 //

@@ -1,5 +1,4 @@
-//! Cryptographic primitives and helpers used by the DTLS 1.2 engine.
-// Crypto functionality for DTLS 1.2
+//! Cryptographic primitives and helpers used by the DTLS engine.
 
 use std::ops::Deref;
 use std::str;
@@ -50,13 +49,13 @@ use num_bigint::BigUint;
 use rsa::pkcs1v15::{Signature as RsaPkcs1v15Signature, VerifyingKey as RsaPkcs1v15VerifyingKey};
 use rsa::RsaPublicKey;
 
-/// DTLS 1.2 AEAD (AES-GCM) record formatting constants
+/// DTLS AEAD (AES-GCM) record formatting constants
 ///
-/// For GCM ciphers in DTLS 1.2 (RFC 6347 + RFC 5288):
+/// For GCM ciphers in DTLS (RFC 6347 + RFC 5288):
 /// - Each encrypted record fragment starts with an 8-byte explicit nonce
 /// - The GCM authentication tag is 16 bytes and appended to the ciphertext
 /// - The AAD length is the plaintext length (TLSCompressed.length / DTLSCompressed.length)
-/// Explicit nonce length for DTLS 1.2 AEAD records.
+/// Explicit nonce length for DTLS AEAD records.
 ///
 /// The explicit nonce is transmitted with each record.
 pub const DTLS_EXPLICIT_NONCE_LEN: usize = 8;
@@ -66,10 +65,10 @@ pub const DTLS_EXPLICIT_NONCE_LEN: usize = 8;
 pub const GCM_TAG_LEN: usize = 16;
 /// Overhead per AEAD record (explicit nonce + tag).
 ///
-/// This equals 24 bytes for DTLS 1.2 AES-GCM.
+/// This equals 24 bytes for DTLS AES-GCM.
 pub const DTLS_AEAD_OVERHEAD: usize = DTLS_EXPLICIT_NONCE_LEN + GCM_TAG_LEN; // 24
 
-/// Return the AAD length given a plaintext length. For DTLS 1.2 AEAD this is the plaintext length.
+/// Return the AAD length given a plaintext length. For DTLS AEAD this is the plaintext length.
 #[inline]
 #[allow(dead_code)]
 /// Compute AAD length from plaintext length for AEAD records.
@@ -107,7 +106,7 @@ pub enum ParsedKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Fixed IV portion for DTLS 1.2 AEAD.
+/// Fixed IV portion for DTLS AEAD.
 pub struct Iv(pub [u8; 4]);
 impl Iv {
     fn new(iv: &[u8]) -> Self {
@@ -130,7 +129,7 @@ impl Nonce {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Additional Authenticated Data for DTLS 1.2 records.
+/// Additional Authenticated Data for DTLS records.
 pub struct Aad(pub [u8; 13]);
 
 impl Aad {
@@ -281,7 +280,7 @@ pub trait DhDomainParams {
     fn into_p_g(self) -> (Vec<u8>, Vec<u8>);
 }
 
-/// DTLS 1.2 crypto context
+/// DTLS crypto context
 /// Crypto context holding negotiated keys and ciphers for a DTLS session.
 pub struct CryptoContext {
     /// Key exchange mechanism

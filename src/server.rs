@@ -10,7 +10,7 @@
 // 5. Server verifies Finished, then sends ChangeCipherSpec, Finished
 // 6. Handshake complete, application data can flow
 //
-// This implementation mirrors the client structure and ordering for a DTLS 1.2 server.
+// This implementation mirrors the client structure and ordering for a DTLS server.
 
 use std::sync::Arc;
 use std::time::Instant;
