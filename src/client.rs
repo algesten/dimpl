@@ -22,8 +22,8 @@ use crate::engine::Engine;
 use crate::message::{
     Body, CertificateVerify, ClientDiffieHellmanPublic, ClientEcdhKeys, ClientHello,
     ClientKeyExchange, CompressionMethod, ContentType, Cookie, DigitallySigned, ExchangeKeys,
-    ExtensionType, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion,
-    PublicValueEncoding, Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension,
+    ExtensionType, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion, Random, SessionId,
+    SignatureAndHashAlgorithm, UseSrtpExtension,
 };
 use crate::{CertVerifier, CipherSuite, Config, Error, Output, SrtpProfile};
 
@@ -932,14 +932,12 @@ fn handshake_create_client_key_exchange(
         }
         KeyExchangeAlgorithm::EDH => {
             // For DHE, use the standard encoding
-            let dh_public =
-                ClientDiffieHellmanPublic::new(PublicValueEncoding::Explicit, &public_key);
+            let dh_public = ClientDiffieHellmanPublic::new(&public_key);
             ExchangeKeys::DhAnon(dh_public)
         }
         _ => {
             // Create a default format for unknown algorithms
-            let dh_public =
-                ClientDiffieHellmanPublic::new(PublicValueEncoding::Explicit, &public_key);
+            let dh_public = ClientDiffieHellmanPublic::new(&public_key);
             ExchangeKeys::DhAnon(dh_public)
         }
     };

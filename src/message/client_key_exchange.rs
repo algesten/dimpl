@@ -98,10 +98,9 @@ impl<'a> ClientKeyExchange<'a> {
 mod test {
     use super::*;
     use crate::buffer::Buf;
-    use crate::message::{KeyExchangeAlgorithm, PublicValueEncoding};
+    use crate::message::KeyExchangeAlgorithm;
 
     const DH_MESSAGE: &[u8] = &[
-        0x01, // PublicValueEncoding::Explicit
         0x00, 0x04, // Public value length
         0x01, 0x02, 0x03, 0x04, // Public value data
     ];
@@ -113,10 +112,9 @@ mod test {
 
     #[test]
     fn roundtrip_dh() {
-        let encoding = PublicValueEncoding::Explicit;
-        let public_value = &DH_MESSAGE[3..7];
+        let public_value = &DH_MESSAGE[2..6];
 
-        let dh_anon = ClientDiffieHellmanPublic::new(encoding, public_value);
+        let dh_anon = ClientDiffieHellmanPublic::new(public_value);
         let client_key_exchange = ClientKeyExchange::new(ExchangeKeys::DhAnon(dh_anon));
 
         // Serialize and compare to DH_MESSAGE
