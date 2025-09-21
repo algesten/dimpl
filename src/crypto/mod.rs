@@ -109,7 +109,7 @@ impl Nonce {
         let mut nonce = [0u8; 12];
         nonce[..4].copy_from_slice(&iv.0);
         nonce[4..].copy_from_slice(explicit_nonce);
-        Self(nonce.try_into().unwrap())
+        Self(nonce)
     }
 }
 
@@ -713,7 +713,7 @@ impl CryptoContext {
         self.server_write_iv
     }
 
-    pub fn verify_signature<'a>(
+    pub fn verify_signature(
         &self,
         data: &Buf<'static>,
         signature: &DigitallySigned<'_>,

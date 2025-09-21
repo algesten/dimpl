@@ -15,8 +15,8 @@ pub trait Cipher: Send + Sync {
 
 /// AES-GCM implementation with different key sizes
 pub enum AesGcm {
-    Aes128(Aes128Gcm),
-    Aes256(Aes256Gcm),
+    Aes128(Box<Aes128Gcm>),
+    Aes256(Box<Aes256Gcm>),
 }
 
 impl AesGcm {
@@ -26,12 +26,12 @@ impl AesGcm {
             16 => {
                 let cipher = Aes128Gcm::new_from_slice(key)
                     .map_err(|_| "Failed to create AES-128-GCM cipher".to_string())?;
-                Ok(AesGcm::Aes128(cipher))
+                Ok(AesGcm::Aes128(Box::new(cipher)))
             }
             32 => {
                 let cipher = Aes256Gcm::new_from_slice(key)
                     .map_err(|_| "Failed to create AES-256-GCM cipher".to_string())?;
-                Ok(AesGcm::Aes256(cipher))
+                Ok(AesGcm::Aes256(Box::new(cipher)))
             }
             _ => Err(format!("Invalid key size for AES-GCM: {}", key.len())),
         }

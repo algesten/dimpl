@@ -2,6 +2,7 @@
 #![warn(clippy::all)]
 #![allow(clippy::upper_case_acronyms)]
 #![allow(mismatched_lifetime_syntaxes)]
+#![allow(clippy::len_without_is_empty)]
 // #![deny(missing_docs)]
 
 // const MAX_MTU: usize = 2200;

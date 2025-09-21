@@ -436,11 +436,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::ServerHelloDone, |body, _| {
-                // ServerHelloDone has an empty body
-                match body.len() {
-                    _ => {}
-                }
+            .create_handshake(MessageType::ServerHelloDone, |_, _| {
                 Ok(())
             })?;
 
