@@ -227,7 +227,7 @@ impl ToBuf for Vec<u8> {
     }
 }
 
-impl<'a> ToBuf for &'a [u8] {
+impl ToBuf for &[u8] {
     fn to_buf(self) -> Buf<'static> {
         self.to_vec().to_buf()
     }

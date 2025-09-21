@@ -113,7 +113,7 @@ impl Engine {
 
     /// Is the given cipher suite allowed by configuration
     pub fn is_cipher_suite_allowed(&self, suite: CipherSuite) -> bool {
-        self.config.cipher_suites.iter().any(|s| *s == suite)
+        self.config.cipher_suites.contains(&suite)
     }
 
     /// Get a reference to the crypto context
@@ -191,16 +191,14 @@ impl Engine {
                     h.header.message_seq, h.header.fragment_offset
                 );
             }
+        } else if let Err(index) = self
+            .queue_rx
+            .binary_search_by_key(&first.record().sequence, |i| i.first().record().sequence)
+        {
+            // Insert in order of sequence_number
+            self.queue_rx.insert(index, incoming);
         } else {
-            if let Err(index) = self
-                .queue_rx
-                .binary_search_by_key(&first.record().sequence, |i| i.first().record().sequence)
-            {
-                // Insert in order of sequence_number
-                self.queue_rx.insert(index, incoming);
-            } else {
-                debug!("Dupe record with sequence: {}", first.record().sequence);
-            }
+            debug!("Dupe record with sequence: {}", first.record().sequence);
         }
 
         Ok(())
@@ -325,8 +323,7 @@ impl Engine {
         let record = self
             .queue_rx
             .iter()
-            .map(|i| i.records().iter())
-            .flatten()
+            .flat_map(|i| i.records().iter())
             .find(|r| !r.is_handled())?;
 
         if record.record().content_type != ctype {
@@ -481,7 +478,7 @@ impl Engine {
         self.next_handshake_seq_no += 1;
 
         // Now create the record with the serialized handshake
-        let rec = self.create_record(ContentType::Handshake, |fragment| {
+        self.create_record(ContentType::Handshake, |fragment| {
             handshake.serialize(fragment);
             Some(msg_type)
         })?;
@@ -489,7 +486,7 @@ impl Engine {
         // Return the buffer
         self.buffers_free.push(body_buffer);
 
-        Ok(rec)
+        Ok(())
     }
 
     /// Process application data packets from the incoming queue

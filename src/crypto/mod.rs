@@ -802,7 +802,7 @@ impl CryptoContext {
                         .map_err(|e| format!("Invalid ECDSA P-256 signature DER: {e}"))?;
 
                     return vk
-                        .verify(&**data, &sig)
+                        .verify(data, &sig)
                         .map_err(|_| "ECDSA P-256 signature verification failed".to_string());
                 }
 
@@ -816,7 +816,7 @@ impl CryptoContext {
                     let sig = p384::ecdsa::Signature::from_der(signature.signature)
                         .map_err(|e| format!("Invalid ECDSA P-384 signature DER: {e}"))?;
                     return vk
-                        .verify(&**data, &sig)
+                        .verify(data, &sig)
                         .map_err(|_| "ECDSA P-384 signature verification failed".to_string());
                 }
 

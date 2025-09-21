@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-// #![warn(clippy::all)]
+#![warn(clippy::all)]
 #![allow(clippy::upper_case_acronyms)]
 #![allow(mismatched_lifetime_syntaxes)]
 // #![deny(missing_docs)]

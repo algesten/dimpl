@@ -69,7 +69,7 @@ impl Incoming {
 
         // håll i hatten
         let inner = Inner::try_new(into, |data| {
-            Ok::<_, Error>(Records::parse(data.borrow_mut(), engine)?)
+            Records::parse(data.borrow_mut(), engine)
         })?;
 
         Ok(Incoming(inner))
@@ -121,7 +121,7 @@ impl<'a> Record<'a> {
     /// The first parse pass only parses the DTLSRecord header which is unencrypted.
     pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Option<Record<'a>>, Error> {
         let inner = RecordInner::try_new(input, |borrowed| {
-            Ok::<_, Error>(ParsedRecord::parse(&borrowed, engine)?)
+            ParsedRecord::parse(borrowed, engine)
         })?;
 
         let record = Record(inner);
@@ -167,7 +167,7 @@ impl<'a> Record<'a> {
         input.copy_within(CIPH..(CIPH + new_len), DTLSRecord::HEADER_LEN);
 
         let inner = RecordInner::try_new(input, |borrowed| {
-            Ok::<_, Error>(ParsedRecord::parse(&borrowed, engine)?)
+            ParsedRecord::parse(borrowed, engine)
         })?;
 
         Ok(Some(Record(inner)))

@@ -234,9 +234,7 @@ impl State {
 
         // Enforce Null compression only (client must offer it)
         let has_null = ch
-            .compression_methods
-            .iter()
-            .any(|m| *m == CompressionMethod::Null);
+            .compression_methods.contains(&CompressionMethod::Null);
         if !has_null {
             return Err(Error::SecurityError(
                 "Client did not offer Null compression".to_string(),
@@ -717,7 +715,7 @@ impl State {
 
 fn compute_cookie(secret: &[u8], client_random: Random) -> Result<Cookie, Error> {
     // cookie = trunc_32(HMAC(secret, client_random))
-    let mut mac = HmacSha256::new_from_slice(&secret)
+    let mut mac = HmacSha256::new_from_slice(secret)
         .map_err(|_| Error::CryptoError("Invalid HMAC key".to_string()))?;
     let mut buf = Buf::new();
     client_random.serialize(&mut buf);
@@ -733,7 +731,7 @@ fn verify_cookie(secret: &[u8], client_random: Random, cookie: Cookie) -> bool {
         return false;
     }
     match compute_cookie(secret, client_random) {
-        Ok(expected) => &*expected == &*cookie,
+        Ok(expected) => *expected == *cookie,
         Err(_) => false,
     }
 }
@@ -873,7 +871,7 @@ fn handshake_create_server_key_exchange(
             Ok(())
         }
         _ => {
-            return Err(Error::SecurityError(
+            Err(Error::SecurityError(
                 "Unsupported key exchange algorithm".to_string(),
             ))
         }

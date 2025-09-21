@@ -229,7 +229,7 @@ impl State {
                 )
             })?;
 
-        let can_hello_verify = !client.cookie.is_some();
+        let can_hello_verify = client.cookie.is_none();
 
         if can_hello_verify {
             Ok(Self::AwaitHelloVerifyRequest)
@@ -279,7 +279,7 @@ impl State {
         client.cookie = Some(h.cookie);
 
         // Redo ClientHello, now with cookie.
-        return Ok(Self::SendClientHello);
+        Ok(Self::SendClientHello)
     }
 
     fn await_server_hello(self, client: &mut Client) -> Result<Self, Error> {
@@ -453,9 +453,7 @@ impl State {
             .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
 
         // Ensure the server's (hash, signature) pair was offered by the client
-        let offered = SignatureAndHashAlgorithm::supported()
-            .iter()
-            .any(|alg| *alg == d_signed.algorithm);
+        let offered = SignatureAndHashAlgorithm::supported().contains(&d_signed.algorithm);
         if !offered {
             return Err(Error::CryptoError(
                 "Signature algorithm not offered by client".to_string(),
