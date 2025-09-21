@@ -844,8 +844,11 @@ fn handshake_create_client_hello(
     let cipher_suites: ArrayVec<[CipherSuite; 32]> = compatible_suites
         .iter()
         .copied()
-        .filter(|suite| engine.is_cipher_suite_allowed(*suite))
-        .filter(|suite| engine.crypto_context().is_cipher_suite_compatible(*suite))
+        .filter(|suite| {
+            let is_allowed = engine.is_cipher_suite_allowed(*suite);
+            let is_compatible = engine.crypto_context().is_cipher_suite_compatible(*suite);
+            is_allowed && is_compatible
+        })
         .take(32)
         .collect();
 

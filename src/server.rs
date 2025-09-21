@@ -38,6 +38,9 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// DTLS server
 pub struct Server {
+    /// Current server state.
+    state: State,
+
     /// Random unique data (with gmt timestamp). Used for signature checks.
     random: Random,
 
@@ -49,9 +52,6 @@ pub struct Server {
 
     /// The negotiated SRTP profile (if any)
     negotiated_srtp_profile: Option<SrtpProfile>,
-
-    /// Current server state.
-    state: ServerState,
 
     /// Engine in common between server and client.
     engine: Engine,
@@ -74,18 +74,21 @@ pub struct Server {
 
 /// Current state of the server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServerState {
-    /// Await a ClientHello (with or without cookie)
+enum State {
     AwaitClientHello,
-
-    /// Send the ServerHello flight (ServerHello..ServerHelloDone)
-    SendServerHelloFlight,
-
-    /// Await client flight up to Finished
-    AwaitClientFinished,
-
-    /// Send and receive encrypted data.
-    Running,
+    SendServerHello,
+    SendCertificate,
+    SendServerKeyExchange,
+    SendCertificateRequest,
+    SendServerHelloDone,
+    AwaitCertificate,
+    AwaitClientKeyExchange,
+    AwaitCertificateVerify,
+    AwaitChangeCipherSpec,
+    AwaitFinished,
+    SendChangeCipherSpec,
+    SendFinished,
+    AwaitApplicationData,
 }
 
 impl Server {
@@ -103,11 +106,11 @@ impl Server {
         OsRng.fill_bytes(&mut cookie_secret);
 
         Server {
+            state: State::AwaitClientHello,
             random: Random::new(now),
             session_id: None,
             extension_data: Buf::new(),
             negotiated_srtp_profile: None,
-            state: ServerState::AwaitClientHello,
             engine,
             client_random: None,
             client_certificates: Vec::with_capacity(3),
@@ -119,7 +122,7 @@ impl Server {
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         self.engine.parse_packet(packet)?;
-        self.process_input()?;
+        self.make_progress()?;
         Ok(())
     }
 
@@ -128,178 +131,186 @@ impl Server {
     }
 
     pub fn handle_timeout(&mut self, _now: Instant) -> Result<(), Error> {
-        // Server is purely reactive; nothing to do on timeout here.
+        self.make_progress()?;
         Ok(())
     }
 
-    fn process_input(&mut self) -> Result<(), Error> {
+    /// Send application data when the server is in the Running state
+    pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
+        if self.state != State::AwaitApplicationData {
+            return Err(Error::UnexpectedMessage("Server not connected".to_string()));
+        }
+
+        // Use the engine's create_record to send application data
+        // The encryption is now handled in the engine
+        self.engine
+            .create_record(ContentType::ApplicationData, |body| {
+                body.extend_from_slice(data);
+                None
+            })?;
+
+        Ok(())
+    }
+
+    fn make_progress(&mut self) -> Result<(), Error> {
         loop {
             let prev_state = self.state;
-            self.do_process_input()?;
-            if prev_state == self.state {
+
+            let new_state = prev_state.make_progress(self)?;
+            if prev_state != new_state {
+                self.state = new_state;
+                trace!("{:?} -> {:?}", prev_state, new_state);
+            } else {
                 break;
             }
         }
         Ok(())
     }
+}
 
-    fn do_process_input(&mut self) -> Result<(), Error> {
-        match self.state {
-            ServerState::AwaitClientHello => self.process_client_hello(),
-            ServerState::SendServerHelloFlight => {
-                self.send_server_hello_flight()?;
-                self.state = ServerState::AwaitClientFinished;
-                Ok(())
-            }
-            ServerState::AwaitClientFinished => self.process_client_finished(),
-            ServerState::Running => {
-                self.engine.process_application_data()?;
-                Ok(())
-            }
+impl State {
+    fn make_progress(self, server: &mut Server) -> Result<Self, Error> {
+        match self {
+            State::AwaitClientHello => self.await_client_hello(server),
+            State::SendServerHello => self.send_server_hello(server),
+            State::SendCertificate => self.send_certificate(server),
+            State::SendServerKeyExchange => self.send_server_key_exchange(server),
+            State::SendCertificateRequest => self.send_certificate_request(server),
+            State::SendServerHelloDone => self.send_server_hello_done(server),
+            State::AwaitCertificate => self.await_certificate(server),
+            State::AwaitClientKeyExchange => self.await_client_key_exchange(server),
+            State::AwaitCertificateVerify => self.await_certificate_verify(server),
+            State::AwaitChangeCipherSpec => self.await_change_cipher_spec(server),
+            State::AwaitFinished => self.await_finished(server),
+            State::SendChangeCipherSpec => self.send_change_cipher_spec(server),
+            State::SendFinished => self.send_finished(server),
+            State::AwaitApplicationData => self.await_application_data(server),
         }
     }
 
-    fn process_client_hello(&mut self) -> Result<(), Error> {
-        // We expect a ClientHello flight (single message)
-        let Some(mut flight) = self.engine.has_complete_handshake(MessageType::ClientHello) else {
-            return Ok(());
+    fn await_client_hello(self, server: &mut Server) -> Result<Self, Error> {
+        let maybe = server
+            .engine
+            .next_handshake(MessageType::ClientHello, &mut server.defragment_buffer)?;
+
+        let Some(handshake) = maybe else {
+            // Stay in same state
+            return Ok(self);
         };
 
-        while let Some(handshake) = self
-            .engine
-            .next_handshake(&mut flight, &mut self.defragment_buffer)?
-        {
-            if !matches!(handshake.header.msg_type, MessageType::ClientHello) {
-                return Err(Error::UnexpectedMessage(format!(
-                    "Unexpected message type: {:?}",
-                    handshake.header.msg_type
-                )));
+        let Body::ClientHello(ch) = &handshake.body else {
+            unreachable!()
+        };
+
+        // Enforce DTLS1.2
+        if ch.client_version != ProtocolVersion::DTLS1_2 {
+            return Err(Error::SecurityError(format!(
+                "Unsupported DTLS version from client: {:?}",
+                ch.client_version
+            )));
+        }
+
+        // Enforce Null compression only (client must offer it)
+        let has_null = ch
+            .compression_methods
+            .iter()
+            .any(|m| *m == CompressionMethod::Null);
+        if !has_null {
+            return Err(Error::SecurityError(
+                "Client did not offer Null compression".to_string(),
+            ));
+        }
+
+        // Stateless cookie: require 32-byte cookie matching HMAC(secret, client_random)
+        let client_random = ch.random;
+        if !verify_cookie(&server.cookie_secret, client_random, ch.cookie) {
+            debug!("Invalid/missing cookie; sending HelloVerifyRequest");
+
+            let cookie = compute_cookie(&server.cookie_secret, client_random)?;
+            server
+                .engine
+                .create_handshake(MessageType::HelloVerifyRequest, |body, _engine| {
+                    let hvr = HelloVerifyRequest::new(ProtocolVersion::DTLS1_2, cookie);
+                    hvr.serialize(body);
+                    Ok(())
+                })?;
+
+            // After HelloVerifyRequest, await a new ClientHello
+            return Ok(self);
+        }
+
+        // Client offered suites; we pick per client order intersecting allowed and server key compatibility
+        let mut selected: Option<CipherSuite> = None;
+        for s in ch.cipher_suites.iter() {
+            let is_allowed = server.engine.is_cipher_suite_allowed(*s);
+            let is_compatible = server.engine.crypto_context().is_cipher_suite_compatible(*s);
+            if is_allowed && is_compatible {
+                selected = Some(*s);
+                break;
             }
+        }
 
-            let Body::ClientHello(ch) = &handshake.body else {
-                return Err(Error::UnexpectedMessage(
-                    "ClientHello parse error".to_string(),
-                ));
-            };
+        let Some(cs) = selected else {
+            return Err(Error::SecurityError(
+                "No mutually acceptable cipher suite".to_string(),
+            ));
+        };
 
-            // Enforce DTLS1.2
-            if ch.client_version != ProtocolVersion::DTLS1_2 {
-                return Err(Error::SecurityError(format!(
-                    "Unsupported DTLS version from client: {:?}",
-                    ch.client_version
-                )));
+        server.engine.set_cipher_suite(cs);
+        server.client_random = Some(client_random);
+
+        // Process client extensions: SRTP and EMS
+        let mut client_offers_ems = false;
+        let mut client_srtp_profiles: Option<ArrayVec<[SrtpProfileId; 32]>> = None;
+        for ext in &ch.extensions {
+            match ext.extension_type {
+                ExtensionType::UseSrtp => {
+                    if let Ok((_, use_srtp)) = UseSrtpExtension::parse(ext.extension_data) {
+                        client_srtp_profiles = Some(use_srtp.profiles.clone());
+                    }
+                }
+                ExtensionType::ExtendedMasterSecret => {
+                    client_offers_ems = true;
+                }
+                _ => {}
             }
+        }
 
-            // Enforce Null compression only (client must offer it)
-            if !ch
-                .compression_methods
-                .iter()
-                .any(|m| *m == CompressionMethod::Null)
-            {
-                return Err(Error::SecurityError(
-                    "Client did not offer Null compression".to_string(),
-                ));
-            }
+        // EMS is mandatory
+        if !client_offers_ems {
+            return Err(Error::SecurityError(
+                "Extended Master Secret not negotiated".to_string(),
+            ));
+        }
 
-            // Stateless cookie: require 32-byte cookie matching HMAC(secret, client_random)
-            let client_random = ch.random;
-            if !verify_cookie(&self.cookie_secret, client_random, ch.cookie) {
-                debug!("Invalid/missing cookie; sending HelloVerifyRequest");
-                self.send_hello_verify_request(client_random)?;
-                // After HelloVerifyRequest, await a new ClientHello
-                return Ok(());
-            }
-
-            // Client offered suites; we pick per client order intersecting allowed and server key compatibility
-            let mut selected: Option<CipherSuite> = None;
-            for s in ch.cipher_suites.iter() {
-                if self.engine.is_cipher_suite_allowed(*s)
-                    && self.engine.crypto_context().is_cipher_suite_compatible(*s)
-                {
-                    selected = Some(*s);
+        // Select SRTP profile according to server priority: GCM first, then SHA1
+        if let Some(profiles) = client_srtp_profiles {
+            // Map client profile ids to SrtpProfile, then pick our preferred
+            let mut selected_profile: Option<SrtpProfile> = None;
+            for preferred in [SrtpProfile::AeadAes128Gcm, SrtpProfile::Aes128CmSha1_80] {
+                if profiles.iter().any(|pid| preferred == (*pid).into()) {
+                    selected_profile = Some(preferred);
                     break;
                 }
             }
-
-            let Some(cs) = selected else {
-                return Err(Error::SecurityError(
-                    "No mutually acceptable cipher suite".to_string(),
-                ));
-            };
-
-            self.engine.set_cipher_suite(cs);
-            self.client_random = Some(client_random);
-
-            // Process client extensions: SRTP and EMS
-            let mut client_offers_ems = false;
-            let mut client_srtp_profiles: Option<ArrayVec<[SrtpProfileId; 32]>> = None;
-            for ext in &ch.extensions {
-                match ext.extension_type {
-                    ExtensionType::UseSrtp => {
-                        if let Ok((_, use_srtp)) = UseSrtpExtension::parse(ext.extension_data) {
-                            client_srtp_profiles = Some(use_srtp.profiles.clone());
-                        }
-                    }
-                    ExtensionType::ExtendedMasterSecret => {
-                        client_offers_ems = true;
-                    }
-                    _ => {}
-                }
-            }
-
-            // EMS is mandatory
-            if !client_offers_ems {
-                return Err(Error::SecurityError(
-                    "Extended Master Secret not negotiated".to_string(),
-                ));
-            }
-
-            // Select SRTP profile according to server priority: GCM first, then SHA1
-            if let Some(profiles) = client_srtp_profiles {
-                // Map client profile ids to SrtpProfile, then pick our preferred
-                let mut selected_profile: Option<SrtpProfile> = None;
-                for preferred in [SrtpProfile::AeadAes128Gcm, SrtpProfile::Aes128CmSha1_80] {
-                    if profiles.iter().any(|pid| preferred == (*pid).into()) {
-                        selected_profile = Some(preferred);
-                        break;
-                    }
-                }
-                self.negotiated_srtp_profile = selected_profile;
-            }
-
-            // Proceed to send the server flight
-            self.state = ServerState::SendServerHelloFlight;
+            server.negotiated_srtp_profile = selected_profile;
         }
 
-        Ok(())
+        // Proceed to send the server flight
+        Ok(Self::SendServerHello)
     }
 
-    fn send_hello_verify_request(&mut self, client_random: Random) -> Result<(), Error> {
-        let cookie = compute_cookie(&self.cookie_secret, client_random)?;
-        self.engine
-            .create_handshake(MessageType::HelloVerifyRequest, |body, _engine| {
-                let hvr = HelloVerifyRequest::new(ProtocolVersion::DTLS1_2, cookie);
-                hvr.serialize(body);
-                Ok(())
-            })?;
-        Ok(())
-    }
+    fn send_server_hello(self, server: &mut Server) -> Result<Self, Error> {
+        debug!("Sending ServerHello");
 
-    fn send_server_hello_flight(&mut self) -> Result<(), Error> {
-        debug!("Sending ServerHello flight");
-
-        let session_id = self.session_id.unwrap_or_else(SessionId::empty);
-        let server_random = self.random;
-
-        let client_random = self
-            .client_random
-            .ok_or_else(|| Error::UnexpectedMessage("No client random".to_string()))?;
-        let negotiated_srtp_profile = self.negotiated_srtp_profile;
-
-        let extension_data = &mut self.extension_data;
+        let session_id = server.session_id.unwrap_or_else(SessionId::empty);
+        let server_random = server.random;
+        let negotiated_srtp_profile = server.negotiated_srtp_profile;
+        let extension_data = &mut server.extension_data;
 
         // Send ServerHello
-        self.engine
+        server
+            .engine
             .create_handshake(MessageType::ServerHello, move |body, engine| {
                 handshake_create_server_hello(
                     body,
@@ -311,24 +322,52 @@ impl Server {
                 )
             })?;
 
-        // Send Certificate
-        self.engine
+        Ok(Self::SendCertificate)
+    }
+
+    fn send_certificate(self, server: &mut Server) -> Result<Self, Error> {
+        debug!("Sending Certificate");
+
+        server
+            .engine
             .create_handshake(MessageType::Certificate, handshake_create_certificate)?;
 
-        // Send ServerKeyExchange
-        self.engine
+        Ok(Self::SendServerKeyExchange)
+    }
+
+    fn send_server_key_exchange(self, server: &mut Server) -> Result<Self, Error> {
+        debug!("Sending ServerKeyExchange");
+
+        let client_random = server
+            .client_random
+            .ok_or_else(|| Error::UnexpectedMessage("No client random".to_string()))?;
+        let server_random = server.random;
+
+        server
+            .engine
             .create_handshake(MessageType::ServerKeyExchange, |body, engine| {
                 handshake_create_server_key_exchange(body, engine, client_random, server_random)
             })?;
 
-        // Send CertificateRequest (always request)
-        self.engine.create_handshake(
+        Ok(Self::SendCertificateRequest)
+    }
+
+    fn send_certificate_request(self, server: &mut Server) -> Result<Self, Error> {
+        debug!("Sending CertificateRequest");
+
+        server.engine.create_handshake(
             MessageType::CertificateRequest,
             handshake_create_certificate_request,
         )?;
 
-        // Send ServerHelloDone
-        self.engine
+        Ok(Self::SendServerHelloDone)
+    }
+
+    fn send_server_hello_done(self, server: &mut Server) -> Result<Self, Error> {
+        debug!("Sending ServerHelloDone");
+
+        server
+            .engine
             .create_handshake(MessageType::ServerHelloDone, |body, _| {
                 // ServerHelloDone has an empty body
                 match body.len() {
@@ -337,241 +376,281 @@ impl Server {
                 Ok(())
             })?;
 
-        Ok(())
+        Ok(Self::AwaitCertificate)
     }
 
-    fn process_client_finished(&mut self) -> Result<(), Error> {
-        // We expect a client flight up to Finished
-        let Some(mut flight) = self.engine.has_complete_handshake(MessageType::Finished) else {
-            return Ok(());
-        };
-
-        let mut state = ServerHandshakeState::AwaitingClientMessages;
-
-        while let Some(handshake) = self
+    fn await_certificate(self, server: &mut Server) -> Result<Self, Error> {
+        let has_ckx = server
             .engine
-            .next_handshake(&mut flight, &mut self.defragment_buffer)?
-        {
-            state = state.handle(handshake.header.msg_type)?;
+            .has_complete_handshake(MessageType::ClientKeyExchange);
 
-            match handshake.header.msg_type {
-                MessageType::Certificate => {
-                    let Body::Certificate(certificate) = &handshake.body else {
-                        return Ok(());
-                    };
-
-                    if certificate.certificate_list.is_empty() {
-                        // Client didn't provide a certificate (allowed), skip
-                    } else {
-                        // Store and verify via callback
-                        for (i, cert) in certificate.certificate_list.iter().enumerate() {
-                            let cert_data = cert.0.to_vec();
-                            trace!(
-                                "Client Certificate #{} size: {} bytes",
-                                i + 1,
-                                cert_data.len()
-                            );
-                            self.client_certificates.push(cert_data.to_buf());
-                        }
-
-                        // Verify leaf certificate
-                        if let Err(err) = self
-                            .engine
-                            .crypto_context()
-                            .verify_server_certificate(&self.client_certificates[0])
-                        {
-                            return Err(Error::CertificateError(format!(
-                                "Certificate verification failed: {}",
-                                err
-                            )));
-                        }
-                        self.engine
-                            .push_peer_cert(self.client_certificates[0].to_vec());
-                    }
-                }
-
-                MessageType::ClientKeyExchange => {
-                    let Body::ClientKeyExchange(ckx) = &handshake.body else {
-                        return Ok(());
-                    };
-
-                    let suite = self.engine.cipher_suite().ok_or_else(|| {
-                        Error::UnexpectedMessage("No cipher suite selected".to_string())
-                    })?;
-
-                    // Extract client's public key depending on KE
-                    let client_pub = match &ckx.exchange_keys {
-                        ExchangeKeys::Ecdh(ClientEcdhKeys { public_key, .. }) => {
-                            public_key.to_vec()
-                        }
-                        ExchangeKeys::DhAnon(dh) => dh.public_value.to_vec(),
-                    };
-
-                    // Compute shared secret
-                    self.engine
-                        .crypto_context_mut()
-                        .compute_shared_secret(&client_pub)
-                        .map_err(|e| {
-                            Error::CryptoError(format!("Failed to compute shared secret: {}", e))
-                        })?;
-
-                    // Capture session hash for EMS now (up to ClientKeyExchange)
-                    let suite_hash = suite.hash_algorithm();
-                    self.captured_session_hash = Some(self.engine.handshake_hash(suite_hash));
-
-                    // Derive master secret and keys (needed to decrypt client's Finished)
-                    let suite_hash = suite.hash_algorithm();
-                    let client_random_buf = {
-                        let mut b = Buf::new();
-                        self.client_random.unwrap().serialize(&mut b);
-                        b.into_vec()
-                    };
-                    let server_random_buf = {
-                        let mut b = Buf::new();
-                        self.random.serialize(&mut b);
-                        b.into_vec()
-                    };
-
-                    let session_hash = self.captured_session_hash.as_ref().ok_or_else(|| {
-                        Error::CryptoError(
-                            "Extended Master Secret negotiated but session hash not captured"
-                                .to_string(),
-                        )
-                    })?;
-
-                    self.engine
-                        .crypto_context_mut()
-                        .derive_extended_master_secret(session_hash, suite_hash)
-                        .map_err(|e| {
-                            Error::CryptoError(format!(
-                                "Failed to derive extended master secret: {}",
-                                e
-                            ))
-                        })?;
-
-                    self.engine
-                        .crypto_context_mut()
-                        .derive_keys(suite, &client_random_buf, &server_random_buf)
-                        .map_err(|e| Error::CryptoError(format!("Failed to derive keys: {}", e)))?;
-                }
-
-                MessageType::CertificateVerify => {
-                    // Verify client's signature over the handshake transcript
-                    let Body::CertificateVerify(cv) = &handshake.body else {
-                        return Ok(());
-                    };
-
-                    if self.client_certificates.is_empty() {
-                        return Err(Error::CertificateError(
-                            "CertificateVerify received but no client certificate".to_string(),
-                        ));
-                    }
-
-                    let data = self.engine.handshake_data().to_buf();
-                    self.engine
-                        .crypto_context()
-                        .verify_signature(&data, &cv.signed, &self.client_certificates[0])
-                        .map_err(|e| {
-                            Error::CryptoError(format!(
-                                "Failed to verify client CertificateVerify: {}",
-                                e
-                            ))
-                        })?;
-                }
-
-                MessageType::Finished => {
-                    // Verify client's Finished
-                    let Body::Finished(finished) = &handshake.body else {
-                        return Ok(());
-                    };
-
-                    let expected = self.engine.generate_verify_data(true /* client */)?;
-                    if finished.verify_data != expected {
-                        return Err(Error::SecurityError(
-                            "Client Finished verification failed".to_string(),
-                        ));
-                    }
-
-                    debug!("Client Finished verified successfully");
-
-                    // Now send our ChangeCipherSpec and Finished
-                    self.send_server_ccs_and_finished()?;
-
-                    // Handshake complete
-                    self.state = ServerState::Running;
-                    self.engine.push_connected();
-
-                    // Emit SRTP keying material if negotiated
-                    if let Some(profile) = self.negotiated_srtp_profile {
-                        let suite_hash = self.engine.cipher_suite().unwrap().hash_algorithm();
-                        if let Ok(keying_material) = self
-                            .engine
-                            .crypto_context()
-                            .extract_srtp_keying_material(profile, suite_hash)
-                        {
-                            debug!(
-                                "SRTP keying material extracted ({} bytes) for profile: {:?}",
-                                keying_material.len(),
-                                profile
-                            );
-                            self.engine.push_keying_material(keying_material, profile);
-                        }
-                    }
-                }
-
-                other => {
-                    // ChangeCipherSpec is handled at record layer; ignore here
-                    if other != MessageType::HelloVerifyRequest
-                        && other != MessageType::ServerHello
-                        && other != MessageType::ServerKeyExchange
-                        && other != MessageType::ServerHelloDone
-                    {
-                        debug!("Unexpected handshake message from client: {:?}", other);
-                    }
-                }
-            }
+        if has_ckx {
+            return Ok(Self::AwaitClientKeyExchange);
         }
 
-        Ok(())
+        let maybe = server
+            .engine
+            .next_handshake(MessageType::Certificate, &mut server.defragment_buffer)?;
+
+        let Some(handshake) = maybe else {
+            // Stay in same state
+            return Ok(self);
+        };
+
+        let Body::Certificate(certificate) = &handshake.body else {
+            unreachable!()
+        };
+
+        if certificate.certificate_list.is_empty() {
+            // Client didn't provide a certificate (allowed), skip
+        } else {
+            // Store and verify via callback
+            for (i, cert) in certificate.certificate_list.iter().enumerate() {
+                let cert_data = cert.0.to_vec();
+                trace!(
+                    "Client Certificate #{} size: {} bytes",
+                    i + 1,
+                    cert_data.len()
+                );
+                server.client_certificates.push(cert_data.to_buf());
+            }
+
+            // Verify leaf certificate
+            if let Err(err) = server
+                .engine
+                .crypto_context()
+                .verify_server_certificate(&server.client_certificates[0])
+            {
+                return Err(Error::CertificateError(format!(
+                    "Certificate verification failed: {}",
+                    err
+                )));
+            }
+            server
+                .engine
+                .push_peer_cert(server.client_certificates[0].to_vec());
+        }
+
+        Ok(Self::AwaitClientKeyExchange)
     }
 
-    fn send_server_ccs_and_finished(&mut self) -> Result<(), Error> {
+    fn await_client_key_exchange(self, server: &mut Server) -> Result<Self, Error> {
+        let maybe = server.engine.next_handshake(
+            MessageType::ClientKeyExchange,
+            &mut server.defragment_buffer,
+        )?;
+
+        let Some(handshake) = maybe else {
+            // Stay in same state
+            return Ok(self);
+        };
+
+        let Body::ClientKeyExchange(ckx) = &handshake.body else {
+            unreachable!()
+        };
+
+        let suite = server
+            .engine
+            .cipher_suite()
+            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+
+        // Extract client's public key depending on KE
+        let client_pub = match &ckx.exchange_keys {
+            ExchangeKeys::Ecdh(ClientEcdhKeys { public_key, .. }) => public_key.to_vec(),
+            ExchangeKeys::DhAnon(dh) => dh.public_value.to_vec(),
+        };
+
+        // Compute shared secret
+        server
+            .engine
+            .crypto_context_mut()
+            .compute_shared_secret(&client_pub)
+            .map_err(|e| Error::CryptoError(format!("Failed to compute shared secret: {}", e)))?;
+
+        // Capture session hash for EMS now (up to ClientKeyExchange)
+        let suite_hash = suite.hash_algorithm();
+        server.captured_session_hash = Some(server.engine.handshake_hash(suite_hash));
+
+        // Derive master secret and keys (needed to decrypt client's Finished)
+        let suite_hash = suite.hash_algorithm();
+        let client_random_buf = {
+            let mut b = Buf::new();
+            server.client_random.unwrap().serialize(&mut b);
+            b.into_vec()
+        };
+        let server_random_buf = {
+            let mut b = Buf::new();
+            server.random.serialize(&mut b);
+            b.into_vec()
+        };
+
+        let session_hash = server.captured_session_hash.as_ref().ok_or_else(|| {
+            Error::CryptoError(
+                "Extended Master Secret negotiated but session hash not captured".to_string(),
+            )
+        })?;
+
+        server
+            .engine
+            .crypto_context_mut()
+            .derive_extended_master_secret(session_hash, suite_hash)
+            .map_err(|e| {
+                Error::CryptoError(format!("Failed to derive extended master secret: {}", e))
+            })?;
+
+        server
+            .engine
+            .crypto_context_mut()
+            .derive_keys(suite, &client_random_buf, &server_random_buf)
+            .map_err(|e| Error::CryptoError(format!("Failed to derive keys: {}", e)))?;
+
+        if !server.client_certificates.is_empty() {
+            Ok(Self::AwaitCertificateVerify)
+        } else {
+            Ok(Self::AwaitChangeCipherSpec)
+        }
+    }
+
+    fn await_certificate_verify(self, server: &mut Server) -> Result<Self, Error> {
+        // Check if we have ChangeCipherSpec instead of CertificateVerify
+        let has_ccs = server.engine.next_record(ContentType::ChangeCipherSpec);
+        if has_ccs.is_some() {
+            // Enable peer encryption right away and proceed to finished
+            server.engine.enable_peer_encryption()?;
+            return Ok(Self::AwaitFinished);
+        }
+
+        let maybe = server.engine.next_handshake(
+            MessageType::CertificateVerify,
+            &mut server.defragment_buffer,
+        )?;
+
+        let Some(handshake) = maybe else {
+            // Stay in same state
+            return Ok(self);
+        };
+
+        let Body::CertificateVerify(cv) = &handshake.body else {
+            unreachable!()
+        };
+
+        if server.client_certificates.is_empty() {
+            return Err(Error::CertificateError(
+                "CertificateVerify received but no client certificate".to_string(),
+            ));
+        }
+
+        let data = server.engine.handshake_data().to_buf();
+        server
+            .engine
+            .crypto_context()
+            .verify_signature(&data, &cv.signed, &server.client_certificates[0])
+            .map_err(|e| {
+                Error::CryptoError(format!("Failed to verify client CertificateVerify: {}", e))
+            })?;
+
+        Ok(Self::AwaitChangeCipherSpec)
+    }
+
+    fn await_change_cipher_spec(self, server: &mut Server) -> Result<Self, Error> {
+        let maybe = server.engine.next_record(ContentType::ChangeCipherSpec);
+
+        let Some(_) = maybe else {
+            // Stay in same state
+            return Ok(self);
+        };
+
+        // Expect every record to be decrypted from now on.
+        server.engine.enable_peer_encryption()?;
+
+        Ok(Self::AwaitFinished)
+    }
+
+    fn await_finished(self, server: &mut Server) -> Result<Self, Error> {
+        // Generate expected verify data based on current transcript.
+        // This must be done before next_handshake() below since
+        // it should not include Finished itself.
+        let expected = server.engine.generate_verify_data(true /* client */)?;
+
+        let maybe = server
+            .engine
+            .next_handshake(MessageType::Finished, &mut server.defragment_buffer)?;
+
+        let Some(handshake) = maybe else {
+            // stay in same state
+            return Ok(self);
+        };
+
+        let Body::Finished(finished) = &handshake.body else {
+            panic!("Finished message should have been parsed");
+        };
+
+        if finished.verify_data != expected {
+            return Err(Error::SecurityError(
+                "Client Finished verification failed".to_string(),
+            ));
+        }
+
+        debug!("Client Finished verified successfully");
+
+        Ok(Self::SendChangeCipherSpec)
+    }
+
+    fn send_change_cipher_spec(self, server: &mut Server) -> Result<Self, Error> {
+        debug!("Sending ChangeCipherSpec");
+
         // Send ChangeCipherSpec
-        self.engine
+        server
+            .engine
             .create_record(ContentType::ChangeCipherSpec, |body| {
                 body.push(1);
                 None
             })?;
-        self.engine.enable_server_encryption();
+        server.engine.enable_server_encryption();
 
-        // Send Finished
-        self.engine
+        Ok(Self::SendFinished)
+    }
+
+    fn send_finished(self, server: &mut Server) -> Result<Self, Error> {
+        debug!("Sending Finished message to complete handshake");
+
+        server
+            .engine
             .create_handshake(MessageType::Finished, |body, engine| {
                 let verify_data = engine.generate_verify_data(false /* server */)?;
                 let finished = Finished::new(&verify_data);
                 finished.serialize(body);
                 Ok(())
             })?;
-        Ok(())
-    }
 
-    /// Send application data when the server is in the Running state
-    pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
-        if !matches!(self.state, ServerState::Running) {
-            debug!(
-                "Attempted to send application data while not in Running state: {:?}",
-                self.state
-            );
-            return Err(Error::UnexpectedMessage("Not in Running state".to_string()));
+        // Handshake complete
+        server.engine.push_connected();
+
+        // Emit SRTP keying material if negotiated
+        if let Some(profile) = server.negotiated_srtp_profile {
+            let suite_hash = server.engine.cipher_suite().unwrap().hash_algorithm();
+            if let Ok(keying_material) = server
+                .engine
+                .crypto_context()
+                .extract_srtp_keying_material(profile, suite_hash)
+            {
+                debug!(
+                    "SRTP keying material extracted ({} bytes) for profile: {:?}",
+                    keying_material.len(),
+                    profile
+                );
+                server.engine.push_keying_material(keying_material, profile);
+            }
         }
 
-        self.engine
-            .create_record(ContentType::ApplicationData, |body| {
-                body.extend_from_slice(data);
-                None
-            })?;
+        Ok(Self::AwaitApplicationData)
+    }
 
-        Ok(())
+    fn await_application_data(self, server: &mut Server) -> Result<Self, Error> {
+        // Process incoming application data packets using the engine
+        server.engine.process_application_data()?;
+
+        Ok(self)
     }
 }
 
@@ -595,32 +674,6 @@ fn verify_cookie(secret: &[u8], client_random: Random, cookie: Cookie) -> bool {
     match compute_cookie(secret, client_random) {
         Ok(expected) => &*expected == &*cookie,
         Err(_) => false,
-    }
-}
-
-/// Handshake state machine for client-to-server messages (post ServerHelloDone)
-#[derive(Debug, PartialEq, Eq)]
-enum ServerHandshakeState {
-    /// Expecting Certificate (optional), then ClientKeyExchange, optional CertificateVerify, CCS, Finished
-    AwaitingClientMessages,
-}
-
-impl ServerHandshakeState {
-    fn handle(&self, message_type: MessageType) -> Result<ServerHandshakeState, Error> {
-        match (self, message_type) {
-            (ServerHandshakeState::AwaitingClientMessages, MessageType::Certificate)
-            | (ServerHandshakeState::AwaitingClientMessages, MessageType::ClientKeyExchange)
-            | (ServerHandshakeState::AwaitingClientMessages, MessageType::CertificateVerify)
-            | (ServerHandshakeState::AwaitingClientMessages, MessageType::Finished) => {
-                Ok(ServerHandshakeState::AwaitingClientMessages)
-            }
-
-            // ChangeCipherSpec is a record-layer message; ignore ordering here
-            _ => Err(Error::UnexpectedMessage(format!(
-                "Unexpected message {:?} during client flight",
-                message_type
-            ))),
-        }
     }
 }
 

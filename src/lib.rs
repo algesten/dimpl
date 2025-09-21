@@ -16,8 +16,8 @@ pub mod state;
 mod client;
 pub use client::Client;
 
-// mod server;
-// pub use server::Server;
+mod server;
+pub use server::Server;
 
 mod message;
 pub use message::{CipherSuite, SignatureAlgorithm};
