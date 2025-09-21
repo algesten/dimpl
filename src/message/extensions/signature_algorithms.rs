@@ -1,7 +1,7 @@
 use crate::buffer::Buf;
-use crate::message::{HashAlgorithm, SignatureAlgorithm, SignatureAndHashAlgorithm};
+use crate::message::SignatureAndHashAlgorithm;
 use nom::IResult;
-use tinyvec::{array_vec, ArrayVec};
+use tinyvec::ArrayVec;
 
 /// SignatureAlgorithms extension as defined in RFC 5246
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,12 +10,6 @@ pub struct SignatureAlgorithmsExtension {
 }
 
 impl SignatureAlgorithmsExtension {
-    pub fn new(supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 32]>) -> Self {
-        SignatureAlgorithmsExtension {
-            supported_signature_algorithms,
-        }
-    }
-
     /// Create a default SignatureAlgorithmsExtension with standard algorithms
     pub fn default() -> Self {
         // Convert from the smaller-capacity helper to our larger-capacity storage
@@ -65,6 +59,9 @@ impl SignatureAlgorithmsExtension {
 
 #[cfg(test)]
 mod tests {
+    use crate::message::HashAlgorithm;
+    use crate::SignatureAlgorithm;
+
     use super::*;
 
     #[test]
@@ -79,7 +76,9 @@ mod tests {
             SignatureAlgorithm::RSA,
         ));
 
-        let ext = SignatureAlgorithmsExtension::new(algorithms.clone());
+        let ext = SignatureAlgorithmsExtension {
+            supported_signature_algorithms: algorithms.clone(),
+        };
 
         let mut serialized = Buf::new();
         ext.serialize(&mut serialized);

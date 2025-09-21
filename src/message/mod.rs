@@ -1,6 +1,8 @@
-// TODO(martin): remove these once we use all the parsers.
-#![allow(unused_imports)]
-#![allow(unused)]
+//! Low-level DTLS message parsing and serialization types.
+//!
+//! This module exposes enums and helpers used by the public API for negotiating
+//! cipher suites and signature algorithms, as well as parsing wire formats.
+//! Only the public items are documented here; the rest are internal helpers.
 
 mod certificate;
 mod certificate_request;
@@ -38,7 +40,6 @@ pub use handshake::{Body, Handshake, Header, MessageType};
 pub use hello_verify::HelloVerifyRequest;
 pub use id::{Cookie, SessionId};
 pub use named_curve::{CurveType, NamedCurve};
-pub use nom::error::{Error, ErrorKind};
 pub use random::Random;
 pub use record::{ContentType, DTLSRecord, DTLSRecordSlice, Sequence};
 pub use server_hello::ServerHello;
@@ -65,15 +66,6 @@ impl Default for ProtocolVersion {
 }
 
 impl ProtocolVersion {
-    pub fn from_u16(value: u16) -> Self {
-        match value {
-            0xFEFF => ProtocolVersion::DTLS1_0,
-            0xFEFD => ProtocolVersion::DTLS1_2,
-            0xFEFC => ProtocolVersion::DTLS1_3,
-            _ => ProtocolVersion::Unknown(value),
-        }
-    }
-
     pub fn as_u16(&self) -> u16 {
         match self {
             ProtocolVersion::DTLS1_0 => 0xFEFF,
@@ -101,17 +93,25 @@ impl ProtocolVersion {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
+/// Supported TLS 1.2 cipher suites for DTLS.
 pub enum CipherSuite {
     // ECDHE with AES-GCM
+    /// ECDHE with ECDSA authentication, AES-256-GCM, SHA-384
     ECDHE_ECDSA_AES256_GCM_SHA384, // 0xC02C
+    /// ECDHE with ECDSA authentication, AES-128-GCM, SHA-256
     ECDHE_ECDSA_AES128_GCM_SHA256, // 0xC02B
-    ECDHE_RSA_AES256_GCM_SHA384,   // 0xC030
-    ECDHE_RSA_AES128_GCM_SHA256,   // 0xC02F
+    /// ECDHE with RSA authentication, AES-256-GCM, SHA-384
+    ECDHE_RSA_AES256_GCM_SHA384, // 0xC030
+    /// ECDHE with RSA authentication, AES-128-GCM, SHA-256
+    ECDHE_RSA_AES128_GCM_SHA256, // 0xC02F
 
     // DHE with AES-GCM
+    /// DHE with RSA authentication, AES-256-GCM, SHA-384
     DHE_RSA_AES256_GCM_SHA384, // 0x009F
+    /// DHE with RSA authentication, AES-128-GCM, SHA-256
     DHE_RSA_AES128_GCM_SHA256, // 0x009E
 
+    /// Unknown or unsupported cipher suite by its IANA value
     Unknown(u16),
 }
 
@@ -122,6 +122,7 @@ impl Default for CipherSuite {
 }
 
 impl CipherSuite {
+    /// Convert the 16-bit IANA value to a `CipherSuite`.
     pub fn from_u16(value: u16) -> Self {
         match value {
             // ECDHE with AES-GCM
@@ -138,6 +139,7 @@ impl CipherSuite {
         }
     }
 
+    /// Return the 16-bit IANA value for this cipher suite.
     pub fn as_u16(&self) -> u16 {
         match self {
             // ECDHE with AES-GCM
@@ -154,11 +156,13 @@ impl CipherSuite {
         }
     }
 
+    /// Parse a `CipherSuite` from network byte order.
     pub fn parse(input: &[u8]) -> IResult<&[u8], CipherSuite> {
         let (input, value) = be_u16(input)?;
         Ok((input, CipherSuite::from_u16(value)))
     }
 
+    /// Length in bytes of verify_data for Finished MACs.
     pub fn verify_data_length(&self) -> usize {
         match self {
             // AES-GCM suites
@@ -173,6 +177,7 @@ impl CipherSuite {
         }
     }
 
+    /// The key exchange algorithm family for this cipher suite.
     pub fn as_key_exchange_algorithm(&self) -> KeyExchangeAlgorithm {
         match self {
             // All ECDHE ciphers
@@ -190,6 +195,7 @@ impl CipherSuite {
         }
     }
 
+    /// Whether this cipher suite uses ECC-based key exchange.
     pub fn has_ecc(&self) -> bool {
         matches!(
             self,
@@ -202,6 +208,7 @@ impl CipherSuite {
         )
     }
 
+    /// All supported cipher suites in server preference order.
     pub fn all() -> &'static [CipherSuite] {
         &[
             CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
@@ -213,6 +220,7 @@ impl CipherSuite {
         ]
     }
 
+    /// Cipher suites compatible with a given certificate's signature algorithm.
     pub fn compatible_with_certificate(cert_type: SignatureAlgorithm) -> &'static [CipherSuite] {
         match cert_type {
             SignatureAlgorithm::ECDSA => &[
@@ -237,6 +245,7 @@ impl CipherSuite {
         false
     }
 
+    /// The hash algorithm used by this cipher suite.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
         match self {
             CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
@@ -249,6 +258,7 @@ impl CipherSuite {
         }
     }
 
+    /// The signature algorithm associated with the suite's key exchange.
     pub fn signature_algorithm(&self) -> SignatureAlgorithm {
         match self {
             CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => SignatureAlgorithm::ECDSA,
@@ -363,11 +373,17 @@ impl ClientCertificateType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
+/// Signature algorithms used in DTLS handshakes.
 pub enum SignatureAlgorithm {
+    /// Anonymous (no certificate)
     Anonymous,
+    /// RSA signatures
     RSA,
+    /// DSA signatures
     DSA,
+    /// ECDSA signatures
     ECDSA,
+    /// Unknown or unsupported signature algorithm
     Unknown(u8),
 }
 
@@ -378,6 +394,7 @@ impl Default for SignatureAlgorithm {
 }
 
 impl SignatureAlgorithm {
+    /// Convert an 8-bit value into a `SignatureAlgorithm`.
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => SignatureAlgorithm::Anonymous,
@@ -388,6 +405,7 @@ impl SignatureAlgorithm {
         }
     }
 
+    /// Convert this `SignatureAlgorithm` into its 8-bit representation.
     pub fn as_u8(&self) -> u8 {
         match self {
             SignatureAlgorithm::Anonymous => 0,
@@ -398,6 +416,7 @@ impl SignatureAlgorithm {
         }
     }
 
+    /// Parse a `SignatureAlgorithm` from network bytes.
     pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAlgorithm> {
         let (input, value) = be_u8(input)?;
         Ok((input, SignatureAlgorithm::from_u8(value)))
@@ -489,35 +508,5 @@ impl SignatureAndHashAlgorithm {
             SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA),
             SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::RSA)
         ]
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PublicValueEncoding {
-    Implicit,
-    Explicit,
-    Unknown(u8),
-}
-
-impl PublicValueEncoding {
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0 => PublicValueEncoding::Implicit,
-            1 => PublicValueEncoding::Explicit,
-            _ => PublicValueEncoding::Unknown(value),
-        }
-    }
-
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            PublicValueEncoding::Implicit => 0,
-            PublicValueEncoding::Explicit => 1,
-            PublicValueEncoding::Unknown(value) => *value,
-        }
-    }
-
-    pub fn parse(input: &[u8]) -> IResult<&[u8], PublicValueEncoding> {
-        let (input, value) = be_u8(input)?;
-        Ok((input, PublicValueEncoding::from_u8(value)))
     }
 }

@@ -1,5 +1,7 @@
-// Certificate handling for DTLS 1.2
-// Implements certificate generation and verification
+//! Certificate generation and formatting utilities exposed via the public `certificate` module.
+//!
+//! This module provides helpers to generate self-signed certificates suitable for DTLS,
+//! compute fingerprints, and format them for display.
 
 use rcgen::{
     Certificate as RcgenCertificate, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair,

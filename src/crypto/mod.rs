@@ -1,3 +1,4 @@
+//! Cryptographic primitives and helpers used by the DTLS 1.2 engine.
 // Crypto functionality for DTLS 1.2
 
 use std::ops::Deref;
@@ -55,13 +56,23 @@ use rsa::RsaPublicKey;
 /// - Each encrypted record fragment starts with an 8-byte explicit nonce
 /// - The GCM authentication tag is 16 bytes and appended to the ciphertext
 /// - The AAD length is the plaintext length (TLSCompressed.length / DTLSCompressed.length)
+/// Explicit nonce length for DTLS 1.2 AEAD records.
+///
+/// The explicit nonce is transmitted with each record.
 pub const DTLS_EXPLICIT_NONCE_LEN: usize = 8;
+/// GCM authentication tag length.
+///
+/// The tag is appended to the ciphertext.
 pub const GCM_TAG_LEN: usize = 16;
+/// Overhead per AEAD record (explicit nonce + tag).
+///
+/// This equals 24 bytes for DTLS 1.2 AES-GCM.
 pub const DTLS_AEAD_OVERHEAD: usize = DTLS_EXPLICIT_NONCE_LEN + GCM_TAG_LEN; // 24
 
 /// Return the AAD length given a plaintext length. For DTLS 1.2 AEAD this is the plaintext length.
 #[inline]
 #[allow(dead_code)]
+/// Compute AAD length from plaintext length for AEAD records.
 pub fn aad_len_from_plaintext_len(plaintext_len: u16) -> u16 {
     plaintext_len
 }
@@ -70,6 +81,7 @@ pub fn aad_len_from_plaintext_len(plaintext_len: u16) -> u16 {
 /// fragment_len = explicit_nonce(8) + ciphertext(plaintext_len + 16 tag)
 #[inline]
 #[allow(dead_code)]
+/// Compute fragment length from plaintext length for AEAD records.
 pub fn fragment_len_from_plaintext_len(plaintext_len: usize) -> usize {
     DTLS_EXPLICIT_NONCE_LEN + plaintext_len + GCM_TAG_LEN
 }
@@ -78,11 +90,13 @@ pub fn fragment_len_from_plaintext_len(plaintext_len: usize) -> usize {
 /// Returns None if the fragment is smaller than the mandatory AEAD overhead.
 #[inline]
 #[allow(dead_code)]
+/// Compute plaintext length from fragment length, if large enough.
 pub fn plaintext_len_from_fragment_len(fragment_len: usize) -> Option<usize> {
     fragment_len.checked_sub(DTLS_AEAD_OVERHEAD)
 }
 
 /// A parsed private key with its associated signature algorithm
+/// Parsed private key variants supported by this crate.
 pub enum ParsedKey {
     /// P-256 ECDSA key
     P256(P256SigningKey),
@@ -93,6 +107,7 @@ pub enum ParsedKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Fixed IV portion for DTLS 1.2 AEAD.
 pub struct Iv(pub [u8; 4]);
 impl Iv {
     fn new(iv: &[u8]) -> Self {
@@ -102,6 +117,7 @@ impl Iv {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Full AEAD nonce (fixed IV + explicit nonce).
 pub struct Nonce(pub [u8; 12]);
 
 impl Nonce {
@@ -114,6 +130,7 @@ impl Nonce {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Additional Authenticated Data for DTLS 1.2 records.
 pub struct Aad(pub [u8; 13]);
 
 impl Aad {
@@ -252,6 +269,7 @@ impl ParsedKey {
 }
 
 /// Certificate verifier trait for DTLS connections
+/// Application-provided certificate verifier for DTLS peer authentication.
 pub trait CertVerifier: Send + Sync {
     /// Verify a certificate by its binary DER representation
     fn verify_certificate(&self, der: &[u8]) -> Result<(), String>;
@@ -264,6 +282,7 @@ pub trait DhDomainParams {
 }
 
 /// DTLS 1.2 crypto context
+/// Crypto context holding negotiated keys and ciphers for a DTLS session.
 pub struct CryptoContext {
     /// Key exchange mechanism
     key_exchange: Option<KeyExchange>,
@@ -690,29 +709,35 @@ impl CryptoContext {
         ke.get_curve_info()
     }
 
+    /// Signature algorithm for the configured private key
     pub fn signature_algorithm(&self) -> SignatureAlgorithm {
         self.private_key.signature_algorithm()
     }
 
+    /// Default hash algorithm for the configured private key
     pub fn private_key_default_hash_algorithm(&self) -> HashAlgorithm {
         self.private_key.default_hash_algorithm()
     }
 
     /// Check if the client's private key is compatible with a given cipher suite
+    /// Whether the configured private key is compatible with the cipher suite
     pub fn is_cipher_suite_compatible(&self, cipher_suite: CipherSuite) -> bool {
         self.private_key.is_compatible(cipher_suite)
     }
 
     /// Get client write IV
+    /// Get the client write IV if derived
     pub fn get_client_write_iv(&self) -> Option<Iv> {
         self.client_write_iv
     }
 
     /// Get server write IV
+    /// Get the server write IV if derived
     pub fn get_server_write_iv(&self) -> Option<Iv> {
         self.server_write_iv
     }
 
+    /// Verify a DigitallySigned structure against a certificate's public key.
     pub fn verify_signature(
         &self,
         data: &Buf<'static>,
@@ -857,6 +882,7 @@ fn validate_dh_parameters(params: &dyn DhDomainParams, ys: &[u8]) -> Result<(), 
 }
 
 impl CipherSuite {
+    /// Return (mac_key_len, enc_key_len, fixed_iv_len) for this suite.
     pub fn key_length(&self) -> (usize, usize, usize) {
         match self {
             // AES-128-GCM suites
@@ -873,6 +899,7 @@ impl CipherSuite {
         }
     }
 
+    /// Whether this suite is an AEAD GCM cipher.
     pub fn is_gcm(&self) -> bool {
         matches!(
             self,

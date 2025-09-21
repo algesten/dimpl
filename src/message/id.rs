@@ -2,9 +2,8 @@ use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
 use nom::{Err, IResult};
-use rand::{rngs::OsRng, Rng};
+use std::fmt;
 use std::ops::Deref;
-use std::{array, fmt};
 
 pub struct InvalidLength(&'static str, IdType, usize);
 
@@ -35,6 +34,7 @@ impl fmt::Display for InvalidLength {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum IdType {
+    #[allow(unused)]
     Fixed(usize),
     Variable(usize, usize),
 }
@@ -64,20 +64,6 @@ macro_rules! var_array {
                     panic!("{}::empty() is not valid", stringify!($name));
                 }
                 Self([0; $max], 0)
-            }
-
-            pub fn random(len: usize) -> $name {
-                let mut rng = OsRng;
-                #[allow(unused_comparisons)]
-                {
-                    assert!(len >= $min);
-                    assert!(len <= $max);
-                }
-                let mut arr = [0; $max];
-                for a in &mut arr[..len] {
-                    *a = rng.gen();
-                }
-                Self(arr, len)
             }
 
             pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {

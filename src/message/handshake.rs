@@ -1,9 +1,4 @@
 use std::cell::Cell;
-use std::collections::VecDeque;
-use std::hash::DefaultHasher;
-use std::iter::Peekable;
-
-use crate::incoming::Incoming;
 
 use super::{
     Certificate, CertificateRequest, CertificateVerify, CipherSuite, ClientHello,
@@ -18,7 +13,6 @@ use nom::{
     number::complete::{be_u16, be_u24},
     IResult,
 };
-use tinyvec::ArrayVec;
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub struct Header {
@@ -37,6 +31,7 @@ pub struct Handshake<'a> {
 }
 
 impl<'a> Handshake<'a> {
+    #[cfg(test)]
     pub fn new(
         msg_type: MessageType,
         length: u32,
@@ -45,9 +40,6 @@ impl<'a> Handshake<'a> {
         fragment_length: u32,
         body: Body<'a>,
     ) -> Self {
-        // The constructor must not used to create fragments.
-        assert!(!body.is_fragment());
-
         Handshake {
             header: Header {
                 msg_type,
@@ -59,10 +51,6 @@ impl<'a> Handshake<'a> {
             body,
             handled: Cell::new(false),
         }
-    }
-
-    pub fn is_fragment(&self) -> bool {
-        self.body.is_fragment()
     }
 
     pub fn parse_header(input: &'a [u8]) -> IResult<&'a [u8], Header> {
@@ -184,6 +172,7 @@ impl<'a> Handshake<'a> {
         Ok(handshake)
     }
 
+    #[cfg(test)]
     fn do_clone<'b>(&self) -> Handshake<'b> {
         Handshake {
             header: Header {
@@ -198,6 +187,7 @@ impl<'a> Handshake<'a> {
         }
     }
 
+    #[cfg(test)]
     pub fn fragment<'b>(
         &self,
         max: usize,
@@ -320,10 +310,6 @@ impl<'a> Default for Body<'a> {
 }
 
 impl<'a> Body<'a> {
-    pub fn is_fragment(&self) -> bool {
-        matches!(self, Body::Fragment(_))
-    }
-
     pub fn parse(
         input: &'a [u8],
         m: MessageType,
@@ -434,6 +420,8 @@ impl<'a> Body<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
     use tinyvec::array_vec;
 
     use super::*;
@@ -558,7 +546,7 @@ mod tests {
         );
 
         // Fragment the handshake with size 10
-        let mut fragments: VecDeque<_> = handshake.fragment(10, &mut buffer).collect();
+        let fragments: VecDeque<_> = handshake.fragment(10, &mut buffer).collect();
 
         // Defragment the fragments
         let mut defragmented_buffer = Buf::new();

@@ -619,10 +619,6 @@ impl Engine {
         hash.clone_and_finalize()
     }
 
-    pub fn reset_handshake_seq_no(&mut self) {
-        self.next_handshake_seq_no = 0;
-    }
-
     pub fn handshake_data(&self) -> &[u8] {
         &self.handshakes
     }

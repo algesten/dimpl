@@ -5,11 +5,7 @@ use crate::buffer::Buf;
 use crate::util::many0;
 use nom::error::{Error, ErrorKind};
 use nom::Err;
-use nom::{
-    bytes::complete::take,
-    number::complete::{be_u16, be_u8},
-    IResult,
-};
+use nom::{bytes::complete::take, number::complete::be_u16, IResult};
 use tinyvec::ArrayVec;
 
 #[derive(Debug, PartialEq, Eq)]

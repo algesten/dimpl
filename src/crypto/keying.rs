@@ -1,9 +1,11 @@
+//! SRTP keying material types and profiles used by DTLS-SRTP.
 use std::ops::Deref;
 
 /// Keying material used as master key for SRTP.
 pub struct KeyingMaterial(Vec<u8>);
 
 impl KeyingMaterial {
+    /// Create a new wrapper for DTLS-SRTP keying material bytes.
     pub fn new(m: Vec<u8>) -> Self {
         KeyingMaterial(m)
     }
@@ -24,14 +26,18 @@ impl std::fmt::Debug for KeyingMaterial {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Supported SRTP protection profiles (RFC 5764).
 pub enum SrtpProfile {
+    /// SRTP_AES128_CM_HMAC_SHA1_80 (RFC 5764)
     Aes128CmSha1_80,
+    /// AEAD_AES_128_GCM (RFC 7714)
     AeadAes128Gcm,
 }
 
 #[allow(dead_code)]
 impl SrtpProfile {
     // All the profiles we support, ordered from most preferred to least.
+    /// All supported profiles ordered by preference.
     pub const ALL: &'static [SrtpProfile] =
         &[SrtpProfile::AeadAes128Gcm, SrtpProfile::Aes128CmSha1_80];
 

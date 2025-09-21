@@ -45,10 +45,6 @@ pub struct SupportedGroupsExtension {
 }
 
 impl SupportedGroupsExtension {
-    pub fn new(groups: ArrayVec<[NamedGroup; 16]>) -> Self {
-        SupportedGroupsExtension { groups }
-    }
-
     /// Create a default SupportedGroupsExtension with standard curves
     pub fn default() -> Self {
         let mut groups = ArrayVec::new();
@@ -94,7 +90,9 @@ mod tests {
     fn test_supported_groups_extension() {
         let groups = array_vec![NamedGroup::X25519, NamedGroup::Secp256r1];
 
-        let ext = SupportedGroupsExtension::new(groups.clone());
+        let ext = SupportedGroupsExtension {
+            groups: groups.clone(),
+        };
 
         let mut serialized = Buf::new();
         ext.serialize(&mut serialized);

@@ -82,13 +82,6 @@ impl Buf<'static> {
         v.resize(len, value);
     }
 
-    pub fn as_vec_mut(&mut self) -> &mut Vec<u8> {
-        let Inner::Owned(v) = &mut self.0 else {
-            unreachable!();
-        };
-        v
-    }
-
     pub fn drain(&mut self, r: impl RangeBounds<usize>) -> Drain<'_, u8> {
         let Inner::Owned(v) = &mut self.0 else {
             unreachable!();

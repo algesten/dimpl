@@ -12,7 +12,6 @@
 //
 // This implementation is a Sans-IO DTLS 1.2 client.
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use tinyvec::{array_vec, ArrayVec};
@@ -25,7 +24,7 @@ use crate::message::{
     ExtensionType, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion, Random, SessionId,
     SignatureAndHashAlgorithm, UseSrtpExtension,
 };
-use crate::{CertVerifier, CipherSuite, Config, Error, Output, Server, SrtpProfile};
+use crate::{CipherSuite, Error, Output, Server, SrtpProfile};
 
 /// DTLS client
 pub struct Client {
@@ -73,26 +72,6 @@ pub struct Client {
 }
 
 impl Client {
-    /// Create a new DTLS client
-    ///
-    /// # Parameters
-    ///
-    /// * `now` - Current timestamp for random generation
-    /// * `config` - DTLS configuration
-    /// * `certificate` - Client certificate, create one with `generate_self_signed_certificate()`
-    /// * `private_key` - Client private key corresponding to the certificate
-    /// * `cert_verifier` - Certificate verifier for validating server certificates
-    pub fn new(
-        now: Instant,
-        config: Arc<Config>,
-        certificate: Vec<u8>,
-        private_key: Vec<u8>,
-        cert_verifier: Box<dyn CertVerifier>,
-    ) -> Client {
-        let engine = Engine::new(config, certificate, private_key, cert_verifier);
-        Self::new_with_engine(now, engine)
-    }
-
     pub(crate) fn new_with_engine(now: Instant, mut engine: Engine) -> Client {
         engine.set_client(true);
 

@@ -1,13 +1,25 @@
+//! Public error type returned by the high-level DTLS API.
+
 #[derive(Debug)]
+/// Errors returned by DTLS processing functions.
 pub enum Error {
+    /// Parser requested more data
     ParseIncomplete,
+    /// Parser encountered an error kind from nom
     ParseError(nom::error::ErrorKind),
+    /// Unexpected DTLS message
     UnexpectedMessage(String),
+    /// Cryptographic operation failed
     CryptoError(String),
+    /// Certificate validation failed
     CertificateError(String),
+    /// Security policy violation
     SecurityError(String),
+    /// Incoming queue exceeded capacity
     ReceiveQueueFull,
+    /// Outgoing queue exceeded capacity
     TransmitQueueFull,
+    /// Missing fields when parsing ServerHello
     IncompleteServerHello,
 }
 

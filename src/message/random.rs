@@ -1,5 +1,4 @@
 use std::array::from_fn;
-use std::ops::Deref;
 use std::time::Instant;
 
 use nom::bytes::complete::take;

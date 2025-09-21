@@ -27,11 +27,6 @@ impl Incoming {
         &self.records()[0]
     }
 
-    pub fn last(&self) -> &Record {
-        // Invariant: See above.
-        self.records().last().unwrap()
-    }
-
     pub fn into_owner(self) -> Buf<'static> {
         self.0.into_owner().into_inner()
     }
@@ -68,9 +63,7 @@ impl Incoming {
         let into = MutBorrow::new(into);
 
         // håll i hatten
-        let inner = Inner::try_new(into, |data| {
-            Records::parse(data.borrow_mut(), engine)
-        })?;
+        let inner = Inner::try_new(into, |data| Records::parse(data.borrow_mut(), engine))?;
 
         Ok(Incoming(inner))
     }
@@ -120,9 +113,7 @@ pub struct Record<'a>(RecordInner<'a>);
 impl<'a> Record<'a> {
     /// The first parse pass only parses the DTLSRecord header which is unencrypted.
     pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Option<Record<'a>>, Error> {
-        let inner = RecordInner::try_new(input, |borrowed| {
-            ParsedRecord::parse(borrowed, engine)
-        })?;
+        let inner = RecordInner::try_new(input, |borrowed| ParsedRecord::parse(borrowed, engine))?;
 
         let record = Record(inner);
 
@@ -166,9 +157,7 @@ impl<'a> Record<'a> {
         // Shift the decrypted buffer to the start of the record.
         input.copy_within(CIPH..(CIPH + new_len), DTLSRecord::HEADER_LEN);
 
-        let inner = RecordInner::try_new(input, |borrowed| {
-            ParsedRecord::parse(borrowed, engine)
-        })?;
+        let inner = RecordInner::try_new(input, |borrowed| ParsedRecord::parse(borrowed, engine))?;
 
         Ok(Some(Record(inner)))
     }

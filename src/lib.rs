@@ -1,9 +1,15 @@
+//! A DTLS 1.2 implementation for WebRTC.
+//!
+//! This crate provides a DTLS 1.2 implementation.
+//!
+//! It is specifically the str0m WebRTC crate.
+//!
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 #![allow(clippy::upper_case_acronyms)]
 #![allow(mismatched_lifetime_syntaxes)]
 #![allow(clippy::len_without_is_empty)]
-// #![deny(missing_docs)]
+#![deny(missing_docs)]
 
 // const MAX_MTU: usize = 2200;
 
@@ -26,11 +32,11 @@ pub use message::{CipherSuite, SignatureAlgorithm};
 
 mod time_tricks;
 
-pub mod buffer;
+mod buffer;
 mod crypto;
 pub use crypto::CertVerifier;
 mod engine;
-pub mod incoming;
+mod incoming;
 
 mod util;
 
@@ -44,16 +50,24 @@ pub mod certificate;
 
 pub use crypto::{KeyingMaterial, SrtpProfile};
 
+/// Public DTLS endpoint wrapping either a client or server state.
+///
+/// Use the role helpers to query or switch between client and server modes
+/// and drive the handshake and record processing.
 pub struct Dtls {
     inner: Option<Inner>,
 }
 
-pub enum Inner {
+enum Inner {
     Client(Client),
     Server(Server),
 }
 
 impl Dtls {
+    /// Create a new DTLS instance.
+    ///
+    /// The instance is initialized with the provided `now`, `config`,
+    /// certificate, private key, and certificate verifier.
     pub fn new(
         now: Instant,
         config: Arc<Config>,
@@ -71,10 +85,14 @@ impl Dtls {
         Dtls { inner: Some(inner) }
     }
 
+    /// Return true if the instance is operating in the client role.
     pub fn is_active(&self) -> bool {
         matches!(self.inner, Some(Inner::Client(_)))
     }
 
+    /// Switch between server and client roles.
+    ///
+    /// Set `active` to true for client role, false for server role.
     pub fn set_active(&mut self, active: bool) {
         match (self.is_active(), active) {
             (true, false) => {
@@ -95,6 +113,7 @@ impl Dtls {
         }
     }
 
+    /// Process an incoming DTLS datagram.
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
             Inner::Client(client) => client.handle_packet(packet),
@@ -102,6 +121,7 @@ impl Dtls {
         }
     }
 
+    /// Poll for pending output from the DTLS engine.
     pub fn poll_output(&mut self) -> Output {
         match self.inner.as_mut().unwrap() {
             Inner::Client(client) => client.poll_output(),
@@ -109,6 +129,7 @@ impl Dtls {
         }
     }
 
+    /// Handle time-based events such as retransmission timers.
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
             Inner::Client(client) => client.handle_timeout(now),
@@ -116,6 +137,7 @@ impl Dtls {
         }
     }
 
+    /// Send application data over the established DTLS session.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
             Inner::Client(client) => client.send_application_data(data),
@@ -148,12 +170,19 @@ impl Dtls {
 //                                                [ChangeCipherSpec]
 //                                    <--------             Finished
 //       Application Data             <------->     Application Data
+/// Output events produced by the DTLS engine when polled.
 pub enum Output<'a> {
+    /// A DTLS record to transmit on the wire.
     Packet(&'a [u8]),
+    /// A timeout instant for scheduling retransmission or handshake timers.
     Timeout(Instant),
+    /// The handshake completed and the connection is established.
     Connected,
+    /// The peer's leaf certificate in DER encoding.
     PeerCert(Vec<u8>),
+    /// Extracted DTLS-SRTP keying material and selected SRTP profile.
     KeyingMaterial(KeyingMaterial, SrtpProfile),
+    /// Received application data plaintext.
     ApplicationData(Vec<u8>),
 }
 

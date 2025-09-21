@@ -233,8 +233,7 @@ impl State {
         }
 
         // Enforce Null compression only (client must offer it)
-        let has_null = ch
-            .compression_methods.contains(&CompressionMethod::Null);
+        let has_null = ch.compression_methods.contains(&CompressionMethod::Null);
         if !has_null {
             return Err(Error::SecurityError(
                 "Client did not offer Null compression".to_string(),
@@ -436,9 +435,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::ServerHelloDone, |_, _| {
-                Ok(())
-            })?;
+            .create_handshake(MessageType::ServerHelloDone, |_, _| Ok(()))?;
 
         if server.engine.config().require_client_certificate {
             Ok(Self::AwaitCertificate)
@@ -866,11 +863,9 @@ fn handshake_create_server_key_exchange(
             ske.serialize(body, true);
             Ok(())
         }
-        _ => {
-            Err(Error::SecurityError(
-                "Unsupported key exchange algorithm".to_string(),
-            ))
-        }
+        _ => Err(Error::SecurityError(
+            "Unsupported key exchange algorithm".to_string(),
+        )),
     }
 }
 

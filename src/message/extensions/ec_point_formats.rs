@@ -4,6 +4,7 @@ use tinyvec::ArrayVec;
 
 /// EC Point Format as defined in RFC 4492 Section 5.1.2
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(unused)]
 pub enum ECPointFormat {
     #[default]
     Uncompressed = 0x00,
@@ -12,6 +13,7 @@ pub enum ECPointFormat {
 }
 
 impl ECPointFormat {
+    #[allow(unused)]
     pub fn parse(input: &[u8]) -> IResult<&[u8], ECPointFormat> {
         let (input, value) = be_u8(input)?;
         let format = match value {
@@ -40,10 +42,6 @@ pub struct ECPointFormatsExtension {
 }
 
 impl ECPointFormatsExtension {
-    pub fn new(formats: ArrayVec<[ECPointFormat; 3]>) -> Self {
-        ECPointFormatsExtension { formats }
-    }
-
     /// Create a default ECPointFormatsExtension with standard formats
     pub fn default() -> Self {
         let mut formats = ArrayVec::new();
@@ -53,6 +51,7 @@ impl ECPointFormatsExtension {
         ECPointFormatsExtension { formats }
     }
 
+    #[allow(unused)]
     pub fn parse(input: &[u8]) -> IResult<&[u8], ECPointFormatsExtension> {
         let (input, list_len) = be_u8(input)?;
         let mut formats = ArrayVec::new();
@@ -93,7 +92,9 @@ mod tests {
             ECPointFormat::AnsiX962CompressedPrime
         ];
 
-        let ext = ECPointFormatsExtension::new(formats.clone());
+        let ext = ECPointFormatsExtension {
+            formats: formats.clone(),
+        };
 
         let mut serialized = Buf::new();
         ext.serialize(&mut serialized);
