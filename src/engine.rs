@@ -75,7 +75,6 @@ impl Engine {
         certificate: Vec<u8>,
         private_key: Vec<u8>,
         cert_verifier: Box<dyn CertVerifier>,
-        is_client: bool,
     ) -> Self {
         Self {
             config,
@@ -89,7 +88,7 @@ impl Engine {
             crypto_context: CryptoContext::new(certificate, private_key, cert_verifier),
             server_encryption_enabled: false,
             client_encryption_enabled: false,
-            is_client,
+            is_client: false,
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
             handshakes: Buf::new(),
@@ -97,6 +96,10 @@ impl Engine {
             replay_max_seq: 0,
             replay_window: 0,
         }
+    }
+
+    pub fn set_client(&mut self, is_client: bool) {
+        self.is_client = is_client;
     }
 
     pub fn config(&self) -> &Config {

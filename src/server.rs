@@ -33,7 +33,7 @@ use crate::message::{
     SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId,
     SupportedGroupsExtension, UseSrtpExtension,
 };
-use crate::{Config, Error, Output};
+use crate::{Client, Config, Error, Output};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -44,6 +44,9 @@ pub struct Server {
 
     /// Engine in common between server and client.
     engine: Engine,
+
+    /// Start time of the server
+    start: Instant,
 
     /// Random unique data (with gmt timestamp). Used for signature checks.
     random: Random,
@@ -107,7 +110,12 @@ impl Server {
         private_key: Vec<u8>,
         cert_verifier: Box<dyn CertVerifier>,
     ) -> Server {
-        let engine = Engine::new(config, certificate, private_key, cert_verifier, false);
+        let engine = Engine::new(config, certificate, private_key, cert_verifier);
+        Self::new_with_engine(now, engine)
+    }
+
+    pub(crate) fn new_with_engine(now: Instant, mut engine: Engine) -> Server {
+        engine.set_client(false);
 
         let mut cookie_secret = [0u8; 32];
         OsRng.fill_bytes(&mut cookie_secret);
@@ -115,6 +123,7 @@ impl Server {
         Server {
             state: State::AwaitClientHello,
             engine,
+            start: now,
             random: Random::new(now),
             session_id: None,
             cookie_secret,
@@ -127,6 +136,10 @@ impl Server {
             defragment_buffer: Buf::new(),
             captured_session_hash: None,
         }
+    }
+
+    pub fn into_client(self) -> Client {
+        Client::new_with_engine(self.start, self.engine)
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {

@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{CertVerifier, Config, Output, Server};
+use dimpl::{CertVerifier, Config, Dtls, Output};
 use ossl::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
 
 #[test]
@@ -46,13 +46,14 @@ fn server_ossl() {
         }
     }
 
-    let mut server = Server::new(
+    let mut server = Dtls::new(
         now,
         config,
         server_x509_der,
         server_pkey_der,
         Box::new(DummyVerifier),
     );
+    server.set_active(false);
 
     // Buffers and flags
     let mut client_events = VecDeque::new();

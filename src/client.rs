@@ -25,7 +25,7 @@ use crate::message::{
     ExtensionType, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion, Random, SessionId,
     SignatureAndHashAlgorithm, UseSrtpExtension,
 };
-use crate::{CertVerifier, CipherSuite, Config, Error, Output, SrtpProfile};
+use crate::{CertVerifier, CipherSuite, Config, Error, Output, Server, SrtpProfile};
 
 /// DTLS client
 pub struct Client {
@@ -34,6 +34,9 @@ pub struct Client {
 
     /// Engine in common between server and client.
     engine: Engine,
+
+    /// Start time of the client
+    start: Instant,
 
     /// Random unique data (with gmt timestamp). Used for signature checks.
     random: Random,
@@ -86,11 +89,17 @@ impl Client {
         private_key: Vec<u8>,
         cert_verifier: Box<dyn CertVerifier>,
     ) -> Client {
-        let engine = Engine::new(config, certificate, private_key, cert_verifier, true);
+        let engine = Engine::new(config, certificate, private_key, cert_verifier);
+        Self::new_with_engine(now, engine)
+    }
+
+    pub(crate) fn new_with_engine(now: Instant, mut engine: Engine) -> Client {
+        engine.set_client(true);
 
         Client {
             state: State::SendClientHello,
             engine,
+            start: now,
             random: Random::new(now),
             session_id: None,
             cookie: None,
@@ -102,6 +111,10 @@ impl Client {
             certificate_verify: false,
             captured_session_hash: None,
         }
+    }
+
+    pub fn into_server(self) -> Server {
+        Server::new_with_engine(self.start, self.engine)
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {

@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{CertVerifier, CipherSuite, Client, Config, Output, Server, SignatureAlgorithm};
+use dimpl::{CertVerifier, CipherSuite, Config, Dtls, Output, SignatureAlgorithm};
 use ossl::{DtlsCertOptions, DtlsEvent, DtlsPKeyType, OsslDtlsCert};
 
 #[test]
@@ -66,13 +66,14 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: CipherSuite) {
         }
     }
 
-    let mut client = Client::new(
+    let mut client = Dtls::new(
         now,
         config,
         client_x509_der,
         client_pkey_der,
         Box::new(DummyVerifier),
     );
+    client.set_active(true);
 
     let mut server_events = VecDeque::new();
     let mut client_connected = false;
@@ -173,13 +174,14 @@ fn run_ossl_client_vs_dimpl_server_for_suite(suite: CipherSuite) {
         }
     }
 
-    let mut server = Server::new(
+    let mut server = Dtls::new(
         now,
         config,
         server_x509_der,
         server_pkey_der,
         Box::new(DummyVerifier),
     );
+    server.set_active(false);
 
     // Drive handshake until both sides report connected
     let mut client_events = VecDeque::new();
