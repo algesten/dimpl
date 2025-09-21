@@ -32,6 +32,9 @@ pub struct Client {
     /// Current client state.
     state: State,
 
+    /// Engine in common between server and client.
+    engine: Engine,
+
     /// Random unique data (with gmt timestamp). Used for signature checks.
     random: Random,
 
@@ -48,9 +51,6 @@ pub struct Client {
 
     /// The negotiated SRTP profile (if any)
     negotiated_srtp_profile: Option<SrtpProfile>,
-
-    /// Engine in common between server and client.
-    engine: Engine,
 
     /// Server random. Set by ServerHello.
     server_random: Option<Random>,
@@ -90,14 +90,14 @@ impl Client {
 
         Client {
             state: State::SendClientHello,
+            engine,
             random: Random::new(now),
             session_id: None,
             cookie: None,
-            engine,
+            extension_data: Buf::new(),
+            negotiated_srtp_profile: None,
             server_random: None,
             server_certificates: Vec::with_capacity(3),
-            negotiated_srtp_profile: None,
-            extension_data: Buf::new(),
             defragment_buffer: Buf::new(),
             certificate_verify: false,
             captured_session_hash: None,

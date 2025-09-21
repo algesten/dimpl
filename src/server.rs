@@ -41,20 +41,23 @@ pub struct Server {
     /// Current server state.
     state: State,
 
+    /// Engine in common between server and client.
+    engine: Engine,
+
     /// Random unique data (with gmt timestamp). Used for signature checks.
     random: Random,
 
     /// SessionId we provide to the client (unused/resumption not implemented).
     session_id: Option<SessionId>,
 
+    /// Cookie secret for HMAC, generated per-server instance
+    cookie_secret: [u8; 32],
+
     /// Storage for extension data
     extension_data: Buf<'static>,
 
     /// The negotiated SRTP profile (if any)
     negotiated_srtp_profile: Option<SrtpProfile>,
-
-    /// Engine in common between server and client.
-    engine: Engine,
 
     /// Client random. Set by ClientHello.
     client_random: Option<Random>,
@@ -67,9 +70,6 @@ pub struct Server {
 
     /// Captured session hash for Extended Master Secret (RFC 7627)
     captured_session_hash: Option<Vec<u8>>,
-
-    /// Cookie secret for HMAC, generated per-server instance
-    cookie_secret: [u8; 32],
 }
 
 /// Current state of the server.
@@ -107,16 +107,16 @@ impl Server {
 
         Server {
             state: State::AwaitClientHello,
+            engine,
             random: Random::new(now),
             session_id: None,
+            cookie_secret,
             extension_data: Buf::new(),
             negotiated_srtp_profile: None,
-            engine,
             client_random: None,
             client_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
             captured_session_hash: None,
-            cookie_secret,
         }
     }
 
