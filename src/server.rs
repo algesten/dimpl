@@ -161,13 +161,13 @@ impl Server {
 
     fn process_client_hello(&mut self) -> Result<(), Error> {
         // We expect a ClientHello flight (single message)
-        let Some(mut flight) = self.engine.has_complete_message(MessageType::ClientHello) else {
+        let Some(mut flight) = self.engine.has_complete_handshake(MessageType::ClientHello) else {
             return Ok(());
         };
 
         while let Some(handshake) = self
             .engine
-            .next_message(&mut flight, &mut self.defragment_buffer)?
+            .next_handshake(&mut flight, &mut self.defragment_buffer)?
         {
             if !matches!(handshake.header.msg_type, MessageType::ClientHello) {
                 return Err(Error::UnexpectedMessage(format!(
@@ -342,7 +342,7 @@ impl Server {
 
     fn process_client_finished(&mut self) -> Result<(), Error> {
         // We expect a client flight up to Finished
-        let Some(mut flight) = self.engine.has_complete_message(MessageType::Finished) else {
+        let Some(mut flight) = self.engine.has_complete_handshake(MessageType::Finished) else {
             return Ok(());
         };
 
@@ -350,7 +350,7 @@ impl Server {
 
         while let Some(handshake) = self
             .engine
-            .next_message(&mut flight, &mut self.defragment_buffer)?
+            .next_handshake(&mut flight, &mut self.defragment_buffer)?
         {
             state = state.handle(handshake.header.msg_type)?;
 

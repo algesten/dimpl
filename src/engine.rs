@@ -8,7 +8,7 @@ use crate::buffer::{Buf, BufferPool};
 use crate::crypto::{Aad, CertVerifier, CryptoContext, Hash};
 use crate::crypto::{Iv, KeyingMaterial, DTLS_AEAD_OVERHEAD};
 use crate::crypto::{Nonce, SrtpProfile, DTLS_EXPLICIT_NONCE_LEN};
-use crate::incoming::Incoming;
+use crate::incoming::{Incoming, Record};
 use crate::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
 use crate::{Config, Error, Output};
@@ -233,73 +233,63 @@ impl Engine {
         Instant::now()
     }
 
-    pub fn has_complete_message(&mut self, to: MessageType) -> Option<CompleteMessage> {
-        if self.queue_rx.is_empty() {
-            return None;
-        }
-
-        // ChangeCipherSpec is not a handshake, and might be first in the incoming queue.
-        let first = self
+    pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
+        let maybe_first_handshake = self
             .queue_rx
             .front()
-            .unwrap()
-            .records()
-            .iter()
-            .find_map(|r| r.handshake())?;
+            .and_then(|i| i.records().iter().find(|r| !r.is_handled()))
+            .and_then(|r| r.handshake());
+
+        let Some(first) = maybe_first_handshake else {
+            return false;
+        };
 
         if first.header.message_seq != self.peer_handshake_seq_no {
-            return None;
+            return false;
         }
 
-        let mut current_seq = first.header.message_seq;
-        let mut found_end = false;
+        if first.header.msg_type != wanted {
+            return false;
+        }
+
+        let wanted_seq = first.header.message_seq;
+        let wanted_length = first.header.length;
         let mut last_fragment_end = 0;
 
         // Cap to MAX_DEFRAGMENT_PACKETS to avoid misbehaving peers
         for incoming in self.queue_rx.iter().take(MAX_DEFRAGMENT_PACKETS) {
             for record in incoming.records().iter() {
                 if let Some(h) = &record.handshake() {
-                    // Check message sequence contiguity
-                    if h.header.message_seq != current_seq {
-                        // Reset fragment tracking for new message sequence
-                        last_fragment_end = 0;
-                        current_seq += 1;
+                    // A different seq means we're looking at a different handshake
+                    if wanted_seq != h.header.message_seq {
+                        continue;
                     }
 
                     // Check fragment contiguity
-                    if h.header.fragment_offset > 0 && h.header.fragment_offset != last_fragment_end
-                    {
-                        return None;
+                    if h.header.fragment_offset != last_fragment_end {
+                        return false;
                     }
                     last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
 
-                    if h.header.msg_type == to {
-                        found_end = true;
-                        break;
+                    // Found the last fragment to complete the wanted handshake.
+                    if last_fragment_end == wanted_length {
+                        return true;
                     }
                 }
             }
-            if found_end {
-                break;
-            }
         }
 
-        if !found_end {
-            return None;
-        }
-
-        Some(CompleteMessage {
-            to,
-            current: Some(first.header.msg_type),
-        })
+        false
     }
 
-    pub fn next_message<'b>(
+    pub fn next_handshake<'b>(
         &mut self,
-        complete_message: &mut CompleteMessage,
+        wanted: MessageType,
         defragment_buffer: &'b mut Buf<'static>,
     ) -> Result<Option<Handshake<'b>>, Error> {
-        if complete_message.current.is_none() {
+        self.purge_queue_rx();
+
+        if !self.has_complete_handshake(wanted) {
             return Ok(None);
         }
 
@@ -310,50 +300,51 @@ impl Engine {
             // Handled in previous iteration
             .skip_while(|h| h.handled.get());
 
-        let (handshake, next_type) =
-            Handshake::defragment(iter, defragment_buffer, self.cipher_suite)?;
+        // This sets the handled flag on the handshake.
+        let handshake = Handshake::defragment(iter, defragment_buffer, self.cipher_suite)?;
 
         // Update the stored handshakes used for CertificateVerify and Finished
         handshake.serialize(&mut self.handshakes);
 
-        // Update the flight with the next message type, this eventually returns None
-        // and that makes the flight complete.
-        complete_message.current = if complete_message.current == Some(complete_message.to) {
-            // We reached the end condition
-            None
-        } else {
-            // There might be another message after this one
-            next_type
-        };
-
-        // Purge completely handled packets. We can only purge the Incoming if all the
-        // Handshake in it are handled.
-        while let Some(incoming) = self.queue_rx.front() {
-            let all_handled = incoming
-                .records()
-                .iter()
-                .filter_map(|r| r.handshake())
-                .all(|h| h.handled.get());
-
-            if all_handled {
-                let incoming = self.queue_rx.pop_front().unwrap();
-
-                // The last handled handshake
-                let last_handshake = incoming.last().handshake().unwrap();
-
-                // Move the expected sequence number
-                self.peer_handshake_seq_no = last_handshake.header.message_seq + 1;
-            } else {
-                break;
-            }
-        }
+        // Move the expected seq_no along
+        self.peer_handshake_seq_no = handshake.header.message_seq + 1;
 
         Ok(Some(handshake))
     }
 
-    /// Get the next incoming packet
-    pub fn next_incoming(&mut self) -> Option<Incoming> {
-        self.queue_rx.pop_front()
+    pub(crate) fn next_record(&mut self, ctype: ContentType) -> Option<&Record> {
+        self.purge_queue_rx();
+
+        let record = self
+            .queue_rx
+            .iter()
+            .map(|i| i.records().iter())
+            .flatten()
+            .find(|r| !r.is_handled())?;
+
+        if record.record().content_type != ctype {
+            return None;
+        }
+
+        record.set_handled();
+
+        Some(record)
+    }
+
+    // Purge completely handled packets. We can only purge the Incoming if all the
+    // Handshake in it are handled.
+    fn purge_queue_rx(&mut self) {
+        while let Some(incoming) = self.queue_rx.front() {
+            // Records/handshakes are marked as handled, which means they should be skipped
+            // from further processing.
+            let all_handled = incoming.records().iter().all(|r| r.is_handled());
+
+            if all_handled {
+                let _ = self.queue_rx.pop_front();
+            } else {
+                break;
+            }
+        }
     }
 
     /// Create a DTLS record and serialize it into a buffer
@@ -497,7 +488,7 @@ impl Engine {
     /// Process application data packets from the incoming queue
     pub fn process_application_data(&mut self) -> Result<(), Error> {
         // Process any incoming packets with application data
-        while let Some(incoming) = self.next_incoming() {
+        while let Some(incoming) = self.queue_rx.pop_front() {
             let records = incoming.records();
 
             for i in 0..records.len() {
@@ -636,7 +627,7 @@ impl Engine {
         self.cipher_suite = Some(cipher_suite);
     }
 
-    pub fn enable_peer_encryption(&mut self) {
+    pub fn enable_peer_encryption(&mut self) -> Result<(), Error> {
         if self.is_client {
             debug!("Server encryption enabled");
             self.server_encryption_enabled = true;
@@ -644,6 +635,32 @@ impl Engine {
             debug!("Client encryption enabled");
             self.client_encryption_enabled = true;
         }
+
+        // Make doubly sure all fully used entries are gone.
+        self.purge_queue_rx();
+
+        // Now decrypt all entries remaining.
+        let all = self.queue_rx.split_off(0);
+
+        for incoming in all {
+            // Part of the incoming buffer has already been handled since
+            // the ChangeCipherSpec happens mid-flight.
+            let offset = incoming
+                .records()
+                .iter()
+                .take_while(|r| r.is_handled())
+                .map(|r| r.len())
+                .sum::<usize>();
+
+            let mut buffer = incoming.into_owner();
+
+            // This has already been used up and does not need decrypting.
+            let _ = buffer.drain(..offset);
+
+            self.parse_packet(&buffer)?;
+        }
+
+        Ok(())
     }
 
     pub fn is_peer_encryption_enabled(&self) -> bool {
@@ -701,10 +718,4 @@ impl Engine {
 
         Ok(verify_data)
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct CompleteMessage {
-    to: MessageType,
-    current: Option<MessageType>,
 }

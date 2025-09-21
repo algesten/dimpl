@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::ops::Deref;
 
 use self_cell::{self_cell, MutBorrow};
@@ -30,6 +31,10 @@ impl Incoming {
         // Invariant: See above.
         self.records().last().unwrap()
     }
+
+    pub fn into_owner(self) -> Buf<'static> {
+        self.0.into_owner().into_inner()
+    }
 }
 
 self_cell!(
@@ -53,7 +58,7 @@ impl Incoming {
     /// Will surface parser errors.
     pub fn parse_packet(
         packet: &[u8],
-        engine: &Engine,
+        engine: &mut Engine,
         mut into: Buf<'static>,
     ) -> Result<Self, Error> {
         // The Buffer is where we store the raw packet data.
@@ -78,7 +83,7 @@ pub struct Records<'a> {
 }
 
 impl<'a> Records<'a> {
-    pub fn parse(input: &'a mut [u8], engine: &Engine) -> Result<Records<'a>, Error> {
+    pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Records<'a>, Error> {
         let mut records = ArrayVec::default();
         let mut current = input;
 
@@ -87,7 +92,11 @@ impl<'a> Records<'a> {
         while let Some(dtls_rec) = DTLSRecordSlice::try_read(current)? {
             match Record::parse(dtls_rec.slice, engine) {
                 Ok(record) => {
-                    records.push(record);
+                    if let Some(record) = record {
+                        records.push(record);
+                    } else {
+                        trace!("Discarding replayed rec");
+                    }
                 }
                 Err(e) => return Err(e),
             }
@@ -110,30 +119,29 @@ pub struct Record<'a>(RecordInner<'a>);
 
 impl<'a> Record<'a> {
     /// The first parse pass only parses the DTLSRecord header which is unencrypted.
-    pub fn parse(input: &'a mut [u8], engine: &Engine) -> Result<Record<'a>, Error> {
+    pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Option<Record<'a>>, Error> {
         let inner = RecordInner::try_new(input, |borrowed| {
             Ok::<_, Error>(ParsedRecord::parse(&borrowed, engine)?)
         })?;
 
         let record = Record(inner);
 
-        Ok(record)
-    }
+        if !engine.is_peer_encryption_enabled() {
+            return Ok(Some(record));
+        }
 
-    /// The second parse pass decrypts the record, parses potential Handshake or ApplicationData.
-    pub fn decrypt_and_reparse(self, engine: &mut Engine) -> Result<Record<'a>, Error> {
         // We need to decrypt the record and redo the parsing.
-        let dtls = self.record();
+        let dtls = record.record();
 
         // Anti-replay check
-        // if !engine.replay_check_and_update(dtls.sequence) {
-        //     return Ok(None);
-        // }
+        if !engine.replay_check_and_update(dtls.sequence) {
+            return Ok(None);
+        }
 
         let (aad, nonce) = engine.decryption_aad_and_nonce(dtls);
 
         // Bring back the unparsed bytes.
-        let input = self.0.into_owner();
+        let input = record.0.into_owner();
 
         // Local shorthand for where the encrypted ciphertext starts
         const CIPH: usize = DTLSRecord::HEADER_LEN + DTLS_EXPLICIT_NONCE_LEN;
@@ -162,7 +170,7 @@ impl<'a> Record<'a> {
             Ok::<_, Error>(ParsedRecord::parse(&borrowed, engine)?)
         })?;
 
-        Ok(Record(inner))
+        Ok(Some(Record(inner)))
     }
 
     pub fn record(&self) -> &DTLSRecord {
@@ -171,6 +179,22 @@ impl<'a> Record<'a> {
 
     pub fn handshake(&self) -> Option<&Handshake> {
         self.0.borrow_dependent().handshake.as_ref()
+    }
+
+    pub fn is_handled(&self) -> bool {
+        let rec = self.0.borrow_dependent();
+        rec.handshake
+            .as_ref()
+            .map(|h| h.handled.get())
+            .unwrap_or(rec.handled.get())
+    }
+
+    pub fn set_handled(&self) {
+        self.0.borrow_dependent().handled.set(true);
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.borrow_owner().len()
     }
 }
 
@@ -186,6 +210,7 @@ self_cell!(
 pub struct ParsedRecord<'a> {
     pub record: DTLSRecord<'a>,
     pub handshake: Option<Handshake<'a>>,
+    pub handled: Cell<bool>,
 }
 
 impl<'a> ParsedRecord<'a> {
@@ -200,7 +225,11 @@ impl<'a> ParsedRecord<'a> {
             None
         };
 
-        Ok(ParsedRecord { record, handshake })
+        Ok(ParsedRecord {
+            record,
+            handshake,
+            handled: Cell::new(false),
+        })
     }
 }
 
@@ -231,6 +260,7 @@ impl<'a> Default for Record<'a> {
         Record(RecordInner::new(&mut [], |_| ParsedRecord {
             record: DTLSRecord::default(),
             handshake: None,
+            handled: Cell::new(false),
         }))
     }
 }

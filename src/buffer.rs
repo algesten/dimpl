@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::fmt;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, RangeBounds};
+use std::vec::Drain;
 
 use zeroize::Zeroize;
 
@@ -86,6 +87,13 @@ impl Buf<'static> {
             unreachable!();
         };
         v
+    }
+
+    pub fn drain(&mut self, r: impl RangeBounds<usize>) -> Drain<'_, u8> {
+        let Inner::Owned(v) = &mut self.0 else {
+            unreachable!();
+        };
+        v.drain(r)
     }
 }
 

@@ -130,7 +130,7 @@ impl<'a> Handshake<'a> {
         mut iter: impl Iterator<Item = &'b Handshake<'c>>,
         buffer: &'a mut Buf<'static>,
         cipher_suite: Option<CipherSuite>,
-    ) -> Result<(Handshake<'a>, Option<MessageType>), crate::Error> {
+    ) -> Result<Handshake<'a>, crate::Error> {
         buffer.clear();
 
         // Invariant is upheld by the caller.
@@ -142,11 +142,8 @@ impl<'a> Handshake<'a> {
         buffer.extend_from_slice(data);
         first.handled.set(true);
 
-        let mut next_type = None;
-
         for handshake in iter {
             if handshake.header.msg_type != first.header.msg_type {
-                next_type = Some(handshake.header.msg_type);
                 break;
             }
 
@@ -184,7 +181,7 @@ impl<'a> Handshake<'a> {
         };
 
         // Create a new Handshake with the merged body
-        Ok((handshake, next_type))
+        Ok(handshake)
     }
 
     fn do_clone<'b>(&self) -> Handshake<'b> {
@@ -565,7 +562,7 @@ mod tests {
 
         // Defragment the fragments
         let mut defragmented_buffer = Buf::new();
-        let (defragmented_handshake, _next_type) =
+        let defragmented_handshake =
             Handshake::defragment(fragments.iter(), &mut defragmented_buffer, None).unwrap();
 
         // Serialize and compare to MESSAGE
