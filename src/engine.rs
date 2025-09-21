@@ -623,6 +623,15 @@ impl Engine {
         &self.handshakes
     }
 
+    /// Clear the accumulated handshake transcript.
+    ///
+    /// DTLS HelloVerifyRequest/ClientHello cookie exchange must not be
+    /// included in the main handshake transcript used for CertificateVerify
+    /// and Finished.
+    pub fn reset_handshake_transcript(&mut self) {
+        self.handshakes.clear();
+    }
+
     pub fn set_cipher_suite(&mut self, cipher_suite: CipherSuite) {
         self.cipher_suite = Some(cipher_suite);
     }

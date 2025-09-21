@@ -787,12 +787,16 @@ impl CryptoContext {
                 // Try P-256 first
                 if let Ok(encoded) = p256::EncodedPoint::from_bytes(pubkey_bytes) {
                     if signature.algorithm.hash != HashAlgorithm::SHA256 {
-                        return Err("ECDSA P-256 must use SHA256".to_string());
+                        return Err(format!(
+                            "ECDSA P-256 must use SHA256, got {:?}",
+                            signature.algorithm.hash
+                        ));
                     }
                     let vk = p256::ecdsa::VerifyingKey::from_encoded_point(&encoded)
                         .map_err(|e| format!("Failed to build P-256 verifying key: {e}"))?;
                     let sig = p256::ecdsa::Signature::from_der(signature.signature)
                         .map_err(|e| format!("Invalid ECDSA P-256 signature DER: {e}"))?;
+
                     return vk
                         .verify(&**data, &sig)
                         .map_err(|_| "ECDSA P-256 signature verification failed".to_string());

@@ -235,6 +235,10 @@ impl State {
                     Ok(())
                 })?;
 
+            // The HelloVerifyRequest exchange is not part of the main handshake transcript.
+            // Clear transcript so subsequent CertificateVerify/Finished cover only the real handshake.
+            server.engine.reset_handshake_transcript();
+
             // After HelloVerifyRequest, await a new ClientHello
             return Ok(self);
         }
@@ -243,7 +247,10 @@ impl State {
         let mut selected: Option<CipherSuite> = None;
         for s in ch.cipher_suites.iter() {
             let is_allowed = server.engine.is_cipher_suite_allowed(*s);
-            let is_compatible = server.engine.crypto_context().is_cipher_suite_compatible(*s);
+            let is_compatible = server
+                .engine
+                .crypto_context()
+                .is_cipher_suite_compatible(*s);
             if is_allowed && is_compatible {
                 selected = Some(*s);
                 break;
@@ -520,6 +527,10 @@ impl State {
             return Ok(Self::AwaitFinished);
         }
 
+        // Get handshake data BEFORE processing CertificateVerify message
+        // According to TLS spec, signature is over all handshake messages up to but not including CertificateVerify
+        let data = server.engine.handshake_data().to_buf();
+
         let maybe = server.engine.next_handshake(
             MessageType::CertificateVerify,
             &mut server.defragment_buffer,
@@ -540,7 +551,6 @@ impl State {
             ));
         }
 
-        let data = server.engine.handshake_data().to_buf();
         server
             .engine
             .crypto_context()
