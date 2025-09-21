@@ -237,6 +237,14 @@ impl Client {
                         continue;
                     };
 
+                    // Enforce DTLS 1.2 version in HelloVerifyRequest
+                    if hello_verify.server_version != ProtocolVersion::DTLS1_2 {
+                        return Err(Error::SecurityError(format!(
+                            "Unsupported DTLS version in HelloVerifyRequest: {:?}",
+                            hello_verify.server_version
+                        )));
+                    }
+
                     debug!(
                         "Received HelloVerifyRequest with cookie length: {}",
                         hello_verify.cookie.len()

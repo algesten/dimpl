@@ -81,6 +81,7 @@ pub enum ExtensionType {
     PostHandshakeAuth,
     SignatureAlgorithmsCert,
     KeyShare,
+    RenegotiationInfo,
     Unknown(u16),
 }
 
@@ -130,6 +131,7 @@ impl ExtensionType {
             0x0031 => ExtensionType::PostHandshakeAuth,
             0x0032 => ExtensionType::SignatureAlgorithmsCert,
             0x0033 => ExtensionType::KeyShare,
+            0xFF01 => ExtensionType::RenegotiationInfo,
             _ => ExtensionType::Unknown(value),
         }
     }
@@ -173,6 +175,7 @@ impl ExtensionType {
             ExtensionType::PostHandshakeAuth => 0x0031,
             ExtensionType::SignatureAlgorithmsCert => 0x0032,
             ExtensionType::KeyShare => 0x0033,
+            ExtensionType::RenegotiationInfo => 0xFF01,
             ExtensionType::Unknown(value) => *value,
         }
     }

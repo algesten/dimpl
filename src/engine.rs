@@ -655,9 +655,9 @@ impl Engine {
 
     fn peer_iv(&self) -> Iv {
         if self.is_client {
-            self.crypto_context.get_server_write_iv().unwrap()
+            self.crypto_context.get_server_write_iv().expect("Server write IV not available - keys not derived yet")
         } else {
-            self.crypto_context.get_client_write_iv().unwrap()
+            self.crypto_context.get_client_write_iv().expect("Client write IV not available - keys not derived yet")
         }
     }
 

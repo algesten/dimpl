@@ -70,6 +70,11 @@ impl<'a> ServerHello<'a> {
         let start = buf.len();
         ranges.push((ExtensionType::ExtendedMasterSecret, start, start));
 
+        // Renegotiation Info (RFC 5746) - empty for initial handshake
+        let start = buf.len();
+        buf.push(0); // renegotiated_connection length = 0
+        ranges.push((ExtensionType::RenegotiationInfo, start, buf.len()));
+
         let mut extensions: ArrayVec<[Extension<'a>; 32]> = ArrayVec::new();
         for (t, s, e) in ranges {
             extensions.push(Extension::new(t, &buf[s..e]));

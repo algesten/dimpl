@@ -68,12 +68,19 @@ impl<'a> DTLSRecord<'a> {
         let (input, content_type) = ContentType::parse(input)?; // u8
         let (input, version) = ProtocolVersion::parse(input)?; // u16
 
-        // Enforce DTLS 1.2 at parse-time to reduce error surface downstream
-        if version != ProtocolVersion::DTLS1_2 {
-            return Err(Err::Failure(nom::error::Error::new(
-                input,
-                nom::error::ErrorKind::Tag,
-            )));
+        // Accept DTLS 1.0 or 1.2 in record layer per RFC 6347
+        // DTLS 1.0 (0xFEFF) is often used in record layer during handshake for compatibility
+        // The actual protocol version is negotiated in the handshake messages
+        match version {
+            ProtocolVersion::DTLS1_0 | ProtocolVersion::DTLS1_2 => {
+                // Valid DTLS versions for record layer
+            }
+            _ => {
+                return Err(Err::Failure(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Tag,
+                )));
+            }
         }
 
         let (input, epoch) = be_u16(input)?; // u16
