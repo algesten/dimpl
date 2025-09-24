@@ -216,6 +216,13 @@ impl<'a> Handshake<'a> {
             fragment
         })
     }
+
+    pub fn dupe_triggers_resend(&self) -> bool {
+        matches!(
+            self.header.msg_type,
+            MessageType::ClientHello | MessageType::ServerHelloDone | MessageType::Finished
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
