@@ -14,6 +14,7 @@ pub enum SrtpProfileId {
     #[default]
     SrtpAes128CmSha1_80 = 0x0001,
     SrtpAeadAes128Gcm = 0x0007,
+    SrtpAeadAes256Gcm = 0x0008,
 }
 
 impl SrtpProfileId {
@@ -22,6 +23,7 @@ impl SrtpProfileId {
         let profile = match value {
             0x0001 => SrtpProfileId::SrtpAes128CmSha1_80,
             0x0007 => SrtpProfileId::SrtpAeadAes128Gcm,
+            0x0008 => SrtpProfileId::SrtpAeadAes256Gcm,
             _ => {
                 return Err(nom::Err::Error(nom::error::Error::new(
                     input,
@@ -42,6 +44,7 @@ impl From<SrtpProfile> for SrtpProfileId {
         match profile {
             SrtpProfile::Aes128CmSha1_80 => SrtpProfileId::SrtpAes128CmSha1_80,
             SrtpProfile::AeadAes128Gcm => SrtpProfileId::SrtpAeadAes128Gcm,
+            SrtpProfile::AeadAes256Gcm => SrtpProfileId::SrtpAeadAes256Gcm,
         }
     }
 }
@@ -51,6 +54,7 @@ impl From<SrtpProfileId> for SrtpProfile {
         match profile {
             SrtpProfileId::SrtpAes128CmSha1_80 => SrtpProfile::Aes128CmSha1_80,
             SrtpProfileId::SrtpAeadAes128Gcm => SrtpProfile::AeadAes128Gcm,
+            SrtpProfileId::SrtpAeadAes256Gcm => SrtpProfile::AeadAes256Gcm,
         }
     }
 }
@@ -71,6 +75,7 @@ impl UseSrtpExtension {
     pub fn default() -> Self {
         let mut profiles = ArrayVec::new();
         // Add profiles in order of preference (most secure first)
+        profiles.push(SrtpProfileId::SrtpAeadAes256Gcm);
         profiles.push(SrtpProfileId::SrtpAeadAes128Gcm);
         profiles.push(SrtpProfileId::SrtpAes128CmSha1_80);
 
@@ -131,6 +136,7 @@ mod tests {
     #[test]
     fn test_use_srtp_extension() {
         let profiles = array_vec![
+            SrtpProfileId::SrtpAeadAes256Gcm,
             SrtpProfileId::SrtpAeadAes128Gcm,
             SrtpProfileId::SrtpAes128CmSha1_80
         ];
@@ -143,7 +149,8 @@ mod tests {
         ext.serialize(&mut serialized);
 
         let expected = [
-            0x00, 0x04, // Profiles length (4 bytes)
+            0x00, 0x06, // Profiles length (6 bytes)
+            0x00, 0x08, // SrtpAeadAes256Gcm (0x0008)
             0x00, 0x07, // SrtpAeadAes128Gcm (0x0007)
             0x00, 0x01, // SrtpAes128CmSha1_80 (0x0001)
             0x03, // MKI length (3 bytes)

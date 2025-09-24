@@ -329,11 +329,15 @@ impl State {
             ));
         }
 
-        // Select SRTP profile according to server priority: GCM first, then SHA1
+        // Select SRTP profile according to server priority: AES256GCM, AES128GCM, then SHA1
         if let Some(profiles) = client_srtp_profiles {
             // Map client profile ids to SrtpProfile, then pick our preferred
             let mut selected_profile: Option<SrtpProfile> = None;
-            for preferred in [SrtpProfile::AeadAes128Gcm, SrtpProfile::Aes128CmSha1_80] {
+            for preferred in [
+                SrtpProfile::AeadAes256Gcm,
+                SrtpProfile::AeadAes128Gcm,
+                SrtpProfile::Aes128CmSha1_80,
+            ] {
                 if profiles.iter().any(|pid| preferred == (*pid).into()) {
                     selected_profile = Some(preferred);
                     break;
@@ -772,6 +776,7 @@ fn handshake_create_server_hello(
         .ok_or_else(|| Error::UnexpectedMessage("No cipher suite".to_string()))?;
 
     let srtp_pid = negotiated_srtp_profile.map(|p| match p {
+        SrtpProfile::AeadAes256Gcm => SrtpProfileId::SrtpAeadAes256Gcm,
         SrtpProfile::AeadAes128Gcm => SrtpProfileId::SrtpAeadAes128Gcm,
         SrtpProfile::Aes128CmSha1_80 => SrtpProfileId::SrtpAes128CmSha1_80,
     });

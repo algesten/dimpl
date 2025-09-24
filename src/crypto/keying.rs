@@ -32,14 +32,19 @@ pub enum SrtpProfile {
     Aes128CmSha1_80,
     /// AEAD_AES_128_GCM (RFC 7714)
     AeadAes128Gcm,
+    /// AEAD_AES_256_GCM (RFC 7714)
+    AeadAes256Gcm,
 }
 
 #[allow(dead_code)]
 impl SrtpProfile {
     // All the profiles we support, ordered from most preferred to least.
     /// All supported profiles ordered by preference.
-    pub const ALL: &'static [SrtpProfile] =
-        &[SrtpProfile::AeadAes128Gcm, SrtpProfile::Aes128CmSha1_80];
+    pub const ALL: &'static [SrtpProfile] = &[
+        SrtpProfile::AeadAes256Gcm,
+        SrtpProfile::AeadAes128Gcm,
+        SrtpProfile::Aes128CmSha1_80,
+    ];
 
     /// The length of keying material to extract from the DTLS session in bytes.
     #[rustfmt::skip]
@@ -50,6 +55,7 @@ impl SrtpProfile {
              // don't want a dependency in that direction.
             SrtpProfile::Aes128CmSha1_80 => 16 * 2 + 14 * 2,
             SrtpProfile::AeadAes128Gcm   => 16 * 2 + 12 * 2,
+            SrtpProfile::AeadAes256Gcm   => 32 * 2 + 12 * 2,
         }
     }
 }

@@ -29,8 +29,8 @@ verification and SRTP key export yourself.
 - **AEAD**: AES‑GCM 128/256 only (no CBC/EtM modes).
 - **Key exchange**: ECDHE (P‑256/P‑384) and FFDHE (≥2048 bit) for DHE suites.
 - **Signatures**: ECDSA P‑256/SHA‑256, ECDSA P‑384/SHA‑384, RSA‑PKCS1v1.5 with SHA‑256/384.
-- **DTLS‑SRTP**: Exports keying material for `SRTP_AEAD_AES_128_GCM` and
-  `SRTP_AES128_CM_SHA1_80` (RFC 5764/7714).
+- **DTLS‑SRTP**: Exports keying material for `SRTP_AEAD_AES_256_GCM`,
+  `SRTP_AEAD_AES_128_GCM`, and `SRTP_AES128_CM_SHA1_80` (RFC 5764/7714).
 - **Extended Master Secret** (RFC 7627) is negotiated and enforced.
 - Not supported: PSK cipher suites.
 
