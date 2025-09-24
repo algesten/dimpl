@@ -72,8 +72,11 @@ pub struct Engine {
     /// Flight backoff
     flight_backoff: ExponentialBackoff,
 
-    /// Handshake timeout
-    handshake_timeout: Option<Instant>,
+    /// Timeout for the current flight
+    flight_timeout: Option<Instant>,
+
+    /// Global timeout for the entire connect operation.
+    connect_timeout: Option<Instant>,
 }
 
 impl Engine {
@@ -106,7 +109,8 @@ impl Engine {
             replay_max_seq: 0,
             replay_window: 0,
             flight_backoff,
-            handshake_timeout: None,
+            flight_timeout: None,
+            connect_timeout: None,
         }
     }
 
@@ -217,17 +221,25 @@ impl Engine {
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
-        if self.handshake_timeout.is_none() {
-            self.handshake_timeout = Some(now + self.flight_backoff.rto());
+        if self.connect_timeout.is_none() {
+            self.connect_timeout = Some(now + self.config.handshake_timeout);
+        }
+        if self.flight_timeout.is_none() {
+            self.flight_timeout = Some(now + self.flight_backoff.rto());
         }
 
         // Unwrap is ok because we set it above
-        let handshake_timeout = self.handshake_timeout.as_mut().unwrap();
+        let connect_timeout = self.connect_timeout.as_mut().unwrap();
+        let flight_timeout = self.flight_timeout.as_mut().unwrap();
 
-        if now >= *handshake_timeout {
+        if now >= *connect_timeout {
+            return Err(Error::Timeout("connect"));
+        }
+
+        if now >= *flight_timeout {
             if self.flight_backoff.can_retry() {
                 self.flight_backoff.attempt();
-                self.handshake_timeout = Some(now + self.flight_backoff.rto());
+                self.flight_timeout = Some(now + self.flight_backoff.rto());
                 self.flight_resend();
             } else {
                 return Err(Error::Timeout("handshake"));
@@ -239,7 +251,7 @@ impl Engine {
 
     pub fn poll_output(&mut self, now: Instant) -> Output {
         // Do we need a handle_timeout()?
-        if self.handshake_timeout.is_none() {
+        if self.flight_timeout.is_none() {
             return Output::Timeout(now);
         }
 
@@ -260,7 +272,7 @@ impl Engine {
     fn poll_timeout(&self, now: Instant) -> Instant {
         let next_flight_timeout = now + self.flight_backoff.rto();
 
-        let Some(handshake_timeout) = self.handshake_timeout else {
+        let Some(handshake_timeout) = self.flight_timeout else {
             return next_flight_timeout;
         };
 
@@ -337,7 +349,7 @@ impl Engine {
 
     pub fn flight_reset(&mut self) {
         self.flight_backoff.reset();
-        self.handshake_timeout = None;
+        self.flight_timeout = None;
     }
 
     fn flight_resend(&mut self) {
