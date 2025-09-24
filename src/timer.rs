@@ -33,10 +33,12 @@ impl ExponentialBackoff {
 
     pub fn rto(&self) -> Duration {
         if self.jitter < 0.0 {
-            self.rto - Duration::from_secs_f32(self.jitter.abs())
+            let duration = Duration::from_secs_f32(self.jitter.abs());
+            self.rto.saturating_sub(duration)
         } else {
             self.rto + Duration::from_secs_f32(self.jitter)
         }
+        .max(Duration::from_millis(50))
     }
 
     // A value between -0.25s and 0.25s

@@ -246,7 +246,7 @@ impl Engine {
 
     pub fn poll_output(&mut self, now: Instant) -> Output {
         // Do we need a handle_timeout()?
-        if self.flight_timeout.is_none() {
+        if self.flight_timers_active && self.flight_timeout.is_none() {
             return Output::Timeout(now);
         }
 
@@ -273,8 +273,8 @@ impl Engine {
         let Some(next_flight_timeout) = self.flight_timeout else {
             return now;
         };
-        let Some(handshake_timeout) = self.flight_timeout else {
-            return now;
+        let Some(handshake_timeout) = self.connect_timeout else {
+            return next_flight_timeout;
         };
 
         if next_flight_timeout < handshake_timeout {
@@ -306,11 +306,13 @@ impl Engine {
         self.flight_timeout = None;
     }
 
-    pub fn flight_resend_stop(&mut self) {
+    pub fn flight_resend_stop(&mut self, clear_resends: bool) {
         self.flight_timers_active = false;
-        self.flight_clear_resends();
         self.flight_timeout = None;
         self.connect_timeout = None;
+        if clear_resends && !self.flight_saved_records.is_empty() {
+            self.flight_clear_resends();
+        }
     }
 
     fn flight_clear_resends(&mut self) {
@@ -430,6 +432,21 @@ impl Engine {
         record.set_handled();
 
         Some(record)
+    }
+
+    /// Mark any pending ChangeCipherSpec records as handled and purge them.
+    /// We can accumulate multiple ChangeCipherSpec due to resends. Since they
+    /// don't have any Handshake message_seq and each resend gives a new DTLSRecord
+    /// sequence number, we might have multiple.
+    pub fn drop_pending_ccs(&mut self) {
+        for incoming in self.queue_rx.iter() {
+            for record in incoming.records().iter() {
+                if record.record().content_type == ContentType::ChangeCipherSpec {
+                    record.set_handled();
+                }
+            }
+        }
+        self.purge_queue_rx();
     }
 
     // Purge completely handled packets. We can only purge the Incoming if all the
@@ -683,9 +700,7 @@ impl Engine {
     }
 
     /// Process application data packets from the incoming queue
-    /// Returns true if any application data was processed
-    pub fn process_application_data(&mut self) -> Result<bool, Error> {
-        let mut processed_any = false;
+    pub fn process_application_data(&mut self) -> Result<(), Error> {
         // Process any incoming packets with application data
         while let Some(incoming) = self.queue_rx.pop_front() {
             let records = incoming.records();
@@ -699,11 +714,10 @@ impl Engine {
                     // Push the decrypted data to the queue
                     self.queue_events
                         .push_back(Output::ApplicationData(plaintext));
-                    processed_any = true;
                 }
             }
         }
-        Ok(processed_any)
+        Ok(())
     }
 
     /// Encrypt data appropriate for the role (client or server)

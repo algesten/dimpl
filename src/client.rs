@@ -741,6 +741,9 @@ impl State {
             return Ok(self);
         };
 
+        // Drop any extra CCS resends to avoid being blocked
+        client.engine.drop_pending_ccs();
+
         // Expect every record to be decrypted from now on.
         client.engine.enable_peer_encryption()?;
 
@@ -799,7 +802,7 @@ impl State {
         }
 
         // Receiving server Finished implicitly acks our Flight 5; stop resends
-        client.engine.flight_resend_stop();
+        client.engine.flight_resend_stop(true);
 
         // Emit Connected event
         client.engine.push_connected();
@@ -828,7 +831,7 @@ impl State {
 
     fn await_application_data(self, client: &mut Client) -> Result<Self, Error> {
         // Process incoming application data packets using the engine
-        let _ = client.engine.process_application_data()?;
+        client.engine.process_application_data()?;
 
         Ok(self)
     }

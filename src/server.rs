@@ -622,6 +622,9 @@ impl State {
             return Ok(self);
         };
 
+        // Drop any extra CCS resends to avoid being blocked
+        server.engine.drop_pending_ccs();
+
         // Expect every record to be decrypted from now on.
         server.engine.enable_peer_encryption()?;
 
@@ -686,6 +689,10 @@ impl State {
                 Ok(())
             })?;
 
+        // Final flight sent; stop periodic retransmission timers per RFC 6347 FINISHED state.
+        // If this flight need resending, it relies on the client to resend its last flight.
+        server.engine.flight_resend_stop(false);
+
         // Handshake complete
         server.engine.push_connected();
 
@@ -711,11 +718,10 @@ impl State {
 
     fn await_application_data(self, server: &mut Server) -> Result<Self, Error> {
         // Process incoming application data
-        let processed = server.engine.process_application_data()?;
-        if processed {
-            // Any authenticated epoch-1 record implicitly acks our last flight
-            server.engine.flight_resend_stop();
-        }
+        server.engine.process_application_data()?;
+
+        // Now that authenticated epoch-1 data has been received, clear any saved last-flight resends
+        server.engine.flight_resend_stop(true);
 
         Ok(self)
     }
