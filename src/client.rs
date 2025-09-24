@@ -604,7 +604,7 @@ impl State {
             .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
 
         let suite_hash = cipher_suite.hash_algorithm();
-        client.captured_session_hash = Some(client.engine.handshake_hash(suite_hash));
+        client.captured_session_hash = Some(client.engine.transcript_hash(suite_hash));
 
         if client.certificate_verify {
             Ok(Self::SendCertificateVerify)
@@ -965,7 +965,7 @@ fn handshake_create_certificate_verify(
     // Create the signature algorithm
     let algorithm = SignatureAndHashAlgorithm::new(hash_alg, sig_alg);
 
-    let handshake_data = engine.handshake_data();
+    let handshake_data = engine.transcript();
 
     // Sign all handshake messages
     let signature = engine

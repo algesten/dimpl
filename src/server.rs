@@ -262,7 +262,7 @@ impl State {
 
             // The HelloVerifyRequest exchange is not part of the main handshake transcript.
             // Clear transcript so subsequent CertificateVerify/Finished cover only the real handshake.
-            server.engine.reset_flight();
+            server.engine.transcript_reset();
 
             // After HelloVerifyRequest, await a new ClientHello
             return Ok(self);
@@ -532,7 +532,7 @@ impl State {
 
         // Capture session hash for EMS now (up to ClientKeyExchange)
         let suite_hash = suite.hash_algorithm();
-        server.captured_session_hash = Some(server.engine.handshake_hash(suite_hash));
+        server.captured_session_hash = Some(server.engine.transcript_hash(suite_hash));
 
         // Derive master secret and keys (needed to decrypt client's Finished)
         let suite_hash = suite.hash_algorithm();
@@ -577,7 +577,7 @@ impl State {
     fn await_certificate_verify(self, server: &mut Server) -> Result<Self, Error> {
         // Get handshake data BEFORE processing CertificateVerify message
         // According to TLS spec, signature is over all handshake messages up to but not including CertificateVerify
-        let data = server.engine.handshake_data().to_buf();
+        let data = server.engine.transcript().to_buf();
 
         let maybe = server.engine.next_handshake(
             MessageType::CertificateVerify,

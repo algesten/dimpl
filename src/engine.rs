@@ -62,7 +62,7 @@ pub struct Engine {
     next_handshake_seq_no: u16,
 
     /// Handshakes collected for hash computation.
-    handshakes: Buf<'static>,
+    transcript: Buf<'static>,
 
     /// Anti-replay window state (per current epoch)
     replay_epoch: u16,
@@ -101,7 +101,7 @@ impl Engine {
             is_client: false,
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
-            handshakes: Buf::new(),
+            transcript: Buf::new(),
             replay_epoch: 0,
             replay_max_seq: 0,
             replay_window: 0,
@@ -228,7 +228,7 @@ impl Engine {
             if self.flight_backoff.can_retry() {
                 self.flight_backoff.attempt();
                 self.handshake_timeout = Some(now + self.flight_backoff.rto());
-                self.resend_flight();
+                self.flight_resend();
             } else {
                 return Err(Error::Timeout("handshake"));
             }
@@ -335,13 +335,12 @@ impl Engine {
         false
     }
 
-    pub fn reset_flight(&mut self) {
-        self.handshakes.clear();
+    pub fn flight_reset(&mut self) {
         self.flight_backoff.reset();
         self.handshake_timeout = None;
     }
 
-    fn resend_flight(&mut self) {
+    fn flight_resend(&mut self) {
         //
     }
 
@@ -367,7 +366,7 @@ impl Engine {
         let handshake = Handshake::defragment(iter, defragment_buffer, self.cipher_suite)?;
 
         // Update the stored handshakes used for CertificateVerify and Finished
-        handshake.serialize(&mut self.handshakes);
+        handshake.serialize(&mut self.transcript);
 
         // Move the expected seq_no along
         self.peer_handshake_seq_no = handshake.header.message_seq + 1;
@@ -427,7 +426,7 @@ impl Engine {
 
         // As long as we're handshaking, update the hash with the fragment.
         if maybe_msg_type.is_some() {
-            self.handshakes.extend_from_slice(&fragment);
+            self.transcript.extend_from_slice(&fragment);
         }
 
         let sequence = self.next_sequence_tx;
@@ -671,14 +670,18 @@ impl Engine {
             .push_back(Output::KeyingMaterial(keying_material, profile));
     }
 
-    pub fn handshake_hash(&self, algorithm: HashAlgorithm) -> Vec<u8> {
+    pub fn transcript_reset(&mut self) {
+        self.transcript.clear();
+    }
+
+    pub fn transcript_hash(&self, algorithm: HashAlgorithm) -> Vec<u8> {
         let mut hash = Hash::new(algorithm);
-        hash.update(&self.handshakes);
+        hash.update(&self.transcript);
         hash.clone_and_finalize()
     }
 
-    pub fn handshake_data(&self) -> &[u8] {
-        &self.handshakes
+    pub fn transcript(&self) -> &[u8] {
+        &self.transcript
     }
 
     pub fn set_cipher_suite(&mut self, cipher_suite: CipherSuite) {
@@ -759,7 +762,7 @@ impl Engine {
             ));
         };
         let algorithm = suite.hash_algorithm();
-        let handshake_hash = self.handshake_hash(algorithm);
+        let handshake_hash = self.transcript_hash(algorithm);
 
         let suite_hash = suite.hash_algorithm();
         let verify_data_vec = self
