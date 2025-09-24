@@ -428,17 +428,30 @@ impl Engine {
     where
         F: FnOnce(&mut Buf<'static>),
     {
-        // Check if the queue has reached the maximum size before creating a new buffer
-        if self.queue_tx.len() >= self.config.max_queue_tx {
+        // Prepare the plaintext fragment
+        let mut fragment = self.buffers_free.pop();
+
+        // Let the caller fill the fragment (plaintext)
+        f(&mut fragment);
+
+        // Compute wire length of the record if serialized into a datagram
+        // Record header (13) + handshake/change/app data bytes + AEAD overhead (if epoch >= 1)
+        let overhead = if epoch >= 1 { DTLS_AEAD_OVERHEAD } else { 0 };
+        let record_wire_len = DTLSRecord::HEADER_LEN + fragment.len() + overhead;
+
+        // Decide whether to append to the existing last datagram or create a new one
+        let can_append = self
+            .queue_tx
+            .back()
+            .map(|b| b.len() + record_wire_len <= self.config.mtu)
+            .unwrap_or(false);
+
+        // If we cannot append, ensure we have space for a new datagram
+        if !can_append && self.queue_tx.len() >= self.config.max_queue_tx {
             return Err(Error::TransmitQueueFull);
         }
 
-        let mut buffer = self.buffers_free.pop();
-        let mut fragment = self.buffers_free.pop();
-
-        // Let the callback fill the fragment
-        f(&mut fragment);
-
+        // Sequence number to use for this record
         let sequence = if epoch == 0 {
             self.sequence_epoch_0
         } else {
@@ -446,7 +459,7 @@ impl Engine {
         };
         let length = fragment.len() as u16;
 
-        // Handle encryption if enabled and content type requires it
+        // Handle encryption for epochs >= 1
         if epoch >= 1 {
             // Get the fixed part of the IV (4 bytes)
             let iv = if self.is_client {
@@ -472,21 +485,21 @@ impl Engine {
             // DTLS 1.2 AEAD (AES-GCM): AAD uses the plaintext length (DTLSCompressed.length).
             // See RFC 5246/5288 and RFC 6347. The record fragment on the wire will be:
             // 8-byte explicit nonce || ciphertext(plaintext) || 16-byte GCM tag.
-            let final_length = length;
-            let aad = Aad::new(content_type, sequence, final_length);
+            let aad = Aad::new(content_type, sequence, length);
 
             // Encrypt the fragment in-place
             self.encrypt_data(&mut fragment, aad, nonce)?;
             let ctext_len = fragment.len();
 
-            // Increase the size to make space for the nonce.
+            // Increase the size to make space for the explicit nonce.
             fragment.resize(DTLS_EXPLICIT_NONCE_LEN + ctext_len, 0);
 
-            // Shift the encrypted data to make space for the nonce.
+            // Shift the encrypted data to make space for the nonce and write it
             fragment.copy_within(0..ctext_len, DTLS_EXPLICIT_NONCE_LEN);
             fragment[..DTLS_EXPLICIT_NONCE_LEN].copy_from_slice(&explicit_nonce);
         }
 
+        // Build the record structure referencing the (possibly encrypted) fragment
         let record = DTLSRecord {
             content_type,
             version: ProtocolVersion::DTLS1_2,
@@ -502,16 +515,18 @@ impl Engine {
             self.sequence_epoch_n.sequence_number += 1;
         }
 
-        // Serialize the record into the buffer
-        buffer.clear();
+        // Serialize the record into the chosen datagram buffer
+        if can_append {
+            let last = self.queue_tx.back_mut().unwrap();
+            record.serialize(last);
+        } else {
+            let mut buffer = self.buffers_free.pop();
+            buffer.clear();
+            record.serialize(&mut buffer);
+            self.queue_tx.push_back(buffer);
+        }
 
-        // Serialize the record into the buffer
-        record.serialize(&mut buffer);
-
-        // Add to the outgoing queue
-        self.queue_tx.push_back(buffer);
-
-        // We can reuse this buffer.
+        // Return the fragment buffer to the pool
         self.buffers_free.push(fragment);
 
         Ok(())
@@ -549,10 +564,75 @@ impl Engine {
         // Increment the sequence number for the next handshake message
         self.next_handshake_seq_no += 1;
 
-        // Now create the record with the serialized handshake
-        self.create_record(ContentType::Handshake, msg_type.epoch(), |fragment| {
-            handshake.serialize(fragment);
-        })?;
+        // We want to pack as much as possible into the outgoing datagram and
+        // remain within the MTU. Fragment the handshake across records as needed.
+
+        let epoch = msg_type.epoch();
+        let total_len = body_buffer.len();
+        let mut offset: usize = 0;
+
+        // Handshake header is 12 bytes
+        let handshake_header_len = 12usize;
+        let aead_overhead = if epoch >= 1 { DTLS_AEAD_OVERHEAD } else { 0 };
+
+        // At least one record must be created even if total_len == 0
+        while offset < total_len || (total_len == 0 && offset == 0) {
+            // How many bytes are already used in the current datagram (if any)?
+            let already_used_in_current = self.queue_tx.back().map(|b| b.len()).unwrap_or(0);
+            let available_in_current = self.config.mtu.saturating_sub(already_used_in_current);
+
+            // Fixed overhead per handshake record on the wire:
+            // DTLS record header + handshake header + AEAD overhead (if epoch >= 1)
+            let fixed_overhead = DTLSRecord::HEADER_LEN + handshake_header_len + aead_overhead;
+
+            // Prefer to pack into the current datagram. If the current one cannot fit even
+            // the fixed overhead, we will start a fresh datagram and compute space again.
+            let available_for_body = if available_in_current >= fixed_overhead {
+                available_in_current - fixed_overhead
+            } else {
+                self.config.mtu.saturating_sub(fixed_overhead)
+            };
+
+            // Remaining bytes from the handshake body we still need to send.
+            let remaining_body_bytes = total_len.saturating_sub(offset);
+
+            // For empty-body handshakes (e.g., ServerHelloDone), we still send a header-only record.
+            let chunk_len = if total_len == 0 {
+                0
+            } else {
+                remaining_body_bytes.min(available_for_body)
+            };
+
+            let frag_body = if chunk_len == 0 {
+                &[][..]
+            } else {
+                &body_buffer[offset..offset + chunk_len]
+            };
+
+            let frag_handshake = Handshake {
+                header: Header {
+                    msg_type,
+                    length: handshake.header.length,
+                    message_seq: handshake.header.message_seq,
+                    fragment_offset: offset as u32,
+                    fragment_length: chunk_len as u32,
+                },
+                body: Body::Fragment(frag_body),
+                handled: Cell::new(false),
+            };
+
+            // Emit the record; packing into current datagram happens inside create_record
+            self.create_record(ContentType::Handshake, epoch, |fragment| {
+                frag_handshake.serialize(fragment);
+            })?;
+
+            if total_len == 0 {
+                // Nothing more to send for empty-body handshake
+                break;
+            }
+
+            offset += chunk_len;
+        }
 
         // Return the buffer
         self.buffers_free.push(body_buffer);
