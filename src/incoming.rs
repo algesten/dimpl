@@ -117,7 +117,11 @@ impl<'a> Record<'a> {
 
         let record = Record(inner);
 
-        if !engine.is_peer_encryption_enabled() {
+        // It is not enough to only look at the epoch, since to be able to decrypt the entire
+        // preceeding set of flights sets up the cryptographic context. In a situation with
+        // packet loss, we can end up seeing epoch 1 records before we can decrypt them.
+        let is_epoch_0 = record.record().sequence.epoch == 0;
+        if is_epoch_0 || !engine.is_peer_encryption_enabled() {
             return Ok(Some(record));
         }
 
