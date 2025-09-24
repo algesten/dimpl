@@ -35,6 +35,7 @@ mod crypto;
 pub use crypto::CertVerifier;
 mod engine;
 mod incoming;
+mod window;
 
 mod util;
 

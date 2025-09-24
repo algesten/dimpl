@@ -12,6 +12,7 @@ use crate::incoming::{Incoming, Record};
 use crate::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
 use crate::timer::ExponentialBackoff;
+use crate::window::ReplayWindow;
 use crate::{Config, Error, Output};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
@@ -69,10 +70,10 @@ pub struct Engine {
     transcript: Buf<'static>,
 
     /// Anti-replay window state (per current epoch)
-    replay_epoch: u16,
-    replay_max_seq: u64,
-    replay_window: u64,
+    replay: ReplayWindow,
 
+    /// Whether the flight timers are active. This turns off once
+    /// the connection is established.
     flight_timers_active: bool,
 
     /// Flight backoff
@@ -111,9 +112,7 @@ impl Engine {
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
             transcript: Buf::new(),
-            replay_epoch: 0,
-            replay_max_seq: 0,
-            replay_window: 0,
+            replay: ReplayWindow::new(),
             flight_timers_active: true,
             flight_backoff,
             flight_timeout: None,
@@ -697,38 +696,7 @@ impl Engine {
 
     /// Anti-replay check and update state. Returns true if record is fresh/acceptable.
     pub fn replay_check_and_update(&mut self, seq: Sequence) -> bool {
-        // Epoch handling
-        if seq.epoch != self.replay_epoch {
-            if seq.epoch < self.replay_epoch {
-                // Old epoch: reject
-                return false;
-            }
-            // New epoch: reset window
-            self.replay_epoch = seq.epoch;
-            self.replay_max_seq = 0;
-            self.replay_window = 0;
-        }
-
-        let seqno = seq.sequence_number;
-        if seqno > self.replay_max_seq {
-            let delta = seqno - self.replay_max_seq;
-            let shift = core::cmp::min(delta, 63);
-            self.replay_window <<= shift;
-            self.replay_window |= 1; // mark newest as seen
-            self.replay_max_seq = seqno;
-            true
-        } else {
-            let offset = self.replay_max_seq - seqno;
-            if offset >= 64 {
-                return false; // too old
-            }
-            let mask = 1u64 << offset;
-            if (self.replay_window & mask) != 0 {
-                return false; // duplicate
-            }
-            self.replay_window |= mask;
-            true
-        }
+        self.replay.check_and_update(seq)
     }
 
     /// Push a Connected event to the queue
