@@ -174,42 +174,72 @@ impl Engine {
     /// 2. If it is not a handshake, sort by sequence_number
     ///
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
-        let first = incoming.first();
-
-        // Check if the queue has reached the maximum size
+        // Capacity guard
         if self.queue_rx.len() >= self.config.max_queue_rx {
             return Err(Error::ReceiveQueueFull);
         }
 
-        if let Some(h) = first.handshake() {
-            if let Err(index) = self.queue_rx.binary_search_by(|i| {
-                let other = i
-                    .first()
-                    .handshake()
-                    .as_ref()
-                    .map(|h| (h.header.message_seq, h.header.fragment_offset))
-                    .unwrap_or((u16::MAX, u32::MAX));
-                let current = (h.header.message_seq, h.header.fragment_offset);
-                other.cmp(&current)
-            }) {
-                // Insert in order of handshake
+        // Dispatch to specialized handlers
+        if incoming.first().handshake().is_some() {
+            self.insert_incoming_handshake(incoming)
+        } else {
+            self.insert_incoming_non_handshake(incoming)
+        }
+    }
+
+    fn insert_incoming_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
+        let first = incoming.first();
+        let handshake = first.handshake().expect("caller ensures handshake");
+
+        let key_current = (
+            handshake.header.message_seq,
+            handshake.header.fragment_offset,
+        );
+
+        let search_result = self.queue_rx.binary_search_by(|item| {
+            let key_other = item
+                .first()
+                .handshake()
+                .as_ref()
+                .map(|h| (h.header.message_seq, h.header.fragment_offset))
+                .unwrap_or((u16::MAX, u32::MAX));
+            key_other.cmp(&key_current)
+        });
+
+        match search_result {
+            Err(index) => {
+                // Insert in order of handshake key
                 self.queue_rx.insert(index, incoming);
-            } else {
-                // We have already received this exact handshake packet.
-                // Ignore the new one.
+            }
+            Ok(_) => {
+                // Exact duplicate handshake fragment
                 debug!(
                     "Dupe handshake with message_seq: {} and offset: {}",
-                    h.header.message_seq, h.header.fragment_offset
+                    handshake.header.message_seq, handshake.header.fragment_offset
                 );
             }
-        } else if let Err(index) = self
+        }
+
+        Ok(())
+    }
+
+    fn insert_incoming_non_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
+        let first = incoming.first();
+        let seq_current = first.record().sequence;
+
+        let search_result = self
             .queue_rx
-            .binary_search_by_key(&first.record().sequence, |i| i.first().record().sequence)
-        {
-            // Insert in order of sequence_number
-            self.queue_rx.insert(index, incoming);
-        } else {
-            debug!("Dupe record with sequence: {}", first.record().sequence);
+            .binary_search_by_key(&seq_current, |item| item.first().record().sequence);
+
+        match search_result {
+            Err(index) => self.queue_rx.insert(index, incoming),
+            Ok(_) => {
+                // For epoch 0, we can get duplicates due to resends.
+                // For epoch 1, we have the replay window and there should
+                // be no duplicates.
+                assert!(seq_current.epoch == 0);
+                debug!("Dupe record with sequence: {}", seq_current)
+            }
         }
 
         Ok(())
