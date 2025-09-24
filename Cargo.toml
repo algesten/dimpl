@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
+# MSRV
+rust-version = "1.71.1"
+
 [dependencies]
 log = "0.4.22"
 nom = { version = "7.1.3", default-features = false, features = ["std"] }
