@@ -197,7 +197,7 @@ fn resends_each_flight_epoch_and_sequence_increase() {
         server.handle_packet(&p).expect("server recv f5");
     }
 
-    // FLIGHT 6 (Server CCS, Finished): block initial, deliver resend
+    // FLIGHT 6 (Server CCS, Finished): no resend timer after final flight
     server.handle_timeout(now).expect("server arm flight 6");
     let init6_pkts = collect_flight_packets(&mut server);
     assert!(
@@ -205,15 +205,13 @@ fn resends_each_flight_epoch_and_sequence_increase() {
         "server should emit flight 6 after client flight 5"
     );
     let init6_hdrs = collect_headers(&init6_pkts);
-    trigger_resend(&mut server, &mut now);
-    let resend6_pkts = collect_flight_packets(&mut server);
-    let resend6_hdrs = collect_headers(&resend6_pkts);
-    assert_epochs_and_seq_increased(&init6_hdrs, &resend6_hdrs);
+    // Final flight should include epoch 1 Finished in the initial transmission
     assert!(
-        resend6_hdrs.iter().any(|h| h.ctype == 22 && h.epoch == 1),
+        init6_hdrs.iter().any(|h| h.ctype == 22 && h.epoch == 1),
         "server flight 6 should include epoch 1 Finished"
     );
-    for p in resend6_pkts {
-        client.handle_packet(&p).expect("client recv f6");
-    }
+    // Ensure no timer-driven resend occurs after final flight
+    trigger_resend(&mut server, &mut now);
+    let resend6_pkts = collect_flight_packets(&mut server);
+    assert!(resend6_pkts.is_empty(), "no resend after final flight");
 }
