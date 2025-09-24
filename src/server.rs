@@ -252,6 +252,8 @@ impl State {
             debug!("Invalid/missing cookie; sending HelloVerifyRequest");
 
             let cookie = compute_cookie(&server.cookie_secret, client_random)?;
+            // Start/restart flight timer for server Flight 2 (HelloVerifyRequest)
+            server.engine.begin_flight(2);
             server
                 .engine
                 .create_handshake(MessageType::HelloVerifyRequest, |body, _engine| {
@@ -351,6 +353,9 @@ impl State {
 
     fn send_server_hello(self, server: &mut Server) -> Result<Self, Error> {
         debug!("Sending ServerHello");
+
+        // Start/restart flight timer for server Flight 4
+        server.engine.begin_flight(4);
 
         let session_id = server.session_id.unwrap_or_else(SessionId::empty);
         let server_random = server.random;
@@ -656,6 +661,9 @@ impl State {
 
     fn send_change_cipher_spec(self, server: &mut Server) -> Result<Self, Error> {
         debug!("Sending ChangeCipherSpec");
+
+        // Start/restart flight timer for server Flight 6 (CCS+Finished)
+        server.engine.begin_flight(6);
 
         // Send ChangeCipherSpec
         server

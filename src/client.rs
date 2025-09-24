@@ -201,6 +201,10 @@ impl State {
         let cookie = client.cookie.unwrap_or_else(Cookie::empty);
         let random = client.random;
 
+        // Determine flight number: 1 for initial CH, 3 for retransmit with cookie
+        let flight_no = if client.cookie.is_none() { 1 } else { 3 };
+        client.engine.begin_flight(flight_no);
+
         client
             .engine
             .create_handshake(MessageType::ClientHello, |body, engine| {
@@ -577,6 +581,9 @@ impl State {
     fn send_certificate(self, client: &mut Client) -> Result<Self, Error> {
         debug!("Sending Certificate");
 
+        // Start/restart flight timer for client Flight 5
+        client.engine.begin_flight(5);
+
         // Now use the engine with the stored data
         client
             .engine
@@ -587,6 +594,11 @@ impl State {
 
     fn send_client_key_exchange(self, client: &mut Client) -> Result<Self, Error> {
         debug!("Sending ClientKeyExchange");
+
+        // Start/restart flight timer only if this flight did not start with Certificate
+        if !client.certificate_verify {
+            client.engine.begin_flight(5);
+        }
 
         // Send client key exchange message
         client.engine.create_handshake(
