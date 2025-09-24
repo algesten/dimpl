@@ -130,7 +130,7 @@ impl Client {
         // Use the engine's create_record to send application data
         // The encryption is now handled in the engine
         self.engine
-            .create_record(ContentType::ApplicationData, 1, |body| {
+            .create_record(ContentType::ApplicationData, 1, false, |body| {
                 body.extend_from_slice(data);
             })?;
 
@@ -202,7 +202,7 @@ impl State {
 
         // Determine flight number: 1 for initial CH, 3 for retransmit with cookie
         let flight_no = if client.cookie.is_none() { 1 } else { 3 };
-        client.engine.begin_flight(flight_no);
+        client.engine.flight_begin(flight_no);
 
         client
             .engine
@@ -265,6 +265,11 @@ impl State {
 
         // Set cookie for next ClientHello
         client.cookie = Some(h.cookie);
+
+        // HelloVerifyRequest exchange must not be part of the handshake transcript.
+        // Reset transcript so the following ClientHello (with cookie) starts a fresh transcript
+        // matching the server's expectation.
+        client.engine.transcript_reset();
 
         // Redo ClientHello, now with cookie.
         Ok(Self::SendClientHello)
@@ -581,7 +586,7 @@ impl State {
         debug!("Sending Certificate");
 
         // Start/restart flight timer for client Flight 5
-        client.engine.begin_flight(5);
+        client.engine.flight_begin(5);
 
         // Now use the engine with the stored data
         client
@@ -596,7 +601,7 @@ impl State {
 
         // Start/restart flight timer only if this flight did not start with Certificate
         if !client.certificate_verify {
-            client.engine.begin_flight(5);
+            client.engine.flight_begin(5);
         }
 
         // Send client key exchange message
@@ -642,7 +647,7 @@ impl State {
         // Send change cipher spec
         client
             .engine
-            .create_record(ContentType::ChangeCipherSpec, 0, |body| {
+            .create_record(ContentType::ChangeCipherSpec, 0, true, |body| {
                 // Change cipher spec is just a single byte with value 1
                 body.push(1);
             })?;
@@ -794,7 +799,7 @@ impl State {
         }
 
         // Receiving server Finished implicitly acks our Flight 5; stop resends
-        client.engine.stop_flight_resends();
+        client.engine.flight_resend_stop();
 
         // Emit Connected event
         client.engine.push_connected();

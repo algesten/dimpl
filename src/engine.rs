@@ -1,6 +1,7 @@
 use rand::{rngs::OsRng, RngCore};
 use std::cell::Cell;
 use std::collections::VecDeque;
+use std::mem;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -72,6 +73,9 @@ pub struct Engine {
     /// Anti-replay window state (per current epoch)
     replay: ReplayWindow,
 
+    /// The records that have been sent in the current flight.
+    flight_saved_records: Vec<Entry>,
+
     /// Whether the flight timers are active. This turns off once
     /// the connection is established.
     flight_timers_active: bool,
@@ -84,6 +88,12 @@ pub struct Engine {
 
     /// Global timeout for the entire connect operation.
     connect_timeout: Option<Instant>,
+}
+
+struct Entry {
+    content_type: ContentType,
+    epoch: u16,
+    fragment: Buf<'static>,
 }
 
 impl Engine {
@@ -113,6 +123,7 @@ impl Engine {
             next_handshake_seq_no: 0,
             transcript: Buf::new(),
             replay: ReplayWindow::new(),
+            flight_saved_records: Vec::new(),
             flight_timers_active: true,
             flight_backoff,
             flight_timeout: None,
@@ -224,7 +235,7 @@ impl Engine {
             if self.flight_backoff.can_retry() {
                 self.flight_backoff.attempt();
                 self.flight_timeout = Some(now + self.flight_backoff.rto());
-                self.flight_resend();
+                self.flight_resend()?;
             } else {
                 return Err(Error::Timeout("handshake"));
             }
@@ -288,20 +299,40 @@ impl Engine {
         Some(p)
     }
 
-    pub fn begin_flight(&mut self, flight_no: u8) {
+    pub fn flight_begin(&mut self, flight_no: u8) {
         debug!("Beginning flight {}", flight_no);
         self.flight_backoff.reset();
+        self.flight_clear_resends();
         self.flight_timeout = None;
     }
 
-    fn flight_resend(&mut self) {
-        //
-    }
-
-    pub fn stop_flight_resends(&mut self) {
+    pub fn flight_resend_stop(&mut self) {
         self.flight_timers_active = false;
+        self.flight_clear_resends();
         self.flight_timeout = None;
         self.connect_timeout = None;
+    }
+
+    fn flight_clear_resends(&mut self) {
+        for entry in self.flight_saved_records.drain(..) {
+            self.buffers_free.push(entry.fragment);
+        }
+    }
+
+    fn flight_resend(&mut self) -> Result<(), Error> {
+        // For lifetime issues, we take the entries out of self
+        let records = mem::take(&mut self.flight_saved_records);
+
+        for entry in &records {
+            self.create_record(entry.content_type, entry.epoch, false, |fragment| {
+                fragment.extend_from_slice(&entry.fragment);
+            })?;
+        }
+
+        // Put the entries back into self
+        self.flight_saved_records = records;
+
+        Ok(())
     }
 
     pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
@@ -422,6 +453,7 @@ impl Engine {
         &mut self,
         content_type: ContentType,
         epoch: u16,
+        save_fragment: bool,
         f: F,
     ) -> Result<(), Error>
     where
@@ -432,6 +464,17 @@ impl Engine {
 
         // Let the caller fill the fragment (plaintext)
         f(&mut fragment);
+
+        // Use this as a marker to know whether we are to record fragments for resends.
+        if self.flight_timers_active && save_fragment {
+            let mut clone = self.buffers_free.pop();
+            clone.extend_from_slice(&fragment);
+            self.flight_saved_records.push(Entry {
+                content_type,
+                epoch,
+                fragment: clone,
+            });
+        }
 
         // Compute wire length of the record if serialized into a datagram
         // Record header (13) + handshake/change/app data bytes + AEAD overhead (if epoch >= 1)
@@ -621,7 +664,7 @@ impl Engine {
             };
 
             // Emit the record; packing into current datagram happens inside create_record
-            self.create_record(ContentType::Handshake, epoch, |fragment| {
+            self.create_record(ContentType::Handshake, epoch, true, |fragment| {
                 frag_handshake.serialize(fragment);
             })?;
 

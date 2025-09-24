@@ -172,7 +172,7 @@ impl Server {
         // Use the engine's create_record to send application data
         // The encryption is now handled in the engine
         self.engine
-            .create_record(ContentType::ApplicationData, 1, |body| {
+            .create_record(ContentType::ApplicationData, 1, false, |body| {
                 body.extend_from_slice(data);
             })?;
 
@@ -252,7 +252,7 @@ impl State {
 
             let cookie = compute_cookie(&server.cookie_secret, client_random)?;
             // Start/restart flight timer for server Flight 2 (HelloVerifyRequest)
-            server.engine.begin_flight(2);
+            server.engine.flight_begin(2);
             server
                 .engine
                 .create_handshake(MessageType::HelloVerifyRequest, |body, _engine| {
@@ -354,7 +354,7 @@ impl State {
         debug!("Sending ServerHello");
 
         // Start/restart flight timer for server Flight 4
-        server.engine.begin_flight(4);
+        server.engine.flight_begin(4);
 
         let session_id = server.session_id.unwrap_or_else(SessionId::empty);
         let server_random = server.random;
@@ -662,12 +662,12 @@ impl State {
         debug!("Sending ChangeCipherSpec");
 
         // Start/restart flight timer for server Flight 6 (CCS+Finished)
-        server.engine.begin_flight(6);
+        server.engine.flight_begin(6);
 
         // Send ChangeCipherSpec
         server
             .engine
-            .create_record(ContentType::ChangeCipherSpec, 0, |body| {
+            .create_record(ContentType::ChangeCipherSpec, 0, true, |body| {
                 body.push(1);
             })?;
 
@@ -714,7 +714,7 @@ impl State {
         let processed = server.engine.process_application_data()?;
         if processed {
             // Any authenticated epoch-1 record implicitly acks our last flight
-            server.engine.stop_flight_resends();
+            server.engine.flight_resend_stop();
         }
 
         Ok(self)
