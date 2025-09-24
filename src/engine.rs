@@ -404,7 +404,7 @@ impl Engine {
         let wanted_length = first.header.length;
         let mut last_fragment_end = 0;
 
-        while let Some(h) = skip_handled.next() {
+        for h in skip_handled {
             // A different seq means we're looking at a different handshake
             if wanted_seq != h.header.message_seq {
                 continue;

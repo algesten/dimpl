@@ -228,7 +228,7 @@ impl<'a> Handshake<'a> {
             MessageType::ClientKeyExchange // flight 5
         );
 
-        qualifies.then(|| self.header.message_seq)
+        qualifies.then_some(self.header.message_seq)
     }
 }
 
