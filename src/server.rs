@@ -172,9 +172,8 @@ impl Server {
         // Use the engine's create_record to send application data
         // The encryption is now handled in the engine
         self.engine
-            .create_record(ContentType::ApplicationData, |body| {
+            .create_record(ContentType::ApplicationData, 1, |body| {
                 body.extend_from_slice(data);
-                None
             })?;
 
         Ok(())
@@ -668,11 +667,9 @@ impl State {
         // Send ChangeCipherSpec
         server
             .engine
-            .create_record(ContentType::ChangeCipherSpec, |body| {
+            .create_record(ContentType::ChangeCipherSpec, 0, |body| {
                 body.push(1);
-                None
             })?;
-        server.engine.enable_server_encryption();
 
         Ok(Self::SendFinished)
     }

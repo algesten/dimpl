@@ -54,6 +54,15 @@ pub struct Sequence {
     pub sequence_number: u64, // technically u48
 }
 
+impl Sequence {
+    pub fn new(epoch: u16) -> Self {
+        Self {
+            epoch,
+            sequence_number: 0,
+        }
+    }
+}
+
 impl<'a> DTLSRecord<'a> {
     /// DTLS record header length: content_type(1) + version(2) + epoch(2) + seq(6) + length(2)
     pub const HEADER_LEN: usize = 13;

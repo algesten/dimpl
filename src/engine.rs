@@ -23,8 +23,15 @@ pub struct Engine {
     /// Pool of buffers
     buffers_free: BufferPool,
 
-    /// Counters for sending DTLSRecord.
-    next_sequence_tx: Sequence,
+    /// Counters for sending DTLSRecord during epoch 0.
+    ///
+    /// This is kept separate since resends might force us to
+    /// "go back" to these sequence number even if we technically
+    /// progressed to epoch 1.
+    sequence_epoch_0: Sequence,
+
+    /// Counters for epoch 1 and beyond.
+    sequence_epoch_n: Sequence,
 
     /// Queue of incoming packets.
     ///
@@ -46,11 +53,8 @@ pub struct Engine {
     /// Cryptographic context for handling encryption/decryption
     crypto_context: CryptoContext,
 
-    /// Server encryption enabled flag
-    server_encryption_enabled: bool,
-
-    /// Client encryption enabled flag
-    client_encryption_enabled: bool,
+    /// Whether the remote peer has enabled encryption
+    peer_encryption_enabled: bool,
 
     /// Whether this engine is for a client (true) or server (false)
     is_client: bool,
@@ -94,15 +98,15 @@ impl Engine {
         Self {
             config,
             buffers_free: BufferPool::default(),
-            next_sequence_tx: Sequence::default(),
+            sequence_epoch_0: Sequence::new(0),
+            sequence_epoch_n: Sequence::new(1),
             queue_rx: VecDeque::new(),
             queue_tx: VecDeque::new(),
             queue_events: VecDeque::new(),
             last_packet: None,
             cipher_suite: None,
             crypto_context: CryptoContext::new(certificate, private_key, cert_verifier),
-            server_encryption_enabled: false,
-            client_encryption_enabled: false,
+            peer_encryption_enabled: false,
             is_client: false,
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
@@ -143,28 +147,6 @@ impl Engine {
     /// Get a mutable reference to the crypto context
     pub fn crypto_context_mut(&mut self) -> &mut CryptoContext {
         &mut self.crypto_context
-    }
-
-    /// Enable server encryption
-    pub fn enable_server_encryption(&mut self) {
-        self.server_encryption_enabled = true;
-
-        // Start epoch 1 for server
-        if !self.is_client {
-            self.next_sequence_tx.epoch = 1;
-            self.next_sequence_tx.sequence_number = 0;
-        }
-    }
-
-    /// Enable client encryption
-    pub fn enable_client_encryption(&mut self) {
-        self.client_encryption_enabled = true;
-
-        // Start epoch 1 for client
-        if self.is_client {
-            self.next_sequence_tx.epoch = 1;
-            self.next_sequence_tx.sequence_number = 0;
-        }
     }
 
     pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
@@ -307,6 +289,22 @@ impl Engine {
         Some(p)
     }
 
+    pub fn begin_flight(&mut self, flight_no: u8) {
+        debug!("Beginning flight {}", flight_no);
+        self.flight_backoff.reset();
+        self.flight_timeout = None;
+    }
+
+    fn flight_resend(&mut self) {
+        //
+    }
+
+    pub fn stop_flight_resends(&mut self) {
+        self.flight_timers_active = false;
+        self.flight_timeout = None;
+        self.connect_timeout = None;
+    }
+
     pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
         let maybe_first_handshake = self
             .queue_rx
@@ -354,22 +352,6 @@ impl Engine {
         }
 
         false
-    }
-
-    pub fn begin_flight(&mut self, flight_no: u8) {
-        debug!("Beginning flight {}", flight_no);
-        self.flight_backoff.reset();
-        self.flight_timeout = None;
-    }
-
-    fn flight_resend(&mut self) {
-        //
-    }
-
-    pub fn stop_flight_resends(&mut self) {
-        self.flight_timers_active = false;
-        self.flight_timeout = None;
-        self.connect_timeout = None;
     }
 
     pub fn next_handshake<'b>(
@@ -437,9 +419,14 @@ impl Engine {
     }
 
     /// Create a DTLS record and serialize it into a buffer
-    pub fn create_record<F>(&mut self, content_type: ContentType, f: F) -> Result<(), Error>
+    pub fn create_record<F>(
+        &mut self,
+        content_type: ContentType,
+        epoch: u16,
+        f: F,
+    ) -> Result<(), Error>
     where
-        F: FnOnce(&mut Buf<'static>) -> Option<MessageType>,
+        F: FnOnce(&mut Buf<'static>),
     {
         // Check if the queue has reached the maximum size before creating a new buffer
         if self.queue_tx.len() >= self.config.max_queue_tx {
@@ -450,18 +437,17 @@ impl Engine {
         let mut fragment = self.buffers_free.pop();
 
         // Let the callback fill the fragment
-        let maybe_msg_type = f(&mut fragment);
+        f(&mut fragment);
 
-        // As long as we're handshaking, update the hash with the fragment.
-        if maybe_msg_type.is_some() {
-            self.transcript.extend_from_slice(&fragment);
-        }
-
-        let sequence = self.next_sequence_tx;
+        let sequence = if epoch == 0 {
+            self.sequence_epoch_0
+        } else {
+            self.sequence_epoch_n
+        };
         let length = fragment.len() as u16;
 
         // Handle encryption if enabled and content type requires it
-        if self.should_encrypt(content_type) {
+        if epoch >= 1 {
             // Get the fixed part of the IV (4 bytes)
             let iv = if self.is_client {
                 self.crypto_context.get_client_write_iv()
@@ -509,16 +495,12 @@ impl Engine {
             fragment: &mut fragment,
         };
 
-        // Debug-only sanity check for AEAD record sizing when encryption is enabled.
-        if self.should_encrypt(content_type) {
-            debug_assert!(
-                (record.length as usize) >= DTLS_EXPLICIT_NONCE_LEN,
-                "DTLS AEAD record too small"
-            );
-        }
-
         // Increment the sequence number for the next transmission
-        self.next_sequence_tx.sequence_number += 1;
+        if epoch == 0 {
+            self.sequence_epoch_0.sequence_number += 1;
+        } else {
+            self.sequence_epoch_n.sequence_number += 1;
+        }
 
         // Serialize the record into the buffer
         buffer.clear();
@@ -559,13 +541,17 @@ impl Engine {
             handled: Cell::new(false),
         };
 
+        let mut buffer_full = self.buffers_free.pop();
+        handshake.serialize(&mut buffer_full);
+        self.transcript.extend_from_slice(&buffer_full);
+        self.buffers_free.push(buffer_full);
+
         // Increment the sequence number for the next handshake message
         self.next_handshake_seq_no += 1;
 
         // Now create the record with the serialized handshake
-        self.create_record(ContentType::Handshake, |fragment| {
+        self.create_record(ContentType::Handshake, msg_type.epoch(), |fragment| {
             handshake.serialize(fragment);
-            Some(msg_type)
         })?;
 
         // Return the buffer
@@ -627,26 +613,6 @@ impl Engine {
                 .decrypt_client_to_server(ciphertext, aad, nonce)
                 .map_err(|e| Error::CryptoError(format!("Server decryption failed: {}", e)))
         }
-    }
-
-    /// Should encryption be used for this message based on content type and encryption state
-    fn should_encrypt(&self, content_type: ContentType) -> bool {
-        // Application data is always encrypted
-        if content_type == ContentType::ApplicationData {
-            return true;
-        }
-
-        // For handshake messages, encryption depends on role and state
-        if content_type == ContentType::Handshake {
-            if self.is_client {
-                return self.client_encryption_enabled;
-            } else {
-                return self.server_encryption_enabled;
-            }
-        }
-
-        // Other message types are not encrypted
-        false
     }
 
     /// Anti-replay check and update state. Returns true if record is fresh/acceptable.
@@ -720,13 +686,8 @@ impl Engine {
     }
 
     pub fn enable_peer_encryption(&mut self) -> Result<(), Error> {
-        if self.is_client {
-            debug!("Server encryption enabled");
-            self.server_encryption_enabled = true;
-        } else {
-            debug!("Client encryption enabled");
-            self.client_encryption_enabled = true;
-        }
+        debug!("Peer encryption enabled");
+        self.peer_encryption_enabled = true;
 
         // Make doubly sure all fully used entries are gone.
         self.purge_queue_rx();
@@ -756,11 +717,7 @@ impl Engine {
     }
 
     pub fn is_peer_encryption_enabled(&self) -> bool {
-        if self.is_client {
-            self.server_encryption_enabled
-        } else {
-            self.client_encryption_enabled
-        }
+        self.peer_encryption_enabled
     }
 
     fn peer_iv(&self) -> Iv {

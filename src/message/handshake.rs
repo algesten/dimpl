@@ -282,6 +282,14 @@ impl MessageType {
         let (input, byte) = be_u8(input)?;
         Ok((input, Self::from_u8(byte)))
     }
+
+    pub fn epoch(&self) -> u16 {
+        if matches!(self, MessageType::NewSessionTicket | MessageType::Finished) {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

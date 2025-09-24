@@ -130,9 +130,8 @@ impl Client {
         // Use the engine's create_record to send application data
         // The encryption is now handled in the engine
         self.engine
-            .create_record(ContentType::ApplicationData, |body| {
+            .create_record(ContentType::ApplicationData, 1, |body| {
                 body.extend_from_slice(data);
-                None
             })?;
 
         Ok(())
@@ -643,15 +642,10 @@ impl State {
         // Send change cipher spec
         client
             .engine
-            .create_record(ContentType::ChangeCipherSpec, |body| {
+            .create_record(ContentType::ChangeCipherSpec, 0, |body| {
                 // Change cipher spec is just a single byte with value 1
                 body.push(1);
-                None
             })?;
-
-        // Enable client encryption
-        client.engine.enable_client_encryption();
-        debug!("Client encryption enabled");
 
         Ok(Self::SendFinished)
     }
