@@ -2,7 +2,7 @@ use rand::{rngs::OsRng, RngCore};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::buffer::{Buf, BufferPool};
 use crate::crypto::{Aad, CertVerifier, CryptoContext, Hash};
@@ -69,6 +69,8 @@ pub struct Engine {
     replay_max_seq: u64,
     replay_window: u64,
 
+    flight_timers_active: bool,
+
     /// Flight backoff
     flight_backoff: ExponentialBackoff,
 
@@ -108,6 +110,7 @@ impl Engine {
             replay_epoch: 0,
             replay_max_seq: 0,
             replay_window: 0,
+            flight_timers_active: true,
             flight_backoff,
             flight_timeout: None,
             connect_timeout: None,
@@ -270,10 +273,16 @@ impl Engine {
     }
 
     fn poll_timeout(&self, now: Instant) -> Instant {
-        let next_flight_timeout = now + self.flight_backoff.rto();
+        if !self.flight_timers_active {
+            const DISTANT_FUTURE: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
+            return now + DISTANT_FUTURE;
+        }
 
+        let Some(next_flight_timeout) = self.flight_timeout else {
+            return now;
+        };
         let Some(handshake_timeout) = self.flight_timeout else {
-            return next_flight_timeout;
+            return now;
         };
 
         if next_flight_timeout < handshake_timeout {
@@ -355,6 +364,12 @@ impl Engine {
 
     fn flight_resend(&mut self) {
         //
+    }
+
+    pub fn stop_flight_resends(&mut self) {
+        self.flight_timers_active = false;
+        self.flight_timeout = None;
+        self.connect_timeout = None;
     }
 
     pub fn next_handshake<'b>(
@@ -560,7 +575,9 @@ impl Engine {
     }
 
     /// Process application data packets from the incoming queue
-    pub fn process_application_data(&mut self) -> Result<(), Error> {
+    /// Returns true if any application data was processed
+    pub fn process_application_data(&mut self) -> Result<bool, Error> {
+        let mut processed_any = false;
         // Process any incoming packets with application data
         while let Some(incoming) = self.queue_rx.pop_front() {
             let records = incoming.records();
@@ -574,10 +591,11 @@ impl Engine {
                     // Push the decrypted data to the queue
                     self.queue_events
                         .push_back(Output::ApplicationData(plaintext));
+                    processed_any = true;
                 }
             }
         }
-        Ok(())
+        Ok(processed_any)
     }
 
     /// Encrypt data appropriate for the role (client or server)

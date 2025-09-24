@@ -799,6 +799,9 @@ impl State {
             ));
         }
 
+        // Receiving server Finished implicitly acks our Flight 5; stop resends
+        client.engine.stop_flight_resends();
+
         // Emit Connected event
         client.engine.push_connected();
 
@@ -826,7 +829,7 @@ impl State {
 
     fn await_application_data(self, client: &mut Client) -> Result<Self, Error> {
         // Process incoming application data packets using the engine
-        client.engine.process_application_data()?;
+        let _ = client.engine.process_application_data()?;
 
         Ok(self)
     }

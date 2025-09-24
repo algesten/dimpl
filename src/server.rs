@@ -713,8 +713,12 @@ impl State {
     }
 
     fn await_application_data(self, server: &mut Server) -> Result<Self, Error> {
-        // Process incoming application data packets using the engine
-        server.engine.process_application_data()?;
+        // Process incoming application data
+        let processed = server.engine.process_application_data()?;
+        if processed {
+            // Any authenticated epoch-1 record implicitly acks our last flight
+            server.engine.stop_flight_resends();
+        }
 
         Ok(self)
     }
