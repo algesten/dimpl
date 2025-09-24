@@ -55,6 +55,7 @@ use rsa::RsaPublicKey;
 /// - Each encrypted record fragment starts with an 8-byte explicit nonce
 /// - The GCM authentication tag is 16 bytes and appended to the ciphertext
 /// - The AAD length is the plaintext length (TLSCompressed.length / DTLSCompressed.length)
+///
 /// Explicit nonce length for DTLS AEAD records.
 ///
 /// The explicit nonce is transmitted with each record.

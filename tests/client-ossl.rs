@@ -76,11 +76,10 @@ fn client_ossl() {
     let mut client_received_data = Vec::new();
     let mut server_received_data = Vec::new();
 
-    client.handle_timeout(Instant::now()).unwrap();
-
     // Simulate handshake and data exchange
     // This might need several iterations until both sides consider themselves connected
     for _ in 0..20 {
+        client.handle_timeout(Instant::now()).unwrap();
         // Poll client for output
         let mut continue_polling = true;
         while continue_polling {

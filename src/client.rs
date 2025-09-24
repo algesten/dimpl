@@ -69,6 +69,9 @@ pub struct Client {
     /// Captured session hash for Extended Master Secret (RFC 7627)
     /// This is captured after ServerHelloDone to include the correct handshake messages
     captured_session_hash: Option<Vec<u8>>,
+
+    /// The last now we seen
+    last_now: Instant,
 }
 
 impl Client {
@@ -89,6 +92,7 @@ impl Client {
             defragment_buffer: Buf::new(),
             certificate_verify: false,
             captured_session_hash: None,
+            last_now: now,
         }
     }
 
@@ -103,11 +107,13 @@ impl Client {
     }
 
     pub fn poll_output(&mut self) -> Output {
-        self.engine.poll_output()
+        self.engine.poll_output(self.last_now)
     }
 
     /// Explicitly start the handshake process by sending a ClientHello
-    pub fn handle_timeout(&mut self, _now: Instant) -> Result<(), Error> {
+    pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
+        self.last_now = now;
+        self.engine.handle_timeout(now)?;
         self.make_progress()?;
         Ok(())
     }

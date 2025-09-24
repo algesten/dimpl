@@ -21,6 +21,8 @@ pub enum Error {
     TransmitQueueFull,
     /// Missing fields when parsing ServerHello
     IncompleteServerHello,
+    /// Something timed out
+    Timeout(&'static str),
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {

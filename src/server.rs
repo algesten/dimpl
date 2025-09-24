@@ -80,6 +80,9 @@ pub struct Server {
 
     /// Captured session hash for Extended Master Secret (RFC 7627)
     captured_session_hash: Option<Vec<u8>>,
+
+    /// The last now we seen
+    last_now: Instant,
 }
 
 /// Current state of the server.
@@ -135,6 +138,7 @@ impl Server {
             client_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
             captured_session_hash: None,
+            last_now: now,
         }
     }
 
@@ -149,10 +153,12 @@ impl Server {
     }
 
     pub fn poll_output(&mut self) -> Output {
-        self.engine.poll_output()
+        self.engine.poll_output(self.last_now)
     }
 
-    pub fn handle_timeout(&mut self, _now: Instant) -> Result<(), Error> {
+    pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
+        self.last_now = now;
+        self.engine.handle_timeout(now)?;
         self.make_progress()?;
         Ok(())
     }
@@ -256,7 +262,7 @@ impl State {
 
             // The HelloVerifyRequest exchange is not part of the main handshake transcript.
             // Clear transcript so subsequent CertificateVerify/Finished cover only the real handshake.
-            server.engine.reset_handshake_transcript();
+            server.engine.reset_flight();
 
             // After HelloVerifyRequest, await a new ClientHello
             return Ok(self);

@@ -11,6 +11,7 @@ use crate::crypto::{Nonce, SrtpProfile, DTLS_EXPLICIT_NONCE_LEN};
 use crate::incoming::{Incoming, Record};
 use crate::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
+use crate::timer::ExponentialBackoff;
 use crate::{Config, Error, Output};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
@@ -67,6 +68,12 @@ pub struct Engine {
     replay_epoch: u16,
     replay_max_seq: u64,
     replay_window: u64,
+
+    /// Flight backoff
+    flight_backoff: ExponentialBackoff,
+
+    /// Handshake timeout
+    handshake_timeout: Option<Instant>,
 }
 
 impl Engine {
@@ -76,6 +83,9 @@ impl Engine {
         private_key: Vec<u8>,
         cert_verifier: Box<dyn CertVerifier>,
     ) -> Self {
+        let flight_backoff =
+            ExponentialBackoff::new(config.flight_start_rto, config.flight_retries);
+
         Self {
             config,
             buffers_free: BufferPool::default(),
@@ -95,6 +105,8 @@ impl Engine {
             replay_epoch: 0,
             replay_max_seq: 0,
             replay_window: 0,
+            flight_backoff,
+            handshake_timeout: None,
         }
     }
 
@@ -204,7 +216,62 @@ impl Engine {
         Ok(())
     }
 
-    pub fn poll_packet_tx(&mut self) -> Option<&[u8]> {
+    pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
+        if self.handshake_timeout.is_none() {
+            self.handshake_timeout = Some(now + self.flight_backoff.rto());
+        }
+
+        // Unwrap is ok because we set it above
+        let handshake_timeout = self.handshake_timeout.as_mut().unwrap();
+
+        if now >= *handshake_timeout {
+            if self.flight_backoff.can_retry() {
+                self.flight_backoff.attempt();
+                self.handshake_timeout = Some(now + self.flight_backoff.rto());
+                self.resend_flight();
+            } else {
+                return Err(Error::Timeout("handshake"));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn poll_output(&mut self, now: Instant) -> Output {
+        // Do we need a handle_timeout()?
+        if self.handshake_timeout.is_none() {
+            return Output::Timeout(now);
+        }
+
+        // First check if we have any events
+        if let Some(event) = self.queue_events.pop_front() {
+            return event;
+        }
+
+        let next_timeout = self.poll_timeout(now);
+
+        if let Some(packet) = self.poll_packet_tx() {
+            return Output::Packet(packet);
+        }
+
+        Output::Timeout(next_timeout)
+    }
+
+    fn poll_timeout(&self, now: Instant) -> Instant {
+        let next_flight_timeout = now + self.flight_backoff.rto();
+
+        let Some(handshake_timeout) = self.handshake_timeout else {
+            return next_flight_timeout;
+        };
+
+        if next_flight_timeout < handshake_timeout {
+            next_flight_timeout
+        } else {
+            handshake_timeout
+        }
+    }
+
+    fn poll_packet_tx(&mut self) -> Option<&[u8]> {
         // If there is a previous packet, return it to the pool.
         if let Some(last) = self.last_packet.take() {
             self.buffers_free.push(last);
@@ -217,25 +284,6 @@ impl Engine {
         let p = self.last_packet.as_ref().unwrap();
 
         Some(p)
-    }
-
-    pub fn poll_output(&mut self) -> Output {
-        // First check if we have any events
-        if let Some(event) = self.queue_events.pop_front() {
-            return event;
-        }
-
-        let next_timeout = self.poll_timeout();
-
-        if let Some(packet) = self.poll_packet_tx() {
-            return Output::Packet(packet);
-        }
-
-        Output::Timeout(next_timeout)
-    }
-
-    fn poll_timeout(&self) -> Instant {
-        Instant::now()
     }
 
     pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
@@ -285,6 +333,16 @@ impl Engine {
         }
 
         false
+    }
+
+    pub fn reset_flight(&mut self) {
+        self.handshakes.clear();
+        self.flight_backoff.reset();
+        self.handshake_timeout = None;
+    }
+
+    fn resend_flight(&mut self) {
+        //
     }
 
     pub fn next_handshake<'b>(
@@ -621,15 +679,6 @@ impl Engine {
 
     pub fn handshake_data(&self) -> &[u8] {
         &self.handshakes
-    }
-
-    /// Clear the accumulated handshake transcript.
-    ///
-    /// DTLS HelloVerifyRequest/ClientHello cookie exchange must not be
-    /// included in the main handshake transcript used for CertificateVerify
-    /// and Finished.
-    pub fn reset_handshake_transcript(&mut self) {
-        self.handshakes.clear();
     }
 
     pub fn set_cipher_suite(&mut self, cipher_suite: CipherSuite) {

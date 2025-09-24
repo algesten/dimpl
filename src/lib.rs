@@ -48,6 +48,8 @@ pub mod certificate;
 
 pub use crypto::{KeyingMaterial, SrtpProfile};
 
+mod timer;
+
 /// Public DTLS endpoint wrapping either a client or server state.
 ///
 /// Use the role helpers to query or switch between client and server modes

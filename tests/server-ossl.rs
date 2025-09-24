@@ -72,11 +72,10 @@ fn server_ossl() {
     let mut client_received_data = Vec::new();
     let mut server_received_data = Vec::new();
 
-    server.handle_timeout(Instant::now()).unwrap();
-    client.handle_handshake(&mut client_events).unwrap();
-
     // Drive handshake and data exchange
     for _ in 0..40 {
+        server.handle_timeout(Instant::now()).unwrap();
+        client.handle_handshake(&mut client_events).unwrap();
         // 1) Drain client (OpenSSL) outgoing datagrams to the server
         while let Some(datagram) = client.poll_datagram() {
             server
