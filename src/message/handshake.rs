@@ -217,10 +217,15 @@ impl<'a> Handshake<'a> {
         })
     }
 
+    // These are (unencrypted) handshakes that, when detected as
+    // duplicates, trigger a resend of the entire flight.
     pub fn dupe_triggers_resend(&self) -> bool {
         matches!(
             self.header.msg_type,
-            MessageType::ClientHello | MessageType::ServerHelloDone | MessageType::Finished
+            MessageType::ClientHello |        // flight 1 and 3
+            MessageType::HelloVerifyRequest | // flight 2
+            MessageType::ServerHelloDone |    // flight 4
+            MessageType::ClientKeyExchange // flight 5
         )
     }
 }

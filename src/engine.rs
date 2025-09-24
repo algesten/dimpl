@@ -91,6 +91,7 @@ pub struct Engine {
     connect_timeout: Option<Instant>,
 }
 
+#[derive(Debug)]
 struct Entry {
     content_type: ContentType,
     epoch: u16,
@@ -213,28 +214,12 @@ impl Engine {
                 self.queue_rx.insert(index, incoming);
             }
             Ok(_) => {
-                // De-facto behavior note:
-                // We only treat an exact duplicate (same message_seq and fragment_offset
-                // still present in the queue) as a resend trigger. Common DTLS stacks
-                // (e.g., OpenSSL/mbedTLS/GnuTLS) buffer handshake fragments and retransmit
-                // them without changing fragmentation, so this catches real-world dupes.
-                // If a peer re-fragments across retransmissions, this path will not fire;
-                // the periodic flight timeout will still drive resends.
-                let dupe_triggers_resend = incoming
-                    .records()
-                    .iter()
-                    .filter_map(|r| r.handshake())
-                    .any(|h| h.dupe_triggers_resend());
-
-                if dupe_triggers_resend {
-                    self.flight_resend("dupe triggers resend")?;
-                } else {
-                    // Exact duplicate handshake fragment
-                    debug!(
-                        "Dupe handshake with message_seq: {} and offset: {}",
-                        handshake.header.message_seq, handshake.header.fragment_offset
-                    );
-                }
+                // Exact duplicate handshake fragment
+                debug!(
+                    "Dupe handshake with message_seq: {} and offset: {}",
+                    handshake.header.message_seq, handshake.header.fragment_offset
+                );
+                self.maybe_dupe_triggers_resend(&incoming)?;
             }
         }
 
@@ -256,8 +241,29 @@ impl Engine {
                 // For epoch 1, we have the replay window and there should
                 // be no duplicates.
                 assert!(seq_current.epoch == 0);
-                debug!("Dupe record with sequence: {}", seq_current)
+                debug!("Dupe record with sequence: {}", seq_current);
             }
+        }
+
+        Ok(())
+    }
+
+    fn maybe_dupe_triggers_resend(&mut self, incoming: &Incoming) -> Result<(), Error> {
+        // De-facto behavior note:
+        // We only treat an exact duplicate (same message_seq and fragment_offset
+        // still present in the queue) as a resend trigger. Common DTLS stacks
+        // (e.g., OpenSSL/mbedTLS/GnuTLS) buffer handshake fragments and retransmit
+        // them without changing fragmentation, so this catches real-world dupes.
+        // If a peer re-fragments across retransmissions, this path will not fire;
+        // the periodic flight timeout will still drive resends.
+        let dupe_flight_end = incoming
+            .records()
+            .iter()
+            .filter_map(|r| r.handshake())
+            .any(|h| h.dupe_triggers_resend());
+
+        if dupe_flight_end {
+            self.flight_resend("dupe triggers resend")?;
         }
 
         Ok(())
@@ -490,22 +496,6 @@ impl Engine {
                 if record.record().content_type == ContentType::ChangeCipherSpec {
                     record.set_handled();
                 }
-            }
-        }
-    }
-
-    // Purge completely handled packets. We can only purge the Incoming if all the
-    // Handshake in it are handled.
-    fn purge_queue_rx(&mut self) {
-        while let Some(incoming) = self.queue_rx.front() {
-            // Records/handshakes are marked as handled, which means they should be skipped
-            // from further processing.
-            let all_handled = incoming.records().iter().all(|r| r.is_handled());
-
-            if all_handled {
-                let _ = self.queue_rx.pop_front();
-            } else {
-                break;
             }
         }
     }
@@ -746,8 +736,6 @@ impl Engine {
 
     /// Process application data packets from the incoming queue
     pub fn process_application_data(&mut self) -> Result<(), Error> {
-        self.purge_queue_rx();
-
         // Process any incoming packets with application data
         while let Some(incoming) = self.queue_rx.pop_front() {
             let records = incoming.records();
