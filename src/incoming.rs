@@ -23,7 +23,7 @@ impl Incoming {
 
     pub fn first(&self) -> &Record {
         // Invariant: Every Incoming must have at least one Record
-        // or the parser would have failed. See use of many1 below.
+        // or the parser would have failed.
         &self.records()[0]
     }
 

@@ -76,9 +76,10 @@ pub struct Engine {
     /// The records that have been sent in the current flight.
     flight_saved_records: Vec<Entry>,
 
-    /// Whether the flight timers are active. This turns off once
-    /// the connection is established.
-    flight_timers_active: bool,
+    /// If we are currently handshaking or running.
+    ///
+    /// Decides whether the flight timers are active.
+    is_handshaking: bool,
 
     /// Flight backoff
     flight_backoff: ExponentialBackoff,
@@ -124,7 +125,7 @@ impl Engine {
             transcript: Buf::new(),
             replay: ReplayWindow::new(),
             flight_saved_records: Vec::new(),
-            flight_timers_active: true,
+            is_handshaking: true,
             flight_backoff,
             flight_timeout: None,
             connect_timeout: None,
@@ -293,7 +294,7 @@ impl Engine {
 
     pub fn poll_output(&mut self, now: Instant) -> Output {
         // Do we need a handle_timeout()?
-        if self.flight_timers_active && self.flight_timeout.is_none() {
+        if self.is_handshaking && self.flight_timeout.is_none() {
             return Output::Timeout(now);
         }
 
@@ -312,7 +313,7 @@ impl Engine {
     }
 
     fn poll_timeout(&self, now: Instant) -> Instant {
-        if !self.flight_timers_active {
+        if !self.is_handshaking {
             const DISTANT_FUTURE: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
             return now + DISTANT_FUTURE;
         }
@@ -354,7 +355,7 @@ impl Engine {
     }
 
     pub fn flight_resend_stop(&mut self, clear_resends: bool) {
-        self.flight_timers_active = false;
+        self.is_handshaking = false;
         self.flight_timeout = None;
         self.connect_timeout = None;
         if clear_resends && !self.flight_saved_records.is_empty() {
@@ -386,11 +387,17 @@ impl Engine {
     }
 
     pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
-        let maybe_first_handshake = self
+        let mut skip_handled = self
             .queue_rx
-            .front()
-            .and_then(|i| i.records().iter().find(|r| !r.is_handled()))
-            .and_then(|r| r.handshake());
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .skip_while(|r| r.is_handled())
+            // Cap to MAX_DEFRAGMENT_PACKETS to avoid misbehaving peers
+            .take(MAX_DEFRAGMENT_PACKETS)
+            .filter_map(|r| r.handshake())
+            .peekable();
+
+        let maybe_first_handshake = skip_handled.peek();
 
         let Some(first) = maybe_first_handshake else {
             return false;
@@ -408,26 +415,21 @@ impl Engine {
         let wanted_length = first.header.length;
         let mut last_fragment_end = 0;
 
-        // Cap to MAX_DEFRAGMENT_PACKETS to avoid misbehaving peers
-        for incoming in self.queue_rx.iter().take(MAX_DEFRAGMENT_PACKETS) {
-            for record in incoming.records().iter() {
-                if let Some(h) = &record.handshake() {
-                    // A different seq means we're looking at a different handshake
-                    if wanted_seq != h.header.message_seq {
-                        continue;
-                    }
+        while let Some(h) = skip_handled.next() {
+            // A different seq means we're looking at a different handshake
+            if wanted_seq != h.header.message_seq {
+                continue;
+            }
 
-                    // Check fragment contiguity
-                    if h.header.fragment_offset != last_fragment_end {
-                        return false;
-                    }
-                    last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
+            // Check fragment contiguity
+            if h.header.fragment_offset != last_fragment_end {
+                return false;
+            }
+            last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
 
-                    // Found the last fragment to complete the wanted handshake.
-                    if last_fragment_end == wanted_length {
-                        return true;
-                    }
-                }
+            // Found the last fragment to complete the wanted handshake.
+            if last_fragment_end == wanted_length {
+                return true;
             }
         }
 
@@ -439,8 +441,6 @@ impl Engine {
         wanted: MessageType,
         defragment_buffer: &'b mut Buf<'static>,
     ) -> Result<Option<Handshake<'b>>, Error> {
-        self.purge_queue_rx();
-
         if !self.has_complete_handshake(wanted) {
             return Ok(None);
         }
@@ -448,9 +448,9 @@ impl Engine {
         let iter = self
             .queue_rx
             .iter()
-            .flat_map(|i| i.records().iter().filter_map(|r| r.handshake()))
-            // Handled in previous iteration
-            .skip_while(|h| h.handled.get());
+            .flat_map(|i| i.records().iter())
+            .skip_while(|r| r.is_handled())
+            .filter_map(|r| r.handshake());
 
         // This sets the handled flag on the handshake.
         let handshake = Handshake::defragment(iter, defragment_buffer, self.cipher_suite)?;
@@ -465,8 +465,6 @@ impl Engine {
     }
 
     pub(crate) fn next_record(&mut self, ctype: ContentType) -> Option<&Record> {
-        self.purge_queue_rx();
-
         let record = self
             .queue_rx
             .iter()
@@ -494,7 +492,6 @@ impl Engine {
                 }
             }
         }
-        self.purge_queue_rx();
     }
 
     // Purge completely handled packets. We can only purge the Incoming if all the
@@ -531,7 +528,7 @@ impl Engine {
         f(&mut fragment);
 
         // Use this as a marker to know whether we are to record fragments for resends.
-        if self.flight_timers_active && save_fragment {
+        if self.is_handshaking && save_fragment {
             let mut clone = self.buffers_free.pop();
             clone.extend_from_slice(&fragment);
             self.flight_saved_records.push(Entry {
@@ -749,20 +746,23 @@ impl Engine {
 
     /// Process application data packets from the incoming queue
     pub fn process_application_data(&mut self) -> Result<(), Error> {
+        self.purge_queue_rx();
+
         // Process any incoming packets with application data
         while let Some(incoming) = self.queue_rx.pop_front() {
             let records = incoming.records();
 
-            for i in 0..records.len() {
-                let record = &records[i];
-                if record.record().content_type == ContentType::ApplicationData {
-                    // This is already decrypted as part of the parsing.
-                    let plaintext = record.record().fragment.to_vec();
+            let app_data = records
+                .iter()
+                .filter(|r| r.record().content_type == ContentType::ApplicationData);
 
-                    // Push the decrypted data to the queue
-                    self.queue_events
-                        .push_back(Output::ApplicationData(plaintext));
-                }
+            for record in app_data {
+                // This is already decrypted as part of the parsing.
+                let plaintext = record.record().fragment.to_vec();
+
+                // Push the decrypted data to the queue
+                self.queue_events
+                    .push_back(Output::ApplicationData(plaintext));
             }
         }
         Ok(())
@@ -842,11 +842,17 @@ impl Engine {
         debug!("Peer encryption enabled");
         self.peer_encryption_enabled = true;
 
-        // Make doubly sure all fully used entries are gone.
-        self.purge_queue_rx();
+        let maybe_index_epoch1 = self
+            .queue_rx
+            .iter()
+            .position(|i| i.records().iter().any(|r| r.record().sequence.epoch == 1));
+
+        let Some(index_epoch1) = maybe_index_epoch1 else {
+            return Ok(());
+        };
 
         // Now decrypt all entries remaining.
-        let all = self.queue_rx.split_off(0);
+        let all = self.queue_rx.split_off(index_epoch1);
 
         for incoming in all {
             // Part of the incoming buffer has already been handled since
