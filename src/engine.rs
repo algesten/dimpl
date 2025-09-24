@@ -76,10 +76,8 @@ pub struct Engine {
     /// The records that have been sent in the current flight.
     flight_saved_records: Vec<Entry>,
 
-    /// If we are currently handshaking or running.
-    ///
-    /// Decides whether the flight timers are active.
-    is_handshaking: bool,
+    /// If the timers for flight resends are active.
+    flight_timers_active: bool,
 
     /// Flight backoff
     flight_backoff: ExponentialBackoff,
@@ -126,7 +124,7 @@ impl Engine {
             transcript: Buf::new(),
             replay: ReplayWindow::new(),
             flight_saved_records: Vec::new(),
-            is_handshaking: true,
+            flight_timers_active: true,
             flight_backoff,
             flight_timeout: None,
             connect_timeout: None,
@@ -198,6 +196,21 @@ impl Engine {
             handshake.header.fragment_offset,
         );
 
+        let maybe_dupe_seq = incoming
+            .records()
+            .iter()
+            .filter_map(|r| r.handshake())
+            .filter_map(|h| h.dupe_triggers_resend())
+            .next();
+
+        // Some MessageType when resent, means we must trigger
+        // an immediate resend of the entire flight.
+        if let Some(dupe_seq) = maybe_dupe_seq {
+            if dupe_seq < self.peer_handshake_seq_no {
+                self.flight_resend("dupe triggers resend")?;
+            }
+        }
+
         let search_result = self.queue_rx.binary_search_by(|item| {
             let key_other = item
                 .first()
@@ -215,11 +228,6 @@ impl Engine {
             }
             Ok(_) => {
                 // Exact duplicate handshake fragment
-                debug!(
-                    "Dupe handshake with message_seq: {} and offset: {}",
-                    handshake.header.message_seq, handshake.header.fragment_offset
-                );
-                self.maybe_dupe_triggers_resend(&incoming)?;
             }
         }
 
@@ -241,29 +249,7 @@ impl Engine {
                 // For epoch 1, we have the replay window and there should
                 // be no duplicates.
                 assert!(seq_current.epoch == 0);
-                debug!("Dupe record with sequence: {}", seq_current);
             }
-        }
-
-        Ok(())
-    }
-
-    fn maybe_dupe_triggers_resend(&mut self, incoming: &Incoming) -> Result<(), Error> {
-        // De-facto behavior note:
-        // We only treat an exact duplicate (same message_seq and fragment_offset
-        // still present in the queue) as a resend trigger. Common DTLS stacks
-        // (e.g., OpenSSL/mbedTLS/GnuTLS) buffer handshake fragments and retransmit
-        // them without changing fragmentation, so this catches real-world dupes.
-        // If a peer re-fragments across retransmissions, this path will not fire;
-        // the periodic flight timeout will still drive resends.
-        let dupe_flight_end = incoming
-            .records()
-            .iter()
-            .filter_map(|r| r.handshake())
-            .any(|h| h.dupe_triggers_resend());
-
-        if dupe_flight_end {
-            self.flight_resend("dupe triggers resend")?;
         }
 
         Ok(())
@@ -300,7 +286,7 @@ impl Engine {
 
     pub fn poll_output(&mut self, now: Instant) -> Output {
         // Do we need a handle_timeout()?
-        if self.is_handshaking && self.flight_timeout.is_none() {
+        if self.flight_timers_active && self.flight_timeout.is_none() {
             return Output::Timeout(now);
         }
 
@@ -319,7 +305,7 @@ impl Engine {
     }
 
     fn poll_timeout(&self, now: Instant) -> Instant {
-        if !self.is_handshaking {
+        if !self.flight_timers_active {
             const DISTANT_FUTURE: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
             return now + DISTANT_FUTURE;
         }
@@ -360,13 +346,10 @@ impl Engine {
         self.flight_timeout = None;
     }
 
-    pub fn flight_resend_stop(&mut self, clear_resends: bool) {
-        self.is_handshaking = false;
+    pub fn flight_stop_resend_timers(&mut self) {
+        self.flight_timers_active = false;
         self.flight_timeout = None;
         self.connect_timeout = None;
-        if clear_resends && !self.flight_saved_records.is_empty() {
-            self.flight_clear_resends();
-        }
     }
 
     fn flight_clear_resends(&mut self) {
@@ -518,7 +501,7 @@ impl Engine {
         f(&mut fragment);
 
         // Use this as a marker to know whether we are to record fragments for resends.
-        if self.is_handshaking && save_fragment {
+        if save_fragment {
             let mut clone = self.buffers_free.pop();
             clone.extend_from_slice(&fragment);
             self.flight_saved_records.push(Entry {

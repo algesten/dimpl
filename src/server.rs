@@ -691,7 +691,7 @@ impl State {
 
         // Final flight sent; stop periodic retransmission timers per RFC 6347 FINISHED state.
         // If this flight need resending, it relies on the client to resend its last flight.
-        server.engine.flight_resend_stop(false);
+        server.engine.flight_stop_resend_timers();
 
         // Handshake complete
         server.engine.push_connected();
@@ -721,7 +721,7 @@ impl State {
         server.engine.process_application_data()?;
 
         // Now that authenticated epoch-1 data has been received, clear any saved last-flight resends
-        server.engine.flight_resend_stop(true);
+        server.engine.flight_stop_resend_timers();
 
         Ok(self)
     }

@@ -219,14 +219,16 @@ impl<'a> Handshake<'a> {
 
     // These are (unencrypted) handshakes that, when detected as
     // duplicates, trigger a resend of the entire flight.
-    pub fn dupe_triggers_resend(&self) -> bool {
-        matches!(
+    pub fn dupe_triggers_resend(&self) -> Option<u16> {
+        let qualifies = matches!(
             self.header.msg_type,
             MessageType::ClientHello |        // flight 1 and 3
             MessageType::HelloVerifyRequest | // flight 2
             MessageType::ServerHelloDone |    // flight 4
             MessageType::ClientKeyExchange // flight 5
-        )
+        );
+
+        qualifies.then(|| self.header.message_seq)
     }
 }
 

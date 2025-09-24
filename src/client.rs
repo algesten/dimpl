@@ -802,7 +802,7 @@ impl State {
         }
 
         // Receiving server Finished implicitly acks our Flight 5; stop resends
-        client.engine.flight_resend_stop(true);
+        client.engine.flight_stop_resend_timers();
 
         // Emit Connected event
         client.engine.push_connected();
