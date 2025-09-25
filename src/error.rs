@@ -34,3 +34,22 @@ impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {
         }
     }
 }
+
+impl std::error::Error for Error {}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::ParseIncomplete => write!(f, "parse incomplete"),
+            Error::ParseError(kind) => write!(f, "parse error: {:?}", kind),
+            Error::UnexpectedMessage(msg) => write!(f, "unexpected message: {}", msg),
+            Error::CryptoError(msg) => write!(f, "crypto error: {}", msg),
+            Error::CertificateError(msg) => write!(f, "certificate error: {}", msg),
+            Error::SecurityError(msg) => write!(f, "security error: {}", msg),
+            Error::ReceiveQueueFull => write!(f, "receive queue full"),
+            Error::TransmitQueueFull => write!(f, "transmit queue full"),
+            Error::IncompleteServerHello => write!(f, "incomplete ServerHello"),
+            Error::Timeout(what) => write!(f, "timeout: {}", what),
+        }
+    }
+}
