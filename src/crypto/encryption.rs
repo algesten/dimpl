@@ -1,9 +1,9 @@
 use std::panic::UnwindSafe;
 
-use aes_gcm::aead::AeadMutInPlace;
+use aes_gcm::aead::{AeadMutInPlace, Buffer};
 use aes_gcm::{aead::KeyInit, Aes128Gcm, Aes256Gcm};
 
-use crate::buffer::Buf;
+use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 
 /// Cipher trait for DTLS encryption and decryption
@@ -12,7 +12,7 @@ pub trait Cipher: Send + Sync + UnwindSafe {
     fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String>;
 
     /// Decrypt ciphertext in-place
-    fn decrypt(&mut self, ciphertext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String>;
+    fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String>;
 }
 
 /// AES-GCM implementation with different key sizes
@@ -63,7 +63,7 @@ impl Cipher for AesGcm {
         result
     }
 
-    fn decrypt(&mut self, ciphertext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String> {
+    fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String> {
         // Make sure we have enough data for the tag (16 bytes)
         if ciphertext.len() < 16 {
             return Err(format!("Ciphertext too short: {}", ciphertext.len()));

@@ -31,7 +31,7 @@ pub use keying::{KeyingMaterial, SrtpProfile};
 pub use prf::calculate_extended_master_secret;
 pub use prf::{key_expansion, prf_tls12};
 
-use crate::buffer::{Buf, ToBuf};
+use crate::buffer::{Buf, TmpBuf, ToBuf};
 // Message-related imports
 use crate::message::{
     Asn1Cert, Certificate, CipherSuite, ContentType, CurveType, ServerKeyExchange,
@@ -591,7 +591,7 @@ impl CryptoContext {
     /// Decrypt data (server to client)
     pub fn decrypt_server_to_client(
         &mut self,
-        ciphertext: &mut Buf,
+        ciphertext: &mut TmpBuf,
         aad: Aad,
         nonce: Nonce,
     ) -> Result<(), String> {
@@ -617,7 +617,7 @@ impl CryptoContext {
     /// Decrypt data (client to server)
     pub fn decrypt_client_to_server(
         &mut self,
-        ciphertext: &mut Buf,
+        ciphertext: &mut TmpBuf,
         aad: Aad,
         nonce: Nonce,
     ) -> Result<(), String> {

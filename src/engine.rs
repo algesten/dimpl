@@ -1,11 +1,11 @@
 use rand::{rngs::OsRng, RngCore};
-use std::cell::Cell;
 use std::collections::VecDeque;
 use std::mem;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::buffer::{Buf, BufferPool};
+use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::{Aad, CertVerifier, CryptoContext, Hash};
 use crate::crypto::{Iv, DTLS_AEAD_OVERHEAD};
 use crate::crypto::{Nonce, DTLS_EXPLICIT_NONCE_LEN};
@@ -683,7 +683,7 @@ impl Engine {
                 fragment_length: body_buffer.len() as u32,
             },
             body: Body::Fragment(&body_buffer),
-            handled: Cell::new(false),
+            handled: AtomicBool::new(false),
         };
 
         let mut buffer_full = self.buffers_free.pop();
@@ -748,7 +748,7 @@ impl Engine {
                     fragment_length: chunk_len as u32,
                 },
                 body: Body::Fragment(frag_body),
-                handled: Cell::new(false),
+                handled: AtomicBool::new(false),
             };
 
             // Emit the record; packing into current datagram happens inside create_record
@@ -791,7 +791,7 @@ impl Engine {
     /// Decrypt data appropriate for the role (client or server)
     pub fn decrypt_data(
         &mut self,
-        ciphertext: &mut Buf,
+        ciphertext: &mut TmpBuf,
         aad: Aad,
         nonce: Nonce,
     ) -> Result<(), Error> {

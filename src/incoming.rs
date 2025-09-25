@@ -1,11 +1,12 @@
-use std::cell::Cell;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use aes_gcm::aead::Buffer;
 use self_cell::{self_cell, MutBorrow};
 use std::fmt;
 use tinyvec::ArrayVec;
 
-use crate::buffer::Buf;
+use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::DTLS_EXPLICIT_NONCE_LEN;
 use crate::engine::Engine;
 use crate::message::{ContentType, DTLSRecord, DTLSRecordSlice, Handshake};
@@ -15,6 +16,43 @@ use crate::Error;
 ///
 /// A self-referential struct.
 pub struct Incoming(Inner);
+
+/*
+Why it is sound to assert UnwindSafe for Incoming
+
+- No internal unwind boundaries: this crate does not use catch_unwind. We do not
+  cross panic boundaries internally while mutating state. This marker exists to
+  document that external callers can wrap our APIs in catch_unwind without
+  observing broken invariants from this type.
+
+- self_cell construction is panic-safe without catch_unwind: Incoming/Record are
+  built via self_cell::new/try_new. The crate uses a drop guard to clean up a
+  partially-initialized allocation if the dependent builder panics. No value
+  escapes on panic, so a half-built object cannot be observed across unwinding.
+
+- Read-only builders: our dependent builders (e.g., ParsedRecord::parse) take
+  only a &[u8] to the owner and do not mutate the owner during construction. An
+  unwind during builder execution therefore cannot leave the owner partially
+  mutated across a boundary.
+
+- Decrypt-and-reparse is publish-after-complete: when decrypting we first call
+  into_owner() to regain the raw bytes, mutate a local &mut [u8] (length update,
+  in-place decrypt, copy_within), and only then construct a fresh RecordInner
+  from the fully transformed bytes. If a panic occurs mid-transformation, the
+  new RecordInner is not built and the previously-built Record is dropped; no
+  consumer can observe a half-transformed record across an unwind boundary.
+
+- Interior mutability is benign across unwind: the only interior mutability is
+  AtomicBool "handled" flags. They are monotonic (false -> true). If an external
+  caller catches a panic and continues, the worst effect is conservatively
+  skipping work already done. This does not introduce memory unsafety or aliasing
+  violations, and no invariants rely on "handled implies delivery".
+
+Given the above, an unwind cannot leave Incoming in a state where broken
+invariants are later observed across a catch_unwind boundary. Marking Incoming
+as UnwindSafe is a sound assertion and clarifies behavior for callers.
+*/
+impl std::panic::UnwindSafe for Incoming {}
 
 impl Incoming {
     pub fn records(&self) -> &Records {
@@ -143,7 +181,7 @@ impl<'a> Record<'a> {
         let ciphertext = &mut input[CIPH..];
 
         let new_len = {
-            let mut buffer = Buf::wrap(ciphertext).keep_on_drop();
+            let mut buffer = TmpBuf::new(ciphertext);
 
             // This decrypts in place.
             engine.decrypt_data(&mut buffer, aad, nonce)?;
@@ -174,12 +212,15 @@ impl<'a> Record<'a> {
         let rec = self.0.borrow_dependent();
         rec.handshake
             .as_ref()
-            .map(|h| h.handled.get())
-            .unwrap_or(rec.handled.get())
+            .map(|h| h.handled.load(Ordering::Relaxed))
+            .unwrap_or(rec.handled.load(Ordering::Relaxed))
     }
 
     pub fn set_handled(&self) {
-        self.0.borrow_dependent().handled.set(true);
+        self.0
+            .borrow_dependent()
+            .handled
+            .store(true, Ordering::Relaxed);
     }
 
     pub fn len(&self) -> usize {
@@ -197,9 +238,9 @@ self_cell!(
 );
 
 pub struct ParsedRecord<'a> {
-    pub record: DTLSRecord<'a>,
-    pub handshake: Option<Handshake<'a>>,
-    pub handled: Cell<bool>,
+    record: DTLSRecord<'a>,
+    handshake: Option<Handshake<'a>>,
+    handled: AtomicBool,
 }
 
 impl<'a> ParsedRecord<'a> {
@@ -217,7 +258,7 @@ impl<'a> ParsedRecord<'a> {
         Ok(ParsedRecord {
             record,
             handshake,
-            handled: Cell::new(false),
+            handled: AtomicBool::new(false),
         })
     }
 }
@@ -249,7 +290,7 @@ impl<'a> Default for Record<'a> {
         Record(RecordInner::new(&mut [], |_| ParsedRecord {
             record: DTLSRecord::default(),
             handshake: None,
-            handled: Cell::new(false),
+            handled: AtomicBool::new(false),
         }))
     }
 }

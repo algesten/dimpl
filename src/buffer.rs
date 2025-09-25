@@ -37,13 +37,7 @@ impl fmt::Debug for BufferPool {
     }
 }
 
-pub struct Buf(Vec<u8>, ZeroOnDrop);
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ZeroOnDrop {
-    Yes,
-    No,
-}
+pub struct Buf(Vec<u8>);
 
 impl Buf {
     pub fn new() -> Self {
@@ -73,24 +67,17 @@ impl Buf {
     pub fn into_vec(mut self) -> Vec<u8> {
         std::mem::take(&mut self.0)
     }
-
-    pub fn keep_on_drop(mut self) -> Self {
-        self.1 = ZeroOnDrop::No;
-        self
-    }
 }
 
 impl Default for Buf {
     fn default() -> Self {
-        Buf(vec![], ZeroOnDrop::Yes)
+        Buf(vec![])
     }
 }
 
 impl Drop for Buf {
     fn drop(&mut self) {
-        if self.1 == ZeroOnDrop::Yes {
-            self.0.zeroize();
-        }
+        self.0.zeroize();
     }
 }
 
@@ -147,12 +134,46 @@ pub trait ToBuf {
 
 impl ToBuf for Vec<u8> {
     fn to_buf(self) -> Buf {
-        Buf(self, ZeroOnDrop::Yes)
+        Buf(self)
     }
 }
 
 impl ToBuf for &[u8] {
     fn to_buf(self) -> Buf {
         self.to_vec().to_buf()
+    }
+}
+
+pub struct TmpBuf<'a>(&'a mut [u8], usize);
+
+impl<'a> TmpBuf<'a> {
+    pub fn new(buf: &'a mut [u8]) -> Self {
+        Self(buf, buf.len())
+    }
+}
+
+impl<'a> aes_gcm::aead::Buffer for TmpBuf<'a> {
+    fn len(&self) -> usize {
+        self.1
+    }
+
+    fn extend_from_slice(&mut self, _: &[u8]) -> aes_gcm::aead::Result<()> {
+        unimplemented!()
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.1 = len;
+    }
+}
+
+impl<'a> AsRef<[u8]> for TmpBuf<'a> {
+    fn as_ref(&self) -> &[u8] {
+        &self.0[..self.1]
+    }
+}
+
+impl<'a> AsMut<[u8]> for TmpBuf<'a> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        &mut self.0[..self.1]
     }
 }

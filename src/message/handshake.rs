@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{
     Certificate, CertificateRequest, CertificateVerify, CipherSuite, ClientHello,
@@ -23,12 +23,22 @@ pub struct Header {
     pub fragment_length: u32,
 }
 
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, Default)]
 pub struct Handshake<'a> {
     pub header: Header,
     pub body: Body<'a>,
-    pub handled: Cell<bool>,
+    pub handled: AtomicBool,
 }
+
+impl<'a> PartialEq for Handshake<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.header == other.header
+            && self.body == other.body
+            && self.handled.load(Ordering::Relaxed) == other.handled.load(Ordering::Relaxed)
+    }
+}
+
+impl<'a> Eq for Handshake<'a> {}
 
 impl<'a> Handshake<'a> {
     #[cfg(test)]
@@ -49,7 +59,7 @@ impl<'a> Handshake<'a> {
                 fragment_length,
             },
             body,
-            handled: Cell::new(false),
+            handled: AtomicBool::new(false),
         }
     }
 
@@ -99,7 +109,7 @@ impl<'a> Handshake<'a> {
             Handshake {
                 header,
                 body,
-                handled: Cell::new(false),
+                handled: AtomicBool::new(false),
             },
         ))
     }
@@ -128,7 +138,7 @@ impl<'a> Handshake<'a> {
             unreachable!("Non-Fragment body in defragment()")
         };
         buffer.extend_from_slice(data);
-        first.handled.set(true);
+        first.handled.store(true, Ordering::Relaxed);
 
         for handshake in iter {
             if handshake.header.msg_type != first.header.msg_type {
@@ -139,7 +149,7 @@ impl<'a> Handshake<'a> {
                 unreachable!("Non-Fragment body in defragment()")
             };
 
-            handshake.handled.set(true);
+            handshake.handled.store(true, Ordering::Relaxed);
 
             buffer.extend_from_slice(data);
         }
@@ -165,7 +175,7 @@ impl<'a> Handshake<'a> {
                 fragment_length: first.header.length,
             },
             body,
-            handled: Cell::new(false),
+            handled: AtomicBool::new(false),
         };
 
         // Create a new Handshake with the merged body
@@ -183,7 +193,7 @@ impl<'a> Handshake<'a> {
                 fragment_length: self.header.fragment_length,
             },
             body: Body::HelloRequest, // Placeholder
-            handled: Cell::new(false),
+            handled: AtomicBool::new(false),
         }
     }
 
