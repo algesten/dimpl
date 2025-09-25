@@ -36,8 +36,9 @@ fn parse_records(datagram: &[u8]) -> Vec<RecHdr> {
 
 fn collect_flight_packets(endpoint: &mut Dtls) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
+    let mut buf = vec![0u8; 2048];
     loop {
-        match endpoint.poll_output() {
+        match endpoint.poll_output(&mut buf) {
             Output::Packet(p) => out.push(p.to_vec()),
             Output::Timeout(_) => break,
             _ => {}

@@ -80,12 +80,13 @@ fn run_client_server_with_mtu(mtu: usize) -> (usize, usize) {
     let mut server_received_data = Vec::new();
 
     // Drive handshake and data exchange
+    let mut out_buf = vec![0u8; mtu + 512];
     for _ in 0..20 {
         client.handle_timeout(Instant::now()).unwrap();
 
         let mut continue_polling = true;
         while continue_polling {
-            let output = client.poll_output();
+            let output = client.poll_output(&mut out_buf);
             match output {
                 Output::Packet(data) => {
                     client_to_server_packets += 1;

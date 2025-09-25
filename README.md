@@ -57,13 +57,13 @@ Drive the engine with three calls:
 - [`Dtls::poll_output`] — drain pending output: DTLS records, timers, events.
 - [`Dtls::handle_timeout`] — trigger retransmissions/time‑based progress.
 
-The output is an [`Output`] enum with:
+The output is an [`Output`] enum with borrowed references into your provided buffer:
 - `Packet(&[u8])`: send on your UDP socket
 - `Timeout(Instant)`: schedule a timer and call `handle_timeout` at/after it
 - `Connected`: handshake complete
-- `PeerCert(Vec<u8>)`: peer leaf certificate (DER)
+- `PeerCert(&[u8])`: peer leaf certificate (DER)
 - `KeyingMaterial(KeyingMaterial, SrtpProfile)`: DTLS‑SRTP export
-- `ApplicationData(Vec<u8>)`: plaintext received from peer
+- `ApplicationData(&[u8])`: plaintext received from peer
 
 ## Example (Sans‑IO loop)
 
@@ -88,8 +88,9 @@ fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
     let mut next_wake: Option<Instant> = None;
     loop {
         // Drain engine output until we have to wait for I/O or a timer
+        let mut out_buf = vec![0u8; 2048];
         loop {
-            match dtls.poll_output() {
+            match dtls.poll_output(&mut out_buf) {
                 Output::Packet(p) => send_udp(p),
                 Output::Timeout(t) => { next_wake = Some(t); break; }
                 Output::Connected => {

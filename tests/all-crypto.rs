@@ -79,11 +79,12 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: CipherSuite) {
     let mut client_connected = false;
     let mut server_connected = false;
 
+    let mut out_buf = vec![0u8; 2048];
     for _ in 0..60 {
         client.handle_timeout(Instant::now()).unwrap();
         // Drain client outputs
         loop {
-            match client.poll_output() {
+            match client.poll_output(&mut out_buf) {
                 Output::Packet(data) => {
                     server
                         .handle_receive(&data, &mut server_events)
@@ -187,6 +188,7 @@ fn run_ossl_client_vs_dimpl_server_for_suite(suite: CipherSuite) {
     let mut server_connected = false;
     let mut client_connected = false;
 
+    let mut out_buf = vec![0u8; 2048];
     for _ in 0..60 {
         server.handle_timeout(Instant::now()).unwrap();
         ossl_client.handle_handshake(&mut client_events).unwrap();
@@ -200,7 +202,7 @@ fn run_ossl_client_vs_dimpl_server_for_suite(suite: CipherSuite) {
 
         // 2) Poll server outputs and feed to client
         loop {
-            match server.poll_output() {
+            match server.poll_output(&mut out_buf) {
                 Output::Packet(data) => {
                     ossl_client
                         .handle_receive(data, &mut client_events)

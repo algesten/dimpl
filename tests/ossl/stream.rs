@@ -1,7 +1,6 @@
 use std::panic::UnwindSafe;
 use std::{io, mem};
 
-use dimpl::KeyingMaterial;
 use openssl::hash::MessageDigest;
 use openssl::srtp::SrtpProfileId;
 use openssl::ssl::{HandshakeError, MidHandshakeSslStream, Ssl, SslStream};
@@ -13,7 +12,7 @@ const DTLS_KEY_LABEL: &str = "EXTRACTOR-dtls_srtp";
 pub struct TlsStream<S> {
     active: Option<bool>,
     state: State<S>,
-    keying_mat: Option<(KeyingMaterial, SrtpProfile, Fingerprint)>,
+    keying_mat: Option<(Vec<u8>, SrtpProfile, Fingerprint)>,
     exported: bool,
 }
 
@@ -87,9 +86,7 @@ where
         Ok(v)
     }
 
-    pub fn take_srtp_keying_material(
-        &mut self,
-    ) -> Option<(KeyingMaterial, SrtpProfile, Fingerprint)> {
+    pub fn take_srtp_keying_material(&mut self) -> Option<(Vec<u8>, SrtpProfile, Fingerprint)> {
         self.keying_mat.take()
     }
 
@@ -158,7 +155,7 @@ where
 
 fn export_srtp_keying_material<S>(
     stream: &mut SslStream<S>,
-) -> Result<(KeyingMaterial, SrtpProfile, Fingerprint), io::Error> {
+) -> Result<(Vec<u8>, SrtpProfile, Fingerprint), io::Error> {
     let ssl = stream.ssl();
 
     // remote peer certificate fingerprint
@@ -183,9 +180,7 @@ fn export_srtp_keying_material<S>(
     let mut buf = vec![0_u8; srtp_profile.keying_material_len()];
     ssl.export_keying_material(&mut buf, DTLS_KEY_LABEL, None)?;
 
-    let mat = KeyingMaterial::new(buf);
-
-    Ok((mat, srtp_profile, fp))
+    Ok((buf, srtp_profile, fp))
 }
 
 impl<S> io::Read for TlsStream<S>

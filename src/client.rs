@@ -12,6 +12,7 @@
 //
 // This implementation is a Sans-IO DTLS client.
 
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use tinyvec::{array_vec, ArrayVec};
@@ -24,7 +25,7 @@ use crate::message::{
     ExtensionType, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion, Random, SessionId,
     SignatureAndHashAlgorithm, UseSrtpExtension,
 };
-use crate::{CipherSuite, Error, Output, Server, SrtpProfile};
+use crate::{CipherSuite, Error, KeyingMaterial, Output, Server, SrtpProfile};
 
 /// DTLS client
 pub struct Client {
@@ -72,6 +73,16 @@ pub struct Client {
 
     /// The last now we seen
     last_now: Instant,
+
+    /// Local events
+    local_events: VecDeque<LocalEvent>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LocalEvent {
+    PeerCert,
+    Connected,
+    KeyingMaterial(ArrayVec<[u8; 128]>, SrtpProfile),
 }
 
 impl Client {
@@ -93,6 +104,7 @@ impl Client {
             certificate_verify: false,
             captured_session_hash: None,
             last_now: now,
+            local_events: VecDeque::new(),
         }
     }
 
@@ -106,8 +118,12 @@ impl Client {
         Ok(())
     }
 
-    pub fn poll_output(&mut self) -> Output {
-        self.engine.poll_output(self.last_now)
+    pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
+        if let Some(event) = self.local_events.pop_front() {
+            return event.into_output(buf, &self.server_certificates);
+        }
+
+        self.engine.poll_output(buf, self.last_now)
     }
 
     /// Explicitly start the handshake process by sending a ClientHello
@@ -571,8 +587,7 @@ impl State {
 
         // Send the server certificate as an event
         if !client.server_certificates.is_empty() {
-            let cert_data = client.server_certificates[0].to_vec();
-            client.engine.push_peer_cert(cert_data);
+            client.local_events.push_back(LocalEvent::PeerCert);
         }
 
         if client.certificate_verify {
@@ -805,7 +820,7 @@ impl State {
         client.engine.flight_stop_resend_timers();
 
         // Emit Connected event
-        client.engine.push_connected();
+        client.local_events.push_back(LocalEvent::Connected);
 
         // Extract and emit SRTP keying material if we have a negotiated profile
         if let Some(profile) = client.negotiated_srtp_profile {
@@ -822,17 +837,22 @@ impl State {
                     keying_material.len(),
                     profile
                 );
-                client.engine.push_keying_material(keying_material, profile);
+                // expect should be correct here since we negotiated the profile
+                let profile = client
+                    .negotiated_srtp_profile
+                    .expect("SRTP profile should be negotiated");
+                client
+                    .local_events
+                    .push_back(LocalEvent::KeyingMaterial(keying_material, profile));
             }
         }
+
+        client.engine.release_application_data();
 
         Ok(Self::AwaitApplicationData)
     }
 
-    fn await_application_data(self, client: &mut Client) -> Result<Self, Error> {
-        // Process incoming application data packets using the engine
-        client.engine.process_application_data()?;
-
+    fn await_application_data(self, _client: &mut Client) -> Result<Self, Error> {
         Ok(self)
     }
 }
@@ -1000,4 +1020,31 @@ fn handshake_create_certificate_verify(
 
     certificate_verify.serialize(body);
     Ok(())
+}
+
+impl LocalEvent {
+    pub fn into_output<'a>(self, buf: &'a mut [u8], peer_certs: &Vec<Buf<'static>>) -> Output<'a> {
+        match self {
+            LocalEvent::PeerCert => {
+                let l = peer_certs[0].len();
+                assert!(
+                    l <= buf.len(),
+                    "Output buffer too small for peer certificate"
+                );
+                buf[..l].copy_from_slice(&peer_certs[0]);
+                return Output::PeerCert(&buf[..l]);
+            }
+            LocalEvent::Connected => return Output::Connected,
+            LocalEvent::KeyingMaterial(m, profile) => {
+                let l = m.len();
+                assert!(
+                    l <= buf.len(),
+                    "Output buffer too small for keying material"
+                );
+                buf[..l].copy_from_slice(&m);
+                let km = KeyingMaterial::new(&buf[..l]);
+                return Output::KeyingMaterial(km, profile);
+            }
+        }
+    }
 }

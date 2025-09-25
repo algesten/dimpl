@@ -75,6 +75,7 @@ fn client_ossl() {
     // Buffers for received data
     let mut client_received_data = Vec::new();
     let mut server_received_data = Vec::new();
+    let mut out_buf = vec![0u8; 2048];
 
     // Simulate handshake and data exchange
     // This might need several iterations until both sides consider themselves connected
@@ -84,7 +85,7 @@ fn client_ossl() {
         let mut continue_polling = true;
         while continue_polling {
             // poll_output returns an Output enum (not Option wrapped)
-            let output = client.poll_output();
+            let output = client.poll_output(&mut out_buf);
             match output {
                 Output::Packet(data) => {
                     // println!(
@@ -101,12 +102,12 @@ fn client_ossl() {
                     client_connected = true;
                     println!("Client connected");
                 }
-                Output::PeerCert(cert) => {
-                    client_peer_cert = Some(cert);
+                Output::PeerCert(_cert) => {
+                    client_peer_cert = Some(true);
                     println!("Client received peer certificate");
                 }
                 Output::KeyingMaterial(km, profile) => {
-                    client_keying_material = Some((km, profile));
+                    client_keying_material = Some((km.as_ref().to_vec(), profile));
                     println!("Client received keying material for profile: {:?}", profile);
 
                     // After handshake is complete, send test data
@@ -213,12 +214,12 @@ fn client_ossl() {
 
     // Verify keying material has the right length
     assert!(
-        client_km.as_ref().len() > 0,
+        client_km.len() > 0,
         "Client keying material should not be empty"
     );
     assert_eq!(
-        client_km.as_ref().len(),
-        server_km.as_ref().len(),
+        client_km.len(),
+        server_km.len(),
         "Client and server keying material should have the same length"
     );
 

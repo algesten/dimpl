@@ -678,7 +678,7 @@ impl CryptoContext {
         &self,
         profile: SrtpProfile,
         hash: HashAlgorithm,
-    ) -> Result<KeyingMaterial, String> {
+    ) -> Result<ArrayVec<[u8; 128]>, String> {
         const DTLS_SRTP_KEY_LABEL: &str = "EXTRACTOR-dtls_srtp";
 
         let master_secret = match &self.master_secret {
@@ -696,9 +696,7 @@ impl CryptoContext {
             hash,
         )?;
 
-        let keying_material = keying_material.as_slice().to_vec();
-
-        Ok(KeyingMaterial::new(keying_material))
+        Ok(keying_material)
     }
 
     /// Get curve info for ECDHE key exchange

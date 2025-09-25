@@ -2,16 +2,16 @@
 use std::ops::Deref;
 
 /// Keying material used as master key for SRTP.
-pub struct KeyingMaterial(Vec<u8>);
+pub struct KeyingMaterial<'a>(&'a [u8]);
 
-impl KeyingMaterial {
+impl<'a> KeyingMaterial<'a> {
     /// Create a new wrapper for DTLS-SRTP keying material bytes.
-    pub fn new(m: Vec<u8>) -> Self {
+    pub fn new(m: &'a [u8]) -> Self {
         KeyingMaterial(m)
     }
 }
 
-impl Deref for KeyingMaterial {
+impl<'a> Deref for KeyingMaterial<'a> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -19,7 +19,7 @@ impl Deref for KeyingMaterial {
     }
 }
 
-impl std::fmt::Debug for KeyingMaterial {
+impl<'a> std::fmt::Debug for KeyingMaterial<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "KeyingMaterial")
     }

@@ -61,7 +61,7 @@ fn server_ossl() {
     let mut server_connected = false;
     let mut client_connected = false;
 
-    let mut server_peer_cert: Option<Vec<u8>> = None;
+    let mut saw_server_peer_cert = false;
     let mut server_keying_material = None;
     let mut client_keying_material = None;
 
@@ -73,6 +73,7 @@ fn server_ossl() {
     let mut server_received_data = Vec::new();
 
     // Drive handshake and data exchange
+    let mut out_buf = vec![0u8; 2048];
     for _ in 0..40 {
         server.handle_timeout(Instant::now()).unwrap();
         client.handle_handshake(&mut client_events).unwrap();
@@ -85,7 +86,7 @@ fn server_ossl() {
 
         // 2) Poll server outputs and feed to client
         loop {
-            match server.poll_output() {
+            match server.poll_output(&mut out_buf) {
                 Output::Packet(data) => {
                     client
                         .handle_receive(data, &mut client_events)
@@ -94,11 +95,11 @@ fn server_ossl() {
                 Output::Connected => {
                     server_connected = true;
                 }
-                Output::PeerCert(cert) => {
-                    server_peer_cert = Some(cert);
+                Output::PeerCert(_cert) => {
+                    saw_server_peer_cert = true;
                 }
                 Output::KeyingMaterial(km, profile) => {
-                    server_keying_material = Some((km, profile));
+                    server_keying_material = Some((km.as_ref().to_vec(), profile));
                     // As soon as handshake completes from server side, send server app data
                     server
                         .send_application_data(server_test_data)
@@ -154,7 +155,7 @@ fn server_ossl() {
     assert!(client_connected, "Client should be connected");
 
     assert!(
-        server_peer_cert.is_some(),
+        saw_server_peer_cert,
         "Server should have received peer certificate"
     );
 
@@ -175,12 +176,12 @@ fn server_ossl() {
         "Both sides should negotiate same SRTP profile"
     );
     assert!(
-        server_km.as_ref().len() > 0,
+        server_km.len() > 0,
         "Server keying material should not be empty"
     );
     assert_eq!(
-        server_km.as_ref().len(),
-        client_km.as_ref().len(),
+        server_km.len(),
+        client_km.len(),
         "Keying material length should match"
     );
 

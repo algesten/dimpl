@@ -12,6 +12,7 @@
 //
 // This implementation mirrors the client structure and ordering for a DTLS server.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -22,6 +23,7 @@ use rand::{rngs::OsRng, RngCore};
 use sha2::Sha256;
 
 use crate::buffer::{Buf, ToBuf};
+use crate::client::LocalEvent;
 use crate::crypto::{ffdhe2048, CertVerifier, DhDomainParams, SrtpProfile};
 use crate::engine::Engine;
 use crate::message::{
@@ -83,6 +85,9 @@ pub struct Server {
 
     /// The last now we seen
     last_now: Instant,
+
+    /// Events we are to emit from this Server.
+    local_events: VecDeque<LocalEvent>,
 }
 
 /// Current state of the server.
@@ -139,6 +144,7 @@ impl Server {
             defragment_buffer: Buf::new(),
             captured_session_hash: None,
             last_now: now,
+            local_events: VecDeque::new(),
         }
     }
 
@@ -152,8 +158,12 @@ impl Server {
         Ok(())
     }
 
-    pub fn poll_output(&mut self) -> Output {
-        self.engine.poll_output(self.last_now)
+    pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
+        if let Some(event) = self.local_events.pop_front() {
+            return event.into_output(buf, &self.client_certificates);
+        }
+
+        self.engine.poll_output(buf, self.last_now)
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
@@ -497,9 +507,7 @@ impl State {
                     err
                 )));
             }
-            server
-                .engine
-                .push_peer_cert(server.client_certificates[0].to_vec());
+            server.local_events.push_back(LocalEvent::PeerCert);
         }
 
         Ok(Self::AwaitClientKeyExchange)
@@ -698,7 +706,7 @@ impl State {
         server.engine.flight_stop_resend_timers();
 
         // Handshake complete
-        server.engine.push_connected();
+        server.local_events.push_back(LocalEvent::Connected);
 
         // Emit SRTP keying material if negotiated
         if let Some(profile) = server.negotiated_srtp_profile {
@@ -713,20 +721,24 @@ impl State {
                     keying_material.len(),
                     profile
                 );
-                server.engine.push_keying_material(keying_material, profile);
+                // expect should be correct here since we negotiated the profile
+                let profile = server
+                    .negotiated_srtp_profile
+                    .expect("SRTP profile should be negotiated");
+                server
+                    .local_events
+                    .push_back(LocalEvent::KeyingMaterial(keying_material, profile));
             }
         }
+
+        server.engine.release_application_data();
+        // Now that authenticated epoch-1 data has been received, clear any saved last-flight resends
+        server.engine.flight_stop_resend_timers();
 
         Ok(Self::AwaitApplicationData)
     }
 
-    fn await_application_data(self, server: &mut Server) -> Result<Self, Error> {
-        // Process incoming application data
-        server.engine.process_application_data()?;
-
-        // Now that authenticated epoch-1 data has been received, clear any saved last-flight resends
-        server.engine.flight_stop_resend_timers();
-
+    fn await_application_data(self, _server: &mut Server) -> Result<Self, Error> {
         Ok(self)
     }
 }

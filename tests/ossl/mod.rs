@@ -23,7 +23,7 @@ mod io_buf;
 mod stream;
 
 mod dtls;
-use dimpl::{KeyingMaterial, SrtpProfile};
+use dimpl::SrtpProfile;
 pub use dtls::{dtls_ssl_create, OsslDtlsImpl};
 
 pub use io_buf::DatagramSend;
@@ -43,7 +43,7 @@ pub enum DtlsEvent {
     Connected,
 
     /// Keying material for SRTP encryption master key and the selected SRTP profile.
-    SrtpKeyingMaterial(KeyingMaterial, SrtpProfile),
+    SrtpKeyingMaterial(Vec<u8>, SrtpProfile),
 
     /// The fingerprint of the remote peer.
     ///

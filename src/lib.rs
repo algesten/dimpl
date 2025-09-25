@@ -15,15 +15,15 @@
 //! - **DTLS 1.0**
 //! - **Async** (the crate is Sans‑IO and event‑loop agnostic)
 //! - **no_std** (at least not without allocation)
-//! 
+//!
 //! ## Regarding DTLS 1.3 and the future of this crate
-//! 
+//!
 //! dimpl was built as a support package for [str0m](https://github.com/algesten/str0m),
 //! with WebRTC as its primary use case, which currently uses DTLS 1.2. The author
 //! is not a cryptography expert; however, our understanding is that DTLS 1.2 is acceptable
 //! provided we narrow the protocol's scope—for example, by supporting only specific
 //! cipher suites and hash algorithms and by requiring the Extended Master Secret extension.
-//! 
+//!
 //! If you are interested in extending this crate to support DTLS 1.3 and/or additional
 //! cipher suites or hash algorithms, we welcome collaboration, but we are not planning
 //! to lead such initiatives.
@@ -55,13 +55,13 @@
 //! - [`Dtls::poll_output`] — drain pending output: DTLS records, timers, events.
 //! - [`Dtls::handle_timeout`] — trigger retransmissions/time‑based progress.
 //!
-//! The output is an [`Output`] enum with:
+//! The output is an [`Output`] enum with borrowed references into your provided buffer:
 //! - `Packet(&[u8])`: send on your UDP socket
 //! - `Timeout(Instant)`: schedule a timer and call `handle_timeout` at/after it
 //! - `Connected`: handshake complete
-//! - `PeerCert(Vec<u8>)`: peer leaf certificate (DER)
+//! - `PeerCert(&[u8])`: peer leaf certificate (DER)
 //! - `KeyingMaterial(KeyingMaterial, SrtpProfile)`: DTLS‑SRTP export
-//! - `ApplicationData(Vec<u8>)`: plaintext received from peer
+//! - `ApplicationData(&[u8])`: plaintext received from peer
 //!
 //! # Example (Sans‑IO loop)
 //!
@@ -86,8 +86,9 @@
 //!     let mut next_wake: Option<Instant> = None;
 //!     loop {
 //!         // Drain engine output until we have to wait for I/O or a timer
+//!         let mut out_buf = vec![0u8; 2048];
 //!         loop {
-//!             match dtls.poll_output() {
+//!             match dtls.poll_output(&mut out_buf) {
 //!                 Output::Packet(p) => send_udp(p),
 //!                 Output::Timeout(t) => { next_wake = Some(t); break; }
 //!                 Output::Connected => {
@@ -285,10 +286,10 @@ impl Dtls {
     }
 
     /// Poll for pending output from the DTLS engine.
-    pub fn poll_output(&mut self) -> Output {
+    pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.poll_output(),
-            Inner::Server(server) => server.poll_output(),
+            Inner::Client(client) => client.poll_output(buf),
+            Inner::Server(server) => server.poll_output(buf),
         }
     }
 
@@ -318,11 +319,11 @@ pub enum Output<'a> {
     /// The handshake completed and the connection is established.
     Connected,
     /// The peer's leaf certificate in DER encoding.
-    PeerCert(Vec<u8>),
+    PeerCert(&'a [u8]),
     /// Extracted DTLS-SRTP keying material and selected SRTP profile.
-    KeyingMaterial(KeyingMaterial, SrtpProfile),
+    KeyingMaterial(KeyingMaterial<'a>, SrtpProfile),
     /// Received application data plaintext.
-    ApplicationData(Vec<u8>),
+    ApplicationData(&'a [u8]),
 }
 
 #[cfg(test)]

@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use crate::buffer::{Buf, BufferPool};
 use crate::crypto::{Aad, CertVerifier, CryptoContext, Hash};
-use crate::crypto::{Iv, KeyingMaterial, DTLS_AEAD_OVERHEAD};
-use crate::crypto::{Nonce, SrtpProfile, DTLS_EXPLICIT_NONCE_LEN};
+use crate::crypto::{Iv, DTLS_AEAD_OVERHEAD};
+use crate::crypto::{Nonce, DTLS_EXPLICIT_NONCE_LEN};
 use crate::incoming::{Incoming, Record};
 use crate::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
@@ -36,18 +36,10 @@ pub struct Engine {
     sequence_epoch_n: Sequence,
 
     /// Queue of incoming packets.
-    ///
-    /// Not decrypted but handshakes are parsed.
     queue_rx: VecDeque<Incoming>,
 
     /// Queue of outgoing packets.
     queue_tx: VecDeque<Buf<'static>>,
-
-    /// Queue of Output events
-    queue_events: VecDeque<Output<'static>>,
-
-    /// Holder of last packet. To be able to return a reference.
-    last_packet: Option<Buf<'static>>,
 
     /// The cipher suite in use. Set by ServerHello.
     cipher_suite: Option<CipherSuite>,
@@ -87,6 +79,9 @@ pub struct Engine {
 
     /// Global timeout for the entire connect operation.
     connect_timeout: Option<Instant>,
+
+    /// Whether we are ready to release application data from poll_output.
+    release_app_data: bool,
 }
 
 #[derive(Debug)]
@@ -113,8 +108,6 @@ impl Engine {
             sequence_epoch_n: Sequence::new(1),
             queue_rx: VecDeque::new(),
             queue_tx: VecDeque::new(),
-            queue_events: VecDeque::new(),
-            last_packet: None,
             cipher_suite: None,
             crypto_context: CryptoContext::new(certificate, private_key, cert_verifier),
             peer_encryption_enabled: false,
@@ -128,6 +121,7 @@ impl Engine {
             flight_backoff,
             flight_timeout: None,
             connect_timeout: None,
+            release_app_data: false,
         }
     }
 
@@ -259,11 +253,21 @@ impl Engine {
         if self.connect_timeout.is_none() {
             self.connect_timeout = Some(now + self.config.handshake_timeout);
         }
-        if self.flight_timeout.is_none() {
+        if self.flight_timers_active && self.flight_timeout.is_none() {
             self.flight_timeout = Some(now + self.flight_backoff.rto());
         }
 
-        // Unwrap is ok because we set it above
+        // If timers are inactive, only check the overall connect timeout
+        if !self.flight_timers_active {
+            if let Some(connect_timeout) = self.connect_timeout.as_mut() {
+                if now >= *connect_timeout {
+                    return Err(Error::Timeout("connect"));
+                }
+            }
+            return Ok(());
+        }
+
+        // Unwraps are safe when timers are active and were set above
         let connect_timeout = self.connect_timeout.as_mut().unwrap();
         let flight_timeout = self.flight_timeout.as_mut().unwrap();
 
@@ -284,24 +288,93 @@ impl Engine {
         Ok(())
     }
 
-    pub fn poll_output(&mut self, now: Instant) -> Output {
+    pub fn poll_output<'a>(&mut self, buf: &'a mut [u8], now: Instant) -> Output<'a> {
         // Do we need a handle_timeout()?
         if self.flight_timers_active && self.flight_timeout.is_none() {
             return Output::Timeout(now);
         }
 
-        // First check if we have any events
-        if let Some(event) = self.queue_events.pop_front() {
-            return event;
+        // First check if we have any decrypted app data.
+        let buf = match self.poll_app_data(buf) {
+            Ok(p) => return Output::ApplicationData(p),
+            Err(b) => b,
+        };
+
+        match self.poll_packet_tx(buf) {
+            Ok(p) => return Output::Packet(p),
+            Err(_) => {}
         }
 
         let next_timeout = self.poll_timeout(now);
 
-        if let Some(packet) = self.poll_packet_tx() {
-            return Output::Packet(packet);
+        Output::Timeout(next_timeout)
+    }
+
+    fn poll_app_data<'a>(&mut self, buf: &'a mut [u8]) -> Result<&'a [u8], &'a mut [u8]> {
+        if !self.release_app_data {
+            return Err(buf);
         }
 
-        Output::Timeout(next_timeout)
+        // Drain incoming queue of processed records.
+        self.purge_handled_queue_rx();
+
+        let mut unhandled = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .filter(|r| r.record().content_type == ContentType::ApplicationData)
+            .skip_while(|r| r.is_handled());
+
+        let Some(next) = unhandled.next() else {
+            return Err(buf);
+        };
+
+        let fragment = next.record().fragment;
+        let len = fragment.len();
+
+        assert!(
+            len <= buf.len(),
+            "Output buffer too small for application data {} > {}",
+            len,
+            buf.len()
+        );
+
+        buf[..len].copy_from_slice(fragment);
+        next.set_handled();
+
+        Ok(&buf[..len])
+    }
+
+    fn purge_handled_queue_rx(&mut self) {
+        while let Some(peek) = self.queue_rx.front() {
+            let fully_handled = peek.records().iter().all(|r| r.is_handled());
+
+            if fully_handled {
+                let incoming = self.queue_rx.pop_front().unwrap();
+                let pooled = incoming.into_owner();
+                self.buffers_free.push(pooled);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn poll_packet_tx<'a>(&mut self, buf: &'a mut [u8]) -> Result<&'a [u8], &'a mut [u8]> {
+        let Some(p) = self.queue_tx.pop_front() else {
+            return Err(buf);
+        };
+
+        assert!(
+            p.len() <= buf.len(),
+            "Output buffer too small for packet {} > {}",
+            p.len(),
+            buf.len()
+        );
+
+        let len = p.len();
+        buf[..len].copy_from_slice(&p);
+
+        Ok(&buf[..len])
     }
 
     fn poll_timeout(&self, now: Instant) -> Instant {
@@ -322,21 +395,6 @@ impl Engine {
         } else {
             handshake_timeout
         }
-    }
-
-    fn poll_packet_tx(&mut self) -> Option<&[u8]> {
-        // If there is a previous packet, return it to the pool.
-        if let Some(last) = self.last_packet.take() {
-            self.buffers_free.push(last);
-        }
-
-        let buffer = self.queue_tx.pop_front()?;
-        self.last_packet = Some(buffer);
-
-        // unwrap is ok because we set it right now.
-        let p = self.last_packet.as_ref().unwrap();
-
-        Some(p)
     }
 
     pub fn flight_begin(&mut self, flight_no: u8) {
@@ -717,26 +775,9 @@ impl Engine {
         Ok(())
     }
 
-    /// Process application data packets from the incoming queue
-    pub fn process_application_data(&mut self) -> Result<(), Error> {
-        // Process any incoming packets with application data
-        while let Some(incoming) = self.queue_rx.pop_front() {
-            let records = incoming.records();
-
-            let app_data = records
-                .iter()
-                .filter(|r| r.record().content_type == ContentType::ApplicationData);
-
-            for record in app_data {
-                // This is already decrypted as part of the parsing.
-                let plaintext = record.record().fragment.to_vec();
-
-                // Push the decrypted data to the queue
-                self.queue_events
-                    .push_back(Output::ApplicationData(plaintext));
-            }
-        }
-        Ok(())
+    /// Release application data from the incoming queue
+    pub fn release_application_data(&mut self) {
+        self.release_app_data = true;
     }
 
     /// Encrypt data appropriate for the role (client or server)
@@ -773,22 +814,6 @@ impl Engine {
     /// Anti-replay check and update state. Returns true if record is fresh/acceptable.
     pub fn replay_check_and_update(&mut self, seq: Sequence) -> bool {
         self.replay.check_and_update(seq)
-    }
-
-    /// Push a Connected event to the queue
-    pub fn push_connected(&mut self) {
-        self.queue_events.push_back(Output::Connected);
-    }
-
-    /// Push a PeerCert event to the queue
-    pub fn push_peer_cert(&mut self, cert_data: Vec<u8>) {
-        self.queue_events.push_back(Output::PeerCert(cert_data));
-    }
-
-    /// Push a KeyingMaterial event to the queue
-    pub fn push_keying_material(&mut self, keying_material: KeyingMaterial, profile: SrtpProfile) {
-        self.queue_events
-            .push_back(Output::KeyingMaterial(keying_material, profile));
     }
 
     pub fn transcript_reset(&mut self) {
