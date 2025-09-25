@@ -44,7 +44,7 @@ impl<'a> ServerHello<'a> {
     /// - Includes Extended Master Secret if the flag is set
     pub fn with_extensions(
         mut self,
-        buf: &'a mut Buf<'static>,
+        buf: &'a mut Buf,
         srtp_profile: Option<SrtpProfileId>,
     ) -> Self {
         // Clear the buffer and collect extension byte ranges
@@ -127,7 +127,7 @@ impl<'a> ServerHello<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.extend_from_slice(&self.server_version.as_u16().to_be_bytes());
         self.random.serialize(output);
         output.push(self.session_id.len() as u8);

@@ -33,7 +33,7 @@ impl<'a> Extension<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.extend_from_slice(&self.extension_type.as_u16().to_be_bytes());
         output.extend_from_slice(&(self.extension_data.len() as u16).to_be_bytes());
         if !self.extension_data.is_empty() {

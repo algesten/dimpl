@@ -57,7 +57,7 @@ pub struct Server {
     cookie_secret: [u8; 32],
 
     /// Storage for extension data
-    extension_data: Buf<'static>,
+    extension_data: Buf,
 
     /// The negotiated SRTP profile (if any)
     negotiated_srtp_profile: Option<SrtpProfile>,
@@ -72,10 +72,10 @@ pub struct Server {
     client_random: Option<Random>,
 
     /// Client certificates
-    client_certificates: Vec<Buf<'static>>,
+    client_certificates: Vec<Buf>,
 
     /// Buffer for defragmenting handshakes
-    defragment_buffer: Buf<'static>,
+    defragment_buffer: Buf,
 
     /// Captured session hash for Extended Master Secret (RFC 7627)
     captured_session_hash: Option<Vec<u8>>,
@@ -769,7 +769,7 @@ fn verify_cookie(secret: &[u8], client_random: Random, cookie: Cookie) -> bool {
     }
 }
 
-fn handshake_create_certificate(body: &mut Buf<'static>, engine: &mut Engine) -> Result<(), Error> {
+fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
     let crypto = engine.crypto_context();
     let server_cert = crypto.get_client_certificate();
     server_cert.serialize(body);
@@ -777,12 +777,12 @@ fn handshake_create_certificate(body: &mut Buf<'static>, engine: &mut Engine) ->
 }
 
 fn handshake_create_server_hello(
-    body: &mut Buf<'static>,
+    body: &mut Buf,
     engine: &mut Engine,
     random: Random,
     session_id: SessionId,
     negotiated_srtp_profile: Option<SrtpProfile>,
-    extension_data: &mut Buf<'static>,
+    extension_data: &mut Buf,
 ) -> Result<(), Error> {
     let server_version = ProtocolVersion::DTLS1_2;
 
@@ -811,7 +811,7 @@ fn handshake_create_server_hello(
 }
 
 fn handshake_create_server_key_exchange(
-    body: &mut Buf<'static>,
+    body: &mut Buf,
     engine: &mut Engine,
     client_random: Random,
     server_random: Random,
@@ -911,7 +911,7 @@ fn handshake_create_server_key_exchange(
 }
 
 fn handshake_serialize_certificate_request(
-    body: &mut Buf<'static>,
+    body: &mut Buf,
     sig_algs: &ArrayVec<[SignatureAndHashAlgorithm; 32]>,
 ) -> Result<(), Error> {
     // Advertise RSA_SIGN and ECDSA_SIGN; empty CA list

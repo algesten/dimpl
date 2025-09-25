@@ -29,7 +29,7 @@ impl<'a> Certificate<'a> {
         Ok((input, Certificate { certificate_list }))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         let total_len: usize = self
             .certificate_list
             .iter()

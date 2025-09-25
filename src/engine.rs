@@ -39,7 +39,7 @@ pub struct Engine {
     queue_rx: VecDeque<Incoming>,
 
     /// Queue of outgoing packets.
-    queue_tx: VecDeque<Buf<'static>>,
+    queue_tx: VecDeque<Buf>,
 
     /// The cipher suite in use. Set by ServerHello.
     cipher_suite: Option<CipherSuite>,
@@ -60,7 +60,7 @@ pub struct Engine {
     next_handshake_seq_no: u16,
 
     /// Handshakes collected for hash computation.
-    transcript: Buf<'static>,
+    transcript: Buf,
 
     /// Anti-replay window state (per current epoch)
     replay: ReplayWindow,
@@ -88,7 +88,7 @@ pub struct Engine {
 struct Entry {
     content_type: ContentType,
     epoch: u16,
-    fragment: Buf<'static>,
+    fragment: Buf,
 }
 
 impl Engine {
@@ -481,7 +481,7 @@ impl Engine {
     pub fn next_handshake<'b>(
         &mut self,
         wanted: MessageType,
-        defragment_buffer: &'b mut Buf<'static>,
+        defragment_buffer: &'b mut Buf,
     ) -> Result<Option<Handshake<'b>>, Error> {
         if !self.has_complete_handshake(wanted) {
             return Ok(None);
@@ -545,7 +545,7 @@ impl Engine {
         f: F,
     ) -> Result<(), Error>
     where
-        F: FnOnce(&mut Buf<'static>),
+        F: FnOnce(&mut Buf),
     {
         // Prepare the plaintext fragment
         let mut fragment = self.buffers_free.pop();
@@ -665,7 +665,7 @@ impl Engine {
     /// Create a handshake message and wrap it in a DTLS record
     pub fn create_handshake<F>(&mut self, msg_type: MessageType, f: F) -> Result<(), Error>
     where
-        F: FnOnce(&mut Buf<'static>, &mut Self) -> Result<(), Error>,
+        F: FnOnce(&mut Buf, &mut Self) -> Result<(), Error>,
     {
         // Get a buffer for the handshake body
         let mut body_buffer = self.buffers_free.pop();

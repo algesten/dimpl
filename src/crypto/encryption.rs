@@ -1,3 +1,5 @@
+use std::panic::UnwindSafe;
+
 use aes_gcm::aead::AeadMutInPlace;
 use aes_gcm::{aead::KeyInit, Aes128Gcm, Aes256Gcm};
 
@@ -5,7 +7,7 @@ use crate::buffer::Buf;
 use crate::crypto::{Aad, Nonce};
 
 /// Cipher trait for DTLS encryption and decryption
-pub trait Cipher: Send + Sync {
+pub trait Cipher: Send + Sync + UnwindSafe {
     /// Encrypt plaintext in-place
     fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String>;
 

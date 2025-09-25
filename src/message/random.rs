@@ -44,7 +44,7 @@ impl Random {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.extend_from_slice(&self.gmt_unix_time.to_be_bytes());
         output.extend_from_slice(&self.random_bytes);
     }

@@ -48,7 +48,7 @@ impl<'a> ClientHello<'a> {
     }
 
     /// Add all required extensions for DTLS handshake
-    pub fn with_extensions(mut self, buf: &'a mut Buf<'static>) -> Self {
+    pub fn with_extensions(mut self, buf: &'a mut Buf) -> Self {
         // Clear the extension data buffer
         buf.clear();
 
@@ -185,7 +185,7 @@ impl<'a> ClientHello<'a> {
         Ok((remaining, extensions))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.extend_from_slice(&self.client_version.as_u16().to_be_bytes());
         self.random.serialize(output);
         output.push(self.session_id.len() as u8);

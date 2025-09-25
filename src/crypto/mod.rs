@@ -1,6 +1,7 @@
 //! Cryptographic primitives and helpers used by the DTLS engine.
 
 use std::ops::Deref;
+use std::panic::UnwindSafe;
 use std::str;
 
 use elliptic_curve::generic_array::GenericArray;
@@ -270,7 +271,7 @@ impl ParsedKey {
 
 /// Certificate verifier trait for DTLS connections
 /// Application-provided certificate verifier for DTLS peer authentication.
-pub trait CertVerifier: Send + Sync {
+pub trait CertVerifier: Send + Sync + UnwindSafe {
     /// Verify a certificate by its binary DER representation
     fn verify_certificate(&self, der: &[u8]) -> Result<(), String>;
 }
@@ -288,10 +289,10 @@ pub struct CryptoContext {
     key_exchange: Option<KeyExchange>,
 
     /// Client write key
-    client_write_key: Option<Buf<'static>>,
+    client_write_key: Option<Buf>,
 
     /// Server write key
-    server_write_key: Option<Buf<'static>>,
+    server_write_key: Option<Buf>,
 
     /// Client write IV (for AES-GCM)
     client_write_iv: Option<Iv>,
@@ -300,16 +301,16 @@ pub struct CryptoContext {
     server_write_iv: Option<Iv>,
 
     /// Client MAC key (not used for AEAD ciphers)
-    client_mac_key: Option<Buf<'static>>,
+    client_mac_key: Option<Buf>,
 
     /// Server MAC key (not used for AEAD ciphers)
-    server_mac_key: Option<Buf<'static>>,
+    server_mac_key: Option<Buf>,
 
     /// Master secret
     master_secret: Option<ArrayVec<[u8; 128]>>,
 
     /// Pre-master secret (temporary)
-    pre_master_secret: Option<Buf<'static>>,
+    pre_master_secret: Option<Buf>,
 
     /// Client cipher
     client_cipher: Option<Box<dyn Cipher>>,
@@ -738,7 +739,7 @@ impl CryptoContext {
     /// Verify a DigitallySigned structure against a certificate's public key.
     pub fn verify_signature(
         &self,
-        data: &Buf<'static>,
+        data: &Buf,
         signature: &DigitallySigned<'_>,
         cert_der: &[u8],
     ) -> Result<(), String> {

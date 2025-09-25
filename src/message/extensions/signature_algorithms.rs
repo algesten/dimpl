@@ -44,7 +44,7 @@ impl SignatureAlgorithmsExtension {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         // Write the total length of all algorithms (2 bytes per algorithm)
         output.extend_from_slice(
             &((self.supported_signature_algorithms.len() * 2) as u16).to_be_bytes(),

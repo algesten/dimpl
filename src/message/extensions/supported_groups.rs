@@ -69,7 +69,7 @@ impl SupportedGroupsExtension {
         Ok((current_input, SupportedGroupsExtension { groups }))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         // Write the total length of all groups (2 bytes per group)
         output.extend_from_slice(&((self.groups.len() * 2) as u16).to_be_bytes());
 

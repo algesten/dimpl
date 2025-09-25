@@ -27,14 +27,14 @@ impl Incoming {
         &self.records()[0]
     }
 
-    pub fn into_owner(self) -> Buf<'static> {
+    pub fn into_owner(self) -> Buf {
         self.0.into_owner().into_inner()
     }
 }
 
 self_cell!(
     struct Inner {
-        owner: MutBorrow<Buf<'static>>, // Buffer with UDP packet data
+        owner: MutBorrow<Buf>, // Buffer with UDP packet data
         #[covariant]
         dependent: Records, // Parsed records from that UDP packet
     }
@@ -51,11 +51,7 @@ impl Incoming {
     /// * `into` the buffer in which we want to store the UDP data.
     ///
     /// Will surface parser errors.
-    pub fn parse_packet(
-        packet: &[u8],
-        engine: &mut Engine,
-        mut into: Buf<'static>,
-    ) -> Result<Self, Error> {
+    pub fn parse_packet(packet: &[u8], engine: &mut Engine, mut into: Buf) -> Result<Self, Error> {
         // The Buffer is where we store the raw packet data.
         into.resize(packet.len(), 0);
         into.copy_from_slice(packet);

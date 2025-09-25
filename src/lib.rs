@@ -321,12 +321,13 @@ pub enum Output<'a> {
 
 #[cfg(test)]
 mod test {
+    use std::panic::UnwindSafe;
+
     use crate::certificate::generate_self_signed_certificate;
 
     use super::*;
 
-    #[test]
-    fn test_dtls_default() {
+    fn new_instance() -> Dtls {
         let client_cert =
             generate_self_signed_certificate().expect("Failed to generate client cert");
 
@@ -341,16 +342,34 @@ mod test {
             }
         }
 
-        let mut dtls = Dtls::new(
+        Dtls::new(
             config,
             client_cert.certificate,
             client_cert.private_key,
             Box::new(DummyVerifier),
-        );
+        )
+    }
 
+    #[test]
+    fn test_dtls_default() {
+        let mut dtls = new_instance();
         assert!(!dtls.is_active());
         dtls.set_active(true);
         assert!(dtls.is_active());
         dtls.set_active(false);
+    }
+
+    #[test]
+    fn is_send() {
+        fn is_send<T: Send>(_t: T) {}
+        fn is_sync<T: Sync>(_t: T) {}
+        is_send(new_instance());
+        is_sync(new_instance());
+    }
+
+    #[test]
+    fn is_unwind_safe() {
+        fn is_unwind_safe<T: UnwindSafe>(_t: T) {}
+        is_unwind_safe(new_instance());
     }
 }

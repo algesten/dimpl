@@ -19,7 +19,7 @@ impl<'a> Finished<'a> {
         Ok((input, Finished { verify_data }))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.extend_from_slice(self.verify_data);
     }
 }

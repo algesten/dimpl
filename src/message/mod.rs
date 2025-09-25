@@ -86,7 +86,7 @@ impl ProtocolVersion {
         Ok((input, protocol_version))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.extend_from_slice(&self.as_u16().to_be_bytes());
     }
 }

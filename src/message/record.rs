@@ -114,7 +114,7 @@ impl<'a> DTLSRecord<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.push(self.content_type.as_u8());
         self.version.serialize(output);
         output.extend_from_slice(&self.sequence.epoch.to_be_bytes());

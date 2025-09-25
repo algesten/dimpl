@@ -54,7 +54,7 @@ impl<'a> ClientEcdhKeys<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         // For client key exchange, we only need to include the public key length and value
         // The curve_type and named_curve are already established during ServerKeyExchange
         output.push(self.public_key_length);
@@ -86,7 +86,7 @@ impl<'a> ClientKeyExchange<'a> {
         Ok((input, ClientKeyExchange { exchange_keys }))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         match &self.exchange_keys {
             ExchangeKeys::DhAnon(dh_anon) => dh_anon.serialize(output),
             ExchangeKeys::Ecdh(ecdh_keys) => ecdh_keys.serialize(output),

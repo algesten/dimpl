@@ -17,7 +17,7 @@ impl<'a> CertificateVerify<'a> {
         Ok((input, CertificateVerify { signed }))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         self.signed.serialize(output);
     }
 }

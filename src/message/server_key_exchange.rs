@@ -36,7 +36,7 @@ impl<'a> ServerKeyExchange<'a> {
         Ok((input, ServerKeyExchange { params }))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>, with_signature: bool) {
+    pub fn serialize(&self, output: &mut Buf, with_signature: bool) {
         match &self.params {
             ServerKeyExchangeParams::Dh(dh_params) => dh_params.serialize(output, with_signature),
             ServerKeyExchangeParams::Ecdh(ecdh_params) => {
@@ -112,7 +112,7 @@ impl<'a> DhParams<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>, with_signature: bool) {
+    pub fn serialize(&self, output: &mut Buf, with_signature: bool) {
         output.extend_from_slice(&(self.p.len() as u16).to_be_bytes());
         output.extend_from_slice(self.p);
         output.extend_from_slice(&(self.g.len() as u16).to_be_bytes());
@@ -178,7 +178,7 @@ impl<'a> EcdhParams<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>, with_signature: bool) {
+    pub fn serialize(&self, output: &mut Buf, with_signature: bool) {
         output.push(self.curve_type.as_u8());
         output.extend_from_slice(&self.named_curve.as_u16().to_be_bytes());
         output.push(self.public_key.len() as u8);

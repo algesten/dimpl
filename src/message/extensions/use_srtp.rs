@@ -112,7 +112,7 @@ impl UseSrtpExtension {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         // Length of all profiles (2 bytes per profile)
         output.extend_from_slice(&((self.profiles.len() * 2) as u16).to_be_bytes());
 

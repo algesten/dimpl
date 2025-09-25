@@ -35,7 +35,7 @@ impl HelloVerifyRequest {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.extend_from_slice(&self.server_version.as_u16().to_be_bytes());
         output.push(self.cookie.len() as u8);
         output.extend_from_slice(&self.cookie);

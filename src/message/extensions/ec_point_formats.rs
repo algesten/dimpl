@@ -68,7 +68,7 @@ impl ECPointFormatsExtension {
         Ok((current_input, ECPointFormatsExtension { formats }))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         // Write the number of formats
         output.push(self.formats.len() as u8);
 

@@ -47,7 +47,7 @@ pub struct Client {
     cookie: Option<Cookie>,
 
     /// Storage for extension data
-    extension_data: Buf<'static>,
+    extension_data: Buf,
 
     /// The negotiated SRTP profile (if any)
     negotiated_srtp_profile: Option<SrtpProfile>,
@@ -56,10 +56,10 @@ pub struct Client {
     server_random: Option<Random>,
 
     /// Server certificates
-    server_certificates: Vec<Buf<'static>>,
+    server_certificates: Vec<Buf>,
 
     /// Buffer for defragmenting handshakes
-    defragment_buffer: Buf<'static>,
+    defragment_buffer: Buf,
 
     /// Whether we requested a CertificateVerify
     certificate_verify: bool,
@@ -861,12 +861,12 @@ impl State {
 }
 
 fn handshake_create_client_hello(
-    body: &mut Buf<'static>,
+    body: &mut Buf,
     engine: &mut Engine,
     cookie: Cookie,
     random: Random,
     session_id: SessionId,
-    extension_data: &mut Buf<'static>,
+    extension_data: &mut Buf,
 ) -> Result<(), Error> {
     let client_version = ProtocolVersion::DTLS1_2;
 
@@ -912,17 +912,14 @@ fn handshake_create_client_hello(
     Ok(())
 }
 
-fn handshake_create_certificate(body: &mut Buf<'static>, engine: &mut Engine) -> Result<(), Error> {
+fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
     let crypto = engine.crypto_context();
     let client_cert = crypto.get_client_certificate();
     client_cert.serialize(body);
     Ok(())
 }
 
-fn handshake_create_client_key_exchange(
-    body: &mut Buf<'static>,
-    engine: &mut Engine,
-) -> Result<(), Error> {
+fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
     // Just check that a cipher suite exists without binding to unused variable
     let Some(cipher_suite) = engine.cipher_suite() else {
         return Err(Error::UnexpectedMessage(
@@ -986,10 +983,7 @@ fn handshake_create_client_key_exchange(
     Ok(())
 }
 
-fn handshake_create_certificate_verify(
-    body: &mut Buf<'static>,
-    engine: &mut Engine,
-) -> Result<(), Error> {
+fn handshake_create_certificate_verify(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
     // The hash algorithm to use is the default for the private key type, not
     // the one negotiated to use with the selected cipher suite. I.e.
     // if we negotiate ECDHE_ECDSA_AES256_GCM_SHA384, we are gogin to use
@@ -1026,7 +1020,7 @@ fn handshake_create_certificate_verify(
 }
 
 impl LocalEvent {
-    pub fn into_output<'a>(self, buf: &'a mut [u8], peer_certs: &Vec<Buf<'static>>) -> Output<'a> {
+    pub fn into_output<'a>(self, buf: &'a mut [u8], peer_certs: &Vec<Buf>) -> Output<'a> {
         match self {
             LocalEvent::PeerCert => {
                 let l = peer_certs[0].len();

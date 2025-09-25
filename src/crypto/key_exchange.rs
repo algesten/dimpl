@@ -53,7 +53,7 @@ impl KeyExchange {
     }
 
     /// Compute shared secret using peer's public key
-    pub fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf<'static>, String> {
+    pub fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf, String> {
         match &self.inner {
             Inner::Ecdh(ecdh) => ecdh.compute_shared_secret(peer_public_key),
             Inner::Dh(dh) => dh.compute_shared_secret(peer_public_key),
@@ -115,7 +115,7 @@ impl EcdhKeyExchange {
         }
     }
 
-    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf<'static>, String> {
+    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf, String> {
         match self {
             EcdhKeyExchange::P256 { private_key } => {
                 let Some(secret) = private_key else {
@@ -222,7 +222,7 @@ impl DhKeyExchange {
         public_key.to_bytes_be()
     }
 
-    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf<'static>, String> {
+    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf, String> {
         // Convert peer's public key to BigUint
         let peer_public = BigUint::from_bytes_be(peer_public_key);
 

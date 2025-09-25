@@ -60,7 +60,7 @@ impl<'a> CertificateRequest<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.push(self.certificate_types.len() as u8);
         for cert_type in &self.certificate_types {
             output.push(cert_type.as_u8());

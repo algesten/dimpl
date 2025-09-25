@@ -104,7 +104,7 @@ impl<'a> Handshake<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.push(self.header.msg_type.as_u8());
         output.extend_from_slice(&self.header.length.to_be_bytes()[1..]);
         output.extend_from_slice(&self.header.message_seq.to_be_bytes());
@@ -116,7 +116,7 @@ impl<'a> Handshake<'a> {
     #[allow(private_interfaces)]
     pub fn defragment<'b, 'c: 'b>(
         mut iter: impl Iterator<Item = &'b Handshake<'c>>,
-        buffer: &'a mut Buf<'static>,
+        buffer: &'a mut Buf,
         cipher_suite: Option<CipherSuite>,
     ) -> Result<Handshake<'a>, crate::Error> {
         buffer.clear();
@@ -191,7 +191,7 @@ impl<'a> Handshake<'a> {
     pub fn fragment<'b>(
         &self,
         max: usize,
-        buffer: &'b mut Buf<'static>,
+        buffer: &'b mut Buf,
     ) -> impl Iterator<Item = Handshake<'b>> {
         // Must be called with an empty buffer.
         assert!(buffer.is_empty());
@@ -392,7 +392,7 @@ impl<'a> Body<'a> {
         }
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         match self {
             Body::HelloRequest => {
                 // Serialize HelloRequest (empty)

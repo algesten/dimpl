@@ -31,7 +31,7 @@ impl<'a> ClientDiffieHellmanPublic<'a> {
         Ok((input, ClientDiffieHellmanPublic { public_value }))
     }
 
-    pub fn serialize(&self, output: &mut Buf<'static>) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.extend_from_slice(&(self.public_value.len() as u16).to_be_bytes());
         output.extend_from_slice(self.public_value);
     }
