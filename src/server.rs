@@ -47,11 +47,8 @@ pub struct Server {
     /// Engine in common between server and client.
     engine: Engine,
 
-    /// Start time of the server
-    start: Instant,
-
     /// Random unique data (with gmt timestamp). Used for signature checks.
-    random: Random,
+    random: Option<Random>,
 
     /// SessionId we provide to the client (unused/resumption not implemented).
     session_id: Option<SessionId>,
@@ -84,7 +81,7 @@ pub struct Server {
     captured_session_hash: Option<Vec<u8>>,
 
     /// The last now we seen
-    last_now: Instant,
+    last_now: Option<Instant>,
 
     /// Events we are to emit from this Server.
     local_events: VecDeque<LocalEvent>,
@@ -112,17 +109,16 @@ enum State {
 impl Server {
     /// Create a new DTLS server
     pub fn new(
-        now: Instant,
         config: Arc<Config>,
         certificate: Vec<u8>,
         private_key: Vec<u8>,
         cert_verifier: Box<dyn CertVerifier>,
     ) -> Server {
         let engine = Engine::new(config, certificate, private_key, cert_verifier);
-        Self::new_with_engine(now, engine)
+        Self::new_with_engine(engine)
     }
 
-    pub(crate) fn new_with_engine(now: Instant, mut engine: Engine) -> Server {
+    pub(crate) fn new_with_engine(mut engine: Engine) -> Server {
         engine.set_client(false);
 
         let mut cookie_secret = [0u8; 32];
@@ -131,8 +127,7 @@ impl Server {
         Server {
             state: State::AwaitClientHello,
             engine,
-            start: now,
-            random: Random::new(now),
+            random: None,
             session_id: None,
             cookie_secret,
             extension_data: Buf::new(),
@@ -143,13 +138,13 @@ impl Server {
             client_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
             captured_session_hash: None,
-            last_now: now,
+            last_now: None,
             local_events: VecDeque::new(),
         }
     }
 
     pub fn into_client(self) -> Client {
-        Client::new_with_engine(self.start, self.engine)
+        Client::new_with_engine(self.engine)
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
@@ -159,15 +154,20 @@ impl Server {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
+        let last_now = self.last_now.expect("handle_timeout before poll_output");
+
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.client_certificates);
         }
 
-        self.engine.poll_output(buf, self.last_now)
+        self.engine.poll_output(buf, last_now)
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
-        self.last_now = now;
+        self.last_now = Some(now);
+        if self.random.is_none() {
+            self.random = Some(Random::new(now));
+        }
         self.engine.handle_timeout(now)?;
         self.make_progress()?;
         Ok(())
@@ -371,7 +371,8 @@ impl State {
         server.engine.flight_begin(4);
 
         let session_id = server.session_id.unwrap_or_else(SessionId::empty);
-        let server_random = server.random;
+        // unwrap: is ok because we set the random in handle_timeout
+        let random = server.random.unwrap();
         let negotiated_srtp_profile = server.negotiated_srtp_profile;
         let extension_data = &mut server.extension_data;
 
@@ -382,7 +383,7 @@ impl State {
                 handshake_create_server_hello(
                     body,
                     engine,
-                    server_random,
+                    random,
                     session_id,
                     negotiated_srtp_profile,
                     extension_data,
@@ -408,7 +409,8 @@ impl State {
         let client_random = server
             .client_random
             .ok_or_else(|| Error::UnexpectedMessage("No client random".to_string()))?;
-        let server_random = server.random;
+        // unwrap: is ok because we set the random in handle_timeout
+        let server_random = server.random.unwrap();
 
         // Select ECDHE curve from client offers (prefer P-256, then P-384). If none present, default to P-256.
         let selected_named_curve = select_named_curve(server.client_supported_groups.as_ref());
@@ -559,7 +561,8 @@ impl State {
         };
         let server_random_buf = {
             let mut b = Buf::new();
-            server.random.serialize(&mut b);
+            // unwrap: is ok because we set the random in handle_timeout
+            server.random.unwrap().serialize(&mut b);
             b.into_vec()
         };
 

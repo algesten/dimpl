@@ -18,7 +18,7 @@ pub struct Random {
 impl Random {
     pub fn new(now: Instant) -> Self {
         let gmt_duration = now.to_unix_duration();
-        // This is valid until yaer 2106, at which point I will be beyond caring.
+        // This is valid until year 2106, at which point I will be beyond caring.
         let gmt_unix_time = gmt_duration.as_secs() as u32;
 
         let mut rng = OsRng;

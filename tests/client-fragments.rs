@@ -27,7 +27,6 @@ fn run_client_server_with_mtu(mtu: usize) -> (usize, usize) {
     server.set_active(false);
 
     // Initialize client
-    let now = Instant::now();
     let mut cfg = Config::default();
     cfg.mtu = mtu;
     let config = Arc::new(cfg);
@@ -51,7 +50,6 @@ fn run_client_server_with_mtu(mtu: usize) -> (usize, usize) {
     }
 
     let mut client = Dtls::new(
-        now,
         config,
         client_x509_der,
         client_pkey_der,

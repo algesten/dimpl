@@ -111,6 +111,16 @@ pub fn format_fingerprint(fingerprint: &[u8]) -> String {
         .join(":")
 }
 
+impl fmt::Debug for DtlsCertificate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DtlsCertificate")
+            .field("certificate", &self.certificate.len())
+            .field("private_key", &self.private_key.len())
+            .field("fingerprint", &self.fingerprint.len())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -25,7 +25,6 @@ fn server_ossl() {
     client.set_active(true);
 
     // Initialize dimpl server
-    let now = Instant::now();
     let config = Arc::new(Config::default());
 
     // dimpl Server expects its own certificate/private key (DER)
@@ -47,7 +46,6 @@ fn server_ossl() {
     }
 
     let mut server = Dtls::new(
-        now,
         config,
         server_x509_der,
         server_pkey_der,

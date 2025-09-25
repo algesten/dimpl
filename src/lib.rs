@@ -115,13 +115,13 @@
 //! }
 //!
 //! fn mk_dtls_client() -> Dtls {
-//!     let now = Instant::now();
 //!     let cert = certificate::generate_self_signed_certificate().unwrap();
 //!     let cfg = Arc::new(Config::default());
-//!     let mut dtls = Dtls::new(now, cfg,
+//!     let mut dtls = Dtls::new(
+//!         cfg,
 //!         cert.certificate,
 //!         cert.private_key,
-//!         Box::new(AcceptAll)
+//!         Box::new(AcceptAll),
 //!     );
 //!     dtls.set_active(true); // client role
 //!     dtls
@@ -230,22 +230,15 @@ enum Inner {
 impl Dtls {
     /// Create a new DTLS instance.
     ///
-    /// The instance is initialized with the provided `now`, `config`,
+    /// The instance is initialized with the provided `config`,
     /// certificate, private key, and certificate verifier.
     pub fn new(
-        now: Instant,
         config: Arc<Config>,
         certificate: Vec<u8>,
         private_key: Vec<u8>,
         cert_verifier: Box<dyn CertVerifier>,
     ) -> Self {
-        let inner = Inner::Server(Server::new(
-            now,
-            config,
-            certificate,
-            private_key,
-            cert_verifier,
-        ));
+        let inner = Inner::Server(Server::new(config, certificate, private_key, cert_verifier));
         Dtls { inner: Some(inner) }
     }
 
@@ -338,7 +331,6 @@ mod test {
             generate_self_signed_certificate().expect("Failed to generate client cert");
 
         // Initialize client
-        let now = Instant::now();
         let config = Arc::new(Config::default());
 
         // Simple certificate verifier that accepts any certificate
@@ -350,7 +342,6 @@ mod test {
         }
 
         let mut dtls = Dtls::new(
-            now,
             config,
             client_cert.certificate,
             client_cert.private_key,

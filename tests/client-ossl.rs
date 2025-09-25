@@ -27,7 +27,6 @@ fn client_ossl() {
     server.set_active(false);
 
     // Initialize client
-    let now = Instant::now();
     let config = Arc::new(Config::default());
 
     // Get client certificate as DER encoded bytes
@@ -49,7 +48,6 @@ fn client_ossl() {
     }
 
     let mut client = Dtls::new(
-        now,
         config,
         client_x509_der,
         client_pkey_der,

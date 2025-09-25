@@ -103,7 +103,6 @@ fn duplicate_triggers_server_resend_of_final_flight() {
 
     // Client
     let mut client = Dtls::new(
-        now,
         config_client,
         client_cert.certificate.clone(),
         client_cert.private_key.clone(),
@@ -113,7 +112,6 @@ fn duplicate_triggers_server_resend_of_final_flight() {
 
     // Server
     let mut server = Dtls::new(
-        now,
         config_server,
         server_cert.certificate.clone(),
         server_cert.private_key.clone(),

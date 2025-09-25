@@ -97,7 +97,6 @@ fn resends_each_flight_epoch_and_sequence_increase() {
 
     // Client
     let mut client = Dtls::new(
-        now,
         config_client,
         client_cert.certificate.clone(),
         client_cert.private_key.clone(),
@@ -107,7 +106,6 @@ fn resends_each_flight_epoch_and_sequence_increase() {
 
     // Server
     let mut server = Dtls::new(
-        now,
         config_server,
         server_cert.certificate.clone(),
         server_cert.private_key.clone(),

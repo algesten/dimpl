@@ -289,11 +289,6 @@ impl Engine {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8], now: Instant) -> Output<'a> {
-        // Do we need a handle_timeout()?
-        if self.flight_timers_active && self.flight_timeout.is_none() {
-            return Output::Timeout(now);
-        }
-
         // First check if we have any decrypted app data.
         let buf = match self.poll_app_data(buf) {
             Ok(p) => return Output::ApplicationData(p),

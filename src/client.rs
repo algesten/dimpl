@@ -35,11 +35,8 @@ pub struct Client {
     /// Engine in common between server and client.
     engine: Engine,
 
-    /// Start time of the client
-    start: Instant,
-
     /// Random unique data (with gmt timestamp). Used for signature checks.
-    random: Random,
+    random: Option<Random>,
 
     /// SessionId is set by the server and only sent by the client if we
     /// are reusing a session (key renegotiation).
@@ -72,7 +69,7 @@ pub struct Client {
     captured_session_hash: Option<Vec<u8>>,
 
     /// The last now we seen
-    last_now: Instant,
+    last_now: Option<Instant>,
 
     /// Local events
     local_events: VecDeque<LocalEvent>,
@@ -86,14 +83,13 @@ pub(crate) enum LocalEvent {
 }
 
 impl Client {
-    pub(crate) fn new_with_engine(now: Instant, mut engine: Engine) -> Client {
+    pub(crate) fn new_with_engine(mut engine: Engine) -> Client {
         engine.set_client(true);
 
         Client {
             state: State::SendClientHello,
             engine,
-            start: now,
-            random: Random::new(now),
+            random: None,
             session_id: None,
             cookie: None,
             extension_data: Buf::new(),
@@ -103,13 +99,13 @@ impl Client {
             defragment_buffer: Buf::new(),
             certificate_verify: false,
             captured_session_hash: None,
-            last_now: now,
+            last_now: None,
             local_events: VecDeque::new(),
         }
     }
 
     pub fn into_server(self) -> Server {
-        Server::new_with_engine(self.start, self.engine)
+        Server::new_with_engine(self.engine)
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
@@ -119,16 +115,21 @@ impl Client {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
+        let last_now = self.last_now.expect("handle_timeout before poll_output");
+
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.server_certificates);
         }
 
-        self.engine.poll_output(buf, self.last_now)
+        self.engine.poll_output(buf, last_now)
     }
 
     /// Explicitly start the handshake process by sending a ClientHello
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
-        self.last_now = now;
+        self.last_now = Some(now);
+        if self.random.is_none() {
+            self.random = Some(Random::new(now));
+        }
         self.engine.handle_timeout(now)?;
         self.make_progress()?;
         Ok(())
@@ -214,7 +215,8 @@ impl State {
     fn send_client_hello(self, client: &mut Client) -> Result<Self, Error> {
         let session_id = client.session_id.unwrap_or_else(SessionId::empty);
         let cookie = client.cookie.unwrap_or_else(Cookie::empty);
-        let random = client.random;
+        // unwrap: is ok because we set the random in handle_timeout
+        let random = client.random.unwrap();
 
         // Determine flight number: 1 for initial CH, 3 for retransmit with cookie
         let flight_no = if client.cookie.is_none() { 1 } else { 3 };
@@ -448,7 +450,7 @@ impl State {
         };
 
         // unwrap: is ok because we verify the order of the flight
-        let client_random = client.random;
+        let client_random = client.random.unwrap();
         let server_random = client.server_random.unwrap();
 
         let mut signed_data = Buf::new();
@@ -691,7 +693,8 @@ impl State {
         let mut server_random_buf_b = Buf::new();
 
         // Serialize the random values to raw bytes
-        client.random.serialize(&mut client_random_buf_b);
+        // unwrap: is ok because we set the random in handle_timeout
+        client.random.unwrap().serialize(&mut client_random_buf_b);
         server_random.serialize(&mut server_random_buf_b);
         let client_random_buf = client_random_buf_b.into_vec();
         let server_random_buf = server_random_buf_b.into_vec();

@@ -47,7 +47,6 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: CipherSuite) {
     server.set_active(false);
 
     // Initialize dimpl client restricted to the single suite
-    let now = Instant::now();
     let mut cfg = Config::default();
     cfg.cipher_suites = vec![suite];
     let config = Arc::new(cfg);
@@ -67,7 +66,6 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: CipherSuite) {
     }
 
     let mut client = Dtls::new(
-        now,
         config,
         client_x509_der,
         client_pkey_der,
@@ -156,7 +154,6 @@ fn run_ossl_client_vs_dimpl_server_for_suite(suite: CipherSuite) {
     ossl_client.set_active(true);
 
     // dimpl server with single-suite config
-    let now = Instant::now();
     let mut cfg = Config::default();
     cfg.cipher_suites = vec![suite];
     let config = Arc::new(cfg);
@@ -175,7 +172,6 @@ fn run_ossl_client_vs_dimpl_server_for_suite(suite: CipherSuite) {
     }
 
     let mut server = Dtls::new(
-        now,
         config,
         server_x509_der,
         server_pkey_der,
