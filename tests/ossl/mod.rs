@@ -3,15 +3,25 @@
 //! OpenSSL implementation of cryptographic functions.
 
 /// Errors that can arise in DTLS.
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum CryptoError {
     /// Some error from OpenSSL layer (used for DTLS).
-    #[error("{0}")]
-    OpenSsl(#[from] openssl::error::ErrorStack),
+    OpenSsl(openssl::error::ErrorStack),
 
     /// Other IO errors.
-    #[error("{0}")]
-    Io(#[from] io::Error),
+    Io(io::Error),
+}
+
+impl From<openssl::error::ErrorStack> for CryptoError {
+    fn from(value: openssl::error::ErrorStack) -> Self {
+        CryptoError::OpenSsl(value)
+    }
+}
+
+impl From<io::Error> for CryptoError {
+    fn from(value: io::Error) -> Self {
+        CryptoError::Io(value)
+    }
 }
 
 mod cert;
@@ -28,7 +38,6 @@ pub use dtls::{dtls_ssl_create, OsslDtlsImpl};
 
 pub use io_buf::DatagramSend;
 use std::collections::VecDeque;
-use thiserror::Error;
 
 /// Targeted MTU
 pub(crate) const DATAGRAM_MTU: usize = 1150;

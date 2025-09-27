@@ -28,7 +28,7 @@ elliptic-curve = "0.13"
 num-bigint = { version = "0.4", features = ["rand"] }
 time = { version = "0.3", features = ["formatting"] }
 x509-cert = { version = "0.2", features = ["builder"] }
-rcgen = "0.10"
+rcgen = "0.14"
 der = "0.7"
 rsa = { version = "0.9", features = ["pem", "sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
@@ -37,6 +37,5 @@ spki = "0.7"
 
 [dev-dependencies]
 openssl = "0.10.70"
-thiserror = "1.0"
 libc = "0.2"
 env_logger = "0.11.8"
