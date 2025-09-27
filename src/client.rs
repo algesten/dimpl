@@ -73,6 +73,9 @@ pub struct Client {
 
     /// Local events
     local_events: VecDeque<LocalEvent>,
+
+    /// Data that is sent before we are connected.
+    queued_data: Vec<Buf>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -101,6 +104,7 @@ impl Client {
             captured_session_hash: None,
             last_now: None,
             local_events: VecDeque::new(),
+            queued_data: Vec::new(),
         }
     }
 
@@ -141,7 +145,8 @@ impl Client {
     /// after the handshake is complete.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         if self.state != State::AwaitApplicationData {
-            return Err(Error::UnexpectedMessage("Client not connected".to_string()));
+            self.queued_data.push(data.to_buf());
+            return Ok(());
         }
 
         // Use the engine's create_record to send application data
@@ -874,10 +879,26 @@ impl State {
 
         client.engine.release_application_data();
 
+        debug!("Handshake complete; ready for application data");
+
         Ok(Self::AwaitApplicationData)
     }
 
-    fn await_application_data(self, _client: &mut Client) -> Result<Self, Error> {
+    fn await_application_data(self, client: &mut Client) -> Result<Self, Error> {
+        if !client.queued_data.is_empty() {
+            debug!(
+                "Sending queued application data: {}",
+                client.queued_data.len()
+            );
+            for data in client.queued_data.drain(..) {
+                client
+                    .engine
+                    .create_record(ContentType::ApplicationData, 1, false, |body| {
+                        body.extend_from_slice(&data);
+                    })?;
+            }
+        }
+
         Ok(self)
     }
 }

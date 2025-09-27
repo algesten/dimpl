@@ -85,6 +85,9 @@ pub struct Server {
 
     /// Events we are to emit from this Server.
     local_events: VecDeque<LocalEvent>,
+
+    /// Data that is sent before we are connected.
+    queued_data: Vec<Buf>,
 }
 
 /// Current state of the server.
@@ -135,6 +138,7 @@ impl Server {
             captured_session_hash: None,
             last_now: None,
             local_events: VecDeque::new(),
+            queued_data: Vec::new(),
         }
     }
 
@@ -171,7 +175,8 @@ impl Server {
     /// Send application data when the server is in the Running state
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         if self.state != State::AwaitApplicationData {
-            return Err(Error::UnexpectedMessage("Server not connected".to_string()));
+            self.queued_data.push(data.to_buf());
+            return Ok(());
         }
 
         // Use the engine's create_record to send application data
@@ -764,7 +769,22 @@ impl State {
         Ok(Self::AwaitApplicationData)
     }
 
-    fn await_application_data(self, _server: &mut Server) -> Result<Self, Error> {
+    fn await_application_data(self, server: &mut Server) -> Result<Self, Error> {
+        // Now send any application data that was queued before we were connected.
+        if !server.queued_data.is_empty() {
+            debug!(
+                "Sending queued application data: {}",
+                server.queued_data.len()
+            );
+            for data in server.queued_data.drain(..) {
+                server
+                    .engine
+                    .create_record(ContentType::ApplicationData, 1, false, |body| {
+                        body.extend_from_slice(&data);
+                    })?;
+            }
+        }
+
         Ok(self)
     }
 }
