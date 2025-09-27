@@ -20,18 +20,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
+        id: toolchain
         with:
-          profile: minimal
           toolchain: ${{ matrix.rust }}
-          override: true
       - uses: Swatinem/rust-cache@v1
-      - uses: actions-rs/cargo@v1
-        with:
-          command: build
-      - uses: actions-rs/cargo@v1
-        with:
-          command: test
+      - name: Build
+        run: cargo +${{steps.toolchain.outputs.name}} build
+      - name: Test
+        run: cargo +${{steps.toolchain.outputs.name}} test
 
   snowflake:
     runs-on: ubuntu-latest
@@ -48,26 +45,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
+        id: toolchain
         with:
-          profile: minimal
           toolchain: stable
-          override: true
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v1
-      - uses: actions-rs/cargo@v1
+      - name: fmt
+        run: cargo +${{steps.toolchain.outputs.name}} fmt --all -- --check
+      - name: clippy
+        run: cargo +${{steps.toolchain.outputs.name}} clippy -- -D warnings
+      - uses: dtolnay/rust-toolchain@master
         with:
-          command: fmt
-          args: --all -- --check
-      - uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: -- -D warnings
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
           toolchain: stable
-          override: true
           components: clippy
       - name: doc
         run: cargo doc --no-deps
