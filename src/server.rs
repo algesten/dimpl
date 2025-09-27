@@ -24,14 +24,14 @@ use sha2::Sha256;
 
 use crate::buffer::{Buf, ToBuf};
 use crate::client::LocalEvent;
-use crate::crypto::{ffdhe2048, DhDomainParams, SrtpProfile};
+use crate::crypto::SrtpProfile;
 use crate::engine::Engine;
 use crate::message::{
     Body, CertificateRequest, CipherSuite, ClientCertificateType, ClientEcdhKeys,
-    CompressionMethod, ContentType, Cookie, CurveType, DhParams, DigitallySigned,
-    DistinguishedName, EcdhParams, ExchangeKeys, ExtensionType, Finished, HashAlgorithm,
-    HelloVerifyRequest, KeyExchangeAlgorithm, MessageType, NamedCurve, NamedGroup, ProtocolVersion,
-    Random, ServerHello, ServerKeyExchange, ServerKeyExchangeParams, SessionId, SignatureAlgorithm,
+    CompressionMethod, ContentType, Cookie, CurveType, DigitallySigned, DistinguishedName,
+    EcdhParams, ExchangeKeys, ExtensionType, Finished, HashAlgorithm, HelloVerifyRequest,
+    KeyExchangeAlgorithm, MessageType, NamedCurve, NamedGroup, ProtocolVersion, Random,
+    ServerHello, ServerKeyExchange, ServerKeyExchangeParams, SessionId, SignatureAlgorithm,
     SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId,
     SupportedGroupsExtension, UseSrtpExtension,
 };
@@ -554,7 +554,6 @@ impl State {
         // Extract client's public key depending on KE
         let client_pub = match &ckx.exchange_keys {
             ExchangeKeys::Ecdh(ClientEcdhKeys { public_key, .. }) => public_key.to_vec(),
-            ExchangeKeys::DhAnon(dh) => dh.public_value.to_vec(),
         };
 
         // Compute shared secret
@@ -913,44 +912,6 @@ fn handshake_create_server_key_exchange(
             let params = EcdhParams::new(curve_type, named_curve, pubkey, Some(d_signed));
             let ske = ServerKeyExchange {
                 params: ServerKeyExchangeParams::Ecdh(params),
-            };
-
-            ske.serialize(body, true);
-            Ok(())
-        }
-        KeyExchangeAlgorithm::EDH => {
-            let pubkey = engine
-                .crypto_context_mut()
-                .init_dh_server(ffdhe2048::params())
-                .map_err(|e| Error::CryptoError(format!("Failed to init DHE: {}", e)))?;
-
-            trace!("SKE DHE: pubkey_len={}", pubkey.len());
-
-            let params = ffdhe2048::params();
-            let dh_public = DhParams::new(params.p(), params.g(), pubkey, None);
-
-            let mut signed_data = Buf::new();
-            client_random.serialize(&mut signed_data);
-            server_random.serialize(&mut signed_data);
-            dh_public.serialize(&mut signed_data, false);
-
-            let signature = engine
-                .crypto_context()
-                .sign_data(&signed_data, algorithm.hash)
-                .map_err(|e| {
-                    Error::CryptoError(format!("Failed to sign server key exchange: {}", e))
-                })?;
-
-            // unwrap: safe because init_dh_server() above sets key_exchange = Some(...).
-            // If that failed, we returned Err earlier and never reach this point.
-            let pubkey = engine
-                .crypto_context_mut()
-                .maybe_init_key_exchange()
-                .unwrap();
-            let d_signed = DigitallySigned::new(algorithm, &signature);
-            let params = DhParams::new(params.p(), params.g(), pubkey, Some(d_signed));
-            let ske = ServerKeyExchange {
-                params: ServerKeyExchangeParams::Dh(params),
             };
 
             ske.serialize(body, true);

@@ -7,7 +7,6 @@
 mod certificate;
 mod certificate_request;
 mod certificate_verify;
-mod client_diffie_hellman;
 mod client_hello;
 mod client_key_exchange;
 mod digitally_signed;
@@ -27,7 +26,6 @@ mod wrapped;
 pub use certificate::Certificate;
 pub use certificate_request::CertificateRequest;
 pub use certificate_verify::CertificateVerify;
-pub use client_diffie_hellman::ClientDiffieHellmanPublic;
 pub use client_hello::ClientHello;
 pub use client_key_exchange::{ClientEcdhKeys, ClientKeyExchange, ExchangeKeys};
 pub use digitally_signed::DigitallySigned;
@@ -43,7 +41,7 @@ pub use named_curve::{CurveType, NamedCurve};
 pub use random::Random;
 pub use record::{ContentType, DTLSRecord, DTLSRecordSlice, Sequence};
 pub use server_hello::ServerHello;
-pub use server_key_exchange::{DhParams, EcdhParams, ServerKeyExchange, ServerKeyExchangeParams};
+pub use server_key_exchange::{EcdhParams, ServerKeyExchange, ServerKeyExchangeParams};
 use tinyvec::{array_vec, ArrayVec};
 pub use wrapped::{Asn1Cert, DistinguishedName};
 
@@ -256,7 +254,6 @@ impl CompressionMethod {
 #[allow(non_camel_case_types)]
 pub enum KeyExchangeAlgorithm {
     EECDH,
-    EDH,
     Unknown,
 }
 

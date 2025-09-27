@@ -18,27 +18,25 @@ log = "0.4.22"
 nom = { version = "7.1.3", default-features = false, features = ["std"] }
 once_cell = "1.20.2"
 rand = "0.8.5"
-tinyvec = "1.8.1"
 self_cell = "1.1.0"
+time = { version = "0.3", features = ["formatting"] }
+tinyvec = "1.8.1"
 zeroize = "1.8.1"
 
-# Cryptography dependencies
-p256 = { version = "0.13", features = ["ecdh", "ecdsa", "pkcs8"] }
-x25519-dalek = { version = "2", features = ["getrandom"] }
+# Crypto (and adjacent) dependencies
 aes-gcm = "0.10"
-hmac = "0.12"
-sha2 = "0.10"
-p384 = { version = "0.13", features = ["ecdh", "ecdsa", "pkcs8"] }
-sec1 = "0.7"
-elliptic-curve = "0.13"
-num-bigint = { version = "0.4", features = ["rand"] }
-time = { version = "0.3", features = ["formatting"] }
-x509-cert = { version = "0.2", features = ["builder"] }
-rcgen = "0.14"
 der = "0.7"
+elliptic-curve = "0.13"
+hmac = "0.12"
+p256 = { version = "0.13", features = ["ecdh", "ecdsa", "pkcs8"] }
+p384 = { version = "0.13", features = ["ecdh", "ecdsa", "pkcs8"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
+rcgen = "0.14"
+sec1 = "0.7"
+sha2 = "0.10"
 signature = "2.1"
 spki = "0.7"
+x509-cert = { version = "0.2", features = ["builder"] }
 
 [dev-dependencies]
 openssl = { version = "0.10.70", features = ["vendored"] }

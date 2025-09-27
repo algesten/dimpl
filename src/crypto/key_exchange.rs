@@ -1,12 +1,9 @@
 use crate::buffer::{Buf, ToBuf};
-use crate::crypto::DhDomainParams;
 use crate::message::{CurveType, NamedCurve};
 use elliptic_curve::sec1::FromEncodedPoint;
 use elliptic_curve::sec1::ToEncodedPoint;
-use num_bigint::{BigUint, RandomBits};
 use p256::{ecdh::EphemeralSecret as P256EphemeralSecret, PublicKey as P256PublicKey};
 use p384::{ecdh::EphemeralSecret as P384EphemeralSecret, PublicKey as P384PublicKey};
-use rand::distributions::Distribution;
 use rand::rngs::OsRng;
 
 pub struct KeyExchange {
@@ -17,17 +14,11 @@ pub struct KeyExchange {
 /// Trait for key exchange mechanisms
 enum Inner {
     Ecdh(EcdhKeyExchange),
-    Dh(DhKeyExchange),
 }
 
 impl KeyExchange {
     pub fn new_ecdh(curve: NamedCurve) -> Self {
         Self::new(Inner::Ecdh(EcdhKeyExchange::new(curve)))
-    }
-
-    pub fn new_dh(params: impl DhDomainParams) -> Self {
-        let (prime, generator) = params.into_p_g();
-        Self::new(Inner::Dh(DhKeyExchange::new(prime, generator)))
     }
 
     fn new(inner: Inner) -> Self {
@@ -43,7 +34,6 @@ impl KeyExchange {
         if self.cached_public_key.is_none() {
             let public_key = match &mut self.inner {
                 Inner::Ecdh(ecdh) => ecdh.maybe_init(),
-                Inner::Dh(dh) => dh.maybe_init(),
             };
             self.cached_public_key = Some(public_key.to_vec());
         }
@@ -56,7 +46,6 @@ impl KeyExchange {
     pub fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf, String> {
         match &self.inner {
             Inner::Ecdh(ecdh) => ecdh.compute_shared_secret(peer_public_key),
-            Inner::Dh(dh) => dh.compute_shared_secret(peer_public_key),
         }
     }
 
@@ -64,7 +53,6 @@ impl KeyExchange {
     pub fn get_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
         match &self.inner {
             Inner::Ecdh(ecdh) => ecdh.get_curve_info(),
-            Inner::Dh(dh) => dh.get_curve_info(),
         }
     }
 }
@@ -177,68 +165,5 @@ impl EcdhKeyExchange {
             EcdhKeyExchange::P256 { .. } => Some((CurveType::NamedCurve, NamedCurve::Secp256r1)),
             EcdhKeyExchange::P384 { .. } => Some((CurveType::NamedCurve, NamedCurve::Secp384r1)),
         }
-    }
-}
-
-/// DHE Key Exchange implementation
-pub struct DhKeyExchange {
-    /// Diffie-Hellman prime modulus
-    prime: BigUint,
-
-    /// Diffie-Hellman generator
-    generator: BigUint,
-
-    /// Our private key (random exponent)
-    private_key: Option<BigUint>,
-}
-
-impl DhKeyExchange {
-    pub fn new(prime: Vec<u8>, generator: Vec<u8>) -> Self {
-        DhKeyExchange {
-            prime: BigUint::from_bytes_be(&prime),
-            generator: BigUint::from_bytes_be(&generator),
-            private_key: None,
-        }
-    }
-}
-
-impl DhKeyExchange {
-    fn maybe_init(&mut self) -> Vec<u8> {
-        // Determine bit size of prime
-        let prime_bits = self.prime.bits();
-
-        // Generate a random private key smaller than the prime
-        let mut rng = OsRng;
-        let distribution = RandomBits::new(prime_bits - 1); // One bit less than prime
-        let private_key: BigUint = distribution.sample(&mut rng);
-
-        // Compute public key as g^private_key mod p
-        let public_key = self.generator.modpow(&private_key, &self.prime);
-
-        // Store private key for later use
-        self.private_key = Some(private_key);
-
-        // Return public key as bytes
-        public_key.to_bytes_be()
-    }
-
-    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf, String> {
-        // Convert peer's public key to BigUint
-        let peer_public = BigUint::from_bytes_be(peer_public_key);
-
-        // Get our private key
-        let Some(private_key) = &self.private_key else {
-            return Err("DH private key not generated".to_string());
-        };
-
-        // Compute shared secret as peer_public^private_key mod p
-        let shared_secret = peer_public.modpow(private_key, &self.prime);
-
-        // Return shared secret as big-endian bytes
-        Ok(shared_secret.to_bytes_be().to_buf())
-    }
-
-    fn get_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
-        None // DHE doesn't use named curves
     }
 }
