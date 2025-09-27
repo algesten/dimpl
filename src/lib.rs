@@ -15,6 +15,7 @@
 //! - **DTLS 1.0**
 //! - **Async** (the crate is Sans‑IO and event‑loop agnostic)
 //! - **no_std** (at least not without allocation)
+//! - **RSA**
 //!
 //! ## Regarding DTLS 1.3 and the future of this crate
 //!
@@ -134,6 +135,12 @@
 //! [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
 //! [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
 //! [RFC 7627]: https://www.rfc-editor.org/rfc/rfc7627
+//!
+//! [`Dtls::handle_packet`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.handle_packet
+//! [`Dtls::poll_output`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.poll_output
+//! [`Dtls::handle_timeout`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.handle_timeout
+//! [`Output`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html
+//! [`Output::PeerCert`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html#variant.PeerCert
 //!
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
