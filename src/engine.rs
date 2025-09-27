@@ -152,7 +152,9 @@ impl Engine {
         let buffer = self.buffers_free.pop();
 
         let incoming = Incoming::parse_packet(packet, self, buffer)?;
-        self.insert_incoming(incoming)?;
+        if let Some(incoming) = incoming {
+            self.insert_incoming(incoming)?;
+        }
 
         Ok(())
     }

@@ -24,7 +24,7 @@ impl Incoming {
 
     pub fn first(&self) -> &Record {
         // Invariant: Every Incoming must have at least one Record
-        // or the parser would have failed.
+        // or the parser of Incoming returns None.
         &self.records()[0]
     }
 
@@ -52,7 +52,11 @@ impl Incoming {
     /// * `into` the buffer in which we want to store the UDP data.
     ///
     /// Will surface parser errors.
-    pub fn parse_packet(packet: &[u8], engine: &mut Engine, mut into: Buf) -> Result<Self, Error> {
+    pub fn parse_packet(
+        packet: &[u8],
+        engine: &mut Engine,
+        mut into: Buf,
+    ) -> Result<Option<Self>, Error> {
         // The Buffer is where we store the raw packet data.
         into.resize(packet.len(), 0);
         into.copy_from_slice(packet);
@@ -62,7 +66,14 @@ impl Incoming {
         // håll i hatten
         let inner = Inner::try_new(into, |data| Records::parse(data.borrow_mut(), engine))?;
 
-        Ok(Incoming(inner))
+        // We need at least one Record to be valid. For replayed frames, we discard
+        // the records, hence this might be None
+        let incoming = Incoming(inner);
+        if incoming.records().is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(incoming))
     }
 }
 
