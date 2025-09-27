@@ -26,15 +26,14 @@ use crate::buffer::{Buf, ToBuf};
 use crate::client::LocalEvent;
 use crate::crypto::SrtpProfile;
 use crate::engine::Engine;
-use crate::message::{
-    Body, CertificateRequest, CipherSuite, ClientCertificateType, ClientEcdhKeys,
-    CompressionMethod, ContentType, Cookie, CurveType, DigitallySigned, DistinguishedName,
-    EcdhParams, ExchangeKeys, ExtensionType, Finished, HashAlgorithm, HelloVerifyRequest,
-    KeyExchangeAlgorithm, MessageType, NamedCurve, NamedGroup, ProtocolVersion, Random,
-    ServerHello, ServerKeyExchange, ServerKeyExchangeParams, SessionId, SignatureAlgorithm,
-    SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId,
-    SupportedGroupsExtension, UseSrtpExtension,
-};
+use crate::message::{Body, CertificateRequest, CipherSuite, ClientCertificateType};
+use crate::message::{ClientEcdhKeys, CompressionMethod, ContentType, Cookie, CurveType};
+use crate::message::{DigitallySigned, DistinguishedName, EcdhParams, ExchangeKeys, ExtensionType};
+use crate::message::{Finished, HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
+use crate::message::{MessageType, NamedCurve, NamedGroup, ProtocolVersion, Random, ServerHello};
+use crate::message::{ServerKeyExchange, ServerKeyExchangeParams, SessionId, SignatureAlgorithm};
+use crate::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId};
+use crate::message::{SupportedGroupsExtension, UseSrtpExtension};
 use crate::{Client, Config, Error, Output};
 
 type HmacSha256 = Hmac<Sha256>;

@@ -19,12 +19,10 @@ use tinyvec::{array_vec, ArrayVec};
 
 use crate::buffer::{Buf, ToBuf};
 use crate::engine::Engine;
-use crate::message::{
-    Body, CertificateVerify, ClientEcdhKeys, ClientHello, ClientKeyExchange, CompressionMethod,
-    ContentType, Cookie, DigitallySigned, ExchangeKeys, ExtensionType, Finished,
-    KeyExchangeAlgorithm, MessageType, ProtocolVersion, Random, SessionId,
-    SignatureAndHashAlgorithm, UseSrtpExtension,
-};
+use crate::message::{Body, CertificateVerify, ClientEcdhKeys, ClientHello, ClientKeyExchange};
+use crate::message::{CompressionMethod, ContentType, Cookie, DigitallySigned, ExchangeKeys};
+use crate::message::{ExtensionType, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
+use crate::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
 use crate::{CipherSuite, Error, KeyingMaterial, Output, Server, SrtpProfile};
 
 /// DTLS client
