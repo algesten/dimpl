@@ -41,6 +41,6 @@ signature = "2.1"
 spki = "0.7"
 
 [dev-dependencies]
-openssl = "0.10.70"
+openssl = { version = "0.10.70", features = ["vendored"] }
 libc = "0.2"
 env_logger = "0.11.8"
