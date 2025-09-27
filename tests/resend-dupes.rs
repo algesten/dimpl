@@ -175,7 +175,6 @@ fn duplicate_triggers_server_resend_of_final_flight() {
         !f5_resend.is_empty(),
         "client should resend flight 5 on its timer"
     );
-    println!("now");
     for p in &f5_resend {
         server.handle_packet(p).expect("server recv f5 resend");
     }

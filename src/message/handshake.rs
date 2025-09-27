@@ -479,8 +479,8 @@ mod tests {
         0x01, // Cookie length
         0xBB, // Cookie
         0x00, 0x04, // CipherSuites length
-        0xC0, 0x2F, // CipherSuite::EECDH_AESGCM
-        0xC0, 0x30, // CipherSuite::EDH_AESGCM
+        0xC0, 0x2B, // CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+        0xC0, 0x2C, // CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
         0x01, // CompressionMethods length
         0x00, // CompressionMethod::Null
     ];
@@ -511,8 +511,8 @@ mod tests {
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
         let cipher_suites = array_vec![
-            CipherSuite::ECDHE_RSA_AES128_GCM_SHA256,
-            CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
         ];
         let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
@@ -554,8 +554,8 @@ mod tests {
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
         let cipher_suites = array_vec![
-            CipherSuite::ECDHE_RSA_AES128_GCM_SHA256,
-            CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
         ];
         let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
 
