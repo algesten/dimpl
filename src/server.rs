@@ -24,7 +24,7 @@ use sha2::Sha256;
 
 use crate::buffer::{Buf, ToBuf};
 use crate::client::LocalEvent;
-use crate::crypto::{ffdhe2048, CertVerifier, DhDomainParams, SrtpProfile};
+use crate::crypto::{ffdhe2048, DhDomainParams, SrtpProfile};
 use crate::engine::Engine;
 use crate::message::{
     Body, CertificateRequest, CipherSuite, ClientCertificateType, ClientEcdhKeys,
@@ -108,13 +108,8 @@ enum State {
 
 impl Server {
     /// Create a new DTLS server
-    pub fn new(
-        config: Arc<Config>,
-        certificate: Vec<u8>,
-        private_key: Vec<u8>,
-        cert_verifier: Box<dyn CertVerifier>,
-    ) -> Server {
-        let engine = Engine::new(config, certificate, private_key, cert_verifier);
+    pub fn new(config: Arc<Config>, certificate: Vec<u8>, private_key: Vec<u8>) -> Server {
+        let engine = Engine::new(config, certificate, private_key);
         Self::new_with_engine(engine)
     }
 
@@ -498,17 +493,6 @@ impl State {
                 server.client_certificates.push(cert_data.to_buf());
             }
 
-            // Verify leaf certificate (client auth policy)
-            if let Err(err) = server
-                .engine
-                .crypto_context()
-                .verify_peer_certificate(&server.client_certificates[0])
-            {
-                return Err(Error::CertificateError(format!(
-                    "Certificate verification failed: {}",
-                    err
-                )));
-            }
             server.local_events.push_back(LocalEvent::PeerCert);
         }
 

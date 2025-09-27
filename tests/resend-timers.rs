@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{certificate::generate_self_signed_certificate, CertVerifier, Config, Dtls, Output};
+use dimpl::{certificate::generate_self_signed_certificate, Config, Dtls, Output};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RecHdr {
@@ -76,13 +76,6 @@ fn trigger_resend(ep: &mut Dtls, now: &mut Instant) {
     ep.handle_timeout(*now).expect("handle_timeout");
 }
 
-struct DummyVerifier;
-impl CertVerifier for DummyVerifier {
-    fn verify_certificate(&self, _der: &[u8]) -> Result<(), String> {
-        Ok(())
-    }
-}
-
 #[test]
 fn resends_each_flight_epoch_and_sequence_increase() {
     let now0 = Instant::now();
@@ -100,7 +93,6 @@ fn resends_each_flight_epoch_and_sequence_increase() {
         config_client,
         client_cert.certificate.clone(),
         client_cert.private_key.clone(),
-        Box::new(DummyVerifier),
     );
     client.set_active(true);
 
@@ -109,7 +101,6 @@ fn resends_each_flight_epoch_and_sequence_increase() {
         config_server,
         server_cert.certificate.clone(),
         server_cert.private_key.clone(),
-        Box::new(DummyVerifier),
     );
     server.set_active(false);
 

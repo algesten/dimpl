@@ -45,9 +45,11 @@
 //! - Not supported: PSK cipher suites.
 //!
 //! ## Certificate model
-//! You provide a certificate verifier via [`CertVerifier`]. The crate verifies
-//! handshake signatures against the peer's certificate; PKI policy (chain,
-//! name, EKU, pinning) is enforced by your verifier.
+//! During the handshake the engine emits [`Output::PeerCert`] with the peer's
+//! leaf certificate (DER). The crate uses that certificate to verify DTLS
+//! handshake messages, but it does not perform any PKI validation. Your
+//! application is responsible for validating the peer certificate according to
+//! your policy (fingerprint, chain building, name/EKU checks, pinning, etc.).
 //!
 //! ## Sans‑IO integration model
 //! Drive the engine with three calls:
@@ -59,7 +61,7 @@
 //! - `Packet(&[u8])`: send on your UDP socket
 //! - `Timeout(Instant)`: schedule a timer and call `handle_timeout` at/after it
 //! - `Connected`: handshake complete
-//! - `PeerCert(&[u8])`: peer leaf certificate (DER)
+//! - `PeerCert(&[u8])`: peer leaf certificate (DER) — validate in your app
 //! - `KeyingMaterial(KeyingMaterial, SrtpProfile)`: DTLS‑SRTP export
 //! - `ApplicationData(&[u8])`: plaintext received from peer
 //!
@@ -69,13 +71,7 @@
 //! use std::sync::Arc;
 //! use std::time::Instant;
 //!
-//! use dimpl::{certificate, CertVerifier, Config, Dtls, Output};
-//!
-//! // Minimal certificate verifier (application policy goes here)
-//! struct AcceptAll;
-//! impl CertVerifier for AcceptAll {
-//!     fn verify_certificate(&self, _der: &[u8]) -> Result<(), String> { Ok(()) }
-//! }
+//! use dimpl::{certificate, Config, Dtls, Output};
 //!
 //! // Stub I/O to keep the example focused on the state machine
 //! enum Event { Udp(Vec<u8>), Timer(Instant) }
@@ -121,7 +117,6 @@
 //!         cfg,
 //!         cert.certificate,
 //!         cert.private_key,
-//!         Box::new(AcceptAll),
 //!     );
 //!     dtls.set_active(true); // client role
 //!     dtls
@@ -195,7 +190,6 @@ mod time_tricks;
 
 mod buffer;
 mod crypto;
-pub use crypto::CertVerifier;
 mod engine;
 mod incoming;
 mod window;
@@ -231,14 +225,13 @@ impl Dtls {
     /// Create a new DTLS instance.
     ///
     /// The instance is initialized with the provided `config`,
-    /// certificate, private key, and certificate verifier.
-    pub fn new(
-        config: Arc<Config>,
-        certificate: Vec<u8>,
-        private_key: Vec<u8>,
-        cert_verifier: Box<dyn CertVerifier>,
-    ) -> Self {
-        let inner = Inner::Server(Server::new(config, certificate, private_key, cert_verifier));
+    /// certificate and private key.
+    ///
+    /// During the handshake, the peer's leaf certificate is surfaced via
+    /// [`Output::PeerCert`]. It is up to the application to validate that
+    /// certificate according to its security policy.
+    pub fn new(config: Arc<Config>, certificate: Vec<u8>, private_key: Vec<u8>) -> Self {
+        let inner = Inner::Server(Server::new(config, certificate, private_key));
         Dtls { inner: Some(inner) }
     }
 
@@ -312,6 +305,9 @@ pub enum Output<'a> {
     /// The handshake completed and the connection is established.
     Connected,
     /// The peer's leaf certificate in DER encoding.
+    ///
+    /// Applications must validate this certificate independently (chain,
+    /// name/EKU checks, pinning, etc.).
     PeerCert(&'a [u8]),
     /// Extracted DTLS-SRTP keying material and selected SRTP profile.
     KeyingMaterial(KeyingMaterial<'a>, SrtpProfile),
@@ -334,20 +330,7 @@ mod test {
         // Initialize client
         let config = Arc::new(Config::default());
 
-        // Simple certificate verifier that accepts any certificate
-        struct DummyVerifier;
-        impl CertVerifier for DummyVerifier {
-            fn verify_certificate(&self, _der: &[u8]) -> Result<(), String> {
-                Ok(())
-            }
-        }
-
-        Dtls::new(
-            config,
-            client_cert.certificate,
-            client_cert.private_key,
-            Box::new(DummyVerifier),
-        )
+        Dtls::new(config, client_cert.certificate, client_cert.private_key)
     }
 
     #[test]

@@ -1,7 +1,6 @@
 //! Cryptographic primitives and helpers used by the DTLS engine.
 
 use std::ops::Deref;
-use std::panic::UnwindSafe;
 use std::str;
 
 use elliptic_curve::generic_array::GenericArray;
@@ -269,13 +268,6 @@ impl ParsedKey {
     }
 }
 
-/// Certificate verifier trait for DTLS connections
-/// Application-provided certificate verifier for DTLS peer authentication.
-pub trait CertVerifier: Send + Sync + UnwindSafe {
-    /// Verify a certificate by its binary DER representation
-    fn verify_certificate(&self, der: &[u8]) -> Result<(), String>;
-}
-
 pub trait DhDomainParams {
     fn p(&self) -> &[u8];
     fn g(&self) -> &[u8];
@@ -323,18 +315,11 @@ pub struct CryptoContext {
 
     /// Parsed private key for the certificate with signature algorithm
     private_key: ParsedKey,
-
-    /// Certificate verifier
-    cert_verifier: Box<dyn CertVerifier>,
 }
 
 impl CryptoContext {
     /// Create a new crypto context
-    pub fn new(
-        certificate: Vec<u8>,
-        private_key: Vec<u8>,
-        cert_verifier: Box<dyn CertVerifier>,
-    ) -> Self {
+    pub fn new(certificate: Vec<u8>, private_key: Vec<u8>) -> Self {
         // Validate that we have a certificate and private key
         if certificate.is_empty() {
             panic!("Client certificate cannot be empty");
@@ -362,7 +347,6 @@ impl CryptoContext {
             server_cipher: None,
             certificate,
             private_key,
-            cert_verifier,
         }
     }
 
@@ -640,15 +624,6 @@ impl CryptoContext {
     pub fn sign_data(&self, data: &[u8], hash_alg: HashAlgorithm) -> Result<Vec<u8>, String> {
         // Use the signing module to sign the data
         signing::sign_data(&self.private_key, data, hash_alg)
-    }
-
-    /// Verify the peer's certificate
-    ///
-    /// This delegates to the application's `CertVerifier` policy. The server
-    /// is responsible for enforcing appropriate EKUs and chain validation in
-    /// the verifier implementation.
-    pub fn verify_peer_certificate(&self, der: &[u8]) -> Result<(), String> {
-        self.cert_verifier.verify_certificate(der)
     }
 
     /// Generate verify data for a Finished message using PRF

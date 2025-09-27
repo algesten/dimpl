@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{CertVerifier, CipherSuite, Config, Dtls, Output, SignatureAlgorithm};
+use dimpl::{CipherSuite, Config, Dtls, Output, SignatureAlgorithm};
 use ossl::{DtlsCertOptions, DtlsEvent, DtlsPKeyType, OsslDtlsCert};
 
 #[test]
@@ -58,19 +58,7 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: CipherSuite) {
         .private_key_to_der()
         .expect("client key der");
 
-    struct DummyVerifier;
-    impl CertVerifier for DummyVerifier {
-        fn verify_certificate(&self, _der: &[u8]) -> Result<(), String> {
-            Ok(())
-        }
-    }
-
-    let mut client = Dtls::new(
-        config,
-        client_x509_der,
-        client_pkey_der,
-        Box::new(DummyVerifier),
-    );
+    let mut client = Dtls::new(config, client_x509_der, client_pkey_der);
     client.set_active(true);
 
     let mut server_events = VecDeque::new();
@@ -164,19 +152,7 @@ fn run_ossl_client_vs_dimpl_server_for_suite(suite: CipherSuite) {
         .private_key_to_der()
         .expect("server key der");
 
-    struct DummyVerifier;
-    impl CertVerifier for DummyVerifier {
-        fn verify_certificate(&self, _der: &[u8]) -> Result<(), String> {
-            Ok(())
-        }
-    }
-
-    let mut server = Dtls::new(
-        config,
-        server_x509_der,
-        server_pkey_der,
-        Box::new(DummyVerifier),
-    );
+    let mut server = Dtls::new(config, server_x509_der, server_pkey_der);
     server.set_active(false);
 
     // Drive handshake until both sides report connected

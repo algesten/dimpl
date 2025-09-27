@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::buffer::{Buf, BufferPool, TmpBuf};
-use crate::crypto::{Aad, CertVerifier, CryptoContext, Hash};
+use crate::crypto::{Aad, CryptoContext, Hash};
 use crate::crypto::{Iv, DTLS_AEAD_OVERHEAD};
 use crate::crypto::{Nonce, DTLS_EXPLICIT_NONCE_LEN};
 use crate::incoming::{Incoming, Record};
@@ -92,12 +92,7 @@ struct Entry {
 }
 
 impl Engine {
-    pub fn new(
-        config: Arc<Config>,
-        certificate: Vec<u8>,
-        private_key: Vec<u8>,
-        cert_verifier: Box<dyn CertVerifier>,
-    ) -> Self {
+    pub fn new(config: Arc<Config>, certificate: Vec<u8>, private_key: Vec<u8>) -> Self {
         let flight_backoff =
             ExponentialBackoff::new(config.flight_start_rto, config.flight_retries);
 
@@ -109,7 +104,7 @@ impl Engine {
             queue_rx: VecDeque::new(),
             queue_tx: VecDeque::new(),
             cipher_suite: None,
-            crypto_context: CryptoContext::new(certificate, private_key, cert_verifier),
+            crypto_context: CryptoContext::new(certificate, private_key),
             peer_encryption_enabled: false,
             is_client: false,
             peer_handshake_seq_no: 0,

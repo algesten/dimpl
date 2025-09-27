@@ -10,7 +10,7 @@ use rcgen::{
 use sha2::{Digest, Sha256};
 use std::fmt;
 
-/// Certificate verification error types
+/// Certificate utility error types
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CertificateError {
     /// Invalid certificate format

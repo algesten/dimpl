@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{CertVerifier, Config, Dtls, Output};
+use dimpl::{Config, Dtls, Output};
 use ossl::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
 
 #[test]
@@ -39,20 +39,7 @@ fn client_ossl() {
         .private_key_to_der()
         .expect("Failed to get client private key DER");
 
-    // Simple certificate verifier that accepts any certificate
-    struct DummyVerifier;
-    impl CertVerifier for DummyVerifier {
-        fn verify_certificate(&self, _der: &[u8]) -> Result<(), String> {
-            Ok(())
-        }
-    }
-
-    let mut client = Dtls::new(
-        config,
-        client_x509_der,
-        client_pkey_der,
-        Box::new(DummyVerifier),
-    );
+    let mut client = Dtls::new(config, client_x509_der, client_pkey_der);
     client.set_active(true);
 
     // Collection to store server events

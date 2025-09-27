@@ -574,19 +574,6 @@ impl State {
             ));
         }
 
-        // Verify the certificate using the configured verifier
-        if let Err(err) = client
-            .engine
-            .crypto_context()
-            .verify_peer_certificate(&client.server_certificates[0])
-        {
-            return Err(Error::CertificateError(format!(
-                "Certificate verification failed: {}",
-                err
-            )));
-        }
-        trace!("Server certificate verification successful");
-
         // Send the server certificate as an event
         if !client.server_certificates.is_empty() {
             client.local_events.push_back(LocalEvent::PeerCert);
