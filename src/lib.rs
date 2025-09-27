@@ -16,6 +16,7 @@
 //! - **Async** (the crate is Sans‑IO and event‑loop agnostic)
 //! - **no_std** (at least not without allocation)
 //! - **RSA**
+//! - **DHE**
 //!
 //! ## Regarding DTLS 1.3 and the future of this crate
 //!

@@ -1,5 +1,5 @@
 use super::KeyExchangeAlgorithm;
-use super::{ClientDiffieHellmanPublic, CurveType, NamedCurve};
+use super::{CurveType, NamedCurve};
 use crate::buffer::Buf;
 use nom::bytes::complete::take;
 use nom::error::Error;
@@ -13,7 +13,6 @@ pub struct ClientKeyExchange<'a> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ExchangeKeys<'a> {
-    DhAnon(ClientDiffieHellmanPublic<'a>),
     Ecdh(ClientEcdhKeys<'a>),
 }
 
@@ -72,10 +71,6 @@ impl<'a> ClientKeyExchange<'a> {
         key_exchange_algorithm: KeyExchangeAlgorithm,
     ) -> IResult<&'a [u8], ClientKeyExchange<'a>> {
         let (input, exchange_keys) = match key_exchange_algorithm {
-            KeyExchangeAlgorithm::EDH => {
-                let (input, dh_anon) = ClientDiffieHellmanPublic::parse(input)?;
-                (input, ExchangeKeys::DhAnon(dh_anon))
-            }
             KeyExchangeAlgorithm::EECDH => {
                 let (input, ecdh_keys) = ClientEcdhKeys::parse(input)?;
                 (input, ExchangeKeys::Ecdh(ecdh_keys))
@@ -88,7 +83,6 @@ impl<'a> ClientKeyExchange<'a> {
 
     pub fn serialize(&self, output: &mut Buf) {
         match &self.exchange_keys {
-            ExchangeKeys::DhAnon(dh_anon) => dh_anon.serialize(output),
             ExchangeKeys::Ecdh(ecdh_keys) => ecdh_keys.serialize(output),
         }
     }
@@ -100,35 +94,10 @@ mod test {
     use crate::buffer::Buf;
     use crate::message::KeyExchangeAlgorithm;
 
-    const DH_MESSAGE: &[u8] = &[
-        0x00, 0x04, // Public value length
-        0x01, 0x02, 0x03, 0x04, // Public value data
-    ];
-
     const ECDH_MESSAGE: &[u8] = &[
         0x04, // Public key length
         0x01, 0x02, 0x03, 0x04, // Public key data
     ];
-
-    #[test]
-    fn roundtrip_dh() {
-        let public_value = &DH_MESSAGE[2..6];
-
-        let dh_anon = ClientDiffieHellmanPublic::new(public_value);
-        let client_key_exchange = ClientKeyExchange::new(ExchangeKeys::DhAnon(dh_anon));
-
-        // Serialize and compare to DH_MESSAGE
-        let mut serialized = Buf::new();
-        client_key_exchange.serialize(&mut serialized);
-        assert_eq!(&*serialized, DH_MESSAGE);
-
-        // Parse and compare with original
-        let (rest, parsed) =
-            ClientKeyExchange::parse(&serialized, KeyExchangeAlgorithm::EDH).unwrap();
-        assert_eq!(parsed, client_key_exchange);
-
-        assert!(rest.is_empty());
-    }
 
     #[test]
     fn roundtrip_ecdh() {
@@ -153,7 +122,6 @@ mod test {
                 assert_eq!(keys.public_key_length, 4);
                 assert_eq!(keys.public_key, public_key);
             }
-            _ => panic!("Expected ECDH keys"),
         }
 
         assert!(rest.is_empty());

@@ -13,14 +13,12 @@ use p384::ecdsa::SigningKey as P384SigningKey;
 
 // Internal module imports
 mod encryption;
-pub mod ffdhe2048;
 mod hash;
 mod key_exchange;
 mod keying;
 mod prf;
 mod signing;
 
-// Public re-exports
 pub use encryption::{AesGcm, Cipher};
 pub use hash::Hash;
 pub use key_exchange::KeyExchange;
@@ -29,7 +27,6 @@ pub use prf::calculate_extended_master_secret;
 pub use prf::{key_expansion, prf_tls12};
 
 use crate::buffer::{Buf, TmpBuf, ToBuf};
-// Message-related imports
 use crate::message::{
     Asn1Cert, Certificate, CipherSuite, ContentType, CurveType, ServerKeyExchange,
 };
@@ -41,8 +38,6 @@ use sec1::EcPrivateKey;
 use signature::Verifier;
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
-// RSA verification
-use num_bigint::BigUint;
 
 /// DTLS AEAD (AES-GCM) record formatting constants
 ///
@@ -237,12 +232,6 @@ impl ParsedKey {
     }
 }
 
-pub trait DhDomainParams {
-    fn p(&self) -> &[u8];
-    fn g(&self) -> &[u8];
-    fn into_p_g(self) -> (Vec<u8>, Vec<u8>);
-}
-
 /// DTLS crypto context
 /// Crypto context holding negotiated keys and ciphers for a DTLS session.
 pub struct CryptoContext {
@@ -350,59 +339,10 @@ impl CryptoContext {
         self.maybe_init_key_exchange()
     }
 
-    /// Initialize DHE key exchange (server role) with provided prime and generator
-    /// and return our ephemeral public key
-    pub fn init_dh_server(&mut self, params: impl DhDomainParams) -> Result<&[u8], String> {
-        self.key_exchange = Some(KeyExchange::new_dh(params));
-        self.maybe_init_key_exchange()
-    }
-
     /// Process a ServerKeyExchange message and set up key exchange accordingly
     pub fn process_server_key_exchange(&mut self, ske: &ServerKeyExchange) -> Result<(), String> {
         // Process the server key exchange message based on the parameter type
         match &ske.params {
-            ServerKeyExchangeParams::Dh(dh_params) => {
-                // For DHE, create a new DhKeyExchange with server parameters
-                let prime = dh_params.p.to_vec();
-                let generator = dh_params.g.to_vec();
-                let server_public = dh_params.ys.to_vec();
-
-                struct ClientDhDomainParams {
-                    p: Vec<u8>,
-                    g: Vec<u8>,
-                }
-
-                let params = ClientDhDomainParams {
-                    p: prime,
-                    g: generator,
-                };
-
-                impl DhDomainParams for ClientDhDomainParams {
-                    fn p(&self) -> &[u8] {
-                        &self.p
-                    }
-                    fn g(&self) -> &[u8] {
-                        &self.g
-                    }
-                    fn into_p_g(self) -> (Vec<u8>, Vec<u8>) {
-                        (self.p, self.g)
-                    }
-                }
-
-                // Validate DH parameters (size and ranges)
-                validate_dh_parameters(&params, &server_public)?;
-
-                // Update our key exchange
-                self.key_exchange = Some(KeyExchange::new_dh(params));
-
-                // Generate our keypair
-                let _our_public = self.maybe_init_key_exchange()?;
-
-                // Compute shared secret with the server's public key
-                self.compute_shared_secret(&server_public)?;
-
-                Ok(())
-            }
             ServerKeyExchangeParams::Ecdh(ecdh_params) => {
                 // For ECDHE, create a new EcdhKeyExchange with the specified curve
                 let curve = ecdh_params.named_curve;
@@ -743,33 +683,6 @@ impl CryptoContext {
             )),
         }
     }
-}
-
-/// Validate DHE parameters per basic safety rules
-fn validate_dh_parameters(params: &dyn DhDomainParams, ys: &[u8]) -> Result<(), String> {
-    let p = BigUint::from_bytes_be(params.p());
-    let g = BigUint::from_bytes_be(params.g());
-    let ys = BigUint::from_bytes_be(ys);
-
-    // p must be large enough and odd and > 2
-    if p.bits() < 2048 {
-        return Err("DH prime too small; require >= 2048 bits".to_string());
-    }
-    if p <= BigUint::from(2u32) || (&p & BigUint::from(1u32)) == BigUint::from(0u32) {
-        return Err("DH prime invalid".to_string());
-    }
-
-    // g in [2, p-2]
-    if g < BigUint::from(2u32) || g >= (&p - BigUint::from(1u32)) {
-        return Err("DH generator out of range".to_string());
-    }
-
-    // ys in [2, p-2]
-    if ys < BigUint::from(2u32) || ys >= (&p - BigUint::from(1u32)) {
-        return Err("DH public value out of range".to_string());
-    }
-
-    Ok(())
 }
 
 impl CipherSuite {
