@@ -15,7 +15,7 @@ impl<'a> Deref for KeyingMaterial<'a> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }
 

@@ -292,9 +292,8 @@ impl Engine {
             Err(b) => b,
         };
 
-        match self.poll_packet_tx(buf) {
-            Ok(p) => return Output::Packet(p),
-            Err(_) => {}
+        if let Ok(p) = self.poll_packet_tx(buf) {
+            return Output::Packet(p);
         }
 
         let next_timeout = self.poll_timeout(now);
