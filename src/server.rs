@@ -250,6 +250,12 @@ impl State {
             ));
         }
 
+        trace!(
+            "ClientHello: cookie_len={}, offered_suites={}",
+            ch.cookie.len(),
+            ch.cipher_suites.len()
+        );
+
         // Stateless cookie: require 32-byte cookie matching HMAC(secret, client_random)
         let client_random = ch.random;
         if !verify_cookie(&server.cookie_secret, client_random, ch.cookie) {
@@ -274,6 +280,8 @@ impl State {
             return Ok(self);
         }
 
+        trace!("Accepted ClientHello cookie; proceeding with handshake");
+
         // Client offered suites; we pick per client order intersecting allowed and server key compatibility
         let mut selected: Option<CipherSuite> = None;
         for s in ch.cipher_suites.iter() {
@@ -296,6 +304,8 @@ impl State {
 
         server.engine.set_cipher_suite(cs);
         server.client_random = Some(client_random);
+
+        debug!("Selected cipher suite: {:?}", cs);
 
         // Process client extensions: SRTP, EMS, SupportedGroups and SignatureAlgorithms
         let mut client_offers_ems = false;
@@ -349,6 +359,9 @@ impl State {
                 }
             }
             server.negotiated_srtp_profile = selected_profile;
+            if let Some(profile) = server.negotiated_srtp_profile {
+                debug!("Negotiated SRTP profile: {:?}", profile);
+            }
         }
 
         // Store client's offers for later selection
@@ -356,11 +369,12 @@ impl State {
         server.client_signature_algorithms = client_signature_algorithms;
 
         // Proceed to send the server flight
+        trace!("Extended Master Secret enabled");
         Ok(Self::SendServerHello)
     }
 
     fn send_server_hello(self, server: &mut Server) -> Result<Self, Error> {
-        debug!("Sending ServerHello");
+        trace!("Sending ServerHello");
 
         // Start/restart flight timer for server Flight 4
         server.engine.flight_begin(4);
@@ -389,7 +403,7 @@ impl State {
     }
 
     fn send_certificate(self, server: &mut Server) -> Result<Self, Error> {
-        debug!("Sending Certificate");
+        trace!("Sending Certificate");
 
         server
             .engine
@@ -399,7 +413,7 @@ impl State {
     }
 
     fn send_server_key_exchange(self, server: &mut Server) -> Result<Self, Error> {
-        debug!("Sending ServerKeyExchange");
+        trace!("Sending ServerKeyExchange");
 
         let client_random = server
             .client_random
@@ -414,6 +428,11 @@ impl State {
         let selected_signature = select_ske_signature_algorithm(
             server.client_signature_algorithms.as_ref(),
             server.engine.crypto_context().signature_algorithm(),
+        );
+
+        debug!(
+            "ServerKeyExchange params: curve={:?}, signature_alg={:?}",
+            selected_named_curve, selected_signature
         );
 
         server
@@ -441,6 +460,10 @@ impl State {
         // Select CertificateRequest.signature_algorithms as intersection of client's list and our supported
         let sig_algs =
             select_certificate_request_sig_algs(server.client_signature_algorithms.as_ref());
+        debug!(
+            "CertificateRequest will advertise {} signature algorithms",
+            sig_algs.len()
+        );
 
         server
             .engine
@@ -452,7 +475,7 @@ impl State {
     }
 
     fn send_server_hello_done(self, server: &mut Server) -> Result<Self, Error> {
-        debug!("Sending ServerHelloDone");
+        trace!("Sending ServerHelloDone");
 
         server
             .engine
@@ -483,6 +506,10 @@ impl State {
             // Client didn't provide a certificate (allowed), skip
         } else {
             // Store and verify via callback
+            debug!(
+                "Received client certificate chain with {} certificate(s)",
+                certificate.certificate_list.len()
+            );
             for (i, cert) in certificate.certificate_list.iter().enumerate() {
                 let cert_data = cert.0.to_vec();
                 trace!(
@@ -570,6 +597,12 @@ impl State {
             .derive_keys(suite, &client_random_buf, &server_random_buf)
             .map_err(|e| Error::CryptoError(format!("Failed to derive keys: {}", e)))?;
 
+        trace!(
+            "Captured session hash length for EMS: {}",
+            session_hash.len()
+        );
+        trace!("Derived session keys (EMS) and ready to verify Finished");
+
         if !server.client_certificates.is_empty() {
             Ok(Self::AwaitCertificateVerify)
         } else {
@@ -610,6 +643,8 @@ impl State {
                 Error::CryptoError(format!("Failed to verify client CertificateVerify: {}", e))
             })?;
 
+        debug!("Client CertificateVerify verified successfully");
+
         Ok(Self::AwaitChangeCipherSpec)
     }
 
@@ -622,9 +657,11 @@ impl State {
         };
 
         // Drop any extra CCS resends to avoid being blocked
+        trace!("Dropping any pending CCS resends from peer");
         server.engine.drop_pending_ccs();
 
         // Expect every record to be decrypted from now on.
+        trace!("Received ChangeCipherSpec; enabling peer encryption");
         server.engine.enable_peer_encryption()?;
 
         Ok(Self::AwaitFinished)
@@ -655,13 +692,13 @@ impl State {
             ));
         }
 
-        debug!("Client Finished verified successfully");
+        trace!("Client Finished verified successfully");
 
         Ok(Self::SendChangeCipherSpec)
     }
 
     fn send_change_cipher_spec(self, server: &mut Server) -> Result<Self, Error> {
-        debug!("Sending ChangeCipherSpec");
+        trace!("Sending ChangeCipherSpec");
 
         // Start/restart flight timer for server Flight 6 (CCS+Finished)
         server.engine.flight_begin(6);
@@ -677,12 +714,13 @@ impl State {
     }
 
     fn send_finished(self, server: &mut Server) -> Result<Self, Error> {
-        debug!("Sending Finished message to complete handshake");
+        trace!("Sending Finished message to complete handshake");
 
         server
             .engine
             .create_handshake(MessageType::Finished, |body, engine| {
                 let verify_data = engine.generate_verify_data(false /* server */)?;
+                trace!("Finished.verify_data length: {}", verify_data.len());
                 let finished = Finished::new(&verify_data);
                 finished.serialize(body);
                 Ok(())
@@ -693,6 +731,7 @@ impl State {
         server.engine.flight_stop_resend_timers();
 
         // Handshake complete
+        debug!("Handshake complete; ready for application data");
         server.local_events.push_back(LocalEvent::Connected);
 
         // Emit SRTP keying material if negotiated
@@ -822,6 +861,12 @@ fn handshake_create_server_key_exchange(
                 .init_ecdh_server(named_curve)
                 .map_err(|e| Error::CryptoError(format!("Failed to init ECDHE: {}", e)))?;
 
+            trace!(
+                "SKE ECDHE: curve={:?}, pubkey_len={}",
+                named_curve,
+                pubkey.len()
+            );
+
             let params = EcdhParams::new(curve_type, named_curve, pubkey, None);
 
             // Build signed_data = client_random || server_random || params(without signature)
@@ -830,6 +875,7 @@ fn handshake_create_server_key_exchange(
             server_random.serialize(&mut signed_data);
             params.serialize(&mut signed_data, false);
 
+            trace!("SKE signature hash: {:?}", hash_alg);
             let signature = engine
                 .crypto_context()
                 .sign_data(&signed_data, hash_alg)
@@ -857,6 +903,8 @@ fn handshake_create_server_key_exchange(
                 .crypto_context_mut()
                 .init_dh_server(ffdhe2048::params())
                 .map_err(|e| Error::CryptoError(format!("Failed to init DHE: {}", e)))?;
+
+            trace!("SKE DHE: pubkey_len={}", pubkey.len());
 
             let params = ffdhe2048::params();
             let dh_public = DhParams::new(params.p(), params.g(), pubkey, None);

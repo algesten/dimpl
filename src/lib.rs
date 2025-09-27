@@ -174,6 +174,7 @@
 #[macro_use]
 extern crate log;
 
+use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -313,6 +314,19 @@ pub enum Output<'a> {
     KeyingMaterial(KeyingMaterial<'a>, SrtpProfile),
     /// Received application data plaintext.
     ApplicationData(&'a [u8]),
+}
+
+impl fmt::Debug for Output<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Packet(v) => write!(f, "Packet({})", v.len()),
+            Self::Timeout(v) => write!(f, "Timeout({:?})", v),
+            Self::Connected => write!(f, "Connected"),
+            Self::PeerCert(v) => write!(f, "PeerCert({})", v.len()),
+            Self::KeyingMaterial(v, p) => write!(f, "KeyingMaterial({}, {:?})", v.len(), p),
+            Self::ApplicationData(v) => write!(f, "ApplicationData({})", v.len()),
+        }
+    }
 }
 
 #[cfg(test)]

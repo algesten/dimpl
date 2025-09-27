@@ -287,6 +287,7 @@ impl State {
         // HelloVerifyRequest exchange must not be part of the handshake transcript.
         // Reset transcript so the following ClientHello (with cookie) starts a fresh transcript
         // matching the server's expectation.
+        trace!("Resetting handshake transcript after HelloVerifyRequest");
         client.engine.transcript_reset();
 
         // Redo ClientHello, now with cookie.
@@ -375,6 +376,10 @@ impl State {
                     // Store the first profile as our negotiated profile
                     if !use_srtp.profiles.is_empty() {
                         client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
+                        trace!(
+                            "ServerHello UseSRTP extension processed; selected profile: {:?}",
+                            client.negotiated_srtp_profile
+                        );
                     }
                 }
             }
@@ -393,6 +398,11 @@ impl State {
                 "Extended Master Secret not negotiated".to_string(),
             ));
         }
+
+        if let Some(profile) = client.negotiated_srtp_profile {
+            debug!("Negotiated SRTP profile: {:?}", profile);
+        }
+        trace!("Extended Master Secret enabled");
 
         Ok(Self::AwaitCertificate)
     }
@@ -416,6 +426,11 @@ impl State {
                 "No server certificate received".to_string(),
             ));
         }
+
+        debug!(
+            "Received Certificate message with {} certificate(s)",
+            certificate.certificate_list.len()
+        );
 
         // Convert ASN.1 certificates to byte arrays
         for (i, cert) in certificate.certificate_list.iter().enumerate() {
@@ -494,6 +509,11 @@ impl State {
                 ))
             })?;
 
+        trace!(
+            "ServerKeyExchange signature verified: {:?}",
+            d_signed.algorithm
+        );
+
         // Process the server key exchange message
         client
             .engine
@@ -548,6 +568,7 @@ impl State {
             hash_algorithm
         );
 
+        debug!("Received CertificateRequest; enabling client authentication path");
         client.certificate_verify = true;
 
         Ok(Self::AwaitServerHelloDone)
@@ -566,6 +587,8 @@ impl State {
         let Body::ServerHelloDone = handshake.body else {
             unreachable!()
         };
+
+        trace!("Received ServerHelloDone");
 
         // Validate the server certificate
         if client.server_certificates.is_empty() {
@@ -601,7 +624,7 @@ impl State {
     }
 
     fn send_client_key_exchange(self, client: &mut Client) -> Result<Self, Error> {
-        debug!("Sending ClientKeyExchange");
+        trace!("Sending ClientKeyExchange");
 
         // Start/restart flight timer only if this flight did not start with Certificate
         if !client.certificate_verify {
@@ -649,6 +672,7 @@ impl State {
         Self::derive_keys(client)?;
 
         // Send change cipher spec
+        trace!("Sending ChangeCipherSpec");
         client
             .engine
             .create_record(ContentType::ChangeCipherSpec, 0, true, |body| {
@@ -660,14 +684,14 @@ impl State {
     }
 
     fn derive_keys(client: &mut Client) -> Result<(), Error> {
-        debug!("Deriving keys");
+        trace!("Deriving keys");
         let Some(cipher_suite) = client.engine.cipher_suite() else {
             return Err(Error::UnexpectedMessage(
                 "No cipher suite selected".to_string(),
             ));
         };
 
-        debug!("Using cipher suite for key derivation: {:?}", cipher_suite);
+        trace!("Using cipher suite for key derivation: {:?}", cipher_suite);
 
         let Some(server_random) = &client.server_random else {
             return Err(Error::UnexpectedMessage(
@@ -695,7 +719,7 @@ impl State {
                 "Extended Master Secret negotiated but session hash not captured".to_string(),
             )
         })?;
-        debug!(
+        trace!(
             "Using captured session hash for Extended Master Secret (length: {})",
             session_hash.len()
         );
@@ -718,7 +742,7 @@ impl State {
     }
 
     fn send_finished(self, client: &mut Client) -> Result<Self, Error> {
-        debug!("Sending Finished message to complete handshake");
+        trace!("Sending Finished message to complete handshake");
 
         client
             .engine
@@ -747,9 +771,11 @@ impl State {
         };
 
         // Drop any extra CCS resends to avoid being blocked
+        trace!("Dropping any pending CCS resends from peer");
         client.engine.drop_pending_ccs();
 
         // Expect every record to be decrypted from now on.
+        trace!("Received ChangeCipherSpec; enabling peer encryption");
         client.engine.enable_peer_encryption()?;
 
         Ok(Self::AwaitNewSessionTicket)
@@ -777,6 +803,8 @@ impl State {
 
         // TODO(martin): handle ticket for restart
 
+        trace!("Received NewSessionTicket");
+
         Ok(Self::AwaitFinished)
     }
 
@@ -800,11 +828,18 @@ impl State {
         };
 
         // If verification fails, return an error
+        trace!(
+            "Finished.verify_data received len={}, expected len={}",
+            finished.verify_data.len(),
+            expected.len()
+        );
         if finished.verify_data != expected {
             return Err(Error::SecurityError(
                 "Server Finished verification failed".to_string(),
             ));
         }
+
+        trace!("Server Finished verified successfully");
 
         // Receiving server Finished implicitly acks our Flight 5; stop resends
         client.engine.flight_stop_resend_timers();
@@ -931,7 +966,7 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
         .map_err(|e| Error::CryptoError(format!("Failed to generate key exchange: {}", e)))?
         .to_vec();
 
-    debug!("Generated public key size: {} bytes", public_key.len());
+    trace!("Generated public key size: {} bytes", public_key.len());
 
     // Create a properly formatted ClientKeyExchange message based on the key exchange algorithm
     let exchange_keys = match key_exchange_algorithm {
@@ -941,9 +976,10 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
                 unreachable!("No curve info available for ECDHE");
             };
 
-            debug!(
+            trace!(
                 "Using ECDHE curve info: {:?}, {:?}",
-                curve_type, named_curve
+                curve_type,
+                named_curve
             );
 
             // Create ClientEcdhKeys with the proper curve information and public key

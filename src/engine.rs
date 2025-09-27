@@ -388,7 +388,7 @@ impl Engine {
     }
 
     pub fn flight_begin(&mut self, flight_no: u8) {
-        debug!("Beginning flight {}", flight_no);
+        debug!("Begin flight {}", flight_no);
         self.flight_backoff.reset();
         self.flight_clear_resends();
         self.flight_timeout = None;
