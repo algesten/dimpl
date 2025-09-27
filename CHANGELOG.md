@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.2
+
   * Bump MSRV to 1.81.0 #7
   * Bump rand to 0.9.x #7
 
