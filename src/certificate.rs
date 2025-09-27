@@ -40,8 +40,6 @@ pub struct DtlsCertificate {
     pub certificate: Vec<u8>,
     /// Private key in DER format
     pub private_key: Vec<u8>,
-    /// SHA-256 fingerprint
-    pub fingerprint: Vec<u8>,
 }
 
 /// Generate a self-signed certificate for DTLS
@@ -51,12 +49,12 @@ pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, Certificate
         .map_err(|_| CertificateError::GenerationFailed)?;
 
     // Set up certificate parameters
-    let mut params = CertificateParams::new(vec!["DTLS Client".to_string()]);
+    let mut params = CertificateParams::new(vec!["DTLS Peer".to_string()]);
 
     // Set up distinguished name
     let mut distinguished_name = DistinguishedName::new();
     distinguished_name.push(DnType::OrganizationName, "DTLS".to_string());
-    distinguished_name.push(DnType::CommonName, "DTLS Client".to_string());
+    distinguished_name.push(DnType::CommonName, "DTLS Peer".to_string());
     params.distinguished_name = distinguished_name;
 
     // Configure as end entity certificate (not a CA)
@@ -83,13 +81,9 @@ pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, Certificate
     // Get the private key in DER format
     let key_der = cert.serialize_private_key_der();
 
-    // Calculate the fingerprint
-    let fingerprint = calculate_fingerprint(&cert_der);
-
     Ok(DtlsCertificate {
         certificate: cert_der,
         private_key: key_der,
-        fingerprint,
     })
 }
 
@@ -111,12 +105,29 @@ pub fn format_fingerprint(fingerprint: &[u8]) -> String {
         .join(":")
 }
 
+impl DtlsCertificate {
+    /// Returns the certificate fingerprint as raw bytes.
+    ///
+    /// The fingerprint is computed by hashing the DER-encoded certificate
+    /// with SHA-256 and is therefore 32 bytes long.
+    pub fn fingerprint(&self) -> Vec<u8> {
+        calculate_fingerprint(&self.certificate)
+    }
+
+    /// Returns the certificate fingerprint as a human-readable string.
+    ///
+    /// The string is the SHA-256 fingerprint formatted as uppercase
+    /// hex byte pairs separated by colons, for example "AF:12:F6:...".
+    pub fn fingerprint_str(&self) -> String {
+        format_fingerprint(&self.fingerprint())
+    }
+}
+
 impl fmt::Debug for DtlsCertificate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DtlsCertificate")
             .field("certificate", &self.certificate.len())
             .field("private_key", &self.private_key.len())
-            .field("fingerprint", &self.fingerprint.len())
             .finish()
     }
 }
@@ -135,7 +146,7 @@ mod tests {
         assert!(!cert.private_key.is_empty());
 
         // Fingerprint should be 32 bytes (SHA-256)
-        assert_eq!(cert.fingerprint.len(), 32);
+        assert_eq!(cert.fingerprint().len(), 32);
     }
 
     #[test]
@@ -146,7 +157,7 @@ mod tests {
 
         // Test with an actual generated certificate
         let cert = generate_self_signed_certificate().unwrap();
-        let formatted = format_fingerprint(&cert.fingerprint);
+        let formatted = format_fingerprint(&cert.fingerprint());
 
         // Verify the format
         assert_eq!(formatted.len(), 95); // 32 bytes * 3 - 1 = 95 (32 hex pairs with : between them)
