@@ -170,7 +170,7 @@ mod test {
         0x1F, 0x20, //
         0x01, // SessionId length
         0xAA, // SessionId
-        0xC0, 0x2F, // CipherSuite::EECDH_AESGCM
+        0xC0, 0x2B, // CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
         0x00, // CompressionMethod::Null
         0x00, 0x0C, // Extensions length (12 bytes total: 2 type + 2 length + 8 data)
         0x00, 0x0A, // ExtensionType::SupportedGroups
@@ -187,7 +187,7 @@ mod test {
 
         let random = Random::parse(&MESSAGE[2..34]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
-        let cipher_suite = CipherSuite::ECDHE_RSA_AES128_GCM_SHA256;
+        let cipher_suite = CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256;
         let compression_method = CompressionMethod::Null;
         let extensions = Some(array_vec!([Extension; 32] => Extension::new(
             ExtensionType::SupportedGroups,

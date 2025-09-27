@@ -36,7 +36,6 @@ time = { version = "0.3", features = ["formatting"] }
 x509-cert = { version = "0.2", features = ["builder"] }
 rcgen = "0.14"
 der = "0.7"
-rsa = { version = "0.9", features = ["pem", "sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 signature = "2.1"
 spki = "0.7"

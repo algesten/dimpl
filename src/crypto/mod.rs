@@ -10,8 +10,6 @@ use tinyvec::{array_vec, ArrayVec};
 // Crypto-related imports
 use p256::ecdsa::SigningKey as P256SigningKey;
 use p384::ecdsa::SigningKey as P384SigningKey;
-use rsa::pkcs1::DecodeRsaPrivateKey;
-use rsa::RsaPrivateKey;
 
 // Internal module imports
 mod encryption;
@@ -40,14 +38,11 @@ use crate::message::{NamedCurve, Sequence, ServerKeyExchangeParams, SignatureAlg
 
 use sec1::der::Decode;
 use sec1::EcPrivateKey;
-use sha2::{Digest, Sha256, Sha384};
-use signature::{DigestVerifier, Verifier};
+use signature::Verifier;
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 // RSA verification
 use num_bigint::BigUint;
-use rsa::pkcs1v15::{Signature as RsaPkcs1v15Signature, VerifyingKey as RsaPkcs1v15VerifyingKey};
-use rsa::RsaPublicKey;
 
 /// DTLS AEAD (AES-GCM) record formatting constants
 ///
@@ -102,8 +97,6 @@ pub enum ParsedKey {
     P256(P256SigningKey),
     /// P-384 ECDSA key
     P384(P384SigningKey),
-    /// RSA key
-    Rsa(RsaPrivateKey),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,7 +156,6 @@ impl ParsedKey {
     pub fn signature_algorithm(&self) -> SignatureAlgorithm {
         match self {
             ParsedKey::P256(_) | ParsedKey::P384(_) => SignatureAlgorithm::ECDSA,
-            ParsedKey::Rsa(_) => SignatureAlgorithm::RSA,
         }
     }
 
@@ -175,15 +167,6 @@ impl ParsedKey {
                     cipher_suite,
                     CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
                         | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-                )
-            }
-            ParsedKey::Rsa(_) => {
-                matches!(
-                    cipher_suite,
-                    CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
-                        | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
-                        | CipherSuite::DHE_RSA_AES256_GCM_SHA384
-                        | CipherSuite::DHE_RSA_AES128_GCM_SHA256
                 )
             }
         }
@@ -225,11 +208,6 @@ impl ParsedKey {
 
         // Check if it's a PEM encoded key
         if let Ok(pem_str) = str::from_utf8(key_data) {
-            // Try as RSA key
-            if let Ok(private_key) = RsaPrivateKey::from_pkcs8_pem(pem_str) {
-                return Ok(ParsedKey::Rsa(private_key));
-            }
-
             // Try as P-256 key
             if let Ok(signing_key) = P256SigningKey::from_pkcs8_pem(pem_str) {
                 return Ok(ParsedKey::P256(signing_key));
@@ -241,14 +219,6 @@ impl ParsedKey {
             }
         }
 
-        // Try as PKCS#8 DER format
-        if let Ok(private_key) = RsaPrivateKey::from_pkcs8_der(key_data) {
-            return Ok(ParsedKey::Rsa(private_key));
-        }
-        // Try as PKCS#1 DER format (OpenSSL may export this)
-        if let Ok(private_key) = RsaPrivateKey::from_pkcs1_der(key_data) {
-            return Ok(ParsedKey::Rsa(private_key));
-        }
         if let Ok(signing_key) = P256SigningKey::from_pkcs8_der(key_data) {
             return Ok(ParsedKey::P256(signing_key));
         }
@@ -263,7 +233,6 @@ impl ParsedKey {
         match self {
             ParsedKey::P256(_) => HashAlgorithm::SHA256,
             ParsedKey::P384(_) => HashAlgorithm::SHA384,
-            ParsedKey::Rsa(_) => HashAlgorithm::SHA256,
         }
     }
 }
@@ -489,14 +458,10 @@ impl CryptoContext {
         // Key sizes depend on the cipher suite
         let (mac_key_len, enc_key_len, fixed_iv_len) = match cipher_suite {
             // AES-128-GCM suites
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-            | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
-            | CipherSuite::DHE_RSA_AES128_GCM_SHA256 => (0, 16, 4),
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => (0, 16, 4),
 
             // AES-256-GCM suites
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-            | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
-            | CipherSuite::DHE_RSA_AES256_GCM_SHA384 => (0, 32, 4),
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => (0, 32, 4),
 
             _ => return Err("Unsupported cipher suite for key derivation".to_string()),
         };
@@ -539,11 +504,7 @@ impl CryptoContext {
         match cipher_suite {
             // AES-GCM suites
             CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-            | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
-            | CipherSuite::DHE_RSA_AES128_GCM_SHA256
-            | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-            | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
-            | CipherSuite::DHE_RSA_AES256_GCM_SHA384 => {
+            | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => {
                 // AES-GCM ciphers
                 self.client_cipher = Some(Box::new(AesGcm::new(
                     self.client_write_key.as_ref().unwrap(),
@@ -621,9 +582,9 @@ impl CryptoContext {
 
     /// Sign the provided data using the client's private key
     /// Returns the signature or an error if signing fails
-    pub fn sign_data(&self, data: &[u8], hash_alg: HashAlgorithm) -> Result<Vec<u8>, String> {
+    pub fn sign_data(&self, data: &[u8], _hash_alg: HashAlgorithm) -> Result<Vec<u8>, String> {
         // Use the signing module to sign the data
-        signing::sign_data(&self.private_key, data, hash_alg)
+        signing::sign_data(&self.private_key, data)
     }
 
     /// Generate verify data for a Finished message using PRF
@@ -724,9 +685,6 @@ impl CryptoContext {
         let spki = &cert.tbs_certificate.subject_public_key_info;
 
         // OIDs we care about
-        // rsaEncryption: 1.2.840.113549.1.1.1
-        const OID_RSA_ENCRYPTION: ObjectIdentifier =
-            ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
         // id-ecPublicKey: 1.2.840.10045.2.1
         const OID_EC_PUBLIC_KEY: ObjectIdentifier =
             ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
@@ -734,47 +692,6 @@ impl CryptoContext {
         let alg_oid = spki.algorithm.oid;
 
         match alg_oid {
-            OID_RSA_ENCRYPTION => {
-                // Signature type must be RSA
-                if signature.algorithm.signature != SignatureAlgorithm::RSA {
-                    return Err("Signature algorithm mismatch: expected RSA".to_string());
-                }
-
-                // SubjectPublicKey is a BIT STRING containing a DER-encoded RSAPublicKey (PKCS#1)
-                let pk_der = spki
-                    .subject_public_key
-                    .as_bytes()
-                    .ok_or_else(|| "Invalid RSA subject_public_key bitstring".to_string())?;
-
-                // Parse RSAPublicKey directly to RsaPublicKey
-                use rsa::pkcs1::DecodeRsaPublicKey;
-                let rsa_pub = RsaPublicKey::from_pkcs1_der(pk_der)
-                    .map_err(|e| format!("Failed to parse RSA public key: {e}"))?;
-
-                // Build verifying key for the negotiated hash
-                match signature.algorithm.hash {
-                    HashAlgorithm::SHA256 => {
-                        let vk = RsaPkcs1v15VerifyingKey::<Sha256>::new(rsa_pub);
-                        let sig = RsaPkcs1v15Signature::try_from(signature.signature)
-                            .map_err(|e| format!("Invalid RSA signature encoding: {e}"))?;
-                        // Verify over the raw data (hasher is internal to the verifier via DigestVerifier)
-                        let mut hasher = Sha256::new();
-                        hasher.update(&**data);
-                        vk.verify_digest(hasher, &sig)
-                            .map_err(|_| "RSA/SHA256 signature verification failed".to_string())
-                    }
-                    HashAlgorithm::SHA384 => {
-                        let vk = RsaPkcs1v15VerifyingKey::<Sha384>::new(rsa_pub);
-                        let sig = RsaPkcs1v15Signature::try_from(signature.signature)
-                            .map_err(|e| format!("Invalid RSA signature encoding: {e}"))?;
-                        let mut hasher = Sha384::new();
-                        hasher.update(&**data);
-                        vk.verify_digest(hasher, &sig)
-                            .map_err(|_| "RSA/SHA384 signature verification failed".to_string())
-                    }
-                    other => Err(format!("Unsupported RSA hash algorithm: {:?}", other)),
-                }
-            }
             OID_EC_PUBLIC_KEY => {
                 // Signature type must be ECDSA
                 if signature.algorithm.signature != SignatureAlgorithm::ECDSA {
@@ -860,14 +777,10 @@ impl CipherSuite {
     pub fn key_length(&self) -> (usize, usize, usize) {
         match self {
             // AES-128-GCM suites
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-            | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
-            | CipherSuite::DHE_RSA_AES128_GCM_SHA256 => (0, 16, 4),
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => (0, 16, 4),
 
             // AES-256-GCM suites
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-            | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
-            | CipherSuite::DHE_RSA_AES256_GCM_SHA384 => (0, 32, 4),
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => (0, 32, 4),
 
             CipherSuite::Unknown(_) => (0, 32, 4), // Default to AES-256-GCM
         }
@@ -877,12 +790,7 @@ impl CipherSuite {
     pub fn is_gcm(&self) -> bool {
         matches!(
             self,
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-                | CipherSuite::ECDHE_RSA_AES128_GCM_SHA256
-                | CipherSuite::DHE_RSA_AES128_GCM_SHA256
-                | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-                | CipherSuite::ECDHE_RSA_AES256_GCM_SHA384
-                | CipherSuite::DHE_RSA_AES256_GCM_SHA384
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
         )
     }
 }
