@@ -1,4 +1,4 @@
-use rand::{rngs::OsRng, RngCore};
+use rand::random;
 use std::collections::VecDeque;
 use std::mem;
 use std::sync::atomic::AtomicBool;
@@ -602,8 +602,7 @@ impl Engine {
             };
 
             // Generate 8 random bytes for the explicit part of the nonce
-            let mut explicit_nonce = [0u8; 8];
-            OsRng.fill_bytes(&mut explicit_nonce);
+            let explicit_nonce: [u8; 8] = random();
 
             // Combine the fixed IV and the explicit nonce
             let nonce = Nonce::new(iv, &explicit_nonce);

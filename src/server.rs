@@ -19,7 +19,7 @@ use std::time::Instant;
 use tinyvec::ArrayVec;
 
 use hmac::{Hmac, Mac};
-use rand::{rngs::OsRng, RngCore};
+use rand::random;
 use sha2::Sha256;
 
 use crate::buffer::{Buf, ToBuf};
@@ -118,8 +118,7 @@ impl Server {
     pub(crate) fn new_with_engine(mut engine: Engine) -> Server {
         engine.set_client(false);
 
-        let mut cookie_secret = [0u8; 32];
-        OsRng.fill_bytes(&mut cookie_secret);
+        let cookie_secret: [u8; 32] = random();
 
         Server {
             state: State::AwaitClientHello,

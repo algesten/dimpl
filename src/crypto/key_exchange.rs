@@ -1,10 +1,10 @@
 use crate::buffer::{Buf, ToBuf};
 use crate::message::{CurveType, NamedCurve};
+use elliptic_curve::rand_core::OsRng;
 use elliptic_curve::sec1::FromEncodedPoint;
 use elliptic_curve::sec1::ToEncodedPoint;
 use p256::{ecdh::EphemeralSecret as P256EphemeralSecret, PublicKey as P256PublicKey};
 use p384::{ecdh::EphemeralSecret as P384EphemeralSecret, PublicKey as P384PublicKey};
-use rand::rngs::OsRng;
 
 pub struct KeyExchange {
     inner: Inner,
@@ -82,7 +82,8 @@ impl EcdhKeyExchange {
         match self {
             EcdhKeyExchange::P256 { private_key } => {
                 if private_key.is_none() {
-                    let secret = P256EphemeralSecret::random(&mut OsRng);
+                    let mut rng = OsRng;
+                    let secret = P256EphemeralSecret::random(&mut rng);
                     *private_key = Some(secret);
                 }
                 let secret = private_key.as_ref().unwrap();
@@ -92,7 +93,8 @@ impl EcdhKeyExchange {
             }
             EcdhKeyExchange::P384 { private_key } => {
                 if private_key.is_none() {
-                    let secret = P384EphemeralSecret::random(&mut OsRng);
+                    let mut rng = OsRng;
+                    let secret = P384EphemeralSecret::random(&mut rng);
                     *private_key = Some(secret);
                 }
                 let secret = private_key.as_ref().unwrap();
