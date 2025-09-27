@@ -17,43 +17,6 @@ use crate::Error;
 /// A self-referential struct.
 pub struct Incoming(Inner);
 
-/*
-Why it is sound to assert UnwindSafe for Incoming
-
-- No internal unwind boundaries: this crate does not use catch_unwind. We do not
-  cross panic boundaries internally while mutating state. This marker exists to
-  document that external callers can wrap our APIs in catch_unwind without
-  observing broken invariants from this type.
-
-- self_cell construction is panic-safe without catch_unwind: Incoming/Record are
-  built via self_cell::new/try_new. The crate uses a drop guard to clean up a
-  partially-initialized allocation if the dependent builder panics. No value
-  escapes on panic, so a half-built object cannot be observed across unwinding.
-
-- Read-only builders: our dependent builders (e.g., ParsedRecord::parse) take
-  only a &[u8] to the owner and do not mutate the owner during construction. An
-  unwind during builder execution therefore cannot leave the owner partially
-  mutated across a boundary.
-
-- Decrypt-and-reparse is publish-after-complete: when decrypting we first call
-  into_owner() to regain the raw bytes, mutate a local &mut [u8] (length update,
-  in-place decrypt, copy_within), and only then construct a fresh RecordInner
-  from the fully transformed bytes. If a panic occurs mid-transformation, the
-  new RecordInner is not built and the previously-built Record is dropped; no
-  consumer can observe a half-transformed record across an unwind boundary.
-
-- Interior mutability is benign across unwind: the only interior mutability is
-  AtomicBool "handled" flags. They are monotonic (false -> true). If an external
-  caller catches a panic and continues, the worst effect is conservatively
-  skipping work already done. This does not introduce memory unsafety or aliasing
-  violations, and no invariants rely on "handled implies delivery".
-
-Given the above, an unwind cannot leave Incoming in a state where broken
-invariants are later observed across a catch_unwind boundary. Marking Incoming
-as UnwindSafe is a sound assertion and clarifies behavior for callers.
-*/
-impl std::panic::UnwindSafe for Incoming {}
-
 impl Incoming {
     pub fn records(&self) -> &Records {
         self.0.borrow_dependent()
@@ -294,3 +257,40 @@ impl<'a> Default for Record<'a> {
         }))
     }
 }
+
+/*
+Why it is sound to assert UnwindSafe for Incoming
+
+- No internal unwind boundaries: this crate does not use catch_unwind. We do not
+  cross panic boundaries internally while mutating state. This marker exists to
+  document that external callers can wrap our APIs in catch_unwind without
+  observing broken invariants from this type.
+
+- self_cell construction is panic-safe without catch_unwind: Incoming/Record are
+  built via self_cell::new/try_new. The crate uses a drop guard to clean up a
+  partially-initialized allocation if the dependent builder panics. No value
+  escapes on panic, so a half-built object cannot be observed across unwinding.
+
+- Read-only builders: our dependent builders (e.g., ParsedRecord::parse) take
+  only a &[u8] to the owner and do not mutate the owner during construction. An
+  unwind during builder execution therefore cannot leave the owner partially
+  mutated across a boundary.
+
+- Decrypt-and-reparse is publish-after-complete: when decrypting we first call
+  into_owner() to regain the raw bytes, mutate a local &mut [u8] (length update,
+  in-place decrypt, copy_within), and only then construct a fresh RecordInner
+  from the fully transformed bytes. If a panic occurs mid-transformation, the
+  new RecordInner is not built and the previously-built Record is dropped; no
+  consumer can observe a half-transformed record across an unwind boundary.
+
+- Interior mutability is benign across unwind: the only interior mutability is
+  AtomicBool "handled" flags. They are monotonic (false -> true). If an external
+  caller catches a panic and continues, the worst effect is conservatively
+  skipping work already done. This does not introduce memory unsafety or aliasing
+  violations, and no invariants rely on "handled implies delivery".
+
+Given the above, an unwind cannot leave Incoming in a state where broken
+invariants are later observed across a catch_unwind boundary. Marking Incoming
+as UnwindSafe is a sound assertion and clarifies behavior for callers.
+*/
+impl std::panic::UnwindSafe for Incoming {}
