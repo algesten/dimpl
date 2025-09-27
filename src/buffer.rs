@@ -37,6 +37,7 @@ impl fmt::Debug for BufferPool {
     }
 }
 
+#[derive(Default)]
 pub struct Buf(Vec<u8>);
 
 impl Buf {
@@ -66,12 +67,6 @@ impl Buf {
 
     pub fn into_vec(mut self) -> Vec<u8> {
         std::mem::take(&mut self.0)
-    }
-}
-
-impl Default for Buf {
-    fn default() -> Self {
-        Buf(vec![])
     }
 }
 

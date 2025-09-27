@@ -1064,7 +1064,7 @@ fn handshake_create_certificate_verify(body: &mut Buf, engine: &mut Engine) -> R
 }
 
 impl LocalEvent {
-    pub fn into_output<'a>(self, buf: &'a mut [u8], peer_certs: &Vec<Buf>) -> Output<'a> {
+    pub fn into_output<'a>(self, buf: &'a mut [u8], peer_certs: &[Buf]) -> Output<'a> {
         match self {
             LocalEvent::PeerCert => {
                 let l = peer_certs[0].len();
@@ -1073,9 +1073,9 @@ impl LocalEvent {
                     "Output buffer too small for peer certificate"
                 );
                 buf[..l].copy_from_slice(&peer_certs[0]);
-                return Output::PeerCert(&buf[..l]);
+                Output::PeerCert(&buf[..l])
             }
-            LocalEvent::Connected => return Output::Connected,
+            LocalEvent::Connected => Output::Connected,
             LocalEvent::KeyingMaterial(m, profile) => {
                 let l = m.len();
                 assert!(
@@ -1084,7 +1084,7 @@ impl LocalEvent {
                 );
                 buf[..l].copy_from_slice(&m);
                 let km = KeyingMaterial::new(&buf[..l]);
-                return Output::KeyingMaterial(km, profile);
+                Output::KeyingMaterial(km, profile)
             }
         }
     }
