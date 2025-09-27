@@ -714,9 +714,11 @@ impl Engine {
 
             // Prefer to pack into the current datagram. If the current one cannot fit even
             // the fixed overhead, we will start a fresh datagram and compute space again.
-            let available_for_body = if available_in_current >= fixed_overhead {
+            let available_for_body = if available_in_current > fixed_overhead {
+                // There is room for at least 1 byte of handshake body in the current datagram
                 available_in_current - fixed_overhead
             } else {
+                // Not enough space in the current datagram for any body bytes; start a fresh datagram
                 self.config.mtu.saturating_sub(fixed_overhead)
             };
 
