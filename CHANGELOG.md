@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Remove rcgen/ring dependency #8
+
 # 0.1.2
 
   * Bump MSRV to 1.81.0 #7
