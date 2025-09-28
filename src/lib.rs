@@ -126,7 +126,7 @@
 //! ```
 //!
 //! ### MSRV
-//! Rust 1.71.1.
+//! Rust 1.81.0
 //!
 //! ### Status
 //! - Session resumption is not implemented (WebRTC does a full handshake on ICE restart).
