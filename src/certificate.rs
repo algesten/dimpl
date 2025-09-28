@@ -3,9 +3,21 @@
 //! This module provides helpers to generate self-signed certificates suitable for DTLS,
 //! compute fingerprints, and format them for display.
 
-use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, PKCS_ECDSA_P256_SHA256};
 use sha2::{Digest, Sha256};
 use std::fmt;
+
+// RustCrypto-based imports for key generation and X.509 building
+use der::Encode;
+use elliptic_curve::rand_core::OsRng;
+use p256::ecdsa::SigningKey as EcdsaSigningKey;
+use p256::SecretKey as P256SecretKey;
+use pkcs8::{EncodePrivateKey, EncodePublicKey};
+use std::str::FromStr;
+use x509_cert::builder::{Builder, CertificateBuilder, Profile};
+use x509_cert::name::Name;
+use x509_cert::serial_number::SerialNumber;
+use x509_cert::spki::SubjectPublicKeyInfoOwned;
+use x509_cert::time::Validity;
 
 /// Certificate utility error types
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,39 +53,55 @@ pub struct DtlsCertificate {
 
 /// Generate a self-signed certificate for DTLS
 pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, CertificateError> {
-    // Create a key pair for the certificate
-    let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+    // Generate P-256 ECDSA key pair (pure Rust via RustCrypto)
+    let mut rng = OsRng;
+    let secret_key = P256SecretKey::random(&mut rng);
+    let signing_key: EcdsaSigningKey = EcdsaSigningKey::from(secret_key.clone());
+
+    // Encode private key as PKCS#8 DER
+    let key_der = {
+        let doc = secret_key
+            .to_pkcs8_der()
+            .map_err(|_| CertificateError::GenerationFailed)?;
+        doc.as_bytes().to_vec()
+    };
+
+    // Subject/Issuer names: Organization and CommonName
+    let subject =
+        Name::from_str("O=DTLS,CN=DTLS Peer").map_err(|_| CertificateError::GenerationFailed)?;
+    let issuer = subject.clone();
+
+    // Validity: now to now + 365 days
+    let validity = Validity::from_now(std::time::Duration::from_secs(365 * 24 * 60 * 60))
         .map_err(|_| CertificateError::GenerationFailed)?;
 
-    // Set up certificate parameters
-    let mut params = CertificateParams::new(Vec::<String>::new())
+    // Public key (SPKI) from p256::PublicKey
+    let public_key = secret_key.public_key();
+    let spki_doc = public_key
+        .to_public_key_der()
+        .map_err(|_| CertificateError::GenerationFailed)?;
+    let spki = SubjectPublicKeyInfoOwned::try_from(spki_doc.as_bytes())
         .map_err(|_| CertificateError::GenerationFailed)?;
 
-    // Set up distinguished name
-    let mut distinguished_name = DistinguishedName::new();
-    distinguished_name.push(DnType::OrganizationName, "DTLS".to_string());
-    distinguished_name.push(DnType::CommonName, "DTLS Peer".to_string());
-    params.distinguished_name = distinguished_name;
+    // Serial number: small fixed non-zero
+    let serial = SerialNumber::from(1u64);
 
-    // Configure as end entity certificate (not a CA)
-    params.is_ca = IsCa::NoCa;
-
-    // Set validity period (1 year)
-    let not_before = time::OffsetDateTime::now_utc();
-    let not_after = not_before + time::Duration::days(365);
-    params.not_before = not_before;
-    params.not_after = not_after;
-
-    // Build the certificate
-    let cert = params
-        .self_signed(&key_pair)
+    // Build end-entity certificate and sign with ECDSA P-256/SHA-256
+    let profile = Profile::Leaf {
+        issuer,
+        enable_key_agreement: false,
+        enable_key_encipherment: false,
+    };
+    let builder = CertificateBuilder::new(profile, serial, validity, subject, spki, &signing_key)
+        .map_err(|_| CertificateError::GenerationFailed)?;
+    let cert = builder
+        .build::<p256::ecdsa::DerSignature>()
         .map_err(|_| CertificateError::GenerationFailed)?;
 
-    // Get the certificate in DER format
-    let cert_der = cert.der().to_vec();
-
-    // Get the private key in DER format
-    let key_der = key_pair.serialize_der();
+    // Encode certificate to DER
+    let cert_der = cert
+        .to_der()
+        .map_err(|_| CertificateError::GenerationFailed)?;
 
     Ok(DtlsCertificate {
         certificate: cert_der,
