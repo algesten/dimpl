@@ -31,12 +31,12 @@ hmac = "0.12"
 p256 = { version = "0.13", features = ["ecdh", "ecdsa", "pkcs8"] }
 p384 = { version = "0.13", features = ["ecdh", "ecdsa", "pkcs8"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
-rcgen = "0.14"
 sec1 = "0.7"
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["oid"] }
 signature = "2.1"
 spki = "0.7"
 x509-cert = { version = "0.2", features = ["builder"] }
+ecdsa = { version = "0.16", features = ["digest"] }
 
 [dev-dependencies]
 openssl = { version = "0.10.70", features = ["vendored"] }
