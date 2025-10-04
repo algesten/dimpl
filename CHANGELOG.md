@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Better connection/flight timers #9
   * Remove rcgen/ring dependency #8
 
 # 0.1.2

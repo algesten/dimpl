@@ -68,20 +68,24 @@ pub struct Engine {
     /// The records that have been sent in the current flight.
     flight_saved_records: Vec<Entry>,
 
-    /// If the timers for flight resends are active.
-    flight_timers_active: bool,
-
     /// Flight backoff
     flight_backoff: ExponentialBackoff,
 
     /// Timeout for the current flight
-    flight_timeout: Option<Instant>,
+    flight_timeout: Timeout,
 
     /// Global timeout for the entire connect operation.
-    connect_timeout: Option<Instant>,
+    connect_timeout: Timeout,
 
     /// Whether we are ready to release application data from poll_output.
     release_app_data: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Timeout {
+    Disabled,
+    Unarmed,
+    Armed(Instant),
 }
 
 #[derive(Debug)]
@@ -112,10 +116,9 @@ impl Engine {
             transcript: Buf::new(),
             replay: ReplayWindow::new(),
             flight_saved_records: Vec::new(),
-            flight_timers_active: true,
             flight_backoff,
-            flight_timeout: None,
-            connect_timeout: None,
+            flight_timeout: Timeout::Unarmed,
+            connect_timeout: Timeout::Unarmed,
             release_app_data: false,
         }
     }
@@ -247,35 +250,44 @@ impl Engine {
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
-        if self.connect_timeout.is_none() {
-            self.connect_timeout = Some(now + self.config.handshake_timeout);
+        if self.connect_timeout == Timeout::Unarmed {
+            debug!(
+                "Connect timeout in: {:.03}s",
+                self.config.handshake_timeout.as_secs_f32()
+            );
+            let timeout = now + self.config.handshake_timeout;
+            self.connect_timeout = Timeout::Armed(timeout);
         }
-        if self.flight_timers_active && self.flight_timeout.is_none() {
-            self.flight_timeout = Some(now + self.flight_backoff.rto());
+        if self.flight_timeout == Timeout::Unarmed {
+            debug!(
+                "Flight timeout in: {:.03}s",
+                self.flight_backoff.rto().as_secs_f32()
+            );
+            let timeout = now + self.flight_backoff.rto();
+            self.flight_timeout = Timeout::Armed(timeout);
         }
 
-        // If timers are inactive, only check the overall connect timeout
-        if !self.flight_timers_active {
-            if let Some(connect_timeout) = self.connect_timeout.as_mut() {
-                if now >= *connect_timeout {
-                    return Err(Error::Timeout("connect"));
-                }
+        // The connect timeout is the overall timeout for establishing the connection
+        if let Timeout::Armed(connect_timeout) = self.connect_timeout {
+            if now >= connect_timeout {
+                return Err(Error::Timeout("connect"));
             }
+        }
+
+        // If there is no flight timeout, we have already checked the global connect timeout.
+        let Timeout::Armed(flight_timeout) = self.flight_timeout else {
             return Ok(());
-        }
+        };
 
-        // Unwraps are safe when timers are active and were set above
-        let connect_timeout = self.connect_timeout.as_mut().unwrap();
-        let flight_timeout = self.flight_timeout.as_mut().unwrap();
-
-        if now >= *connect_timeout {
-            return Err(Error::Timeout("connect"));
-        }
-
-        if now >= *flight_timeout {
+        if now >= flight_timeout {
             if self.flight_backoff.can_retry() {
                 self.flight_backoff.attempt();
-                self.flight_timeout = Some(now + self.flight_backoff.rto());
+                debug!(
+                    "Re-arm flight timeout due to resend in {}",
+                    self.flight_backoff.rto().as_secs_f32()
+                );
+                let timeout = now + self.flight_backoff.rto();
+                self.flight_timeout = Timeout::Armed(timeout);
                 self.flight_resend("flight timeout")?;
             } else {
                 return Err(Error::Timeout("handshake"));
@@ -369,22 +381,23 @@ impl Engine {
     }
 
     fn poll_timeout(&self, now: Instant) -> Instant {
-        if !self.flight_timers_active {
+        // No timeouts, return a distant future
+        if self.connect_timeout == Timeout::Disabled && self.flight_timeout == Timeout::Disabled {
             const DISTANT_FUTURE: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
             return now + DISTANT_FUTURE;
         }
 
-        let Some(next_flight_timeout) = self.flight_timeout else {
-            return now;
-        };
-        let Some(handshake_timeout) = self.connect_timeout else {
-            return next_flight_timeout;
-        };
-
-        if next_flight_timeout < handshake_timeout {
-            next_flight_timeout
-        } else {
-            handshake_timeout
+        match (self.connect_timeout, self.flight_timeout) {
+            (Timeout::Armed(c), Timeout::Armed(f)) => {
+                if c < f {
+                    c
+                } else {
+                    f
+                }
+            }
+            (Timeout::Armed(c), _) => c,
+            (_, Timeout::Armed(f)) => f,
+            _ => unreachable!(),
         }
     }
 
@@ -392,13 +405,13 @@ impl Engine {
         debug!("Begin flight {}", flight_no);
         self.flight_backoff.reset();
         self.flight_clear_resends();
-        self.flight_timeout = None;
+        self.flight_timeout = Timeout::Unarmed;
     }
 
     pub fn flight_stop_resend_timers(&mut self) {
-        self.flight_timers_active = false;
-        self.flight_timeout = None;
-        self.connect_timeout = None;
+        debug!("Stop connect and flight timeouts");
+        self.flight_timeout = Timeout::Disabled;
+        self.connect_timeout = Timeout::Disabled;
     }
 
     fn flight_clear_resends(&mut self) {

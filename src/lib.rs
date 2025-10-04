@@ -154,24 +154,24 @@
 //
 // Client                                               Server
 //
-//       ClientHello                  -------->
+// 1     ClientHello                  -------->
 //
-//                                    <--------   HelloVerifyRequest
+// 2                                  <--------   HelloVerifyRequest
 //                                                 (contains cookie)
 //
-//       ClientHello                  -------->
+// 3     ClientHello                  -------->
 //       (with cookie)
-//                                                       ServerHello
+// 4                                                     ServerHello
 //                                                      Certificate*
 //                                                ServerKeyExchange*
 //                                               CertificateRequest*
 //                                    <--------      ServerHelloDone
-//       Certificate*
+// 5     Certificate*
 //       ClientKeyExchange
 //       CertificateVerify*
 //       [ChangeCipherSpec]
 //       Finished                     -------->
-//                                                [ChangeCipherSpec]
+// 6                                              [ChangeCipherSpec]
 //                                    <--------             Finished
 //       Application Data             <------->     Application Data
 
