@@ -760,8 +760,6 @@ impl State {
         }
 
         server.engine.release_application_data();
-        // Now that authenticated epoch-1 data has been received, clear any saved last-flight resends
-        server.engine.flight_stop_resend_timers();
 
         Ok(Self::AwaitApplicationData)
     }
