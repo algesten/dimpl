@@ -117,7 +117,9 @@ impl Client {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
-        let last_now = self.last_now.expect("handle_timeout before poll_output");
+        let last_now = self
+            .last_now
+            .expect("need handle_timeout before poll_output");
 
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.server_certificates);
