@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Fixes to extension parsing #10
   * Better connection/flight timers #9
   * Remove rcgen/ring dependency #8
 

@@ -89,14 +89,21 @@ impl UseSrtpExtension {
         let (input, profiles_length) = be_u16(input)?;
         let (input, profiles_data) = take(profiles_length)(input)?;
 
-        // Parse the profiles
+        // Parse the profiles (ignore unknown profile IDs instead of failing)
         let mut profiles = ArrayVec::new();
         let mut profiles_rest = profiles_data;
 
-        while !profiles_rest.is_empty() {
-            let (rest, profile) = SrtpProfileId::parse(profiles_rest)?;
-            profiles.push(profile);
+        while profiles_rest.len() >= 2 {
+            let (rest, value) = be_u16(profiles_rest)?;
             profiles_rest = rest;
+            match value {
+                0x0001 => profiles.push(SrtpProfileId::SrtpAes128CmSha1_80),
+                0x0007 => profiles.push(SrtpProfileId::SrtpAeadAes128Gcm),
+                0x0008 => profiles.push(SrtpProfileId::SrtpAeadAes256Gcm),
+                _ => {
+                    // Unknown SRTP profile: skip
+                }
+            }
         }
 
         // Parse MKI
@@ -163,5 +170,28 @@ mod tests {
 
         assert_eq!(parsed.profiles, profiles);
         assert_eq!(parsed.mki, mki);
+    }
+
+    #[test]
+    fn test_use_srtp_parse_provided_bytes() {
+        // Provided bytes: [0,8,0,7,0,8,0,1,0,2,0]
+        // Meaning:
+        // 0x0008 -> profiles length = 8 bytes (4 profile IDs)
+        // profiles: 0x0007, 0x0008, 0x0001, 0x0002 (0x0002 is unknown and should be ignored)
+        // MKI length = 0
+        let bytes = [0, 8, 0, 7, 0, 8, 0, 1, 0, 2, 0];
+
+        let (_, parsed) = UseSrtpExtension::parse(&bytes).expect("parse UseSrtpExtension");
+
+        // Expect only the three known profiles, in the same order as offered
+        assert_eq!(
+            parsed.profiles,
+            array_vec![
+                SrtpProfileId::SrtpAeadAes128Gcm,
+                SrtpProfileId::SrtpAeadAes256Gcm,
+                SrtpProfileId::SrtpAes128CmSha1_80
+            ]
+        );
+        assert_eq!(parsed.mki, Vec::<u8>::new());
     }
 }

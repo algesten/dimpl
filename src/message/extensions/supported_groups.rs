@@ -15,22 +15,20 @@ pub enum NamedGroup {
 }
 
 impl NamedGroup {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], NamedGroup> {
+    pub fn parse_opt(input: &[u8]) -> IResult<&[u8], Option<NamedGroup>> {
         let (input, value) = be_u16(input)?;
-        let group = match value {
-            0x0017 => NamedGroup::Secp256r1,
-            0x0018 => NamedGroup::Secp384r1,
-            0x0019 => NamedGroup::Secp521r1,
-            0x001D => NamedGroup::X25519,
-            0x001E => NamedGroup::X448,
-            _ => {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    input,
-                    nom::error::ErrorKind::Switch,
-                )))
-            }
-        };
-        Ok((input, group))
+        Ok((input, NamedGroup::from_u16(value)))
+    }
+
+    fn from_u16(value: u16) -> Option<Self> {
+        match value {
+            0x0017 => Some(NamedGroup::Secp256r1),
+            0x0018 => Some(NamedGroup::Secp384r1),
+            0x0019 => Some(NamedGroup::Secp521r1),
+            0x001D => Some(NamedGroup::X25519),
+            0x001E => Some(NamedGroup::X448),
+            _ => None,
+        }
     }
 
     pub fn as_u16(&self) -> u16 {
@@ -54,19 +52,21 @@ impl SupportedGroupsExtension {
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], SupportedGroupsExtension> {
-        let (input, list_len) = be_u16(input)?;
+        let (mut input, list_len) = be_u16(input)?;
         let mut groups = ArrayVec::new();
         let mut remaining = list_len as usize;
-        let mut current_input = input;
 
-        while remaining > 0 {
-            let (rest, group) = NamedGroup::parse(current_input)?;
-            groups.push(group);
-            current_input = rest;
-            remaining -= 2; // Each group is 2 bytes
+        // Parse groups; ignore unknown/unsupported ones (delegating to NamedGroup)
+        while remaining >= 2 {
+            let (rest, maybe_group) = NamedGroup::parse_opt(input)?;
+            input = rest;
+            remaining -= 2;
+            if let Some(group) = maybe_group {
+                groups.push(group);
+            }
         }
 
-        Ok((current_input, SupportedGroupsExtension { groups }))
+        Ok((input, SupportedGroupsExtension { groups }))
     }
 
     pub fn serialize(&self, output: &mut Buf) {
@@ -108,5 +108,28 @@ mod tests {
         let (_, parsed) = SupportedGroupsExtension::parse(&serialized).unwrap();
 
         assert_eq!(parsed.groups, groups);
+    }
+
+    #[test]
+    fn test_supported_groups_parse_provided_bytes() {
+        // Provided bytes: [0,10,0,29,0,23,0,24,1,0,1,1]
+        // Meaning:
+        // 0x000A -> list length = 10 bytes (5 groups)
+        // groups: 0x001D (X25519), 0x0017 (P-256), 0x0018 (P-384), 0x0100 (unknown), 0x0101 (unknown)
+        let bytes = [0, 10, 0, 29, 0, 23, 0, 24, 1, 0, 1, 1];
+
+        let (rest, parsed) =
+            SupportedGroupsExtension::parse(&bytes).expect("parse SupportedGroups");
+        assert!(rest.is_empty());
+
+        // Expect only the known groups in order as they appear
+        assert_eq!(
+            parsed.groups,
+            array_vec![
+                NamedGroup::X25519,
+                NamedGroup::Secp256r1,
+                NamedGroup::Secp384r1
+            ]
+        );
     }
 }

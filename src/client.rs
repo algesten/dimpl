@@ -384,6 +384,8 @@ impl State {
                             client.negotiated_srtp_profile
                         );
                     }
+                } else {
+                    warn!("Failed to parse UseSrtp extension");
                 }
             }
 
