@@ -321,6 +321,8 @@ impl State {
                 ExtensionType::UseSrtp => {
                     if let Ok((_, use_srtp)) = UseSrtpExtension::parse(ext.extension_data) {
                         client_srtp_profiles = Some(use_srtp.profiles);
+                    } else {
+                        warn!("Failed to parse UseSrtp extension");
                     }
                 }
                 ExtensionType::ExtendedMasterSecret => {
@@ -329,11 +331,15 @@ impl State {
                 ExtensionType::SupportedGroups => {
                     if let Ok((_, groups)) = SupportedGroupsExtension::parse(ext.extension_data) {
                         client_supported_groups = Some(groups.groups);
+                    } else {
+                        warn!("Failed to parse SupportedGroups extension");
                     }
                 }
                 ExtensionType::SignatureAlgorithms => {
                     if let Ok((_, sigs)) = SignatureAlgorithmsExtension::parse(ext.extension_data) {
                         client_signature_algorithms = Some(sigs.supported_signature_algorithms);
+                    } else {
+                        warn!("Failed to parse SignatureAlgorithms extension");
                     }
                 }
                 _ => {}
