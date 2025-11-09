@@ -3,20 +3,10 @@
 //! This module provides helpers to generate self-signed certificates suitable for DTLS,
 //! compute fingerprints, and format them for display.
 
-use der::Encode;
-use elliptic_curve::rand_core::OsRng;
-use p256::ecdsa::SigningKey as EcdsaSigningKey;
-use p256::SecretKey as P256SecretKey;
-use pkcs8::{EncodePrivateKey, EncodePublicKey};
+use aws_lc_rs::digest;
 use rand::random;
-use sha2::{Digest, Sha256};
+use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, PKCS_ECDSA_P256_SHA256};
 use std::fmt;
-use std::str::FromStr;
-use x509_cert::builder::{Builder, CertificateBuilder, Profile};
-use x509_cert::name::Name;
-use x509_cert::serial_number::SerialNumber;
-use x509_cert::spki::SubjectPublicKeyInfoOwned;
-use x509_cert::time::Validity;
 
 /// Certificate utility error types
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,59 +42,46 @@ pub struct DtlsCertificate {
 
 /// Generate a self-signed certificate for DTLS
 pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, CertificateError> {
-    // Generate P-256 ECDSA key pair (pure Rust via RustCrypto)
-    let mut rng = OsRng;
-    let secret_key = P256SecretKey::random(&mut rng);
-    let signing_key: EcdsaSigningKey = EcdsaSigningKey::from(secret_key.clone());
-
-    // Encode private key as PKCS#8 DER
-    let key_der = {
-        let doc = secret_key
-            .to_pkcs8_der()
-            .map_err(|_| CertificateError::GenerationFailed)?;
-        doc.as_bytes().to_vec()
-    };
-
-    // Subject/Issuer names: Organization and CommonName
-    let subject =
-        Name::from_str("O=DTLS,CN=DTLS Peer").map_err(|_| CertificateError::GenerationFailed)?;
-    let issuer = subject.clone();
-
-    // Validity: now to now + 365 days
-    let validity = Validity::from_now(std::time::Duration::from_secs(365 * 24 * 60 * 60))
+    // Create a key pair for the certificate
+    let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
         .map_err(|_| CertificateError::GenerationFailed)?;
 
-    // Public key (SPKI) from p256::PublicKey
-    let public_key = secret_key.public_key();
-    let spki_doc = public_key
-        .to_public_key_der()
+    // Set up certificate parameters
+    let mut params = CertificateParams::new(Vec::<String>::new())
         .map_err(|_| CertificateError::GenerationFailed)?;
-    let spki = SubjectPublicKeyInfoOwned::try_from(spki_doc.as_bytes())
-        .map_err(|_| CertificateError::GenerationFailed)?;
+
+    // Set up distinguished name
+    let mut distinguished_name = DistinguishedName::new();
+    distinguished_name.push(DnType::OrganizationName, "DTLS".to_string());
+    distinguished_name.push(DnType::CommonName, "DTLS Peer".to_string());
+    params.distinguished_name = distinguished_name;
+
+    // Configure as end entity certificate (not a CA)
+    params.is_ca = IsCa::NoCa;
+
+    // Set validity period (1 year)
+    let not_before = time::OffsetDateTime::now_utc();
+    let not_after = not_before + time::Duration::days(365);
+    params.not_before = not_before;
+    params.not_after = not_after;
 
     // Serial number: must be unique for Firefox compatibility, not only across all certificates
     // of this process, but also across all certificates of other processes/machines!
     // See: https://github.com/versatica/mediasoup/issues/127#issuecomment-474460153
     // and https://github.com/algesten/str0m/issues/517
     let serial_buf: [u8; 16] = random();
-    let serial = SerialNumber::new(&serial_buf).map_err(|_| CertificateError::GenerationFailed)?;
+    params.serial_number = Some(serial_buf.to_vec().into());
 
-    // Build end-entity certificate and sign with ECDSA P-256/SHA-256
-    let profile = Profile::Leaf {
-        issuer,
-        enable_key_agreement: false,
-        enable_key_encipherment: false,
-    };
-    let builder = CertificateBuilder::new(profile, serial, validity, subject, spki, &signing_key)
-        .map_err(|_| CertificateError::GenerationFailed)?;
-    let cert = builder
-        .build::<p256::ecdsa::DerSignature>()
+    // Build the certificate
+    let cert = params
+        .self_signed(&key_pair)
         .map_err(|_| CertificateError::GenerationFailed)?;
 
-    // Encode certificate to DER
-    let cert_der = cert
-        .to_der()
-        .map_err(|_| CertificateError::GenerationFailed)?;
+    // Get the certificate in DER format
+    let cert_der = cert.der().to_vec();
+
+    // Get the private key in DER format
+    let key_der = key_pair.serialize_der();
 
     Ok(DtlsCertificate {
         certificate: cert_der,
@@ -115,9 +92,7 @@ pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, Certificate
 /// Calculate a certificate fingerprint using SHA-256
 pub fn calculate_fingerprint(cert_der: &[u8]) -> Vec<u8> {
     // Use SHA-256 to calculate the fingerprint
-    let mut hasher = Sha256::new();
-    hasher.update(cert_der);
-    hasher.finalize().to_vec()
+    digest::digest(&digest::SHA256, cert_der).as_ref().to_vec()
 }
 
 /// Format a fingerprint as a colon-separated hex string
@@ -160,7 +135,6 @@ impl fmt::Debug for DtlsCertificate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use der::Decode;
 
     #[test]
     fn test_self_signed_certificate() {
@@ -185,11 +159,11 @@ mod tests {
         assert_ne!(cert1.fingerprint(), cert2.fingerprint());
 
         // Parse the certificates to verify serial numbers are different
-        use x509_cert::Certificate;
-        let parsed1 = Certificate::from_der(&cert1.certificate).unwrap();
-        let parsed2 = Certificate::from_der(&cert2.certificate).unwrap();
+        use x509_parser::prelude::*;
+        let (_, parsed1) = X509Certificate::from_der(&cert1.certificate).unwrap();
+        let (_, parsed2) = X509Certificate::from_der(&cert2.certificate).unwrap();
         assert_ne!(
-            parsed1.tbs_certificate.serial_number, parsed2.tbs_certificate.serial_number,
+            parsed1.serial, parsed2.serial,
             "Serial numbers must be unique for Firefox compatibility"
         );
     }

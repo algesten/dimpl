@@ -1,11 +1,6 @@
 use crate::message::HashAlgorithm;
-use hmac::digest::KeyInit;
-use hmac::{Hmac, Mac};
-use sha2::{Sha256, Sha384};
+use aws_lc_rs::hmac;
 use tinyvec::ArrayVec;
-
-type HmacSha256 = Hmac<Sha256>;
-type HmacSha384 = Hmac<Sha384>;
 
 /// PRF for TLS 1.2
 /// as specified in RFC 5246 Section 5.
@@ -23,11 +18,13 @@ pub fn prf_tls12(
 ) -> Result<ArrayVec<[u8; 128]>, String> {
     let full_seed = compute_full_seed(label, seed);
 
-    match hash {
-        HashAlgorithm::SHA256 => p_hash::<HmacSha256>(secret, &full_seed, output_len),
-        HashAlgorithm::SHA384 => p_hash::<HmacSha384>(secret, &full_seed, output_len),
-        _ => Err(format!("Unsupported PRF hash for TLS1.2: {:?}", hash)),
-    }
+    let algorithm = match hash {
+        HashAlgorithm::SHA256 => hmac::HMAC_SHA256,
+        HashAlgorithm::SHA384 => hmac::HMAC_SHA384,
+        _ => return Err(format!("Unsupported PRF hash for TLS1.2: {:?}", hash)),
+    };
+
+    p_hash(algorithm, secret, &full_seed, output_len)
 }
 
 fn compute_full_seed(label: &str, seed: &[u8]) -> ArrayVec<[u8; 128]> {
@@ -38,34 +35,33 @@ fn compute_full_seed(label: &str, seed: &[u8]) -> ArrayVec<[u8; 128]> {
     full_seed
 }
 
-fn p_hash<M: Mac + KeyInit>(
+fn p_hash(
+    algorithm: hmac::Algorithm,
     secret: &[u8],
     full_seed: &[u8],
     output_len: usize,
 ) -> Result<ArrayVec<[u8; 128]>, String> {
     let mut result = ArrayVec::default();
 
+    let key = hmac::Key::new(algorithm, secret);
+
     // A(1) = HMAC_hash(secret, A(0)) where A(0) = seed
-    let mut hmac = <M as KeyInit>::new_from_slice(secret).map_err(|e| e.to_string())?;
-    hmac.update(full_seed);
-    let mut a = hmac.finalize().into_bytes();
+    let mut a = hmac::sign(&key, full_seed);
 
     while result.len() < output_len {
         // HMAC_hash(secret, A(i) + seed)
-        let mut hmac = <M as KeyInit>::new_from_slice(secret).map_err(|e| e.to_string())?;
-        hmac.update(&a);
-        hmac.update(full_seed);
-        let output = hmac.finalize().into_bytes();
+        let mut ctx = hmac::Context::with_key(&key);
+        ctx.update(a.as_ref());
+        ctx.update(full_seed);
+        let output = ctx.sign();
 
         let remaining = output_len - result.len();
-        let to_copy = std::cmp::min(remaining, output.len());
-        result.extend_from_slice(&output[..to_copy]);
+        let to_copy = std::cmp::min(remaining, output.as_ref().len());
+        result.extend_from_slice(&output.as_ref()[..to_copy]);
 
         if result.len() < output_len {
             // A(i+1) = HMAC_hash(secret, A(i))
-            let mut hmac = <M as KeyInit>::new_from_slice(secret).map_err(|e| e.to_string())?;
-            hmac.update(&a);
-            a = hmac.finalize().into_bytes();
+            a = hmac::sign(&key, a.as_ref());
         }
     }
 

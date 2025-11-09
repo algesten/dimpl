@@ -1,7 +1,7 @@
 use std::panic::UnwindSafe;
 
-use aes_gcm::aead::{AeadMutInPlace, Buffer};
-use aes_gcm::{aead::KeyInit, Aes128Gcm, Aes256Gcm};
+use aws_lc_rs::aead::{Aad as AwsAad, LessSafeKey, Nonce as AwsNonce};
+use aws_lc_rs::aead::{UnboundKey, AES_128_GCM, AES_256_GCM};
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
@@ -15,52 +15,41 @@ pub trait Cipher: Send + Sync + UnwindSafe {
     fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String>;
 }
 
-/// AES-GCM implementation with different key sizes
-pub enum AesGcm {
-    Aes128(Box<Aes128Gcm>),
-    Aes256(Box<Aes256Gcm>),
+/// AES-GCM implementation using aws-lc-rs
+pub struct AesGcm {
+    key: LessSafeKey,
 }
 
 impl AesGcm {
     /// Create a new AES-GCM cipher with the specified key size
     pub fn new(key: &[u8]) -> Result<Self, String> {
-        match key.len() {
-            16 => {
-                let cipher = Aes128Gcm::new_from_slice(key)
-                    .map_err(|_| "Failed to create AES-128-GCM cipher".to_string())?;
-                Ok(AesGcm::Aes128(Box::new(cipher)))
-            }
-            32 => {
-                let cipher = Aes256Gcm::new_from_slice(key)
-                    .map_err(|_| "Failed to create AES-256-GCM cipher".to_string())?;
-                Ok(AesGcm::Aes256(Box::new(cipher)))
-            }
-            _ => Err(format!("Invalid key size for AES-GCM: {}", key.len())),
-        }
+        let algorithm = match key.len() {
+            16 => &AES_128_GCM,
+            32 => &AES_256_GCM,
+            _ => return Err(format!("Invalid key size for AES-GCM: {}", key.len())),
+        };
+
+        let unbound_key = UnboundKey::new(algorithm, key)
+            .map_err(|_| "Failed to create AES-GCM cipher".to_string())?;
+
+        Ok(AesGcm {
+            key: LessSafeKey::new(unbound_key),
+        })
     }
 }
 
 impl Cipher for AesGcm {
     fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String> {
-        let nonce = aes_gcm::Nonce::from_slice(&nonce);
+        let aws_nonce =
+            AwsNonce::try_assume_unique_for_key(&nonce).map_err(|_| "Invalid nonce".to_string())?;
 
-        // Perform encryption based on the cipher variant
-        let result = match self {
-            AesGcm::Aes128(cipher) => {
-                cipher
-                    .encrypt_in_place(nonce, &aad, plaintext)
-                    .map_err(|e| format!("AES-GCM encryption failed: {:?}", e))?;
-                Ok(())
-            }
-            AesGcm::Aes256(cipher) => {
-                cipher
-                    .encrypt_in_place(nonce, &aad, plaintext)
-                    .map_err(|e| format!("AES-GCM encryption failed: {:?}", e))?;
-                Ok(())
-            }
-        };
+        let aws_aad = AwsAad::from(&aad[..]);
 
-        result
+        self.key
+            .seal_in_place_append_tag(aws_nonce, aws_aad, plaintext)
+            .map_err(|_| "AES-GCM encryption failed".to_string())?;
+
+        Ok(())
     }
 
     fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String> {
@@ -69,24 +58,20 @@ impl Cipher for AesGcm {
             return Err(format!("Ciphertext too short: {}", ciphertext.len()));
         }
 
-        let nonce = aes_gcm::Nonce::from_slice(&nonce);
+        let aws_nonce =
+            AwsNonce::try_assume_unique_for_key(&nonce).map_err(|_| "Invalid nonce".to_string())?;
 
-        // Perform decryption based on the cipher variant
-        let result = match self {
-            AesGcm::Aes128(cipher) => {
-                cipher
-                    .decrypt_in_place(nonce, &aad, ciphertext)
-                    .map_err(|e| format!("AES-GCM decryption failed: {:?}", e))?;
-                Ok(())
-            }
-            AesGcm::Aes256(cipher) => {
-                cipher
-                    .decrypt_in_place(nonce, &aad, ciphertext)
-                    .map_err(|e| format!("AES-GCM decryption failed: {:?}", e))?;
-                Ok(())
-            }
-        };
+        let aws_aad = AwsAad::from(&aad[..]);
 
-        result
+        let plaintext = self
+            .key
+            .open_in_place(aws_nonce, aws_aad, ciphertext.as_mut())
+            .map_err(|_| "AES-GCM decryption failed".to_string())?;
+
+        // Truncate buffer to plaintext length (removes the tag)
+        let plaintext_len = plaintext.len();
+        ciphertext.truncate(plaintext_len);
+
+        Ok(())
     }
 }
