@@ -273,6 +273,12 @@ pub struct CryptoContext {
 
     /// Parsed private key for the certificate with signature algorithm
     private_key: ParsedKey,
+
+    /// Client random (needed for SRTP key export per RFC 5705)
+    client_random: Option<ArrayVec<[u8; 32]>>,
+
+    /// Server random (needed for SRTP key export per RFC 5705)
+    server_random: Option<ArrayVec<[u8; 32]>>,
 }
 
 impl CryptoContext {
@@ -305,6 +311,8 @@ impl CryptoContext {
             server_cipher: None,
             certificate,
             private_key,
+            client_random: None,
+            server_random: None,
         }
     }
 
@@ -394,6 +402,15 @@ impl CryptoContext {
         let Some(master_secret) = &self.master_secret else {
             return Err("Master secret not available".to_string());
         };
+
+        // Store the randoms for later SRTP key export (RFC 5705)
+        let mut client_random_arr = ArrayVec::new();
+        client_random_arr.extend_from_slice(client_random);
+        self.client_random = Some(client_random_arr);
+
+        let mut server_random_arr = ArrayVec::new();
+        server_random_arr.extend_from_slice(server_random);
+        self.server_random = Some(server_random_arr);
 
         // Key sizes depend on the cipher suite
         let (mac_key_len, enc_key_len, fixed_iv_len) = match cipher_suite {
@@ -550,7 +567,7 @@ impl CryptoContext {
     }
 
     /// Extract SRTP keying material from the master secret
-    /// This is per RFC 5764 (DTLS-SRTP) section 4.2
+    /// This is per RFC 5764 (DTLS-SRTP) section 4.2 and RFC 5705 (TLS Exporter)
     pub fn extract_srtp_keying_material(
         &self,
         profile: SrtpProfile,
@@ -563,12 +580,26 @@ impl CryptoContext {
             None => return Err("No master secret available".to_string()),
         };
 
-        // Extract the keying material using the PRF function
-        // The seed is empty for DTLS-SRTP as per RFC 5764
+        let client_random = match &self.client_random {
+            Some(cr) => cr,
+            None => return Err("No client random available".to_string()),
+        };
+
+        let server_random = match &self.server_random {
+            Some(sr) => sr,
+            None => return Err("No server random available".to_string()),
+        };
+
+        // Per RFC 5705, the exporter uses: PRF(master_secret, label, client_random + server_random)
+        // The seed for DTLS-SRTP exporter is client_random + server_random (no additional context)
+        let mut seed = ArrayVec::<[u8; 64]>::new();
+        seed.extend_from_slice(client_random);
+        seed.extend_from_slice(server_random);
+
         let keying_material = prf_tls12(
             master_secret,
             DTLS_SRTP_KEY_LABEL,
-            &[],
+            &seed,
             profile.keying_material_len(),
             hash,
         )?;
