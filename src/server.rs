@@ -18,9 +18,8 @@ use std::time::Instant;
 
 use tinyvec::ArrayVec;
 
-use hmac::{Hmac, Mac};
+use aws_lc_rs::hmac;
 use rand::random;
-use sha2::Sha256;
 
 use crate::buffer::{Buf, ToBuf};
 use crate::client::LocalEvent;
@@ -35,8 +34,6 @@ use crate::message::{ServerKeyExchange, ServerKeyExchangeParams, SessionId, Sign
 use crate::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId};
 use crate::message::{SupportedGroupsExtension, UseSrtpExtension};
 use crate::{Client, Config, Error, Output};
-
-type HmacSha256 = Hmac<Sha256>;
 
 /// DTLS server
 pub struct Server {
@@ -794,13 +791,11 @@ impl State {
 
 fn compute_cookie(secret: &[u8], client_random: Random) -> Result<Cookie, Error> {
     // cookie = trunc_32(HMAC(secret, client_random))
-    let mut mac = HmacSha256::new_from_slice(secret)
-        .map_err(|_| Error::CryptoError("Invalid HMAC key".to_string()))?;
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
     let mut buf = Buf::new();
     client_random.serialize(&mut buf);
-    mac.update(&buf);
-    let tag = mac.finalize().into_bytes();
-    let cookie = Cookie::try_new(&tag[..32])
+    let tag = hmac::sign(&key, &buf);
+    let cookie = Cookie::try_new(&tag.as_ref()[..32])
         .map_err(|_| Error::CryptoError("Failed to build cookie from HMAC output".to_string()))?;
     Ok(cookie)
 }

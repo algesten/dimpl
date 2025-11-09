@@ -1,7 +1,6 @@
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use aes_gcm::aead::Buffer;
 use self_cell::{self_cell, MutBorrow};
 use std::fmt;
 use tinyvec::ArrayVec;

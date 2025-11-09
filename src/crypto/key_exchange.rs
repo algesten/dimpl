@@ -1,10 +1,7 @@
-use crate::buffer::{Buf, ToBuf};
+use crate::buffer::Buf;
 use crate::message::{CurveType, NamedCurve};
-use elliptic_curve::rand_core::OsRng;
-use elliptic_curve::sec1::FromEncodedPoint;
-use elliptic_curve::sec1::ToEncodedPoint;
-use p256::{ecdh::EphemeralSecret as P256EphemeralSecret, PublicKey as P256PublicKey};
-use p384::{ecdh::EphemeralSecret as P384EphemeralSecret, PublicKey as P384PublicKey};
+use aws_lc_rs::agreement::{agree_ephemeral, EphemeralPrivateKey};
+use aws_lc_rs::agreement::{UnparsedPublicKey, ECDH_P256, ECDH_P384};
 
 pub struct KeyExchange {
     inner: Inner,
@@ -43,8 +40,8 @@ impl KeyExchange {
     }
 
     /// Compute shared secret using peer's public key
-    pub fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf, String> {
-        match &self.inner {
+    pub fn compute_shared_secret(&mut self, peer_public_key: &[u8]) -> Result<Buf, String> {
+        match &mut self.inner {
             Inner::Ecdh(ecdh) => ecdh.compute_shared_secret(peer_public_key),
         }
     }
@@ -58,114 +55,72 @@ impl KeyExchange {
 }
 
 /// ECDHE Key Exchange
-pub enum EcdhKeyExchange {
-    P256 {
-        private_key: Option<P256EphemeralSecret>,
-    },
-    P384 {
-        private_key: Option<P384EphemeralSecret>,
-    },
+pub struct EcdhKeyExchange {
+    curve: NamedCurve,
+    private_key: Option<EphemeralPrivateKey>,
 }
 
 impl EcdhKeyExchange {
     pub fn new(curve: NamedCurve) -> Self {
         match curve {
-            NamedCurve::Secp256r1 => EcdhKeyExchange::P256 { private_key: None },
-            NamedCurve::Secp384r1 => EcdhKeyExchange::P384 { private_key: None },
+            NamedCurve::Secp256r1 | NamedCurve::Secp384r1 => Self {
+                curve,
+                private_key: None,
+            },
             _ => panic!("Unsupported curve"),
         }
+    }
+
+    fn algorithm(&self) -> &'static aws_lc_rs::agreement::Algorithm {
+        match self.curve {
+            NamedCurve::Secp256r1 => &ECDH_P256,
+            NamedCurve::Secp384r1 => &ECDH_P384,
+            _ => unreachable!("Unsupported curve"),
+        }
+    }
+
+    fn compute_public_key(&self) -> Result<Vec<u8>, String> {
+        self.private_key
+            .as_ref()
+            .ok_or_else(|| "Private key not generated".to_string())?
+            .compute_public_key()
+            .map(|pk| pk.as_ref().to_vec())
+            .map_err(|_| "Failed to compute public key".to_string())
     }
 }
 
 impl EcdhKeyExchange {
     fn maybe_init(&mut self) -> Vec<u8> {
-        match self {
-            EcdhKeyExchange::P256 { private_key } => {
-                if private_key.is_none() {
-                    let mut rng = OsRng;
-                    let secret = P256EphemeralSecret::random(&mut rng);
-                    *private_key = Some(secret);
-                }
-                let secret = private_key.as_ref().unwrap();
-                let public_key = P256PublicKey::from(secret);
-                let encoded_point = public_key.to_encoded_point(false);
-                encoded_point.as_bytes().to_vec()
-            }
-            EcdhKeyExchange::P384 { private_key } => {
-                if private_key.is_none() {
-                    let mut rng = OsRng;
-                    let secret = P384EphemeralSecret::random(&mut rng);
-                    *private_key = Some(secret);
-                }
-                let secret = private_key.as_ref().unwrap();
-                let public_key = P384PublicKey::from(secret);
-                let encoded_point = public_key.to_encoded_point(false);
-                encoded_point.as_bytes().to_vec()
-            }
+        if self.private_key.is_none() {
+            let rng = aws_lc_rs::rand::SystemRandom::new();
+            let ephemeral = EphemeralPrivateKey::generate(self.algorithm(), &rng)
+                .expect("Failed to generate ephemeral key");
+            self.private_key = Some(ephemeral);
         }
+
+        self.compute_public_key()
+            .expect("Failed to compute public key")
     }
 
-    fn compute_shared_secret(&self, peer_public_key: &[u8]) -> Result<Buf, String> {
-        match self {
-            EcdhKeyExchange::P256 { private_key } => {
-                let Some(secret) = private_key else {
-                    return Err("Private key not generated".to_string());
-                };
+    fn compute_shared_secret(&mut self, peer_public_key: &[u8]) -> Result<Buf, String> {
+        // aws-lc-rs agreement consumes the private key, so we take ownership
+        let priv_key = self
+            .private_key
+            .take()
+            .ok_or_else(|| "Private key not generated".to_string())?;
 
-                let encoded_point = p256::EncodedPoint::from_bytes(peer_public_key)
-                    .map_err(|_| "Invalid peer public key for P-256".to_string())?;
+        let algorithm = self.algorithm();
+        let peer_key = UnparsedPublicKey::new(algorithm, peer_public_key);
 
-                let public_key_opt = P256PublicKey::from_encoded_point(&encoded_point);
-                let Some(public_key) = Option::<P256PublicKey>::from(public_key_opt) else {
-                    return Err("Invalid peer public key format for P-256".to_string());
-                };
-
-                let shared_secret = secret.diffie_hellman(&public_key);
-                Ok(shared_secret.raw_secret_bytes().as_slice().to_buf())
-            }
-            EcdhKeyExchange::P384 { private_key } => {
-                let Some(secret) = private_key else {
-                    return Err("Private key not generated".to_string());
-                };
-
-                let encoded_point = p384::EncodedPoint::from_bytes(peer_public_key)
-                    .map_err(|_| "Invalid peer public key for P-384".to_string())?;
-
-                let public_key_opt = P384PublicKey::from_encoded_point(&encoded_point);
-                let Some(public_key) = Option::<P384PublicKey>::from(public_key_opt) else {
-                    return Err("Invalid peer public key format for P-384".to_string());
-                };
-
-                // Compute the shared secret point
-                let shared_secret = secret.diffie_hellman(&public_key);
-
-                // Extract the raw bytes from the shared secret
-                let raw_bytes = shared_secret.raw_secret_bytes().as_slice();
-
-                // Create a properly formatted buffer that matches OpenSSL's behavior
-                // For P-384, ECDH shared secret is the x-coordinate of the resulting point
-                // Ensure it's exactly 48 bytes with proper padding in big-endian format
-                let mut formatted_secret = Buf::new();
-                formatted_secret.resize(48, 0);
-
-                // Copy the raw bytes to the buffer with proper alignment
-                // If raw_bytes.len() < 48, preserve leading zeros as needed
-                // If raw_bytes.len() == 48, just copy the bytes
-                let copy_len = std::cmp::min(raw_bytes.len(), 48);
-                let start_idx = 48 - copy_len;
-                formatted_secret[start_idx..]
-                    .copy_from_slice(&raw_bytes[raw_bytes.len() - copy_len..]);
-
-                // Return the formatted secret
-                Ok(formatted_secret)
-            }
-        }
+        agree_ephemeral(priv_key, peer_key, "ECDH agreement failed", |secret| {
+            let mut buf = Buf::new();
+            buf.extend_from_slice(secret);
+            Ok(buf)
+        })
+        .map_err(|e| e.to_string())
     }
 
     fn get_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
-        match self {
-            EcdhKeyExchange::P256 { .. } => Some((CurveType::NamedCurve, NamedCurve::Secp256r1)),
-            EcdhKeyExchange::P384 { .. } => Some((CurveType::NamedCurve, NamedCurve::Secp384r1)),
-        }
+        Some((CurveType::NamedCurve, self.curve))
     }
 }

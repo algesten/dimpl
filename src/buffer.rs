@@ -76,18 +76,10 @@ impl Drop for Buf {
     }
 }
 
-impl aes_gcm::aead::Buffer for Buf {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    fn extend_from_slice(&mut self, other: &[u8]) -> aes_gcm::aead::Result<()> {
-        self.0.extend_from_slice(other);
-        Ok(())
-    }
-
-    fn truncate(&mut self, len: usize) {
-        self.0.truncate(len);
+// aws-lc-rs AEAD operations require Extend<&u8> for appending authentication tags
+impl<'a> Extend<&'a u8> for Buf {
+    fn extend<T: IntoIterator<Item = &'a u8>>(&mut self, iter: T) {
+        self.0.extend(iter.into_iter().copied());
     }
 }
 
@@ -147,16 +139,14 @@ impl<'a> TmpBuf<'a> {
     }
 }
 
-impl<'a> aes_gcm::aead::Buffer for TmpBuf<'a> {
-    fn len(&self) -> usize {
+impl<'a> TmpBuf<'a> {
+    /// Get the length of the buffer
+    pub fn len(&self) -> usize {
         self.1
     }
 
-    fn extend_from_slice(&mut self, _: &[u8]) -> aes_gcm::aead::Result<()> {
-        unimplemented!()
-    }
-
-    fn truncate(&mut self, len: usize) {
+    /// Truncate the buffer to the specified length
+    pub fn truncate(&mut self, len: usize) {
         self.1 = len;
     }
 }

@@ -1,30 +1,14 @@
-use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
-use p384::ecdsa::{Signature as P384Signature, SigningKey as P384SigningKey};
-use signature::{SignatureEncoding, Signer};
-
 use crate::crypto::ParsedKey;
 
-/// Sign data using ECDSA with the provided private key
-pub fn sign_ecdsa_p256(signing_key: &P256SigningKey, data: &[u8]) -> Result<Vec<u8>, String> {
-    let signature: P256Signature = signing_key.sign(data);
-
-    // Use DER format for TLS 1.2 compatibility with OpenSSL
-    let sig_bytes = signature.to_der().to_vec();
-    Ok(sig_bytes)
-}
-
-pub fn sign_ecdsa_p384(signing_key: &P384SigningKey, data: &[u8]) -> Result<Vec<u8>, String> {
-    let signature: P384Signature = signing_key.sign(data);
-
-    // Use DER format for TLS 1.2 compatibility with OpenSSL
-    let sig_bytes = signature.to_der().to_vec();
-    Ok(sig_bytes)
-}
-
-/// Sign data using the provided parsed key and hash algorithm
+/// Sign data using the provided parsed key
 pub fn sign_data(parsed_key: &ParsedKey, data: &[u8]) -> Result<Vec<u8>, String> {
+    let rng = aws_lc_rs::rand::SystemRandom::new();
     match parsed_key {
-        ParsedKey::P256(signing_key) => sign_ecdsa_p256(signing_key, data),
-        ParsedKey::P384(signing_key) => sign_ecdsa_p384(signing_key, data),
+        ParsedKey::P256(key_pair) | ParsedKey::P384(key_pair) => {
+            let signature = key_pair
+                .sign(&rng, data)
+                .map_err(|_| "Signing failed".to_string())?;
+            Ok(signature.as_ref().to_vec())
+        }
     }
 }

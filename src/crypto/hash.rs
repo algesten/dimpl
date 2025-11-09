@@ -1,38 +1,32 @@
-use sha2::{Digest, Sha256, Sha384};
+use aws_lc_rs::digest::{Context, SHA256, SHA384};
 
 use crate::message::HashAlgorithm;
 
 /// A hash context that supports SHA256 and SHA384 algorithms
-pub enum Hash {
-    Sha256(Sha256),
-    Sha384(Sha384),
+pub struct Hash {
+    context: Context,
 }
 
 impl Hash {
     /// Create a new hash context with the specified algorithm
     pub fn new(algorithm: HashAlgorithm) -> Self {
-        match algorithm {
-            HashAlgorithm::SHA256 => Hash::Sha256(Sha256::new()),
-            HashAlgorithm::SHA384 => Hash::Sha384(Sha384::new()),
+        let context = match algorithm {
+            HashAlgorithm::SHA256 => Context::new(&SHA256),
+            HashAlgorithm::SHA384 => Context::new(&SHA384),
             _ => panic!("Unsupported hash algorithm for handshake: {:?}", algorithm),
-        }
+        };
+        Hash { context }
     }
 
     /// Update the hash with new data
     pub fn update(&mut self, data: &[u8]) {
-        match self {
-            Hash::Sha256(hasher) => hasher.update(data),
-            Hash::Sha384(hasher) => hasher.update(data),
-        }
+        self.context.update(data);
     }
 
     /// Finalize the hash and return the result. This clones the state, so
     /// it is possible to continue the hashing.
     pub fn clone_and_finalize(&self) -> Vec<u8> {
-        match self {
-            Hash::Sha256(hasher) => hasher.clone().finalize().to_vec(),
-            Hash::Sha384(hasher) => hasher.clone().finalize().to_vec(),
-        }
+        self.context.clone().finish().as_ref().to_vec()
     }
 }
 
