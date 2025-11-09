@@ -3,15 +3,14 @@
 //! This module provides helpers to generate self-signed certificates suitable for DTLS,
 //! compute fingerprints, and format them for display.
 
-use sha2::{Digest, Sha256};
-use std::fmt;
-
-// RustCrypto-based imports for key generation and X.509 building
 use der::Encode;
 use elliptic_curve::rand_core::OsRng;
 use p256::ecdsa::SigningKey as EcdsaSigningKey;
 use p256::SecretKey as P256SecretKey;
 use pkcs8::{EncodePrivateKey, EncodePublicKey};
+use rand::random;
+use sha2::{Digest, Sha256};
+use std::fmt;
 use std::str::FromStr;
 use x509_cert::builder::{Builder, CertificateBuilder, Profile};
 use x509_cert::name::Name;
@@ -83,8 +82,12 @@ pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, Certificate
     let spki = SubjectPublicKeyInfoOwned::try_from(spki_doc.as_bytes())
         .map_err(|_| CertificateError::GenerationFailed)?;
 
-    // Serial number: small fixed non-zero
-    let serial = SerialNumber::from(1u64);
+    // Serial number: must be unique for Firefox compatibility, not only across all certificates
+    // of this process, but also across all certificates of other processes/machines!
+    // See: https://github.com/versatica/mediasoup/issues/127#issuecomment-474460153
+    // and https://github.com/algesten/str0m/issues/517
+    let serial_buf: [u8; 16] = random();
+    let serial = SerialNumber::new(&serial_buf).map_err(|_| CertificateError::GenerationFailed)?;
 
     // Build end-entity certificate and sign with ECDSA P-256/SHA-256
     let profile = Profile::Leaf {
@@ -157,6 +160,7 @@ impl fmt::Debug for DtlsCertificate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use der::Decode;
 
     #[test]
     fn test_self_signed_certificate() {
@@ -169,6 +173,25 @@ mod tests {
 
         // Fingerprint should be 32 bytes (SHA-256)
         assert_eq!(cert.fingerprint().len(), 32);
+    }
+
+    #[test]
+    fn test_unique_serial_numbers() {
+        // Generate two certificates
+        let cert1 = generate_self_signed_certificate().unwrap();
+        let cert2 = generate_self_signed_certificate().unwrap();
+
+        // Fingerprints should be different (unique serial numbers + keys)
+        assert_ne!(cert1.fingerprint(), cert2.fingerprint());
+
+        // Parse the certificates to verify serial numbers are different
+        use x509_cert::Certificate;
+        let parsed1 = Certificate::from_der(&cert1.certificate).unwrap();
+        let parsed2 = Certificate::from_der(&cert2.certificate).unwrap();
+        assert_ne!(
+            parsed1.tbs_certificate.serial_number, parsed2.tbs_certificate.serial_number,
+            "Serial numbers must be unique for Firefox compatibility"
+        );
     }
 
     #[test]
