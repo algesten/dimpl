@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Make generated certs compatible with Firefox #11
+
 # 0.1.3
 
   * Fixes to extension parsing #10
