@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Replace RustCrypto with aws-lc-rs #12
   * Fix SRTP key to include client_random and server_random #11
   * Make generated certs compatible with Firefox #11
 
