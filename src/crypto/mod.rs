@@ -1,12 +1,8 @@
 //! Cryptographic primitives and helpers used by the DTLS engine.
 
 use std::ops::Deref;
-use std::str;
 
-use aws_lc_rs::signature::{
-    EcdsaKeyPair, UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_ASN1_SIGNING,
-    ECDSA_P384_SHA384_ASN1, ECDSA_P384_SHA384_ASN1_SIGNING,
-};
+use aws_lc_rs::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P384_SHA384_ASN1};
 use tinyvec::{array_vec, ArrayVec};
 
 // Internal module imports
@@ -14,6 +10,7 @@ mod encryption;
 mod hash;
 mod key_exchange;
 mod keying;
+mod parsed_key;
 mod prf;
 mod signing;
 
@@ -21,6 +18,7 @@ pub use encryption::{AesGcm, Cipher};
 pub use hash::Hash;
 pub use key_exchange::KeyExchange;
 pub use keying::{KeyingMaterial, SrtpProfile};
+pub use parsed_key::ParsedKey;
 pub use prf::calculate_extended_master_secret;
 pub use prf::{key_expansion, prf_tls12};
 
@@ -81,15 +79,6 @@ pub fn plaintext_len_from_fragment_len(fragment_len: usize) -> Option<usize> {
     fragment_len.checked_sub(DTLS_AEAD_OVERHEAD)
 }
 
-/// A parsed private key with its associated signature algorithm
-/// Parsed private key variants supported by this crate.
-pub enum ParsedKey {
-    /// P-256 ECDSA key
-    P256(EcdsaKeyPair),
-    /// P-384 ECDSA key
-    P384(EcdsaKeyPair),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Fixed IV portion for DTLS AEAD.
 pub struct Iv(pub [u8; 4]);
@@ -139,134 +128,6 @@ impl Aad {
         aad[11..].copy_from_slice(&length.to_be_bytes());
 
         Aad(aad)
-    }
-}
-
-impl ParsedKey {
-    /// Get the signature algorithm type for this key
-    pub fn signature_algorithm(&self) -> SignatureAlgorithm {
-        match self {
-            ParsedKey::P256(_) | ParsedKey::P384(_) => SignatureAlgorithm::ECDSA,
-        }
-    }
-
-    /// Check if this key is compatible with a given cipher suite
-    pub fn is_compatible(&self, cipher_suite: CipherSuite) -> bool {
-        match self {
-            ParsedKey::P256(_) | ParsedKey::P384(_) => {
-                matches!(
-                    cipher_suite,
-                    CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-                        | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-                )
-            }
-        }
-    }
-
-    /// Try to parse a private key from raw bytes
-    pub fn try_parse_key(key_data: &[u8]) -> Result<Self, String> {
-        use der::Encode;
-
-        // Try PKCS#8 DER format first (most common)
-        if let Ok(key_pair) = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, key_data) {
-            return Ok(ParsedKey::P256(key_pair));
-        }
-        if let Ok(key_pair) = EcdsaKeyPair::from_pkcs8(&ECDSA_P384_SHA384_ASN1_SIGNING, key_data) {
-            return Ok(ParsedKey::P384(key_pair));
-        }
-
-        // Try parsing as SEC1 DER format (OpenSSL EC private key format)
-        if let Ok(ec_key) = sec1::EcPrivateKey::try_from(key_data) {
-            // SEC1 format detected - need to wrap in PKCS#8 for aws-lc-rs
-            // Determine curve from key size or parameters
-            let private_key_len = ec_key.private_key.len();
-
-            // Get curve OID from parameters if present, otherwise infer from key length
-            let curve_oid = if let Some(params) = &ec_key.parameters {
-                match params {
-                    sec1::EcParameters::NamedCurve(oid) => Some(*oid),
-                }
-            } else if private_key_len == 32 {
-                // P-256
-                Some(spki::ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7"))
-            } else if private_key_len == 48 {
-                // P-384
-                Some(spki::ObjectIdentifier::new_unwrap("1.3.132.0.34"))
-            } else {
-                None
-            };
-
-            if let Some(curve_oid) = curve_oid {
-                // Build PKCS#8 structure wrapping the SEC1 data
-                let ec_alg_oid = spki::ObjectIdentifier::new_unwrap("1.2.840.10045.2.1"); // ecPublicKey
-
-                // Encode curve OID as parameters
-                let curve_params_der = curve_oid
-                    .to_der()
-                    .map_err(|_| "Failed to encode curve OID".to_string())?;
-                let curve_params_any = der::asn1::AnyRef::try_from(curve_params_der.as_slice())
-                    .map_err(|_| "Failed to create AnyRef".to_string())?;
-
-                let algorithm = spki::AlgorithmIdentifierRef {
-                    oid: ec_alg_oid,
-                    parameters: Some(curve_params_any),
-                };
-
-                // For PKCS#8 with aws-lc-rs, we wrap the SEC1 key as-is
-                // The SEC1 structure already contains the public key, so don't duplicate it
-                let pkcs8 = pkcs8::PrivateKeyInfo {
-                    algorithm,
-                    private_key: key_data, // SEC1 DER bytes will be wrapped in OCTET STRING
-                    public_key: None,      // Already in SEC1 structure
-                };
-
-                let pkcs8_der = pkcs8
-                    .to_der()
-                    .map_err(|_| "Failed to encode PKCS#8".to_string())?;
-
-                // Try to parse with aws-lc-rs
-                let p256_curve = spki::ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
-                if curve_oid == p256_curve {
-                    match EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &pkcs8_der) {
-                        Ok(key_pair) => {
-                            return Ok(ParsedKey::P256(key_pair));
-                        }
-                        Err(_) => {}
-                    }
-                }
-
-                let p384_curve = spki::ObjectIdentifier::new_unwrap("1.3.132.0.34");
-                if curve_oid == p384_curve {
-                    match EcdsaKeyPair::from_pkcs8(&ECDSA_P384_SHA384_ASN1_SIGNING, &pkcs8_der) {
-                        Ok(key_pair) => {
-                            return Ok(ParsedKey::P384(key_pair));
-                        }
-                        Err(_) => {}
-                    }
-                }
-            }
-        }
-
-        // Check if it's a PEM encoded key
-        if let Ok(pem_str) = str::from_utf8(key_data) {
-            // PEM keys start with "-----BEGIN"
-            if pem_str.contains("-----BEGIN") {
-                // Try to decode the PEM using the pkcs8 crate's pem support
-                if let Ok((_label, doc)) = pkcs8::Document::from_pem(pem_str) {
-                    // Recursively try to parse the DER bytes
-                    return Self::try_parse_key(doc.as_bytes());
-                }
-            }
-        }
-
-        Err("Failed to parse private key in any supported format".to_string())
-    }
-
-    fn default_hash_algorithm(&self) -> HashAlgorithm {
-        match self {
-            ParsedKey::P256(_) => HashAlgorithm::SHA256,
-            ParsedKey::P384(_) => HashAlgorithm::SHA384,
-        }
     }
 }
 
