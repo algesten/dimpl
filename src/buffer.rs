@@ -3,8 +3,6 @@ use std::fmt;
 use std::ops::{Deref, DerefMut, RangeBounds};
 use std::vec::Drain;
 
-use zeroize::Zeroize;
-
 #[derive(Default)]
 pub struct BufferPool {
     free: VecDeque<Buf>,
@@ -24,7 +22,6 @@ impl BufferPool {
 
     /// Return a buffer to the pool.
     pub fn push(&mut self, mut buffer: Buf) {
-        buffer.zeroize();
         buffer.clear();
     }
 }
@@ -67,12 +64,6 @@ impl Buf {
 
     pub fn into_vec(mut self) -> Vec<u8> {
         std::mem::take(&mut self.0)
-    }
-}
-
-impl Drop for Buf {
-    fn drop(&mut self) {
-        self.0.zeroize();
     }
 }
 
