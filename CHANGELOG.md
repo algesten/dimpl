@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Remove zeroize - for now #13
+
 # 0.1.4
 
   * Replace RustCrypto with aws-lc-rs #12
