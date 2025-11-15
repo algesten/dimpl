@@ -23,6 +23,7 @@ impl BufferPool {
     /// Return a buffer to the pool.
     pub fn push(&mut self, mut buffer: Buf) {
         buffer.clear();
+        self.free.push_front(buffer);
     }
 }
 
