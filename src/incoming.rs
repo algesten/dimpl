@@ -1,7 +1,7 @@
 use std::ops::Deref;
+use std::slice::from_raw_parts_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use self_cell::{self_cell, MutBorrow};
 use std::fmt;
 use tinyvec::ArrayVec;
 
@@ -18,7 +18,7 @@ pub struct Incoming(Inner);
 
 impl Incoming {
     pub fn records(&self) -> &Records {
-        self.0.borrow_dependent()
+        &self.0.dependent
     }
 
     pub fn first(&self) -> &Record {
@@ -28,17 +28,14 @@ impl Incoming {
     }
 
     pub fn into_owner(self) -> Buf {
-        self.0.into_owner().into_inner()
+        self.0.owner
     }
 }
 
-self_cell!(
-    struct Inner {
-        owner: MutBorrow<Buf>, // Buffer with UDP packet data
-        #[covariant]
-        dependent: Records, // Parsed records from that UDP packet
-    }
-);
+struct Inner {
+    owner: Buf,                  // Buffer with UDP packet data
+    dependent: Records<'static>, // Parsed records from that UDP packet
+}
 
 impl Incoming {
     /// Parse an incoming UDP packet
@@ -60,10 +57,16 @@ impl Incoming {
         into.resize(packet.len(), 0);
         into.copy_from_slice(packet);
 
-        let into = MutBorrow::new(into);
-
         // håll i hatten
-        let inner = Inner::try_new(into, |data| Records::parse(data.borrow_mut(), engine))?;
+        let records = Records::parse(&mut into, engine);
+
+        // It is 'static, mkay? :)
+        let dependent = unsafe { std::mem::transmute(records) };
+
+        let inner = Inner {
+            owner: into,
+            dependent,
+        };
 
         // We need at least one Record to be valid. For replayed frames, we discard
         // the records, hence this might be None
@@ -115,14 +118,36 @@ impl<'a> Deref for Records<'a> {
     }
 }
 
-pub struct Record<'a>(RecordInner<'a>);
+pub struct Record<'a> {
+    owner: &'a mut [u8],
+    dependent: ParsedRecord<'a>,
+}
+
+impl<'a> Default for Record<'a> {
+    fn default() -> Self {
+        Self {
+            owner: Default::default(),
+            dependent: ParsedRecord {
+                record: DTLSRecord::default(),
+                handshake: None,
+                handled: AtomicBool::new(false),
+            },
+        }
+    }
+}
 
 impl<'a> Record<'a> {
     /// The first parse pass only parses the DTLSRecord header which is unencrypted.
     pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Option<Record<'a>>, Error> {
-        let inner = RecordInner::try_new(input, |borrowed| ParsedRecord::parse(borrowed, engine))?;
+        let len = input.len();
+        let owner = unsafe { from_raw_parts_mut(input.as_mut_ptr(), len) };
 
-        let record = Record(inner);
+        let parsed = ParsedRecord::parse(input, engine)?;
+
+        let record = Record {
+            owner,
+            dependent: parsed,
+        };
 
         // It is not enough to only look at the epoch, since to be able to decrypt the entire
         // preceeding set of flights sets up the cryptographic context. In a situation with
@@ -143,7 +168,7 @@ impl<'a> Record<'a> {
         let (aad, nonce) = engine.decryption_aad_and_nonce(dtls);
 
         // Bring back the unparsed bytes.
-        let input = record.0.into_owner();
+        let input = record.owner;
 
         // Local shorthand for where the encrypted ciphertext starts
         const CIPH: usize = DTLSRecord::HEADER_LEN + DTLS_EXPLICIT_NONCE_LEN;
@@ -168,21 +193,27 @@ impl<'a> Record<'a> {
         // Shift the decrypted buffer to the start of the record.
         input.copy_within(CIPH..(CIPH + new_len), DTLSRecord::HEADER_LEN);
 
-        let inner = RecordInner::try_new(input, |borrowed| ParsedRecord::parse(borrowed, engine))?;
+        let owner = unsafe { from_raw_parts_mut(input.as_mut_ptr(), len) };
+        let parsed = ParsedRecord::parse(input, engine)?;
 
-        Ok(Some(Record(inner)))
+        let record = Record {
+            owner,
+            dependent: parsed,
+        };
+
+        Ok(Some(record))
     }
 
     pub fn record(&self) -> &DTLSRecord {
-        &self.0.borrow_dependent().record
+        &self.dependent.record
     }
 
     pub fn handshake(&self) -> Option<&Handshake> {
-        self.0.borrow_dependent().handshake.as_ref()
+        self.dependent.handshake.as_ref()
     }
 
     pub fn is_handled(&self) -> bool {
-        let rec = self.0.borrow_dependent();
+        let rec = &self.dependent;
         rec.handshake
             .as_ref()
             .map(|h| h.handled.load(Ordering::Relaxed))
@@ -190,25 +221,13 @@ impl<'a> Record<'a> {
     }
 
     pub fn set_handled(&self) {
-        self.0
-            .borrow_dependent()
-            .handled
-            .store(true, Ordering::Relaxed);
+        self.dependent.handled.store(true, Ordering::Relaxed);
     }
 
     pub fn len(&self) -> usize {
-        self.0.borrow_owner().len()
+        self.owner.len()
     }
 }
-
-self_cell!(
-    pub struct RecordInner<'a> {
-        owner: &'a mut [u8],
-
-        #[covariant]
-        dependent: ParsedRecord,
-    }
-);
 
 pub struct ParsedRecord<'a> {
     record: DTLSRecord<'a>,
@@ -252,19 +271,9 @@ impl fmt::Debug for Incoming {
 impl<'a> fmt::Debug for Record<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Record")
-            .field("record", &self.0.borrow_dependent().record)
-            .field("handshake", &self.0.borrow_dependent().handshake)
+            .field("record", &self.dependent.record)
+            .field("handshake", &self.dependent.handshake)
             .finish()
-    }
-}
-
-impl<'a> Default for Record<'a> {
-    fn default() -> Self {
-        Record(RecordInner::new(&mut [], |_| ParsedRecord {
-            record: DTLSRecord::default(),
-            handshake: None,
-            handled: AtomicBool::new(false),
-        }))
     }
 }
 

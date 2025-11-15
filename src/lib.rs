@@ -143,7 +143,6 @@
 //! [`Output`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html
 //! [`Output::PeerCert`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html#variant.PeerCert
 //!
-#![forbid(unsafe_code)]
 #![warn(clippy::all)]
 #![allow(clippy::upper_case_acronyms)]
 #![allow(mismatched_lifetime_syntaxes)]
