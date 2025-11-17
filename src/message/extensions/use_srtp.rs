@@ -1,11 +1,11 @@
 use crate::buffer::Buf;
 use crate::SrtpProfile;
+use arrayvec::ArrayVec;
 use nom::{
     bytes::complete::take,
     number::complete::{be_u16, be_u8},
     IResult,
 };
-use tinyvec::ArrayVec;
 
 /// DTLS-SRTP protection profile identifiers
 /// From RFC 5764 Section 4.1.2
@@ -62,12 +62,12 @@ impl From<SrtpProfileId> for SrtpProfile {
 /// UseSrtp extension as defined in RFC 5764
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UseSrtpExtension {
-    pub profiles: ArrayVec<[SrtpProfileId; 32]>,
+    pub profiles: ArrayVec<SrtpProfileId, 32>,
     pub mki: Vec<u8>, // MKI value (usually empty)
 }
 
 impl UseSrtpExtension {
-    pub fn new(profiles: ArrayVec<[SrtpProfileId; 32]>, mki: Vec<u8>) -> Self {
+    pub fn new(profiles: ArrayVec<SrtpProfileId, 32>, mki: Vec<u8>) -> Self {
         UseSrtpExtension { profiles, mki }
     }
 
@@ -138,19 +138,17 @@ impl UseSrtpExtension {
 mod tests {
     use super::*;
     use crate::buffer::Buf;
-    use tinyvec::array_vec;
 
     #[test]
     fn test_use_srtp_extension() {
-        let profiles = array_vec![
-            SrtpProfileId::SrtpAeadAes256Gcm,
-            SrtpProfileId::SrtpAeadAes128Gcm,
-            SrtpProfileId::SrtpAes128CmSha1_80
-        ];
+        let mut profiles = ArrayVec::new();
+        profiles.push(SrtpProfileId::SrtpAeadAes256Gcm);
+        profiles.push(SrtpProfileId::SrtpAeadAes128Gcm);
+        profiles.push(SrtpProfileId::SrtpAes128CmSha1_80);
 
         let mki = vec![1, 2, 3];
 
-        let ext = UseSrtpExtension::new(profiles.clone(), mki.clone());
+        let ext = UseSrtpExtension::new(profiles, mki.clone());
 
         let mut serialized = Buf::new();
         ext.serialize(&mut serialized);
@@ -168,7 +166,7 @@ mod tests {
 
         let (_, parsed) = UseSrtpExtension::parse(&serialized).unwrap();
 
-        assert_eq!(parsed.profiles, profiles);
+        assert_eq!(parsed.profiles.as_slice(), ext.profiles.as_slice());
         assert_eq!(parsed.mki, mki);
     }
 
@@ -185,8 +183,8 @@ mod tests {
 
         // Expect only the three known profiles, in the same order as offered
         assert_eq!(
-            parsed.profiles,
-            array_vec![
+            parsed.profiles.as_slice(),
+            &[
                 SrtpProfileId::SrtpAeadAes128Gcm,
                 SrtpProfileId::SrtpAeadAes256Gcm,
                 SrtpProfileId::SrtpAes128CmSha1_80

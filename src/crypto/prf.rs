@@ -1,6 +1,6 @@
 use crate::message::HashAlgorithm;
+use arrayvec::ArrayVec;
 use aws_lc_rs::hmac;
-use tinyvec::ArrayVec;
 
 /// PRF for TLS 1.2
 /// as specified in RFC 5246 Section 5.
@@ -15,7 +15,7 @@ pub fn prf_tls12(
     seed: &[u8],
     output_len: usize,
     hash: HashAlgorithm,
-) -> Result<ArrayVec<[u8; 128]>, String> {
+) -> Result<ArrayVec<u8, 128>, String> {
     let full_seed = compute_full_seed(label, seed);
 
     let algorithm = match hash {
@@ -27,11 +27,15 @@ pub fn prf_tls12(
     p_hash(algorithm, secret, &full_seed, output_len)
 }
 
-fn compute_full_seed(label: &str, seed: &[u8]) -> ArrayVec<[u8; 128]> {
+fn compute_full_seed(label: &str, seed: &[u8]) -> ArrayVec<u8, 128> {
     assert!(label.is_ascii());
-    let mut full_seed = ArrayVec::default();
-    full_seed.extend_from_slice(label.as_bytes());
-    full_seed.extend_from_slice(seed);
+    let mut full_seed = ArrayVec::new();
+    full_seed
+        .try_extend_from_slice(label.as_bytes())
+        .expect("label too long");
+    full_seed
+        .try_extend_from_slice(seed)
+        .expect("seed too long");
     full_seed
 }
 
@@ -40,8 +44,8 @@ fn p_hash(
     secret: &[u8],
     full_seed: &[u8],
     output_len: usize,
-) -> Result<ArrayVec<[u8; 128]>, String> {
-    let mut result = ArrayVec::default();
+) -> Result<ArrayVec<u8, 128>, String> {
+    let mut result = ArrayVec::new();
 
     let key = hmac::Key::new(algorithm, secret);
 
@@ -57,7 +61,9 @@ fn p_hash(
 
         let remaining = output_len - result.len();
         let to_copy = std::cmp::min(remaining, output.as_ref().len());
-        result.extend_from_slice(&output.as_ref()[..to_copy]);
+        result
+            .try_extend_from_slice(&output.as_ref()[..to_copy])
+            .expect("result buffer too small");
 
         if result.len() < output_len {
             // A(i+1) = HMAC_hash(secret, A(i))
@@ -75,7 +81,7 @@ pub fn calculate_extended_master_secret(
     pre_master_secret: &[u8],
     session_hash: &[u8],
     hash: HashAlgorithm,
-) -> Result<ArrayVec<[u8; 128]>, String> {
+) -> Result<ArrayVec<u8, 128>, String> {
     prf_tls12(
         pre_master_secret,
         "extended master secret",
@@ -93,11 +99,13 @@ pub fn key_expansion(
     server_random: &[u8],
     key_material_length: usize,
     hash: HashAlgorithm,
-) -> Result<ArrayVec<[u8; 128]>, String> {
+) -> Result<ArrayVec<u8, 128>, String> {
     // For key expansion, the seed is server_random + client_random
-    let mut seed: ArrayVec<[u8; 128]> = ArrayVec::default();
-    seed.extend_from_slice(server_random);
-    seed.extend_from_slice(client_random);
+    let mut seed: ArrayVec<u8, 128> = ArrayVec::new();
+    seed.try_extend_from_slice(server_random)
+        .expect("server_random too long");
+    seed.try_extend_from_slice(client_random)
+        .expect("client_random too long");
 
     // key_block = PRF(master_secret, "key expansion", server_random + client_random, key_material_length)
     // The label "key expansion" is passed separately and will be prepended to the seed by prf_tls12

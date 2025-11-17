@@ -3,10 +3,10 @@ use super::{CipherSuite, CompressionMethod, Extension, ExtensionType};
 use super::{ProtocolVersion, Random, SessionId};
 use crate::buffer::Buf;
 use crate::util::many0;
+use arrayvec::ArrayVec;
 use nom::error::{Error, ErrorKind};
 use nom::Err;
 use nom::{bytes::complete::take, number::complete::be_u16, IResult};
-use tinyvec::ArrayVec;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ServerHello<'a> {
@@ -15,7 +15,7 @@ pub struct ServerHello<'a> {
     pub session_id: SessionId,
     pub cipher_suite: CipherSuite,
     pub compression_method: CompressionMethod,
-    pub extensions: Option<ArrayVec<[Extension<'a>; 32]>>,
+    pub extensions: Option<ArrayVec<Extension<'a>, 32>>,
 }
 
 impl<'a> ServerHello<'a> {
@@ -25,7 +25,7 @@ impl<'a> ServerHello<'a> {
         session_id: SessionId,
         cipher_suite: CipherSuite,
         compression_method: CompressionMethod,
-        extensions: Option<ArrayVec<[Extension<'a>; 32]>>,
+        extensions: Option<ArrayVec<Extension<'a>, 32>>,
     ) -> Self {
         ServerHello {
             server_version,
@@ -50,7 +50,7 @@ impl<'a> ServerHello<'a> {
         // Clear the buffer and collect extension byte ranges
         buf.clear();
 
-        let mut ranges: ArrayVec<[(ExtensionType, usize, usize); 8]> = ArrayVec::new();
+        let mut ranges: ArrayVec<(ExtensionType, usize, usize), 8> = ArrayVec::new();
 
         // UseSRTP (if negotiated)
         if let Some(pid) = srtp_profile {
@@ -71,7 +71,7 @@ impl<'a> ServerHello<'a> {
         buf.push(0); // renegotiated_connection length = 0
         ranges.push((ExtensionType::RenegotiationInfo, start, buf.len()));
 
-        let mut extensions: ArrayVec<[Extension<'a>; 32]> = ArrayVec::new();
+        let mut extensions: ArrayVec<Extension<'a>, 32> = ArrayVec::new();
         for (t, s, e) in ranges {
             extensions.push(Extension::new(t, &buf[s..e]));
         }
@@ -155,8 +155,6 @@ impl<'a> ServerHello<'a> {
 
 #[cfg(test)]
 mod test {
-    use tinyvec::array_vec;
-
     use crate::message::ExtensionType;
 
     use super::*;
@@ -189,10 +187,12 @@ mod test {
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cipher_suite = CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256;
         let compression_method = CompressionMethod::Null;
-        let extensions = Some(array_vec!([Extension; 32] => Extension::new(
+        let mut extensions_vec = ArrayVec::new();
+        extensions_vec.push(Extension::new(
             ExtensionType::SupportedGroups,
             &MESSAGE[45..], // Only include the raw extension data (after type and length)
-        )));
+        ));
+        let extensions = Some(extensions_vec);
 
         let server_hello = ServerHello::new(
             ProtocolVersion::DTLS1_2,

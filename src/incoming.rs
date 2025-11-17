@@ -2,8 +2,8 @@ use std::ops::Deref;
 use std::slice::from_raw_parts_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use arrayvec::ArrayVec;
 use std::fmt;
-use tinyvec::ArrayVec;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::DTLS_EXPLICIT_NONCE_LEN;
@@ -58,7 +58,7 @@ impl Incoming {
         into.copy_from_slice(packet);
 
         // håll i hatten
-        let records = Records::parse(&mut into, engine);
+        let records = Records::parse(&mut into, engine)?;
 
         // It is 'static, mkay? :)
         let dependent = unsafe { std::mem::transmute(records) };
@@ -82,12 +82,12 @@ impl Incoming {
 /// A number of records parsed from a single UDP packet.
 #[derive(Debug)]
 pub struct Records<'a> {
-    pub records: ArrayVec<[Record<'a>; 32]>,
+    pub records: ArrayVec<Record<'a>, 32>,
 }
 
 impl<'a> Records<'a> {
     pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Records<'a>, Error> {
-        let mut records = ArrayVec::default();
+        let mut records = ArrayVec::new();
         let mut current = input;
 
         // DTLSRecordSlice::try_read will end with None when cleanly chunking ends.
@@ -142,7 +142,7 @@ impl<'a> Record<'a> {
         let len = input.len();
         let owner = unsafe { from_raw_parts_mut(input.as_mut_ptr(), len) };
 
-        let parsed = ParsedRecord::parse(input, engine)?;
+        let parsed = ParsedRecord::parse(input, engine, 0)?;
 
         let record = Record {
             owner,
@@ -188,13 +188,11 @@ impl<'a> Record<'a> {
         };
 
         // Update the length of the record.
-        input[DTLSRecord::LENGTH_OFFSET].copy_from_slice(&(new_len as u16).to_be_bytes());
-
-        // Shift the decrypted buffer to the start of the record.
-        input.copy_within(CIPH..(CIPH + new_len), DTLSRecord::HEADER_LEN);
+        input[11] = (new_len >> 8) as u8;
+        input[12] = new_len as u8;
 
         let owner = unsafe { from_raw_parts_mut(input.as_mut_ptr(), len) };
-        let parsed = ParsedRecord::parse(input, engine)?;
+        let parsed = ParsedRecord::parse(input, engine, DTLS_EXPLICIT_NONCE_LEN)?;
 
         let record = Record {
             owner,
@@ -236,8 +234,12 @@ pub struct ParsedRecord<'a> {
 }
 
 impl<'a> ParsedRecord<'a> {
-    pub fn parse(input: &'a [u8], engine: &Engine) -> Result<ParsedRecord<'a>, Error> {
-        let (_, record) = DTLSRecord::parse(input)?;
+    pub fn parse(
+        input: &'a [u8],
+        engine: &Engine,
+        offset: usize,
+    ) -> Result<ParsedRecord<'a>, Error> {
+        let (_, record) = DTLSRecord::parse(input, offset)?;
 
         let handshake = if record.content_type == ContentType::Handshake {
             // This will also return None on the encrypted Finished after ChangeCipherSpec.

@@ -73,7 +73,7 @@ impl<'a> DTLSRecord<'a> {
     /// Byte offset in the record header where the 2-byte length field is
     pub const LENGTH_OFFSET: Range<usize> = 11..13;
 
-    pub fn parse(input: &'a [u8]) -> IResult<&[u8], DTLSRecord<'a>> {
+    pub fn parse(input: &'a [u8], offset: usize) -> IResult<&[u8], DTLSRecord<'a>> {
         let (input, content_type) = ContentType::parse(input)?; // u8
         let (input, version) = ProtocolVersion::parse(input)?; // u16
 
@@ -95,6 +95,11 @@ impl<'a> DTLSRecord<'a> {
         let (input, epoch) = be_u16(input)?; // u16
         let (input, sequence_number) = be_u48(input)?; // u48
         let (input, length) = be_u16(input)?; // u16
+
+        // When encrypted, offset is 0 and this has the explicit nonce.
+        // When decrypted, offset is > 0 to skip the explicit nonce.
+        let input = &input[offset..];
+
         let (rest, fragment) = take(length as usize)(input)?;
 
         let sequence = Sequence {
@@ -208,7 +213,7 @@ mod tests {
         assert_eq!(&*serialized, RECORD);
 
         // Parse and compare with original
-        let (rest, parsed) = DTLSRecord::parse(&mut serialized).unwrap();
+        let (rest, parsed) = DTLSRecord::parse(&mut serialized, 0).unwrap();
         assert_eq!(parsed, record);
 
         assert!(rest.is_empty());
