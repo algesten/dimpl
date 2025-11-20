@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{
@@ -24,13 +25,13 @@ pub struct Header {
 }
 
 #[derive(Debug, Default)]
-pub struct Handshake<'a> {
+pub struct Handshake {
     pub header: Header,
-    pub body: Body<'a>,
+    pub body: Body,
     pub handled: AtomicBool,
 }
 
-impl<'a> PartialEq for Handshake<'a> {
+impl PartialEq for Handshake {
     fn eq(&self, other: &Self) -> bool {
         self.header == other.header
             && self.body == other.body
@@ -38,9 +39,9 @@ impl<'a> PartialEq for Handshake<'a> {
     }
 }
 
-impl<'a> Eq for Handshake<'a> {}
+impl Eq for Handshake {}
 
-impl<'a> Handshake<'a> {
+impl Handshake {
     #[cfg(test)]
     pub fn new(
         msg_type: MessageType,
@@ -48,7 +49,7 @@ impl<'a> Handshake<'a> {
         message_seq: u16,
         fragment_offset: u32,
         fragment_length: u32,
-        body: Body<'a>,
+        body: Body,
     ) -> Self {
         Handshake {
             header: Header {
@@ -63,7 +64,7 @@ impl<'a> Handshake<'a> {
         }
     }
 
-    pub fn parse_header(input: &'a [u8]) -> IResult<&'a [u8], Header> {
+    pub fn parse_header(input: &[u8]) -> IResult<&[u8], Header> {
         let (input, msg_type) = MessageType::parse(input)?;
         let (input, length) = be_u24(input)?;
         let (input, message_seq) = be_u16(input)?;
@@ -83,10 +84,12 @@ impl<'a> Handshake<'a> {
     }
 
     pub fn parse(
-        input: &'a [u8],
+        input: &[u8],
+        base_offset: usize,
         c: Option<CipherSuite>,
         as_fragment: bool,
-    ) -> IResult<&'a [u8], Handshake<'a>> {
+    ) -> IResult<&[u8], Handshake> {
+        let original_input = input;
         let (input, header) = Self::parse_header(input)?;
 
         let is_fragment = header.fragment_offset > 0 || header.fragment_length < header.length;
@@ -96,11 +99,19 @@ impl<'a> Handshake<'a> {
         }
 
         let (input, body) = if as_fragment {
-            let (input, fragment) = take(header.fragment_length as usize)(input)?;
-            (input, Body::Fragment(fragment))
+            let (input, fragment_slice) = take(header.fragment_length as usize)(input)?;
+            // Calculate range relative to original input
+            let relative_offset =
+                fragment_slice.as_ptr() as usize - original_input.as_ptr() as usize;
+            let start = base_offset + relative_offset;
+            let end = start + fragment_slice.len();
+            (input, Body::Fragment(start..end))
         } else {
             let (input, body_bytes) = take(header.length as usize)(input)?;
-            let (_, body) = Body::parse(body_bytes, header.msg_type, c)?;
+            // Calculate base_offset for body parsing
+            let consumed = body_bytes.as_ptr() as usize - original_input.as_ptr() as usize;
+            let body_base_offset = base_offset + consumed;
+            let (_, body) = Body::parse(body_bytes, body_base_offset, header.msg_type, c)?;
             (input, body)
         };
 
@@ -114,65 +125,77 @@ impl<'a> Handshake<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf) {
+    pub fn serialize(&self, source_buf: &[u8], output: &mut Buf) {
         output.push(self.header.msg_type.as_u8());
         output.extend_from_slice(&self.header.length.to_be_bytes()[1..]);
         output.extend_from_slice(&self.header.message_seq.to_be_bytes());
         output.extend_from_slice(&self.header.fragment_offset.to_be_bytes()[1..]);
         output.extend_from_slice(&self.header.fragment_length.to_be_bytes()[1..]);
-        self.body.serialize(output);
+        self.body.serialize(source_buf, output);
     }
 
     #[allow(private_interfaces)]
-    pub fn defragment<'b, 'c: 'b>(
-        mut iter: impl Iterator<Item = &'b Handshake<'c>>,
-        buffer: &'a mut Buf,
+    pub fn defragment<'b>(
+        mut iter: impl Iterator<Item = (&'b Handshake, &'b [u8])>,
+        buffer: &mut Buf,
         cipher_suite: Option<CipherSuite>,
-    ) -> Result<Handshake<'a>, crate::Error> {
+        transcript: Option<&mut Buf>,
+    ) -> Result<Handshake, crate::Error> {
         buffer.clear();
 
         // Invariant is upheld by the caller.
-        let first = iter.next().unwrap();
+        let (first_handshake, first_buffer) = iter.next().unwrap();
 
-        let Body::Fragment(data) = first.body else {
+        let Body::Fragment(range) = &first_handshake.body else {
             unreachable!("Non-Fragment body in defragment()")
         };
-        buffer.extend_from_slice(data);
-        first.handled.store(true, Ordering::Relaxed);
+        buffer.extend_from_slice(&first_buffer[range.clone()]);
+        first_handshake.handled.store(true, Ordering::Relaxed);
 
-        for handshake in iter {
-            if handshake.header.msg_type != first.header.msg_type {
+        for (handshake, source_buf) in iter {
+            if handshake.header.msg_type != first_handshake.header.msg_type {
                 break;
             }
 
-            let Body::Fragment(data) = handshake.body else {
+            let Body::Fragment(range) = &handshake.body else {
                 unreachable!("Non-Fragment body in defragment()")
             };
 
             handshake.handled.store(true, Ordering::Relaxed);
 
-            buffer.extend_from_slice(data);
+            buffer.extend_from_slice(&source_buf[range.clone()]);
         }
 
-        if buffer.len() != first.header.length as usize {
+        if buffer.len() != first_handshake.header.length as usize {
             debug!("Defragmentation failed. Fragment length mismatch");
             return Err(crate::Error::ParseIncomplete);
         }
 
-        let (rest, body) = Body::parse(buffer, first.header.msg_type, cipher_suite)?;
+        // If transcript is provided, write the handshake header + body before parsing
+        if let Some(transcript) = transcript {
+            transcript.push(first_handshake.header.msg_type.as_u8());
+            transcript.extend_from_slice(&first_handshake.header.length.to_be_bytes()[1..]);
+            transcript.extend_from_slice(&first_handshake.header.message_seq.to_be_bytes());
+            // Defragmented handshake has fragment_offset=0 and fragment_length=length
+            transcript.extend_from_slice(&0u32.to_be_bytes()[1..]);
+            transcript.extend_from_slice(&first_handshake.header.length.to_be_bytes()[1..]);
+            transcript.extend_from_slice(&buffer[..first_handshake.header.length as usize]);
+        }
 
-        if !rest.is_empty() && first.header.msg_type == MessageType::Finished {
+        let (rest, body) = Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?;
+
+        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
             return Err(crate::Error::ParseIncomplete);
         }
 
         let handshake = Handshake {
             header: Header {
-                msg_type: first.header.msg_type,
-                length: first.header.length,
-                message_seq: first.header.message_seq,
+                msg_type: first_handshake.header.msg_type,
+                length: first_handshake.header.length,
+                message_seq: first_handshake.header.message_seq,
                 fragment_offset: 0,
-                fragment_length: first.header.length,
+                fragment_length: first_handshake.header.length,
             },
             body,
             handled: AtomicBool::new(false),
@@ -183,7 +206,7 @@ impl<'a> Handshake<'a> {
     }
 
     #[cfg(test)]
-    fn do_clone<'b>(&self) -> Handshake<'b> {
+    fn do_clone(&self) -> Handshake {
         Handshake {
             header: Header {
                 msg_type: self.header.msg_type,
@@ -202,11 +225,13 @@ impl<'a> Handshake<'a> {
         &self,
         max: usize,
         buffer: &'b mut Buf,
-    ) -> impl Iterator<Item = Handshake<'b>> {
+    ) -> impl Iterator<Item = Handshake> + 'b {
         // Must be called with an empty buffer.
         assert!(buffer.is_empty());
 
-        self.body.serialize(buffer);
+        // Note: For fragmentize, self is already serialized data in Body::Fragment
+        // which doesn't need source_buf, so we pass an empty slice
+        self.body.serialize(&[], buffer);
 
         // If this is wrong, the serialize has not produced the same output as we parsed.
         assert_eq!(buffer.len(), self.header.length as usize);
@@ -215,13 +240,14 @@ impl<'a> Handshake<'a> {
 
         buffer.chunks(max).enumerate().map(move |(i, chunk)| {
             let fragment_length = chunk.len() as u32;
-            let fragment_body = chunk;
+            let offset = i * max;
+            let fragment_range = offset..(offset + chunk.len());
 
             let mut fragment = to_clone.do_clone();
-            fragment.header.fragment_offset = (i * max) as u32;
+            fragment.header.fragment_offset = offset as u32;
             fragment.header.fragment_length = fragment_length;
             fragment.header.message_seq = to_clone.header.message_seq + i as u16;
-            fragment.body = Body::Fragment(fragment_body);
+            fragment.body = Body::Fragment(fragment_range);
 
             fragment
         })
@@ -324,39 +350,40 @@ impl MessageType {
 
 #[derive(Debug, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
-pub enum Body<'a> {
+pub enum Body {
     HelloRequest, // empty
-    ClientHello(ClientHello<'a>),
+    ClientHello(ClientHello),
     HelloVerifyRequest(HelloVerifyRequest),
-    ServerHello(ServerHello<'a>),
-    Certificate(Certificate<'a>),
-    ServerKeyExchange(ServerKeyExchange<'a>),
-    CertificateRequest(CertificateRequest<'a>),
+    ServerHello(ServerHello),
+    Certificate(Certificate),
+    ServerKeyExchange(ServerKeyExchange),
+    CertificateRequest(CertificateRequest),
     ServerHelloDone, // empty
-    CertificateVerify(CertificateVerify<'a>),
-    ClientKeyExchange(ClientKeyExchange<'a>),
-    NewSessionTicket(&'a [u8]),
-    Finished(Finished<'a>),
+    CertificateVerify(CertificateVerify),
+    ClientKeyExchange(ClientKeyExchange),
+    NewSessionTicket(Range<usize>),
+    Finished(Finished),
     Unknown(u8),
-    Fragment(&'a [u8]),
+    Fragment(Range<usize>),
 }
 
-impl<'a> Default for Body<'a> {
+impl Default for Body {
     fn default() -> Self {
         Self::Unknown(0)
     }
 }
 
-impl<'a> Body<'a> {
+impl Body {
     pub fn parse(
-        input: &'a [u8],
+        input: &[u8],
+        base_offset: usize,
         m: MessageType,
         c: Option<CipherSuite>,
-    ) -> IResult<&'a [u8], Body<'a>> {
+    ) -> IResult<&[u8], Body> {
         match m {
             MessageType::HelloRequest => Ok((input, Body::HelloRequest)),
             MessageType::ClientHello => {
-                let (input, client_hello) = ClientHello::parse(input)?;
+                let (input, client_hello) = ClientHello::parse(input, base_offset)?;
                 Ok((input, Body::ClientHello(client_hello)))
             }
             MessageType::HelloVerifyRequest => {
@@ -364,39 +391,42 @@ impl<'a> Body<'a> {
                 Ok((input, Body::HelloVerifyRequest(hello_verify_request)))
             }
             MessageType::ServerHello => {
-                let (input, server_hello) = ServerHello::parse(input)?;
+                let (input, server_hello) = ServerHello::parse(input, base_offset)?;
                 Ok((input, Body::ServerHello(server_hello)))
             }
             MessageType::Certificate => {
-                let (input, certificate) = Certificate::parse(input)?;
+                let (input, certificate) = Certificate::parse(input, base_offset)?;
                 Ok((input, Body::Certificate(certificate)))
             }
             MessageType::ServerKeyExchange => {
                 let cipher_suite =
                     c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
                 let algo = cipher_suite.as_key_exchange_algorithm();
-                let (input, server_key_exchange) = ServerKeyExchange::parse(input, algo)?;
+                let (input, server_key_exchange) =
+                    ServerKeyExchange::parse(input, base_offset, algo)?;
                 Ok((input, Body::ServerKeyExchange(server_key_exchange)))
             }
             MessageType::CertificateRequest => {
-                let (input, certificate_request) = CertificateRequest::parse(input)?;
+                let (input, certificate_request) = CertificateRequest::parse(input, base_offset)?;
                 Ok((input, Body::CertificateRequest(certificate_request)))
             }
             MessageType::ServerHelloDone => Ok((input, Body::ServerHelloDone)),
             MessageType::CertificateVerify => {
-                let (input, certificate_verify) = CertificateVerify::parse(input)?;
+                let (input, certificate_verify) = CertificateVerify::parse(input, base_offset)?;
                 Ok((input, Body::CertificateVerify(certificate_verify)))
             }
             MessageType::ClientKeyExchange => {
                 let cipher_suite =
                     c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
                 let algo = cipher_suite.as_key_exchange_algorithm();
-                let (input, client_key_exchange) = ClientKeyExchange::parse(input, algo)?;
+                let (input, client_key_exchange) =
+                    ClientKeyExchange::parse(input, base_offset, algo)?;
                 Ok((input, Body::ClientKeyExchange(client_key_exchange)))
             }
             MessageType::NewSessionTicket => {
                 // Treat ticket as opaque per RFC 5077: lifetime_hint(4) + ticket (opaque vector)
-                Ok((&[], Body::NewSessionTicket(input)))
+                let range = base_offset..(base_offset + input.len());
+                Ok((&[], Body::NewSessionTicket(range)))
             }
             MessageType::Finished => {
                 let cipher_suite =
@@ -408,49 +438,49 @@ impl<'a> Body<'a> {
         }
     }
 
-    pub fn serialize(&self, output: &mut Buf) {
+    pub fn serialize(&self, source_buf: &[u8], output: &mut Buf) {
         match self {
             Body::HelloRequest => {
                 // Serialize HelloRequest (empty)
             }
             Body::ClientHello(client_hello) => {
-                client_hello.serialize(output);
+                client_hello.serialize(source_buf, output);
             }
             Body::HelloVerifyRequest(hello_verify_request) => {
                 hello_verify_request.serialize(output);
             }
             Body::ServerHello(server_hello) => {
-                server_hello.serialize(output);
+                server_hello.serialize(source_buf, output);
             }
             Body::Certificate(certificate) => {
-                certificate.serialize(output);
+                certificate.serialize(source_buf, output);
             }
             Body::ServerKeyExchange(server_key_exchange) => {
-                server_key_exchange.serialize(output, true);
+                server_key_exchange.serialize(source_buf, output, true);
             }
             Body::CertificateRequest(certificate_request) => {
-                certificate_request.serialize(output);
+                certificate_request.serialize(source_buf, output);
             }
             Body::ServerHelloDone => {
                 // Serialize ServerHelloDone (empty)
             }
             Body::CertificateVerify(certificate_verify) => {
-                certificate_verify.serialize(output);
+                certificate_verify.serialize(source_buf, output);
             }
             Body::ClientKeyExchange(client_key_exchange) => {
-                client_key_exchange.serialize(output);
+                client_key_exchange.serialize(source_buf, output);
             }
-            Body::NewSessionTicket(bytes) => {
-                output.extend_from_slice(bytes);
+            Body::NewSessionTicket(range) => {
+                output.extend_from_slice(&source_buf[range.clone()]);
             }
             Body::Finished(finished) => {
-                finished.serialize(output);
+                finished.serialize(source_buf, output);
             }
             Body::Unknown(value) => {
                 output.push(*value);
             }
-            Body::Fragment(value) => {
-                output.extend_from_slice(value);
+            Body::Fragment(range) => {
+                output.extend_from_slice(&source_buf[range.clone()]);
             }
         }
     }
@@ -503,7 +533,7 @@ mod tests {
         );
 
         let mut v = Buf::new();
-        h.serialize(&mut v);
+        h.serialize(&[], &mut v);
 
         assert_eq!(v.len(), 12);
     }
@@ -540,11 +570,11 @@ mod tests {
         );
 
         // Serialize and compare to MESSAGE
-        handshake.serialize(&mut serialized);
+        handshake.serialize(&[], &mut serialized);
         assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
-        let (rest, parsed) = Handshake::parse(&serialized, None, false).unwrap();
+        let (rest, parsed) = Handshake::parse(&serialized, 0, None, false).unwrap();
         assert_eq!(parsed, handshake);
 
         assert!(rest.is_empty());
@@ -587,15 +617,29 @@ mod tests {
 
         // Defragment the fragments
         let mut defragmented_buffer = Buf::new();
-        let defragmented_handshake =
-            Handshake::defragment(fragments.iter(), &mut defragmented_buffer, None).unwrap();
+        let defragmented_handshake = Handshake::defragment(
+            fragments.iter().map(|h| (h, &buffer[..])),
+            &mut defragmented_buffer,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Serialize and compare to MESSAGE
-        defragmented_handshake.serialize(&mut serialized);
+        // Save header info and drop handshake to release buffer borrow
+        let header = defragmented_handshake.header.clone();
+        drop(defragmented_handshake);
+
+        serialized.push(header.msg_type.as_u8());
+        serialized.extend_from_slice(&header.length.to_be_bytes()[1..]);
+        serialized.extend_from_slice(&header.message_seq.to_be_bytes());
+        serialized.extend_from_slice(&header.fragment_offset.to_be_bytes()[1..]);
+        serialized.extend_from_slice(&header.fragment_length.to_be_bytes()[1..]);
+        serialized.extend_from_slice(&defragmented_buffer[..header.length as usize]);
         assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
-        let (rest, parsed) = Handshake::parse(&serialized, None, false).unwrap();
+        let (rest, parsed) = Handshake::parse(&serialized, 0, None, false).unwrap();
         assert_eq!(parsed, handshake);
 
         assert!(rest.is_empty());

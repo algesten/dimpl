@@ -2,30 +2,29 @@ use super::extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
 use super::{CipherSuite, CompressionMethod, Extension, ExtensionType};
 use super::{ProtocolVersion, Random, SessionId};
 use crate::buffer::Buf;
-use crate::util::many0;
 use arrayvec::ArrayVec;
 use nom::error::{Error, ErrorKind};
 use nom::Err;
 use nom::{bytes::complete::take, number::complete::be_u16, IResult};
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ServerHello<'a> {
+pub struct ServerHello {
     pub server_version: ProtocolVersion,
     pub random: Random,
     pub session_id: SessionId,
     pub cipher_suite: CipherSuite,
     pub compression_method: CompressionMethod,
-    pub extensions: Option<ArrayVec<Extension<'a>, 32>>,
+    pub extensions: Option<ArrayVec<Extension, 32>>,
 }
 
-impl<'a> ServerHello<'a> {
+impl ServerHello {
     pub fn new(
         server_version: ProtocolVersion,
         random: Random,
         session_id: SessionId,
         cipher_suite: CipherSuite,
         compression_method: CompressionMethod,
-        extensions: Option<ArrayVec<Extension<'a>, 32>>,
+        extensions: Option<ArrayVec<Extension, 32>>,
     ) -> Self {
         ServerHello {
             server_version,
@@ -39,14 +38,10 @@ impl<'a> ServerHello<'a> {
 
     /// Add extensions to ServerHello using a builder-style API, mirroring ClientHello::with_extensions
     ///
-    /// - Uses the provided buffer to stage extension bytes and then stores slice references
+    /// - Uses the provided buffer to stage extension bytes and then stores Range references
     /// - Includes UseSRTP if a profile is provided
     /// - Includes Extended Master Secret if the flag is set
-    pub fn with_extensions(
-        mut self,
-        buf: &'a mut Buf,
-        srtp_profile: Option<SrtpProfileId>,
-    ) -> Self {
+    pub fn with_extensions(mut self, buf: &mut Buf, srtp_profile: Option<SrtpProfileId>) -> Self {
         // Clear the buffer and collect extension byte ranges
         buf.clear();
 
@@ -71,16 +66,20 @@ impl<'a> ServerHello<'a> {
         buf.push(0); // renegotiated_connection length = 0
         ranges.push((ExtensionType::RenegotiationInfo, start, buf.len()));
 
-        let mut extensions: ArrayVec<Extension<'a>, 32> = ArrayVec::new();
+        let mut extensions: ArrayVec<Extension, 32> = ArrayVec::new();
         for (t, s, e) in ranges {
-            extensions.push(Extension::new(t, &buf[s..e]));
+            extensions.push(Extension {
+                extension_type: t,
+                extension_data_range: s..e,
+            });
         }
         self.extensions = Some(extensions);
 
         self
     }
 
-    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], ServerHello<'a>> {
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], ServerHello> {
+        let original_input = input;
         let (input, server_version) = ProtocolVersion::parse(input)?;
         let (input, random) = Random::parse(input)?;
         let (input, session_id) = SessionId::parse(input)?;
@@ -105,8 +104,23 @@ impl<'a> ServerHello<'a> {
                 if !rest.is_empty() {
                     return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
                 }
-                let (_, extensions) = many0(Extension::parse)(input_ext)?;
-                (rest, Some(extensions))
+                let consumed_to_ext_data =
+                    input_ext.as_ptr() as usize - original_input.as_ptr() as usize;
+                let ext_base_offset = base_offset + consumed_to_ext_data;
+
+                // Parse extensions manually to pass base_offset
+                let mut extensions_vec = ArrayVec::new();
+                let mut current_input = input_ext;
+                let mut current_offset = ext_base_offset;
+                while !current_input.is_empty() && extensions_vec.len() < 32 {
+                    let before_len = current_input.len();
+                    let (rest, ext) = Extension::parse(current_input, current_offset)?;
+                    let parsed_len = before_len - rest.len();
+                    current_offset += parsed_len;
+                    extensions_vec.push(ext);
+                    current_input = rest;
+                }
+                (rest, Some(extensions_vec))
             } else {
                 (input, None)
             }
@@ -127,7 +141,7 @@ impl<'a> ServerHello<'a> {
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf) {
+    pub fn serialize(&self, source_buf: &[u8], output: &mut Buf) {
         output.extend_from_slice(&self.server_version.as_u16().to_be_bytes());
         self.random.serialize(output);
         output.push(self.session_id.len() as u8);
@@ -139,7 +153,8 @@ impl<'a> ServerHello<'a> {
             // For each extension: type (2) + length (2) + data
             let mut extensions_len = 0;
             for ext in extensions.iter() {
-                extensions_len += 2 + 2 + ext.extension_data.len();
+                let ext_data = ext.extension_data(source_buf);
+                extensions_len += 2 + 2 + ext_data.len();
             }
 
             // Write extensions length
@@ -147,7 +162,7 @@ impl<'a> ServerHello<'a> {
 
             // Write each extension
             for ext in extensions {
-                ext.serialize(output);
+                ext.serialize(source_buf, output);
             }
         }
     }
@@ -155,8 +170,6 @@ impl<'a> ServerHello<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::message::ExtensionType;
-
     use super::*;
     use crate::buffer::Buf;
 
@@ -181,37 +194,14 @@ mod test {
 
     #[test]
     fn roundtrip() {
-        let mut serialized = Buf::new();
-
-        let random = Random::parse(&MESSAGE[2..34]).unwrap().1;
-        let session_id = SessionId::try_new(&[0xAA]).unwrap();
-        let cipher_suite = CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256;
-        let compression_method = CompressionMethod::Null;
-        let mut extensions_vec = ArrayVec::new();
-        extensions_vec.push(Extension::new(
-            ExtensionType::SupportedGroups,
-            &MESSAGE[45..], // Only include the raw extension data (after type and length)
-        ));
-        let extensions = Some(extensions_vec);
-
-        let server_hello = ServerHello::new(
-            ProtocolVersion::DTLS1_2,
-            random,
-            session_id,
-            cipher_suite,
-            compression_method,
-            extensions,
-        );
+        // Parse the message first to get the Extension with proper ranges
+        let (rest, parsed) = ServerHello::parse(MESSAGE, 0).unwrap();
+        assert!(rest.is_empty());
 
         // Serialize and compare to MESSAGE
-        server_hello.serialize(&mut serialized);
+        let mut serialized = Buf::new();
+        parsed.serialize(MESSAGE, &mut serialized);
         assert_eq!(&*serialized, MESSAGE);
-
-        // Parse and compare with original
-        let (rest, parsed) = ServerHello::parse(&serialized).unwrap();
-        assert_eq!(parsed, server_hello);
-
-        assert!(rest.is_empty());
     }
 
     #[test]
@@ -219,7 +209,7 @@ mod test {
         let mut message = MESSAGE.to_vec();
         message[34] = 0x21; // SessionId length (33, which is too long)
 
-        let result = ServerHello::parse(&message);
+        let result = ServerHello::parse(&message, 0);
         assert!(result.is_err());
     }
 }

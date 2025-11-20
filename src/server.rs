@@ -26,11 +26,11 @@ use crate::client::LocalEvent;
 use crate::crypto::SrtpProfile;
 use crate::engine::Engine;
 use crate::message::{Body, CertificateRequest, CipherSuite, ClientCertificateType};
-use crate::message::{ClientEcdhKeys, CompressionMethod, ContentType, Cookie, CurveType};
-use crate::message::{DigitallySigned, DistinguishedName, EcdhParams, ExchangeKeys, ExtensionType};
-use crate::message::{Finished, HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
+use crate::message::{CompressionMethod, ContentType, Cookie, CurveType};
+use crate::message::{DistinguishedName, ExchangeKeys, ExtensionType};
+use crate::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
 use crate::message::{MessageType, NamedCurve, NamedGroup, ProtocolVersion, Random, ServerHello};
-use crate::message::{ServerKeyExchange, ServerKeyExchangeParams, SessionId, SignatureAlgorithm};
+use crate::message::{SessionId, SignatureAlgorithm};
 use crate::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId};
 use crate::message::{SupportedGroupsExtension, UseSrtpExtension};
 use crate::{Client, Config, Error, Output};
@@ -317,7 +317,8 @@ impl State {
         for ext in ch.extensions {
             match ext.extension_type {
                 ExtensionType::UseSrtp => {
-                    if let Ok((_, use_srtp)) = UseSrtpExtension::parse(ext.extension_data) {
+                    let ext_data = ext.extension_data(&server.defragment_buffer);
+                    if let Ok((_, use_srtp)) = UseSrtpExtension::parse(ext_data) {
                         client_srtp_profiles = Some(use_srtp.profiles);
                     } else {
                         warn!("Failed to parse UseSrtp extension");
@@ -327,14 +328,16 @@ impl State {
                     client_offers_ems = true;
                 }
                 ExtensionType::SupportedGroups => {
-                    if let Ok((_, groups)) = SupportedGroupsExtension::parse(ext.extension_data) {
+                    let ext_data = ext.extension_data(&server.defragment_buffer);
+                    if let Ok((_, groups)) = SupportedGroupsExtension::parse(ext_data) {
                         client_supported_groups = Some(groups.groups);
                     } else {
                         warn!("Failed to parse SupportedGroups extension");
                     }
                 }
                 ExtensionType::SignatureAlgorithms => {
-                    if let Ok((_, sigs)) = SignatureAlgorithmsExtension::parse(ext.extension_data) {
+                    let ext_data = ext.extension_data(&server.defragment_buffer);
+                    if let Ok((_, sigs)) = SignatureAlgorithmsExtension::parse(ext_data) {
                         client_signature_algorithms = Some(sigs.supported_signature_algorithms);
                     } else {
                         warn!("Failed to parse SignatureAlgorithms extension");
@@ -500,7 +503,7 @@ impl State {
             .engine
             .next_handshake(MessageType::Certificate, &mut server.defragment_buffer)?;
 
-        let Some(handshake) = maybe else {
+        let Some(ref handshake) = maybe else {
             // Stay in same state
             return Ok(self);
         };
@@ -509,16 +512,25 @@ impl State {
             unreachable!()
         };
 
-        if certificate.certificate_list.is_empty() {
+        // Extract certificate ranges before dropping handshake
+        let cert_ranges: ArrayVec<_, 32> = certificate
+            .certificate_list
+            .iter()
+            .map(|cert| cert.0.clone())
+            .collect();
+
+        drop(maybe);
+
+        if cert_ranges.is_empty() {
             // Client didn't provide a certificate (allowed), skip
         } else {
             // Store and verify via callback
             debug!(
                 "Received client certificate chain with {} certificate(s)",
-                certificate.certificate_list.len()
+                cert_ranges.len()
             );
-            for (i, cert) in certificate.certificate_list.iter().enumerate() {
-                let cert_data = cert.0.to_vec();
+            for (i, range) in cert_ranges.iter().enumerate() {
+                let cert_data = &server.defragment_buffer[range.clone()];
                 trace!(
                     "Client Certificate #{} size: {} bytes",
                     i + 1,
@@ -539,7 +551,7 @@ impl State {
             &mut server.defragment_buffer,
         )?;
 
-        let Some(handshake) = maybe else {
+        let Some(ref handshake) = maybe else {
             // Stay in same state
             return Ok(self);
         };
@@ -553,16 +565,21 @@ impl State {
             .cipher_suite()
             .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
 
-        // Extract client's public key depending on KE
-        let client_pub = match &ckx.exchange_keys {
-            ExchangeKeys::Ecdh(ClientEcdhKeys { public_key, .. }) => public_key.to_vec(),
+        // Extract client's public key range before dropping handshake
+        let public_key_range = match &ckx.exchange_keys {
+            ExchangeKeys::Ecdh(keys) => keys.public_key_range.clone(),
         };
+
+        drop(maybe);
+
+        // Get the actual public key data from defragment_buffer
+        let client_pub = &server.defragment_buffer[public_key_range];
 
         // Compute shared secret
         server
             .engine
             .crypto_context_mut()
-            .compute_shared_secret(&client_pub)
+            .compute_shared_secret(client_pub)
             .map_err(|e| Error::CryptoError(format!("Failed to compute shared secret: {}", e)))?;
 
         // Capture session hash for EMS now (up to ClientKeyExchange)
@@ -626,14 +643,26 @@ impl State {
             &mut server.defragment_buffer,
         )?;
 
-        let Some(handshake) = maybe else {
+        if maybe.is_none() {
             // Stay in same state
             return Ok(self);
         };
 
-        let Body::CertificateVerify(cv) = &handshake.body else {
-            unreachable!()
+        // Extract signature data before accessing buffer
+        let (signature_range, signature_algorithm) = {
+            let handshake = maybe.as_ref().unwrap();
+            let Body::CertificateVerify(cv) = &handshake.body else {
+                unreachable!()
+            };
+
+            (cv.signed.signature_range.clone(), cv.signed.algorithm)
         };
+
+        // Drop maybe to release buffer borrow
+        drop(maybe);
+
+        // Now access the buffer
+        let signature_bytes = &server.defragment_buffer[signature_range];
 
         if server.client_certificates.is_empty() {
             return Err(Error::CertificateError(
@@ -641,10 +670,21 @@ impl State {
             ));
         }
 
+        // Create temp DigitallySigned for verification
+        let temp_signed = crate::message::DigitallySigned {
+            algorithm: signature_algorithm,
+            signature_range: 0..signature_bytes.len(),
+        };
+
         server
             .engine
             .crypto_context()
-            .verify_signature(&data, &cv.signed, &server.client_certificates[0])
+            .verify_signature(
+                &data,
+                &temp_signed,
+                signature_bytes,
+                &server.client_certificates[0],
+            )
             .map_err(|e| {
                 Error::CryptoError(format!("Failed to verify client CertificateVerify: {}", e))
             })?;
@@ -683,16 +723,28 @@ impl State {
             .engine
             .next_handshake(MessageType::Finished, &mut server.defragment_buffer)?;
 
-        let Some(handshake) = maybe else {
+        if maybe.is_none() {
             // stay in same state
             return Ok(self);
+        }
+
+        // Extract the range from the handshake
+        let verify_data_range = if let Some(ref handshake) = maybe {
+            if let Body::Finished(finished) = &handshake.body {
+                finished.verify_data_range.clone()
+            } else {
+                panic!("Finished message should have been parsed");
+            }
+        } else {
+            unreachable!()
         };
 
-        let Body::Finished(finished) = &handshake.body else {
-            panic!("Finished message should have been parsed");
-        };
+        // Drop maybe to release the buffer borrow
+        drop(maybe);
 
-        if finished.verify_data != expected {
+        // Now we can access the buffer
+        let verify_data = &server.defragment_buffer[verify_data_range];
+        if verify_data != expected.as_slice() {
             return Err(Error::SecurityError(
                 "Client Finished verification failed".to_string(),
             ));
@@ -727,8 +779,8 @@ impl State {
             .create_handshake(MessageType::Finished, |body, engine| {
                 let verify_data = engine.generate_verify_data(false /* server */)?;
                 trace!("Finished.verify_data length: {}", verify_data.len());
-                let finished = Finished::new(&verify_data);
-                finished.serialize(body);
+                // Directly write the verify data without creating Finished struct
+                body.extend_from_slice(&verify_data);
                 Ok(())
             })?;
 
@@ -811,8 +863,7 @@ fn verify_cookie(secret: &[u8], client_random: Random, cookie: Cookie) -> bool {
 
 fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
     let crypto = engine.crypto_context();
-    let server_cert = crypto.get_client_certificate();
-    server_cert.serialize(body);
+    crypto.serialize_client_certificate(body);
     Ok(())
 }
 
@@ -846,7 +897,7 @@ fn handshake_create_server_hello(
     )
     .with_extensions(extension_data, srtp_pid);
 
-    sh.serialize(body);
+    sh.serialize(extension_data, body);
     Ok(())
 }
 
@@ -884,13 +935,15 @@ fn handshake_create_server_key_exchange(
                 pubkey.len()
             );
 
-            let params = EcdhParams::new(curve_type, named_curve, pubkey, None);
-
             // Build signed_data = client_random || server_random || params(without signature)
             let mut signed_data = Buf::new();
             client_random.serialize(&mut signed_data);
             server_random.serialize(&mut signed_data);
-            params.serialize(&mut signed_data, false);
+            // Write params directly for signing
+            signed_data.push(curve_type.as_u8());
+            signed_data.extend_from_slice(&named_curve.as_u16().to_be_bytes());
+            signed_data.push(pubkey.len() as u8);
+            signed_data.extend_from_slice(pubkey);
 
             trace!("SKE signature hash: {:?}", hash_alg);
             let signature = engine
@@ -906,13 +959,18 @@ fn handshake_create_server_key_exchange(
                 .crypto_context_mut()
                 .maybe_init_key_exchange()
                 .unwrap();
-            let d_signed = DigitallySigned::new(algorithm, &signature);
-            let params = EcdhParams::new(curve_type, named_curve, pubkey, Some(d_signed));
-            let ske = ServerKeyExchange {
-                params: ServerKeyExchangeParams::Ecdh(params),
-            };
 
-            ske.serialize(body, true);
+            // For sending, we don't use DigitallySigned struct, just write the params and signature directly
+            body.push(curve_type.as_u8());
+            body.extend_from_slice(&named_curve.as_u16().to_be_bytes());
+            body.push(pubkey.len() as u8);
+            body.extend_from_slice(pubkey);
+
+            // Write signature
+            body.extend_from_slice(&algorithm.as_u16().to_be_bytes());
+            body.extend_from_slice(&(signature.len() as u16).to_be_bytes());
+            body.extend_from_slice(&signature);
+
             Ok(())
         }
         _ => Err(Error::SecurityError(
@@ -944,10 +1002,10 @@ fn handshake_serialize_certificate_request(
         }
     }
 
-    let cert_auths: ArrayVec<DistinguishedName<'static>, 32> = ArrayVec::new();
+    let cert_auths: ArrayVec<DistinguishedName, 32> = ArrayVec::new();
 
     let cr = CertificateRequest::new(cert_types, selected, cert_auths);
-    cr.serialize(body);
+    cr.serialize(&[], body);
     Ok(())
 }
 

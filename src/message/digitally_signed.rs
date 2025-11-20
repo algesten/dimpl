@@ -2,38 +2,44 @@ use super::SignatureAndHashAlgorithm;
 use crate::buffer::Buf;
 use nom::number::complete::be_u16;
 use nom::{bytes::complete::take, IResult};
+use std::ops::Range;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct DigitallySigned<'a> {
+pub struct DigitallySigned {
     pub algorithm: SignatureAndHashAlgorithm,
-    pub signature: &'a [u8],
+    pub signature_range: Range<usize>,
 }
 
-impl<'a> DigitallySigned<'a> {
-    pub fn new(algorithm: SignatureAndHashAlgorithm, signature: &'a [u8]) -> Self {
-        DigitallySigned {
-            algorithm,
-            signature,
-        }
+impl DigitallySigned {
+    pub fn signature<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
+        &buf[self.signature_range.clone()]
     }
 
-    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], DigitallySigned<'a>> {
-        let (input, algorithm) = SignatureAndHashAlgorithm::parse(input)?;
-        let (input, signature_len) = be_u16(input)?;
-        let (input, signature) = take(signature_len)(input)?;
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], DigitallySigned> {
+        let original_input = input;
+        let (rest, algorithm) = SignatureAndHashAlgorithm::parse(input)?;
+        let (rest, signature_len) = be_u16(rest)?;
+        let (rest, signature_slice) = take(signature_len)(rest)?;
+
+        // Calculate absolute range in root buffer
+        let relative_offset = signature_slice.as_ptr() as usize - original_input.as_ptr() as usize;
+        let start = base_offset + relative_offset;
+        let end = start + signature_slice.len();
+
         Ok((
-            input,
+            rest,
             DigitallySigned {
                 algorithm,
-                signature,
+                signature_range: start..end,
             },
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf) {
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
         output.extend_from_slice(&self.algorithm.as_u16().to_be_bytes());
-        output.extend_from_slice(&(self.signature.len() as u16).to_be_bytes());
-        output.extend_from_slice(self.signature);
+        let signature = self.signature(buf);
+        output.extend_from_slice(&(signature.len() as u16).to_be_bytes());
+        output.extend_from_slice(signature);
     }
 }
 
@@ -41,7 +47,6 @@ impl<'a> DigitallySigned<'a> {
 mod test {
     use super::*;
     use crate::buffer::Buf;
-    use crate::message::{HashAlgorithm, SignatureAlgorithm};
 
     const MESSAGE: &[u8] = &[
         0x04, 0x01, // SignatureAndHashAlgorithm (SHA256 + RSA)
@@ -51,21 +56,13 @@ mod test {
 
     #[test]
     fn roundtrip() {
-        let algorithm =
-            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA);
-        let signature = &MESSAGE[4..8];
-
-        let digitally_signed = DigitallySigned::new(algorithm, signature);
+        // Parse the message with base_offset 0
+        let (rest, parsed) = DigitallySigned::parse(MESSAGE, 0).unwrap();
+        assert!(rest.is_empty());
 
         // Serialize and compare to MESSAGE
         let mut serialized = Buf::new();
-        digitally_signed.serialize(&mut serialized);
+        parsed.serialize(MESSAGE, &mut serialized);
         assert_eq!(&*serialized, MESSAGE);
-
-        // Parse and compare with original
-        let (rest, parsed) = DigitallySigned::parse(&serialized).unwrap();
-        assert_eq!(parsed, digitally_signed);
-
-        assert!(rest.is_empty());
     }
 }

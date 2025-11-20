@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt;
-use std::ops::{Deref, DerefMut, RangeBounds};
-use std::vec::Drain;
+use std::ops::{Deref, DerefMut};
 
 #[derive(Default)]
 pub struct BufferPool {
@@ -57,10 +56,6 @@ impl Buf {
 
     pub fn resize(&mut self, len: usize, value: u8) {
         self.0.resize(len, value);
-    }
-
-    pub fn drain(&mut self, r: impl RangeBounds<usize>) -> Drain<'_, u8> {
-        self.0.drain(r)
     }
 
     pub fn into_vec(mut self) -> Vec<u8> {

@@ -19,9 +19,9 @@ use arrayvec::ArrayVec;
 
 use crate::buffer::{Buf, ToBuf};
 use crate::engine::Engine;
-use crate::message::{Body, CertificateVerify, ClientEcdhKeys, ClientHello, ClientKeyExchange};
-use crate::message::{CompressionMethod, ContentType, Cookie, DigitallySigned, ExchangeKeys};
-use crate::message::{ExtensionType, Finished, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
+use crate::message::{Body, ClientHello, ClientKeyExchange};
+use crate::message::{CompressionMethod, ContentType, Cookie};
+use crate::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
 use crate::{CipherSuite, Error, KeyingMaterial, Output, Server, SrtpProfile};
 
@@ -377,7 +377,8 @@ impl State {
         for extension in extensions {
             if extension.extension_type == ExtensionType::UseSrtp {
                 // Parse the use_srtp extension to get the selected profile
-                if let Ok((_, use_srtp)) = UseSrtpExtension::parse(extension.extension_data) {
+                let extension_data = extension.extension_data(&client.defragment_buffer);
+                if let Ok((_, use_srtp)) = UseSrtpExtension::parse(extension_data) {
                     // Store the first profile as our negotiated profile
                     if !use_srtp.profiles.is_empty() {
                         client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
@@ -419,7 +420,7 @@ impl State {
             .engine
             .next_handshake(MessageType::Certificate, &mut client.defragment_buffer)?;
 
-        let Some(handshake) = maybe else {
+        let Some(ref handshake) = maybe else {
             // Stay in same state
             return Ok(self);
         };
@@ -439,9 +440,18 @@ impl State {
             certificate.certificate_list.len()
         );
 
+        // Extract certificate ranges before dropping handshake
+        let cert_ranges: ArrayVec<_, 32> = certificate
+            .certificate_list
+            .iter()
+            .map(|cert| cert.0.clone())
+            .collect();
+
+        drop(maybe);
+
         // Convert ASN.1 certificates to byte arrays
-        for (i, cert) in certificate.certificate_list.iter().enumerate() {
-            let cert_data = cert.0.to_vec();
+        for (i, range) in cert_ranges.iter().enumerate() {
+            let cert_data = &client.defragment_buffer[range.clone()];
             trace!("Certificate #{} size: {} bytes", i + 1, cert_data.len());
             client.server_certificates.push(cert_data.to_buf());
         }
@@ -455,30 +465,66 @@ impl State {
             &mut client.defragment_buffer,
         )?;
 
-        let Some(handshake) = maybe else {
+        if maybe.is_none() {
             // Stay in same state
             return Ok(self);
         };
 
-        let Body::ServerKeyExchange(server_key_exchange) = &handshake.body else {
-            unreachable!()
-        };
+        // Extract all ranges/data we need before accessing buffer
+        let (signature_range, signature_algorithm, curve_type, named_curve, public_key_range) = {
+            let handshake = maybe.as_ref().unwrap();
+            let Body::ServerKeyExchange(server_key_exchange) = &handshake.body else {
+                unreachable!()
+            };
 
-        let Some(d_signed) = server_key_exchange.signature() else {
-            // We do not support anonymous key exchange
-            return Err(Error::UnexpectedMessage(
-                "ServerKeyExchange without signature".to_string(),
-            ));
+            let Some(d_signed) = server_key_exchange.signature() else {
+                // We do not support anonymous key exchange
+                return Err(Error::UnexpectedMessage(
+                    "ServerKeyExchange without signature".to_string(),
+                ));
+            };
+
+            let signature_range = d_signed.signature_range.clone();
+            let signature_algorithm = d_signed.algorithm;
+
+            // Extract ECDH params ranges
+            let (curve_type, named_curve, public_key_range) = match &server_key_exchange.params {
+                crate::message::ServerKeyExchangeParams::Ecdh(ecdh) => (
+                    ecdh.curve_type,
+                    ecdh.named_curve,
+                    ecdh.public_key_range.clone(),
+                ),
+            };
+
+            (
+                signature_range,
+                signature_algorithm,
+                curve_type,
+                named_curve,
+                public_key_range,
+            )
         };
 
         // unwrap: is ok because we verify the order of the flight
         let client_random = client.random.unwrap();
         let server_random = client.server_random.unwrap();
 
+        // Drop maybe to release the buffer borrow
+        drop(maybe);
+
+        // Now we can access the buffer to get the actual bytes
+        let signature_bytes = client.defragment_buffer[signature_range].to_vec();
+        let public_key_vec = client.defragment_buffer[public_key_range].to_vec();
+
+        // Build signed_data = client_random || server_random || SKE params (without signature)
         let mut signed_data = Buf::new();
         client_random.serialize(&mut signed_data);
         server_random.serialize(&mut signed_data);
-        server_key_exchange.serialize(&mut signed_data, false);
+        // Manually serialize SKE params
+        signed_data.push(curve_type.as_u8());
+        signed_data.extend_from_slice(&named_curve.as_u16().to_be_bytes());
+        signed_data.push(public_key_vec.len() as u8);
+        signed_data.extend_from_slice(&public_key_vec);
 
         let cipher_suite = client
             .engine
@@ -486,7 +532,7 @@ impl State {
             .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
 
         // Ensure the server's (hash, signature) pair was offered by the client
-        let offered = SignatureAndHashAlgorithm::supported().contains(&d_signed.algorithm);
+        let offered = SignatureAndHashAlgorithm::supported().contains(&signature_algorithm);
         if !offered {
             return Err(Error::CryptoError(
                 "Signature algorithm not offered by client".to_string(),
@@ -494,10 +540,10 @@ impl State {
         }
 
         // Ensure the signature algorithm is compatible with the cipher suite
-        if d_signed.algorithm.signature != cipher_suite.signature_algorithm() {
+        if signature_algorithm.signature != cipher_suite.signature_algorithm() {
             return Err(Error::CryptoError(format!(
                 "Signature algorithm mismatch: {:?} != {:?}",
-                d_signed.algorithm.signature,
+                signature_algorithm.signature,
                 cipher_suite.signature_algorithm()
             )));
         }
@@ -505,10 +551,16 @@ impl State {
         // unwrap: is ok because we verify the order of the flight
         let cert_der = client.server_certificates.first().unwrap();
 
+        // Create a temporary DigitallySigned for verification (we only need the algorithm)
+        let temp_signed = crate::message::DigitallySigned {
+            algorithm: signature_algorithm,
+            signature_range: 0..signature_bytes.len(),
+        };
+
         client
             .engine
             .crypto_context_mut()
-            .verify_signature(&signed_data, d_signed, cert_der)
+            .verify_signature(&signed_data, &temp_signed, &signature_bytes, cert_der)
             .map_err(|e| {
                 Error::CryptoError(format!(
                     "Failed to verify server key exchange signature: {}",
@@ -518,14 +570,15 @@ impl State {
 
         trace!(
             "ServerKeyExchange signature verified: {:?}",
-            d_signed.algorithm
+            signature_algorithm
         );
 
-        // Process the server key exchange message
+        // Process the server key exchange parameters
+        // We already have the curve and public key extracted
         client
             .engine
             .crypto_context_mut()
-            .process_server_key_exchange(server_key_exchange)
+            .process_ecdh_params(named_curve, &public_key_vec)
             .map_err(|e| {
                 Error::CryptoError(format!("Failed to process server key exchange: {}", e))
             })?;
@@ -757,12 +810,10 @@ impl State {
                 // Calculate verify data for Finished message using PRF
                 let verify_data = engine.generate_verify_data(true)?;
 
-                // Send finished message
-                let finished = Finished::new(&verify_data);
-
                 debug!("Generated verify data for Finished message (12 bytes)");
 
-                finished.serialize(body);
+                // Directly write the verify data without creating Finished struct
+                body.extend_from_slice(&verify_data);
                 Ok(())
             })?;
 
@@ -825,22 +876,33 @@ impl State {
             .engine
             .next_handshake(MessageType::Finished, &mut client.defragment_buffer)?;
 
-        let Some(handshake) = maybe else {
+        if maybe.is_none() {
             // stay in same state
             return Ok(self);
+        }
+
+        // Extract the range from the handshake
+        let verify_data_range = if let Some(ref handshake) = maybe {
+            if let Body::Finished(finished) = &handshake.body {
+                finished.verify_data_range.clone()
+            } else {
+                panic!("Finished message should have been parsed");
+            }
+        } else {
+            unreachable!()
         };
 
-        let Body::Finished(finished) = &handshake.body else {
-            panic!("Finished message should have been parsed");
-        };
+        // Drop maybe to release the buffer borrow
+        drop(maybe);
 
-        // If verification fails, return an error
+        // Now we can access the buffer
+        let verify_data = &client.defragment_buffer[verify_data_range];
         trace!(
             "Finished.verify_data received len={}, expected len={}",
-            finished.verify_data.len(),
+            verify_data.len(),
             expected.len()
         );
-        if finished.verify_data != expected {
+        if verify_data != expected.as_slice() {
             return Err(Error::SecurityError(
                 "Server Finished verification failed".to_string(),
             ));
@@ -954,14 +1016,13 @@ fn handshake_create_client_hello(
     )
     .with_extensions(extension_data);
 
-    client_hello.serialize(body);
+    client_hello.serialize(extension_data, body);
     Ok(())
 }
 
 fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
     let crypto = engine.crypto_context();
-    let client_cert = crypto.get_client_certificate();
-    client_cert.serialize(body);
+    crypto.serialize_client_certificate(body);
     Ok(())
 }
 
@@ -992,8 +1053,8 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
 
     trace!("Generated public key size: {} bytes", public_key.len());
 
-    // Create a properly formatted ClientKeyExchange message based on the key exchange algorithm
-    let exchange_keys = match key_exchange_algorithm {
+    // Validate key exchange algorithm
+    match key_exchange_algorithm {
         KeyExchangeAlgorithm::EECDH => {
             // For ECDHE, use the curve information we retrieved earlier
             let Some((curve_type, named_curve)) = curve_info else {
@@ -1005,22 +1066,16 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
                 curve_type,
                 named_curve
             );
-
-            // Create ClientEcdhKeys with the proper curve information and public key
-            let ecdh_keys = ClientEcdhKeys::new(curve_type, named_curve, &public_key);
-            ExchangeKeys::Ecdh(ecdh_keys)
         }
         _ => {
             return Err(Error::SecurityError(
                 "Unsupported key exchange algorithm".to_string(),
             ));
         }
-    };
+    }
 
-    // Wrap in ClientKeyExchange and serialize
-    let client_key_exchange = ClientKeyExchange::new(exchange_keys);
-
-    client_key_exchange.serialize(body);
+    // Serialize the public key directly
+    ClientKeyExchange::serialize_from_bytes(&public_key, body);
 
     Ok(())
 }
@@ -1051,13 +1106,11 @@ fn handshake_create_certificate_verify(body: &mut Buf, engine: &mut Engine) -> R
 
     debug!("Generated signature size: {} bytes", signature.len());
 
-    // Create the digitally signed structure
-    let digitally_signed = DigitallySigned::new(algorithm, &signature);
+    // For sending, directly write the CertificateVerify bytes
+    body.extend_from_slice(&algorithm.as_u16().to_be_bytes());
+    body.extend_from_slice(&(signature.len() as u16).to_be_bytes());
+    body.extend_from_slice(&signature);
 
-    // Create the certificate verify message
-    let certificate_verify = CertificateVerify::new(digitally_signed);
-
-    certificate_verify.serialize(body);
     Ok(())
 }
 

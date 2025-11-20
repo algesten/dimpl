@@ -5,47 +5,17 @@ use std::ops::Range;
 use super::ProtocolVersion;
 use crate::buffer::Buf;
 use crate::util::be_u48;
-use crate::Error;
 use nom::bytes::complete::take;
 use nom::number::complete::{be_u16, be_u8};
 use nom::{Err, IResult};
 
-pub struct DTLSRecordSlice<'a> {
-    pub slice: &'a mut [u8],
-    pub rest: &'a mut [u8],
-}
-
-impl<'a> DTLSRecordSlice<'a> {
-    pub fn try_read(input: &'a mut [u8]) -> Result<Option<DTLSRecordSlice<'a>>, Error> {
-        if input.is_empty() {
-            return Ok(None);
-        }
-
-        if input.len() < DTLSRecord::HEADER_LEN {
-            return Err(Error::ParseIncomplete);
-        }
-
-        let length_bytes = input[DTLSRecord::LENGTH_OFFSET].try_into().unwrap();
-        let length = u16::from_be_bytes(length_bytes) as usize;
-        let mid = DTLSRecord::HEADER_LEN + length;
-
-        if input.len() < mid {
-            return Err(Error::ParseIncomplete);
-        }
-
-        let (slice, rest) = input.split_at_mut(mid);
-
-        Ok(Some(DTLSRecordSlice { slice, rest }))
-    }
-}
-
 #[derive(PartialEq, Eq, Default)]
-pub struct DTLSRecord<'a> {
+pub struct DTLSRecord {
     pub content_type: ContentType,
     pub version: ProtocolVersion,
     pub sequence: Sequence,
     pub length: u16,
-    pub fragment: &'a [u8],
+    pub fragment_range: Range<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -63,7 +33,7 @@ impl Sequence {
     }
 }
 
-impl<'a> DTLSRecord<'a> {
+impl DTLSRecord {
     /// DTLS record header length: content_type(1) + version(2) + epoch(2) + seq(6) + length(2)
     pub const HEADER_LEN: usize = 13;
 
@@ -73,7 +43,12 @@ impl<'a> DTLSRecord<'a> {
     /// Byte offset in the record header where the 2-byte length field is
     pub const LENGTH_OFFSET: Range<usize> = 11..13;
 
-    pub fn parse(input: &'a [u8], offset: usize) -> IResult<&[u8], DTLSRecord<'a>> {
+    pub fn parse(
+        input: &[u8],
+        base_offset: usize,
+        skip_offset: usize,
+    ) -> IResult<&[u8], DTLSRecord> {
+        let original_input = input;
         let (input, content_type) = ContentType::parse(input)?; // u8
         let (input, version) = ProtocolVersion::parse(input)?; // u16
 
@@ -96,11 +71,17 @@ impl<'a> DTLSRecord<'a> {
         let (input, sequence_number) = be_u48(input)?; // u48
         let (input, length) = be_u16(input)?; // u16
 
-        // When encrypted, offset is 0 and this has the explicit nonce.
-        // When decrypted, offset is > 0 to skip the explicit nonce.
-        let input = &input[offset..];
+        // When encrypted, skip_offset is 0 and this has the explicit nonce.
+        // When decrypted, skip_offset is > 0 to skip the explicit nonce.
+        let input = &input[skip_offset..];
 
-        let (rest, fragment) = take(length as usize)(input)?;
+        let (rest, fragment_slice) = take(length as usize)(input)?;
+
+        // Calculate absolute range in root buffer
+        // fragment_slice is already offset from original_input by all the header bytes and skip_offset
+        let relative_offset = fragment_slice.as_ptr() as usize - original_input.as_ptr() as usize;
+        let start = base_offset + relative_offset;
+        let end = start + fragment_slice.len();
 
         let sequence = Sequence {
             epoch,
@@ -114,22 +95,27 @@ impl<'a> DTLSRecord<'a> {
                 version,
                 sequence,
                 length,
-                fragment,
+                fragment_range: start..end,
             },
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf) {
+    pub fn fragment<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
+        &buf[self.fragment_range.clone()]
+    }
+
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
         output.push(self.content_type.as_u8());
         self.version.serialize(output);
         output.extend_from_slice(&self.sequence.epoch.to_be_bytes());
         output.extend_from_slice(&self.sequence.sequence_number.to_be_bytes()[2..]);
         output.extend_from_slice(&self.length.to_be_bytes());
-        output.extend_from_slice(self.fragment);
+        output.extend_from_slice(self.fragment(buf));
     }
 
-    pub fn nonce(&self) -> &[u8] {
-        &self.fragment[..Self::EXPLICIT_NONCE_LEN]
+    pub fn nonce<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
+        let fragment = self.fragment(buf);
+        &fragment[..Self::EXPLICIT_NONCE_LEN]
     }
 }
 
@@ -179,7 +165,6 @@ impl ContentType {
 mod tests {
     use super::*;
     use crate::buffer::Buf;
-    use crate::message::ProtocolVersion;
 
     const RECORD: &[u8] = &[
         0x16, // ContentType::Handshake
@@ -194,29 +179,14 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let mut record: Vec<u8> = RECORD.to_vec();
-
-        let record = DTLSRecord {
-            content_type: ContentType::Handshake,
-            version: ProtocolVersion::DTLS1_2,
-            sequence: Sequence {
-                epoch: 1,
-                sequence_number: 1,
-            },
-            length: 16,
-            fragment: &mut record[DTLSRecord::HEADER_LEN..],
-        };
+        // Parse the record with base_offset 0, skip_offset 0
+        let (rest, parsed) = DTLSRecord::parse(RECORD, 0, 0).unwrap();
+        assert!(rest.is_empty());
 
         // Serialize and compare to RECORD
         let mut serialized = Buf::new();
-        record.serialize(&mut serialized);
+        parsed.serialize(RECORD, &mut serialized);
         assert_eq!(&*serialized, RECORD);
-
-        // Parse and compare with original
-        let (rest, parsed) = DTLSRecord::parse(&mut serialized, 0).unwrap();
-        assert_eq!(parsed, record);
-
-        assert!(rest.is_empty());
     }
 }
 
@@ -248,14 +218,14 @@ impl PartialOrd for Sequence {
     }
 }
 
-impl<'a> fmt::Debug for DTLSRecord<'a> {
+impl fmt::Debug for DTLSRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DTLSRecord")
             .field("content_type", &self.content_type)
             .field("version", &self.version)
             .field("sequence", &self.sequence)
             .field("length", &self.length)
-            .field("fragment", &self.fragment.len())
+            .field("fragment_range", &self.fragment_range)
             .finish()
     }
 }

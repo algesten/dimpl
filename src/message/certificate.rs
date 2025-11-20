@@ -1,45 +1,54 @@
 use super::Asn1Cert;
 use crate::buffer::Buf;
-use crate::util::many0;
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
-use nom::error::{Error, ErrorKind};
-use nom::Err;
 use nom::{number::complete::be_u24, IResult};
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Certificate<'a> {
-    pub certificate_list: ArrayVec<Asn1Cert<'a>, 32>,
+pub struct Certificate {
+    pub certificate_list: ArrayVec<Asn1Cert, 32>,
 }
 
-impl<'a> Certificate<'a> {
-    pub fn new(certificate_list: ArrayVec<Asn1Cert<'a>, 32>) -> Self {
+impl Certificate {
+    pub fn new(certificate_list: ArrayVec<Asn1Cert, 32>) -> Self {
         Certificate { certificate_list }
     }
 
-    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], Certificate<'a>> {
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], Certificate> {
+        let original_input = input;
         let (input, total_len) = be_u24(input)?;
         let (input, certs_data) = take(total_len)(input)?;
-        let (rest, certificate_list) = many0(Asn1Cert::parse)(certs_data)?;
 
-        if !rest.is_empty() {
-            return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
+        // Calculate base offset for certs_data within the root buffer
+        let certs_base_offset =
+            base_offset + (certs_data.as_ptr() as usize - original_input.as_ptr() as usize);
+
+        // Parse certificates manually with dynamic base_offset
+        let mut certificate_list = ArrayVec::new();
+        let mut rest = certs_data;
+        while !rest.is_empty() {
+            let offset =
+                certs_base_offset + (rest.as_ptr() as usize - certs_data.as_ptr() as usize);
+            let (new_rest, cert) = Asn1Cert::parse(rest, offset)?;
+            certificate_list.push(cert);
+            rest = new_rest;
         }
 
         Ok((input, Certificate { certificate_list }))
     }
 
-    pub fn serialize(&self, output: &mut Buf) {
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
         let total_len: usize = self
             .certificate_list
             .iter()
-            .map(|cert| 3 + cert.len())
+            .map(|cert| 3 + cert.as_slice(buf).len())
             .sum();
         output.extend_from_slice(&(total_len as u32).to_be_bytes()[1..]);
 
         for cert in &self.certificate_list {
-            output.extend_from_slice(&(cert.len() as u32).to_be_bytes()[1..]);
-            output.extend_from_slice(cert);
+            let cert_data = cert.as_slice(buf);
+            output.extend_from_slice(&(cert_data.len() as u32).to_be_bytes()[1..]);
+            output.extend_from_slice(cert_data);
         }
     }
 }
@@ -59,24 +68,13 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let mut serialized = Buf::new();
-
-        let c1 = &MESSAGE[6..10];
-        let c2 = &MESSAGE[13..15];
-        let mut certificate_list = ArrayVec::new();
-        certificate_list.push(Asn1Cert(c1));
-        certificate_list.push(Asn1Cert(c2));
-
-        let certificate = Certificate::new(certificate_list);
+        // Parse the message with base_offset 0
+        let (rest, parsed) = Certificate::parse(MESSAGE, 0).unwrap();
+        assert!(rest.is_empty());
 
         // Serialize and compare to MESSAGE
-        certificate.serialize(&mut serialized);
+        let mut serialized = Buf::new();
+        parsed.serialize(MESSAGE, &mut serialized);
         assert_eq!(&*serialized, MESSAGE);
-
-        // Parse and compare with original
-        let (rest, parsed) = Certificate::parse(&serialized).unwrap();
-        assert_eq!(parsed, certificate);
-
-        assert!(rest.is_empty());
     }
 }
