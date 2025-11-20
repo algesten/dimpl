@@ -340,7 +340,6 @@ dependencies = [
  "rand",
  "rcgen",
  "sec1",
- "self_cell",
  "signature",
  "spki",
  "time",
@@ -863,12 +862,6 @@ dependencies = [
  "generic-array",
  "zeroize",
 ]
-
-[[package]]
-name = "self_cell"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f7d95a54511e0c7be3f51e8867aa8cf35148d7b9445d44de2f943e2b206e749"
 
 [[package]]
 name = "serde"

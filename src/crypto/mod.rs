@@ -23,11 +23,9 @@ pub use prf::calculate_extended_master_secret;
 pub use prf::{key_expansion, prf_tls12};
 
 use crate::buffer::{Buf, TmpBuf, ToBuf};
-use crate::message::{
-    Asn1Cert, Certificate, CipherSuite, ContentType, CurveType, ServerKeyExchange,
-};
+use crate::message::{Asn1Cert, Certificate, CipherSuite, ContentType, CurveType};
 use crate::message::{DigitallySigned, HashAlgorithm};
-use crate::message::{NamedCurve, Sequence, ServerKeyExchangeParams, SignatureAlgorithm};
+use crate::message::{NamedCurve, Sequence, SignatureAlgorithm};
 
 use der::Decode;
 use spki::ObjectIdentifier;
@@ -247,32 +245,27 @@ impl CryptoContext {
     }
 
     /// Process a ServerKeyExchange message and set up key exchange accordingly
-    pub fn process_server_key_exchange(&mut self, ske: &ServerKeyExchange) -> Result<(), String> {
-        // Process the server key exchange message based on the parameter type
-        match &ske.params {
-            ServerKeyExchangeParams::Ecdh(ecdh_params) => {
-                // For ECDHE, create a new EcdhKeyExchange with the specified curve
-                let curve = ecdh_params.named_curve;
-                let server_public = ecdh_params.public_key.to_vec();
-
-                // Only support P-256 and P-384
-                match curve {
-                    NamedCurve::Secp256r1 | NamedCurve::Secp384r1 => {}
-                    _ => return Err("Unsupported ECDHE named curve".to_string()),
-                }
-
-                // Update our key exchange
-                self.key_exchange = Some(KeyExchange::new_ecdh(curve));
-
-                // Generate our keypair
-                let _our_public = self.maybe_init_key_exchange()?;
-
-                // Compute shared secret with the server's public key
-                self.compute_shared_secret(&server_public)?;
-
-                Ok(())
-            }
+    pub fn process_ecdh_params(
+        &mut self,
+        curve: NamedCurve,
+        server_public: &[u8],
+    ) -> Result<(), String> {
+        // Only support P-256 and P-384
+        match curve {
+            NamedCurve::Secp256r1 | NamedCurve::Secp384r1 => {}
+            _ => return Err("Unsupported ECDHE named curve".to_string()),
         }
+
+        // Create a new ECDH key exchange
+        self.key_exchange = Some(KeyExchange::new_ecdh(curve));
+
+        // Generate our keypair
+        let _our_public = self.maybe_init_key_exchange()?;
+
+        // Compute shared secret with the server's public key
+        self.compute_shared_secret(server_public)?;
+
+        Ok(())
     }
 
     /// Derive master secret using Extended Master Secret (RFC 7627)
@@ -435,10 +428,17 @@ impl CryptoContext {
     /// Get client certificate for authentication
     pub fn get_client_certificate(&self) -> Certificate {
         // We validate in constructor, so we can assume we have a certificate
-        let cert = Asn1Cert(self.certificate.as_slice());
+        // Create an Asn1Cert with a range covering the entire certificate
+        let cert = Asn1Cert(0..self.certificate.len());
         let mut certs = ArrayVec::new();
         certs.push(cert);
         Certificate::new(certs)
+    }
+
+    /// Serialize client certificate for authentication
+    pub fn serialize_client_certificate(&self, output: &mut Buf) {
+        let cert = self.get_client_certificate();
+        cert.serialize(&self.certificate, output);
     }
 
     /// Sign the provided data using the client's private key
@@ -553,7 +553,8 @@ impl CryptoContext {
     pub fn verify_signature(
         &self,
         data: &Buf,
-        signature: &DigitallySigned<'_>,
+        signature: &DigitallySigned,
+        signature_buf: &[u8],
         cert_der: &[u8],
     ) -> Result<(), String> {
         // Parse the server certificate to extract SubjectPublicKeyInfo
@@ -601,12 +602,14 @@ impl CryptoContext {
 
                 let public_key = UnparsedPublicKey::new(algorithm, pubkey_bytes);
 
-                public_key.verify(data, signature.signature).map_err(|_| {
-                    format!(
-                        "ECDSA signature verification failed for {:?}",
-                        signature.algorithm.hash
-                    )
-                })
+                public_key
+                    .verify(data, signature.signature(signature_buf))
+                    .map_err(|_| {
+                        format!(
+                            "ECDSA signature verification failed for {:?}",
+                            signature.algorithm.hash
+                        )
+                    })
             }
             other => Err(format!(
                 "Unsupported public key algorithm OID in certificate: {other}"

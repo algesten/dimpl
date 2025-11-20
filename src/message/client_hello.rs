@@ -17,17 +17,17 @@ use crate::buffer::Buf;
 use crate::util::many1;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ClientHello<'a> {
+pub struct ClientHello {
     pub client_version: ProtocolVersion,
     pub random: Random,
     pub session_id: SessionId,
     pub cookie: Cookie,
     pub cipher_suites: ArrayVec<CipherSuite, 32>,
     pub compression_methods: ArrayVec<CompressionMethod, 4>,
-    pub extensions: ArrayVec<Extension<'a>, 16>,
+    pub extensions: ArrayVec<Extension, 16>,
 }
 
-impl<'a> ClientHello<'a> {
+impl ClientHello {
     pub fn new(
         client_version: ProtocolVersion,
         random: Random,
@@ -48,7 +48,7 @@ impl<'a> ClientHello<'a> {
     }
 
     /// Add all required extensions for DTLS handshake
-    pub fn with_extensions(mut self, buf: &'a mut Buf) -> Self {
+    pub fn with_extensions(mut self, buf: &mut Buf) -> Self {
         // Clear the extension data buffer
         buf.clear();
 
@@ -108,16 +108,19 @@ impl<'a> ClientHello<'a> {
             start_pos, // No data at all
         ));
 
-        // Now create all extensions using the written data
+        // Now create all extensions using ranges
         for (extension_type, start, end) in ranges {
-            self.extensions
-                .push(Extension::new(extension_type, &buf[start..end]));
+            self.extensions.push(Extension {
+                extension_type,
+                extension_data_range: start..end,
+            });
         }
 
         self
     }
 
-    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], ClientHello<'a>> {
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], ClientHello> {
+        let original_input = input;
         let (input, client_version) = ProtocolVersion::parse(input)?;
         let (input, random) = Random::parse(input)?;
         let (input, session_id) = SessionId::parse(input)?;
@@ -135,8 +138,12 @@ impl<'a> ClientHello<'a> {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
 
+        // Calculate base_offset for extensions parsing
+        let consumed = input.as_ptr() as usize - original_input.as_ptr() as usize;
+        let extensions_base_offset = base_offset + consumed;
+
         // Parse extensions if there are any left
-        let (remaining_input, extensions) = Self::parse_extensions(input)?;
+        let (remaining_input, extensions) = Self::parse_extensions(input, extensions_base_offset)?;
 
         Ok((
             remaining_input,
@@ -153,13 +160,18 @@ impl<'a> ClientHello<'a> {
     }
 
     /// Parse extensions from the input
-    fn parse_extensions(input: &'a [u8]) -> IResult<&'a [u8], ArrayVec<Extension<'a>, 16>> {
+    fn parse_extensions(
+        input: &[u8],
+        base_offset: usize,
+    ) -> IResult<&[u8], ArrayVec<Extension, 16>> {
         let mut extensions = ArrayVec::new();
 
         // Early return if input is empty
         if input.is_empty() {
             return Ok((input, extensions));
         }
+
+        let original_input = input;
 
         // Parse extensions length
         let (remaining, extensions_len) = be_u16(input)?;
@@ -172,12 +184,19 @@ impl<'a> ClientHello<'a> {
         // Take the extensions data
         let (remaining, extensions_data) = take(extensions_len)(remaining)?;
 
+        // Calculate base_offset for extension data
+        let consumed = extensions_data.as_ptr() as usize - original_input.as_ptr() as usize;
+        let data_base_offset = base_offset + consumed;
+
         // Parse individual extensions
         let mut extensions_rest = extensions_data;
+        let mut current_offset = data_base_offset;
         while !extensions_rest.is_empty() && extensions.len() < 16 {
-            let (rest, extension) = Extension::parse(extensions_rest)?;
+            let before_len = extensions_rest.len();
+            let (rest, extension) = Extension::parse(extensions_rest, current_offset)?;
+            let parsed_len = before_len - rest.len();
+            current_offset += parsed_len;
 
-            // Add the extension directly with the proper lifetime
             extensions.push(extension);
             extensions_rest = rest;
         }
@@ -185,7 +204,7 @@ impl<'a> ClientHello<'a> {
         Ok((remaining, extensions))
     }
 
-    pub fn serialize(&self, output: &mut Buf) {
+    pub fn serialize(&self, source_buf: &[u8], output: &mut Buf) {
         output.extend_from_slice(&self.client_version.as_u16().to_be_bytes());
         self.random.serialize(output);
         output.push(self.session_id.len() as u8);
@@ -207,7 +226,8 @@ impl<'a> ClientHello<'a> {
             let mut extensions_len = 0;
             for ext in &self.extensions {
                 // Extension type (2) + Extension length (2) + Extension data
-                extensions_len += 4 + ext.extension_data.len();
+                let ext_data = ext.extension_data(source_buf);
+                extensions_len += 4 + ext_data.len();
             }
 
             // Write extensions length
@@ -215,7 +235,7 @@ impl<'a> ClientHello<'a> {
 
             // Write each extension
             for ext in &self.extensions {
-                ext.serialize(output);
+                ext.serialize(source_buf, output);
             }
         }
     }
@@ -265,11 +285,11 @@ mod tests {
 
         // Serialize and compare to MESSAGE
         let mut serialized = Buf::new();
-        client_hello.serialize(&mut serialized);
+        client_hello.serialize(&[], &mut serialized);
         assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
-        let (rest, parsed) = ClientHello::parse(&serialized).unwrap();
+        let (rest, parsed) = ClientHello::parse(&serialized, 0).unwrap();
         assert_eq!(parsed, client_hello);
 
         assert!(rest.is_empty());
@@ -280,7 +300,7 @@ mod tests {
         let mut message = MESSAGE.to_vec();
         message[34] = 0x21; // SessionId length (33, which is too long)
 
-        let result = ClientHello::parse(&message);
+        let result = ClientHello::parse(&message, 0);
         assert!(result.is_err());
     }
 
@@ -289,7 +309,7 @@ mod tests {
         let mut message = MESSAGE.to_vec();
         message[36] = 0xFF; // Cookie length (255, which is too long)
 
-        let result = ClientHello::parse(&message);
+        let result = ClientHello::parse(&message, 0);
         assert!(result.is_err());
     }
 }

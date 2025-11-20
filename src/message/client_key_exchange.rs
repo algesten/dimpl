@@ -5,40 +5,36 @@ use nom::bytes::complete::take;
 use nom::error::Error;
 use nom::number::complete::be_u8;
 use nom::{Err, IResult};
+use std::ops::Range;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ClientKeyExchange<'a> {
-    pub exchange_keys: ExchangeKeys<'a>,
+pub struct ClientKeyExchange {
+    pub exchange_keys: ExchangeKeys,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum ExchangeKeys<'a> {
-    Ecdh(ClientEcdhKeys<'a>),
+pub enum ExchangeKeys {
+    Ecdh(ClientEcdhKeys),
 }
 
 /// ECDHE key exchange parameters
 #[derive(Debug, PartialEq, Eq)]
-pub struct ClientEcdhKeys<'a> {
+pub struct ClientEcdhKeys {
     pub curve_type: CurveType,
     pub named_curve: NamedCurve,
-    pub public_key_length: u8,
-    pub public_key: &'a [u8],
+    pub public_key_range: Range<usize>,
 }
 
-impl<'a> ClientEcdhKeys<'a> {
-    pub fn new(curve_type: CurveType, named_curve: NamedCurve, public_key: &'a [u8]) -> Self {
-        let public_key_length = public_key.len() as u8;
-        ClientEcdhKeys {
-            curve_type,
-            named_curve,
-            public_key_length,
-            public_key,
-        }
-    }
-
-    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], ClientEcdhKeys<'a>> {
+impl ClientEcdhKeys {
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], ClientEcdhKeys> {
+        let original_input = input;
         let (input, public_key_length) = be_u8(input)?;
-        let (input, public_key) = take(public_key_length)(input)?;
+        let (input, public_key_slice) = take(public_key_length)(input)?;
+
+        // Calculate absolute range in root buffer
+        let relative_offset = public_key_slice.as_ptr() as usize - original_input.as_ptr() as usize;
+        let start = base_offset + relative_offset;
+        let end = start + public_key_slice.len();
 
         Ok((
             input,
@@ -47,32 +43,33 @@ impl<'a> ClientEcdhKeys<'a> {
                 // since they're already established during ServerKeyExchange
                 curve_type: CurveType::NamedCurve,  // Default
                 named_curve: NamedCurve::Secp256r1, // Default
-                public_key_length,
-                public_key,
+                public_key_range: start..end,
             },
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf) {
+    pub fn public_key<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
+        &buf[self.public_key_range.clone()]
+    }
+
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
         // For client key exchange, we only need to include the public key length and value
         // The curve_type and named_curve are already established during ServerKeyExchange
-        output.push(self.public_key_length);
-        output.extend_from_slice(self.public_key);
+        let public_key = self.public_key(buf);
+        output.push(public_key.len() as u8);
+        output.extend_from_slice(public_key);
     }
 }
 
-impl<'a> ClientKeyExchange<'a> {
-    pub fn new(exchange_keys: ExchangeKeys<'a>) -> Self {
-        ClientKeyExchange { exchange_keys }
-    }
-
+impl ClientKeyExchange {
     pub fn parse(
-        input: &'a [u8],
+        input: &[u8],
+        base_offset: usize,
         key_exchange_algorithm: KeyExchangeAlgorithm,
-    ) -> IResult<&'a [u8], ClientKeyExchange<'a>> {
+    ) -> IResult<&[u8], ClientKeyExchange> {
         let (input, exchange_keys) = match key_exchange_algorithm {
             KeyExchangeAlgorithm::EECDH => {
-                let (input, ecdh_keys) = ClientEcdhKeys::parse(input)?;
+                let (input, ecdh_keys) = ClientEcdhKeys::parse(input, base_offset)?;
                 (input, ExchangeKeys::Ecdh(ecdh_keys))
             }
             _ => return Err(Err::Failure(Error::new(input, nom::error::ErrorKind::Tag))),
@@ -81,10 +78,16 @@ impl<'a> ClientKeyExchange<'a> {
         Ok((input, ClientKeyExchange { exchange_keys }))
     }
 
-    pub fn serialize(&self, output: &mut Buf) {
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
         match &self.exchange_keys {
-            ExchangeKeys::Ecdh(ecdh_keys) => ecdh_keys.serialize(output),
+            ExchangeKeys::Ecdh(ecdh_keys) => ecdh_keys.serialize(buf, output),
         }
+    }
+
+    /// Helper to serialize directly from public key bytes (for sending)
+    pub fn serialize_from_bytes(public_key: &[u8], output: &mut Buf) {
+        output.push(public_key.len() as u8);
+        output.extend_from_slice(public_key);
     }
 }
 
@@ -101,29 +104,14 @@ mod test {
 
     #[test]
     fn roundtrip_ecdh() {
-        let public_key = &ECDH_MESSAGE[1..5];
-
-        let ecdh_keys =
-            ClientEcdhKeys::new(CurveType::NamedCurve, NamedCurve::Secp256r1, public_key);
-        let client_key_exchange = ClientKeyExchange::new(ExchangeKeys::Ecdh(ecdh_keys));
+        // Parse the message with base_offset 0
+        let (rest, parsed) =
+            ClientKeyExchange::parse(ECDH_MESSAGE, 0, KeyExchangeAlgorithm::EECDH).unwrap();
+        assert!(rest.is_empty());
 
         // Serialize and compare to ECDH_MESSAGE
         let mut serialized = Buf::new();
-        client_key_exchange.serialize(&mut serialized);
+        parsed.serialize(ECDH_MESSAGE, &mut serialized);
         assert_eq!(&*serialized, ECDH_MESSAGE);
-
-        // Parse and compare with original
-        let (rest, parsed) =
-            ClientKeyExchange::parse(&serialized, KeyExchangeAlgorithm::EECDH).unwrap();
-
-        // For parsing, we need to manually check since the curve info is defaulted
-        match &parsed.exchange_keys {
-            ExchangeKeys::Ecdh(keys) => {
-                assert_eq!(keys.public_key_length, 4);
-                assert_eq!(keys.public_key, public_key);
-            }
-        }
-
-        assert!(rest.is_empty());
     }
 }

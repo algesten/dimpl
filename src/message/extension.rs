@@ -1,43 +1,49 @@
 use crate::buffer::Buf;
 use nom::{bytes::complete::take, number::complete::be_u16, IResult};
+use std::ops::Range;
 
 #[derive(Debug, PartialEq, Eq, Default)]
-pub struct Extension<'a> {
+pub struct Extension {
     pub extension_type: ExtensionType,
-    pub extension_data: &'a [u8],
+    pub extension_data_range: Range<usize>,
 }
 
-impl<'a> Extension<'a> {
-    pub const fn new(extension_type: ExtensionType, extension_data: &'a [u8]) -> Self {
-        Extension {
-            extension_type,
-            extension_data,
-        }
-    }
-
-    pub fn parse(input: &'a [u8]) -> IResult<&'a [u8], Extension<'a>> {
+impl Extension {
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], Extension> {
+        let original_input = input;
         let (input, extension_type) = ExtensionType::parse(input)?;
         let (input, extension_length) = be_u16(input)?;
-        let (input, extension_data) = if extension_length > 0 {
+        let (input, extension_data_slice) = if extension_length > 0 {
             take(extension_length)(input)?
         } else {
             (input, &input[0..0])
         };
 
+        // Calculate absolute range in root buffer
+        let relative_offset =
+            extension_data_slice.as_ptr() as usize - original_input.as_ptr() as usize;
+        let start = base_offset + relative_offset;
+        let end = start + extension_data_slice.len();
+
         Ok((
             input,
             Extension {
                 extension_type,
-                extension_data,
+                extension_data_range: start..end,
             },
         ))
     }
 
-    pub fn serialize(&self, output: &mut Buf) {
+    pub fn extension_data<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
+        &buf[self.extension_data_range.clone()]
+    }
+
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
+        let extension_data = self.extension_data(buf);
         output.extend_from_slice(&self.extension_type.as_u16().to_be_bytes());
-        output.extend_from_slice(&(self.extension_data.len() as u16).to_be_bytes());
-        if !self.extension_data.is_empty() {
-            output.extend_from_slice(self.extension_data);
+        output.extend_from_slice(&(extension_data.len() as u16).to_be_bytes());
+        if !extension_data.is_empty() {
+            output.extend_from_slice(extension_data);
         }
     }
 }
@@ -199,18 +205,13 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let extension_data = &MESSAGE[4..];
-        let extension = Extension::new(ExtensionType::SupportedGroups, extension_data);
+        // Parse the message with base_offset 0
+        let (rest, parsed) = Extension::parse(MESSAGE, 0).unwrap();
+        assert!(rest.is_empty());
 
         // Serialize and compare to MESSAGE
         let mut serialized = Buf::new();
-        extension.serialize(&mut serialized);
+        parsed.serialize(MESSAGE, &mut serialized);
         assert_eq!(&*serialized, MESSAGE);
-
-        // Parse and compare with original
-        let (rest, parsed) = Extension::parse(&serialized).unwrap();
-        assert_eq!(parsed, extension);
-
-        assert!(rest.is_empty());
     }
 }

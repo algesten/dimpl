@@ -2,25 +2,37 @@ use crate::buffer::Buf;
 use crate::message::CipherSuite;
 use nom::bytes::complete::take;
 use nom::IResult;
+use std::ops::Range;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Finished<'a> {
-    pub verify_data: &'a [u8],
+pub struct Finished {
+    pub verify_data_range: Range<usize>,
 }
 
-impl<'a> Finished<'a> {
-    pub fn new(verify_data: &'a [u8]) -> Self {
-        Finished { verify_data }
+impl Finished {
+    pub fn verify_data<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
+        &buf[self.verify_data_range.clone()]
     }
 
-    pub fn parse(input: &'a [u8], cipher_suite: CipherSuite) -> IResult<&'a [u8], Finished<'a>> {
+    pub fn parse(input: &[u8], cipher_suite: CipherSuite) -> IResult<&[u8], Finished> {
         let verify_data_length = cipher_suite.verify_data_length();
-        let (input, verify_data) = take(verify_data_length)(input)?;
-        Ok((input, Finished { verify_data }))
+        let (rest, verify_data_slice) = take(verify_data_length)(input)?;
+
+        // Calculate range relative to input buffer without unsafe code
+        // verify_data_slice is a sub-slice of input from nom's take combinator
+        let start = verify_data_slice.as_ptr() as usize - input.as_ptr() as usize;
+        let end = start + verify_data_slice.len();
+
+        Ok((
+            rest,
+            Finished {
+                verify_data_range: start..end,
+            },
+        ))
     }
 
-    pub fn serialize(&self, output: &mut Buf) {
-        output.extend_from_slice(self.verify_data);
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
+        output.extend_from_slice(self.verify_data(buf));
     }
 }
 
@@ -35,17 +47,15 @@ mod test {
         let verify_data = vec![
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C,
         ];
-        let finished = Finished::new(&verify_data);
 
-        // Serialize and compare to MESSAGE
-        let mut serialized = Buf::new();
-        finished.serialize(&mut serialized);
-
-        // Parse and compare with original
+        // Parse the data
         let (rest, parsed) =
-            Finished::parse(&serialized, CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256).unwrap();
-        assert_eq!(parsed, finished);
-
+            Finished::parse(&verify_data, CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256).unwrap();
         assert!(rest.is_empty());
+
+        // Serialize and compare to original
+        let mut serialized = Buf::new();
+        parsed.serialize(&verify_data, &mut serialized);
+        assert_eq!(&*serialized, &verify_data[..]);
     }
 }

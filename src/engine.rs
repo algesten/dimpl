@@ -152,9 +152,7 @@ impl Engine {
     }
 
     pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        let buffer = self.buffers_free.pop();
-
-        let incoming = Incoming::parse_packet(packet, self, buffer)?;
+        let incoming = Incoming::parse_packet(packet, self)?;
         if let Some(incoming) = incoming {
             self.insert_incoming(incoming)?;
         }
@@ -332,7 +330,8 @@ impl Engine {
             return Err(buf);
         };
 
-        let fragment = next.record().fragment;
+        let record_buffer = next.buffer();
+        let fragment = next.record().fragment(record_buffer);
         let len = fragment.len();
 
         assert!(
@@ -354,8 +353,9 @@ impl Engine {
 
             if fully_handled {
                 let incoming = self.queue_rx.pop_front().unwrap();
-                let pooled = incoming.into_owner();
-                self.buffers_free.push(pooled);
+                incoming
+                    .into_records()
+                    .for_each(|r| self.buffers_free.push(r.into_buffer()));
             } else {
                 break;
             }
@@ -487,11 +487,11 @@ impl Engine {
         false
     }
 
-    pub fn next_handshake<'b>(
+    pub fn next_handshake(
         &mut self,
         wanted: MessageType,
-        defragment_buffer: &'b mut Buf,
-    ) -> Result<Option<Handshake<'b>>, Error> {
+        defragment_buffer: &mut Buf,
+    ) -> Result<Option<Handshake>, Error> {
         if !self.has_complete_handshake(wanted) {
             return Ok(None);
         }
@@ -501,13 +501,17 @@ impl Engine {
             .iter()
             .flat_map(|i| i.records().iter())
             .skip_while(|r| r.is_handled())
-            .filter_map(|r| r.handshake());
+            .filter_map(|r| r.handshake().map(|h| (h, r.buffer())));
 
         // This sets the handled flag on the handshake.
-        let handshake = Handshake::defragment(iter, defragment_buffer, self.cipher_suite)?;
-
-        // Update the stored handshakes used for CertificateVerify and Finished
-        handshake.serialize(&mut self.transcript);
+        // Passing Some(&mut self.transcript) to have defragment write to transcript
+        // before creating the handshake, avoiding borrow conflicts.
+        let handshake = Handshake::defragment(
+            iter,
+            defragment_buffer,
+            self.cipher_suite,
+            Some(&mut self.transcript),
+        )?;
 
         // Move the expected seq_no along
         self.peer_handshake_seq_no = handshake.header.message_seq + 1;
@@ -643,7 +647,7 @@ impl Engine {
             version: ProtocolVersion::DTLS1_2,
             sequence,
             length: fragment.len() as u16,
-            fragment: &mut fragment,
+            fragment_range: 0..fragment.len(),
         };
 
         // Increment the sequence number for the next transmission
@@ -656,11 +660,11 @@ impl Engine {
         // Serialize the record into the chosen datagram buffer
         if can_append {
             let last = self.queue_tx.back_mut().unwrap();
-            record.serialize(last);
+            record.serialize(&fragment, last);
         } else {
             let mut buffer = self.buffers_free.pop();
             buffer.clear();
-            record.serialize(&mut buffer);
+            record.serialize(&fragment, &mut buffer);
             self.queue_tx.push_back(buffer);
         }
 
@@ -694,10 +698,11 @@ impl Engine {
         {
             let handshake = Handshake {
                 header: handshake_header,
-                body: Body::Fragment(&body_buffer),
+                body: Body::Fragment(0..body_buffer.len()),
                 handled: AtomicBool::new(false),
             };
-            handshake.serialize(&mut buffer_full);
+            // Serialize with body_buffer as source
+            handshake.serialize(&body_buffer, &mut buffer_full);
         }
         self.transcript.extend_from_slice(&buffer_full);
         self.buffers_free.push(buffer_full);
@@ -746,10 +751,10 @@ impl Engine {
                 remaining_body_bytes.min(available_for_body)
             };
 
-            let frag_body = if chunk_len == 0 {
-                &[][..]
+            let frag_range = if chunk_len == 0 {
+                0..0
             } else {
-                &body_buffer[offset..offset + chunk_len]
+                offset..offset + chunk_len
             };
 
             let frag_handshake = Handshake {
@@ -760,13 +765,14 @@ impl Engine {
                     fragment_offset: offset as u32,
                     fragment_length: chunk_len as u32,
                 },
-                body: Body::Fragment(frag_body),
+                body: Body::Fragment(frag_range),
                 handled: AtomicBool::new(false),
             };
 
             // Emit the record; packing into current datagram happens inside create_record
             self.create_record(ContentType::Handshake, epoch, true, |fragment| {
-                frag_handshake.serialize(fragment);
+                // Serialize with body_buffer as source
+                frag_handshake.serialize(&body_buffer, fragment);
             })?;
 
             if total_len == 0 {
@@ -859,21 +865,13 @@ impl Engine {
         let all = self.queue_rx.split_off(index_epoch1);
 
         for incoming in all {
-            // Part of the incoming buffer has already been handled since
-            // the ChangeCipherSpec happens mid-flight.
-            let offset = incoming
-                .records()
-                .iter()
-                .take_while(|r| r.is_handled())
-                .map(|r| r.len())
-                .sum::<usize>();
+            let unhandled = incoming.into_records().filter(|r| !r.is_handled());
 
-            let mut buffer = incoming.into_owner();
-
-            // This has already been used up and does not need decrypting.
-            let _ = buffer.drain(..offset);
-
-            self.parse_packet(&buffer)?;
+            for record in unhandled {
+                let buf = record.into_buffer();
+                self.parse_packet(&buf)?;
+                self.buffers_free.push(buf);
+            }
         }
 
         Ok(())
@@ -895,14 +893,14 @@ impl Engine {
         }
     }
 
-    pub fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord) -> (Aad, Nonce) {
+    pub fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord, buf: &[u8]) -> (Aad, Nonce) {
         // DTLS 1.2 AEAD (AES-GCM): AAD uses the plaintext length. The fragment on the wire is
         // 8-byte explicit nonce || ciphertext || 16-byte GCM tag. Recover plaintext length from
         // the record header's fragment length field.
         let plaintext_len = dtls.length.saturating_sub(DTLS_AEAD_OVERHEAD as u16);
         let aad = Aad::new(dtls.content_type, dtls.sequence, plaintext_len);
         let iv = self.peer_iv();
-        let nonce = Nonce::new(iv, dtls.nonce());
+        let nonce = Nonce::new(iv, dtls.nonce(buf));
         (aad, nonce)
     }
 

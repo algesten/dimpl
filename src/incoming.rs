@@ -2,23 +2,22 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use arrayvec::ArrayVec;
-use self_cell::{self_cell, MutBorrow};
 use std::fmt;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::DTLS_EXPLICIT_NONCE_LEN;
 use crate::engine::Engine;
-use crate::message::{ContentType, DTLSRecord, DTLSRecordSlice, Handshake};
+use crate::message::{ContentType, DTLSRecord, Handshake};
 use crate::Error;
 
 /// Holds both the UDP packet and the parsed result of that packet.
-///
-/// A self-referential struct.
-pub struct Incoming(Inner);
+pub struct Incoming {
+    records: Records,
+}
 
 impl Incoming {
     pub fn records(&self) -> &Records {
-        self.0.borrow_dependent()
+        &self.records
     }
 
     pub fn first(&self) -> &Record {
@@ -27,70 +26,60 @@ impl Incoming {
         &self.records()[0]
     }
 
-    pub fn into_owner(self) -> Buf {
-        self.0.into_owner().into_inner()
+    pub fn into_records(self) -> impl Iterator<Item = Record> {
+        self.records.records.into_iter()
     }
 }
-
-self_cell!(
-    struct Inner {
-        owner: MutBorrow<Buf>, // Buffer with UDP packet data
-        #[covariant]
-        dependent: Records, // Parsed records from that UDP packet
-    }
-);
 
 impl Incoming {
     /// Parse an incoming UDP packet
     ///
     /// * `packet` is the data from the UDP socket.
-    /// * `c` is a reference to the `CipherSuite` that's been selected. Some of
-    ///   the parsing requires to know this to parse correctly. For Client code,
-    ///   this value is only known after we receive ServerHello, which means it
-    ///   can start empty and be filled in as soon as we know the value.
-    /// * `into` the buffer in which we want to store the UDP data.
+    /// * `engine` is a reference to the Engine for crypto context.
+    /// * `into` the buffer to return to pool (not used for storage).
     ///
     /// Will surface parser errors.
-    pub fn parse_packet(
-        packet: &[u8],
-        engine: &mut Engine,
-        mut into: Buf,
-    ) -> Result<Option<Self>, Error> {
-        // The Buffer is where we store the raw packet data.
-        into.resize(packet.len(), 0);
-        into.copy_from_slice(packet);
-
-        let into = MutBorrow::new(into);
-
-        // håll i hatten
-        let inner = Inner::try_new(into, |data| Records::parse(data.borrow_mut(), engine))?;
+    pub fn parse_packet(packet: &[u8], engine: &mut Engine) -> Result<Option<Self>, Error> {
+        // Parse records directly from packet, copying each record ONCE into its own buffer
+        let records = Records::parse(packet, engine)?;
 
         // We need at least one Record to be valid. For replayed frames, we discard
         // the records, hence this might be None
-        let incoming = Incoming(inner);
-        if incoming.records().is_empty() {
+        if records.records.is_empty() {
             return Ok(None);
         }
 
-        Ok(Some(incoming))
+        Ok(Some(Incoming { records }))
     }
 }
 
 /// A number of records parsed from a single UDP packet.
 #[derive(Debug)]
-pub struct Records<'a> {
-    pub records: ArrayVec<Record<'a>, 32>,
+pub struct Records {
+    pub records: ArrayVec<Record, 32>,
 }
 
-impl<'a> Records<'a> {
-    pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Records<'a>, Error> {
+impl Records {
+    pub fn parse(mut packet: &[u8], engine: &mut Engine) -> Result<Records, Error> {
         let mut records = ArrayVec::new();
-        let mut current = input;
 
-        // DTLSRecordSlice::try_read will end with None when cleanly chunking ends.
-        // Any extra bytes will cause an Error.
-        while let Some(dtls_rec) = DTLSRecordSlice::try_read(current)? {
-            match Record::parse(dtls_rec.slice, engine) {
+        // Find record boundaries and copy each record ONCE from the packet
+        while !packet.is_empty() {
+            if packet.len() < DTLSRecord::HEADER_LEN {
+                return Err(Error::ParseIncomplete);
+            }
+
+            let length_bytes: [u8; 2] = packet[DTLSRecord::LENGTH_OFFSET].try_into().unwrap();
+            let length = u16::from_be_bytes(length_bytes) as usize;
+            let record_end = DTLSRecord::HEADER_LEN + length;
+
+            if packet.len() < record_end {
+                return Err(Error::ParseIncomplete);
+            }
+
+            // This is the ONLY copy: packet -> record buffer
+            let record_slice = &packet[..record_end];
+            match Record::parse(record_slice, engine) {
                 Ok(record) => {
                     if let Some(record) = record {
                         records.push(record);
@@ -100,30 +89,36 @@ impl<'a> Records<'a> {
                 }
                 Err(e) => return Err(e),
             }
-            current = dtls_rec.rest;
+
+            packet = &packet[record_end..];
         }
 
         Ok(Records { records })
     }
 }
 
-impl<'a> Deref for Records<'a> {
-    type Target = [Record<'a>];
+impl Deref for Records {
+    type Target = [Record];
 
     fn deref(&self) -> &Self::Target {
         &self.records
     }
 }
 
-pub struct Record<'a>(RecordInner<'a>);
+pub struct Record {
+    buffer: Buf,
+    parsed: ParsedRecord,
+}
 
-impl<'a> Record<'a> {
+impl Record {
     /// The first parse pass only parses the DTLSRecord header which is unencrypted.
-    pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Option<Record<'a>>, Error> {
-        let inner =
-            RecordInner::try_new(input, |borrowed| ParsedRecord::parse(borrowed, engine, 0))?;
-
-        let record = Record(inner);
+    /// Copies record data from UDP packet ONCE into a pooled buffer.
+    pub fn parse(record_slice: &[u8], engine: &mut Engine) -> Result<Option<Record>, Error> {
+        // ONLY COPY: UDP packet slice -> pooled buffer
+        let mut buffer = Buf::new();
+        buffer.extend_from_slice(record_slice);
+        let parsed = ParsedRecord::parse(&buffer, engine, 0)?;
+        let record = Record { buffer, parsed };
 
         // It is not enough to only look at the epoch, since to be able to decrypt the entire
         // preceeding set of flights sets up the cryptographic context. In a situation with
@@ -141,10 +136,11 @@ impl<'a> Record<'a> {
             return Ok(None);
         }
 
-        let (aad, nonce) = engine.decryption_aad_and_nonce(dtls);
+        // Get a reference to the buffer
+        let (aad, nonce) = engine.decryption_aad_and_nonce(dtls, &record.buffer);
 
-        // Bring back the unparsed bytes.
-        let input = record.0.into_owner();
+        // Extract the buffer for decryption
+        let mut buffer = record.buffer;
 
         // Local shorthand for where the encrypted ciphertext starts
         const CIPH: usize = DTLSRecord::HEADER_LEN + DTLS_EXPLICIT_NONCE_LEN;
@@ -152,7 +148,7 @@ impl<'a> Record<'a> {
         // The encrypted part is after the DTLS header and explicit nonce.
         // The entire buffer is only the single record, since we chunk
         // records up in Records::parse()
-        let ciphertext = &mut input[CIPH..];
+        let ciphertext = &mut buffer[CIPH..];
 
         let new_len = {
             let mut buffer = TmpBuf::new(ciphertext);
@@ -164,71 +160,58 @@ impl<'a> Record<'a> {
         };
 
         // Update the length of the record.
-        input[11] = (new_len >> 8) as u8;
-        input[12] = new_len as u8;
+        buffer[11] = (new_len >> 8) as u8;
+        buffer[12] = new_len as u8;
 
-        let inner = RecordInner::try_new(input, |borrowed| {
-            ParsedRecord::parse(borrowed, engine, DTLS_EXPLICIT_NONCE_LEN)
-        })?;
+        let parsed = ParsedRecord::parse(&buffer, engine, DTLS_EXPLICIT_NONCE_LEN)?;
 
-        Ok(Some(Record(inner)))
+        Ok(Some(Record { buffer, parsed }))
     }
 
     pub fn record(&self) -> &DTLSRecord {
-        &self.0.borrow_dependent().record
+        &self.parsed.record
     }
 
     pub fn handshake(&self) -> Option<&Handshake> {
-        self.0.borrow_dependent().handshake.as_ref()
+        self.parsed.handshake.as_ref()
     }
 
     pub fn is_handled(&self) -> bool {
-        let rec = self.0.borrow_dependent();
-        rec.handshake
+        self.parsed
+            .handshake
             .as_ref()
             .map(|h| h.handled.load(Ordering::Relaxed))
-            .unwrap_or(rec.handled.load(Ordering::Relaxed))
+            .unwrap_or(self.parsed.handled.load(Ordering::Relaxed))
     }
 
     pub fn set_handled(&self) {
-        self.0
-            .borrow_dependent()
-            .handled
-            .store(true, Ordering::Relaxed);
+        self.parsed.handled.store(true, Ordering::Relaxed);
     }
 
-    pub fn len(&self) -> usize {
-        self.0.borrow_owner().len()
+    pub fn buffer(&self) -> &[u8] {
+        &self.buffer
+    }
+
+    pub(crate) fn into_buffer(self) -> Buf {
+        self.buffer
     }
 }
 
-self_cell!(
-    pub struct RecordInner<'a> {
-        owner: &'a mut [u8],
-
-        #[covariant]
-        dependent: ParsedRecord,
-    }
-);
-
-pub struct ParsedRecord<'a> {
-    record: DTLSRecord<'a>,
-    handshake: Option<Handshake<'a>>,
+pub struct ParsedRecord {
+    record: DTLSRecord,
+    handshake: Option<Handshake>,
     handled: AtomicBool,
 }
 
-impl<'a> ParsedRecord<'a> {
-    pub fn parse(
-        input: &'a [u8],
-        engine: &Engine,
-        offset: usize,
-    ) -> Result<ParsedRecord<'a>, Error> {
-        let (_, record) = DTLSRecord::parse(input, offset)?;
+impl ParsedRecord {
+    pub fn parse(input: &[u8], engine: &Engine, offset: usize) -> Result<ParsedRecord, Error> {
+        let (_, record) = DTLSRecord::parse(input, 0, offset)?;
 
         let handshake = if record.content_type == ContentType::Handshake {
             // This will also return None on the encrypted Finished after ChangeCipherSpec.
             // However we will then decrypt and try again.
-            maybe_handshake(record.fragment, engine)
+            let fragment_offset = record.fragment_range.start;
+            maybe_handshake(record.fragment(input), fragment_offset, engine)
         } else {
             None
         };
@@ -241,8 +224,8 @@ impl<'a> ParsedRecord<'a> {
     }
 }
 
-fn maybe_handshake<'a>(input: &'a [u8], engine: &Engine) -> Option<Handshake<'a>> {
-    let (_, handshake) = Handshake::parse(input, engine.cipher_suite(), true).ok()?;
+fn maybe_handshake(input: &[u8], base_offset: usize, engine: &Engine) -> Option<Handshake> {
+    let (_, handshake) = Handshake::parse(input, base_offset, engine.cipher_suite(), true).ok()?;
     Some(handshake)
 }
 
@@ -254,22 +237,25 @@ impl fmt::Debug for Incoming {
     }
 }
 
-impl<'a> fmt::Debug for Record<'a> {
+impl fmt::Debug for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Record")
-            .field("record", &self.0.borrow_dependent().record)
-            .field("handshake", &self.0.borrow_dependent().handshake)
+            .field("record", &self.parsed.record)
+            .field("handshake", &self.parsed.handshake)
             .finish()
     }
 }
 
-impl<'a> Default for Record<'a> {
+impl Default for Record {
     fn default() -> Self {
-        Record(RecordInner::new(&mut [], |_| ParsedRecord {
-            record: DTLSRecord::default(),
-            handshake: None,
-            handled: AtomicBool::new(false),
-        }))
+        Record {
+            buffer: Buf::new(),
+            parsed: ParsedRecord {
+                record: DTLSRecord::default(),
+                handshake: None,
+                handled: AtomicBool::new(false),
+            },
+        }
     }
 }
 
@@ -281,21 +267,15 @@ Why it is sound to assert UnwindSafe for Incoming
   document that external callers can wrap our APIs in catch_unwind without
   observing broken invariants from this type.
 
-- self_cell construction is panic-safe without catch_unwind: Incoming/Record are
-  built via self_cell::new/try_new. The crate uses a drop guard to clean up a
-  partially-initialized allocation if the dependent builder panics. No value
-  escapes on panic, so a half-built object cannot be observed across unwinding.
-
 - Read-only builders: our dependent builders (e.g., ParsedRecord::parse) take
-  only a &[u8] to the owner and do not mutate the owner during construction. An
-  unwind during builder execution therefore cannot leave the owner partially
+  only a &[u8] to the buffer and do not mutate the buffer during construction.
+  An unwind during builder execution therefore cannot leave the buffer partially
   mutated across a boundary.
 
-- Decrypt-and-reparse is publish-after-complete: when decrypting we first call
-  into_owner() to regain the raw bytes, mutate a local &mut [u8] (length update,
-  in-place decrypt, copy_within), and only then construct a fresh RecordInner
-  from the fully transformed bytes. If a panic occurs mid-transformation, the
-  new RecordInner is not built and the previously-built Record is dropped; no
+- Decrypt-and-reparse is publish-after-complete: when decrypting we first extract
+  the buffer, mutate it (length update, in-place decrypt), and only then construct
+  a fresh Record from the fully transformed bytes. If a panic occurs mid-transformation,
+  the new Record is not built and the previously-built Record is dropped; no
   consumer can observe a half-transformed record across an unwind boundary.
 
 - Interior mutability is benign across unwind: the only interior mutability is
