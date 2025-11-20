@@ -120,7 +120,8 @@ pub struct Record<'a>(RecordInner<'a>);
 impl<'a> Record<'a> {
     /// The first parse pass only parses the DTLSRecord header which is unencrypted.
     pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Option<Record<'a>>, Error> {
-        let inner = RecordInner::try_new(input, |borrowed| ParsedRecord::parse(borrowed, engine))?;
+        let inner =
+            RecordInner::try_new(input, |borrowed| ParsedRecord::parse(borrowed, engine, 0))?;
 
         let record = Record(inner);
 
@@ -163,12 +164,12 @@ impl<'a> Record<'a> {
         };
 
         // Update the length of the record.
-        input[DTLSRecord::LENGTH_OFFSET].copy_from_slice(&(new_len as u16).to_be_bytes());
+        input[11] = (new_len >> 8) as u8;
+        input[12] = new_len as u8;
 
-        // Shift the decrypted buffer to the start of the record.
-        input.copy_within(CIPH..(CIPH + new_len), DTLSRecord::HEADER_LEN);
-
-        let inner = RecordInner::try_new(input, |borrowed| ParsedRecord::parse(borrowed, engine))?;
+        let inner = RecordInner::try_new(input, |borrowed| {
+            ParsedRecord::parse(borrowed, engine, DTLS_EXPLICIT_NONCE_LEN)
+        })?;
 
         Ok(Some(Record(inner)))
     }
@@ -217,8 +218,12 @@ pub struct ParsedRecord<'a> {
 }
 
 impl<'a> ParsedRecord<'a> {
-    pub fn parse(input: &'a [u8], engine: &Engine) -> Result<ParsedRecord<'a>, Error> {
-        let (_, record) = DTLSRecord::parse(input)?;
+    pub fn parse(
+        input: &'a [u8],
+        engine: &Engine,
+        offset: usize,
+    ) -> Result<ParsedRecord<'a>, Error> {
+        let (_, record) = DTLSRecord::parse(input, offset)?;
 
         let handshake = if record.content_type == ContentType::Handshake {
             // This will also return None on the encrypted Finished after ChangeCipherSpec.
