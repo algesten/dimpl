@@ -1,9 +1,9 @@
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use arrayvec::ArrayVec;
 use self_cell::{self_cell, MutBorrow};
 use std::fmt;
-use tinyvec::ArrayVec;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::DTLS_EXPLICIT_NONCE_LEN;
@@ -79,12 +79,12 @@ impl Incoming {
 /// A number of records parsed from a single UDP packet.
 #[derive(Debug)]
 pub struct Records<'a> {
-    pub records: ArrayVec<[Record<'a>; 32]>,
+    pub records: ArrayVec<Record<'a>, 32>,
 }
 
 impl<'a> Records<'a> {
     pub fn parse(input: &'a mut [u8], engine: &mut Engine) -> Result<Records<'a>, Error> {
-        let mut records = ArrayVec::default();
+        let mut records = ArrayVec::new();
         let mut current = input;
 
         // DTLSRecordSlice::try_read will end with None when cleanly chunking ends.

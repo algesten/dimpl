@@ -1,24 +1,24 @@
 use super::{ClientCertificateType, DistinguishedName, SignatureAndHashAlgorithm};
 use crate::buffer::Buf;
 use crate::util::{many0, many1};
+use arrayvec::ArrayVec;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u16, be_u8};
 use nom::Err;
 use nom::{bytes::complete::take, IResult};
-use tinyvec::ArrayVec;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct CertificateRequest<'a> {
-    pub certificate_types: ArrayVec<[ClientCertificateType; 8]>,
-    pub supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 32]>,
-    pub certificate_authorities: ArrayVec<[DistinguishedName<'a>; 32]>,
+    pub certificate_types: ArrayVec<ClientCertificateType, 8>,
+    pub supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 32>,
+    pub certificate_authorities: ArrayVec<DistinguishedName<'a>, 32>,
 }
 
 impl<'a> CertificateRequest<'a> {
     pub fn new(
-        certificate_types: ArrayVec<[ClientCertificateType; 8]>,
-        supported_signature_algorithms: ArrayVec<[SignatureAndHashAlgorithm; 32]>,
-        certificate_authorities: ArrayVec<[DistinguishedName<'a>; 32]>,
+        certificate_types: ArrayVec<ClientCertificateType, 8>,
+        supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 32>,
+        certificate_authorities: ArrayVec<DistinguishedName<'a>, 32>,
     ) -> Self {
         CertificateRequest {
             certificate_types,
@@ -94,8 +94,6 @@ impl<'a> CertificateRequest<'a> {
 
 #[cfg(test)]
 mod test {
-    use tinyvec::array_vec;
-
     use crate::message::{HashAlgorithm, SignatureAlgorithm};
 
     use super::*;
@@ -117,17 +115,23 @@ mod test {
     fn roundtrip() {
         let mut serialized = Buf::new();
 
-        let certificate_types = array_vec![
-            ClientCertificateType::RSA_SIGN,
-            ClientCertificateType::DSS_SIGN
-        ];
-        let supported_signature_algorithms = array_vec![
-            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA),
-            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::DSA)
-        ];
+        let mut certificate_types = ArrayVec::new();
+        certificate_types.push(ClientCertificateType::RSA_SIGN);
+        certificate_types.push(ClientCertificateType::DSS_SIGN);
+        let mut supported_signature_algorithms = ArrayVec::new();
+        supported_signature_algorithms.push(SignatureAndHashAlgorithm::new(
+            HashAlgorithm::SHA256,
+            SignatureAlgorithm::RSA,
+        ));
+        supported_signature_algorithms.push(SignatureAndHashAlgorithm::new(
+            HashAlgorithm::SHA384,
+            SignatureAlgorithm::DSA,
+        ));
         let d1 = &MESSAGE[13..17];
         let d2 = &MESSAGE[19..23];
-        let certificate_authorities = array_vec![DistinguishedName(d1), DistinguishedName(d2)];
+        let mut certificate_authorities = ArrayVec::new();
+        certificate_authorities.push(DistinguishedName(d1));
+        certificate_authorities.push(DistinguishedName(d2));
 
         let certificate_request = CertificateRequest::new(
             certificate_types,

@@ -23,6 +23,7 @@ mod server_hello;
 mod server_key_exchange;
 mod wrapped;
 
+use arrayvec::ArrayVec;
 pub use certificate::Certificate;
 pub use certificate_request::CertificateRequest;
 pub use certificate_verify::CertificateVerify;
@@ -42,7 +43,6 @@ pub use random::Random;
 pub use record::{ContentType, DTLSRecord, DTLSRecordSlice, Sequence};
 pub use server_hello::ServerHello;
 pub use server_key_exchange::{EcdhParams, ServerKeyExchange, ServerKeyExchangeParams};
-use tinyvec::{array_vec, ArrayVec};
 pub use wrapped::{Asn1Cert, DistinguishedName};
 
 use crate::buffer::Buf;
@@ -442,12 +442,24 @@ impl SignatureAndHashAlgorithm {
         Ok((input, SignatureAndHashAlgorithm::from_u16(value)))
     }
 
-    pub fn supported() -> ArrayVec<[SignatureAndHashAlgorithm; 8]> {
-        array_vec![
-            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA),
-            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::ECDSA),
-            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA),
-            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::RSA)
-        ]
+    pub fn supported() -> ArrayVec<SignatureAndHashAlgorithm, 8> {
+        let mut algos = ArrayVec::new();
+        algos.push(SignatureAndHashAlgorithm::new(
+            HashAlgorithm::SHA256,
+            SignatureAlgorithm::ECDSA,
+        ));
+        algos.push(SignatureAndHashAlgorithm::new(
+            HashAlgorithm::SHA384,
+            SignatureAlgorithm::ECDSA,
+        ));
+        algos.push(SignatureAndHashAlgorithm::new(
+            HashAlgorithm::SHA256,
+            SignatureAlgorithm::RSA,
+        ));
+        algos.push(SignatureAndHashAlgorithm::new(
+            HashAlgorithm::SHA384,
+            SignatureAlgorithm::RSA,
+        ));
+        algos
     }
 }

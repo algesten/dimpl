@@ -1,19 +1,19 @@
 use super::Asn1Cert;
 use crate::buffer::Buf;
 use crate::util::many0;
+use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::Err;
 use nom::{number::complete::be_u24, IResult};
-use tinyvec::ArrayVec;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Certificate<'a> {
-    pub certificate_list: ArrayVec<[Asn1Cert<'a>; 32]>,
+    pub certificate_list: ArrayVec<Asn1Cert<'a>, 32>,
 }
 
 impl<'a> Certificate<'a> {
-    pub fn new(certificate_list: ArrayVec<[Asn1Cert<'a>; 32]>) -> Self {
+    pub fn new(certificate_list: ArrayVec<Asn1Cert<'a>, 32>) -> Self {
         Certificate { certificate_list }
     }
 
@@ -46,8 +46,6 @@ impl<'a> Certificate<'a> {
 
 #[cfg(test)]
 mod tests {
-    use tinyvec::array_vec;
-
     use super::*;
     use crate::buffer::Buf;
 
@@ -65,7 +63,9 @@ mod tests {
 
         let c1 = &MESSAGE[6..10];
         let c2 = &MESSAGE[13..15];
-        let certificate_list = array_vec![Asn1Cert(c1), Asn1Cert(c2)];
+        let mut certificate_list = ArrayVec::new();
+        certificate_list.push(Asn1Cert(c1));
+        certificate_list.push(Asn1Cert(c2));
 
         let certificate = Certificate::new(certificate_list);
 

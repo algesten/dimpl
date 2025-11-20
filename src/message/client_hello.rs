@@ -4,6 +4,7 @@ use super::extensions::{
 };
 use super::{CipherSuite, CompressionMethod, ProtocolVersion};
 use super::{Cookie, Extension, ExtensionType, Random, SessionId};
+use arrayvec::ArrayVec;
 use nom::error::{Error, ErrorKind};
 use nom::Err;
 use nom::{
@@ -11,7 +12,6 @@ use nom::{
     number::complete::{be_u16, be_u8},
     IResult,
 };
-use tinyvec::ArrayVec;
 
 use crate::buffer::Buf;
 use crate::util::many1;
@@ -22,9 +22,9 @@ pub struct ClientHello<'a> {
     pub random: Random,
     pub session_id: SessionId,
     pub cookie: Cookie,
-    pub cipher_suites: ArrayVec<[CipherSuite; 32]>,
-    pub compression_methods: ArrayVec<[CompressionMethod; 4]>,
-    pub extensions: ArrayVec<[Extension<'a>; 16]>,
+    pub cipher_suites: ArrayVec<CipherSuite, 32>,
+    pub compression_methods: ArrayVec<CompressionMethod, 4>,
+    pub extensions: ArrayVec<Extension<'a>, 16>,
 }
 
 impl<'a> ClientHello<'a> {
@@ -33,8 +33,8 @@ impl<'a> ClientHello<'a> {
         random: Random,
         session_id: SessionId,
         cookie: Cookie,
-        cipher_suites: ArrayVec<[CipherSuite; 32]>,
-        compression_methods: ArrayVec<[CompressionMethod; 4]>,
+        cipher_suites: ArrayVec<CipherSuite, 32>,
+        compression_methods: ArrayVec<CompressionMethod, 4>,
     ) -> Self {
         ClientHello {
             client_version,
@@ -53,7 +53,7 @@ impl<'a> ClientHello<'a> {
         buf.clear();
 
         // First write all extension data
-        let mut ranges = ArrayVec::<[(ExtensionType, usize, usize); 8]>::new();
+        let mut ranges = ArrayVec::<(ExtensionType, usize, usize), 8>::new();
 
         // Check if we have any ECC-based cipher suites
         let has_ecc = self.cipher_suites.iter().any(|suite| suite.has_ecc());
@@ -153,7 +153,7 @@ impl<'a> ClientHello<'a> {
     }
 
     /// Parse extensions from the input
-    fn parse_extensions(input: &'a [u8]) -> IResult<&'a [u8], ArrayVec<[Extension<'a>; 16]>> {
+    fn parse_extensions(input: &'a [u8]) -> IResult<&'a [u8], ArrayVec<Extension<'a>, 16>> {
         let mut extensions = ArrayVec::new();
 
         // Early return if input is empty
@@ -223,8 +223,6 @@ impl<'a> ClientHello<'a> {
 
 #[cfg(test)]
 mod tests {
-    use tinyvec::array_vec;
-
     use super::*;
     use crate::buffer::Buf;
 
@@ -250,11 +248,11 @@ mod tests {
         let random = Random::parse(&MESSAGE[2..34]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
-        let cipher_suites = array_vec![
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-        ];
-        let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
+        let mut cipher_suites = ArrayVec::new();
+        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
+        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
+        let mut compression_methods = ArrayVec::new();
+        compression_methods.push(CompressionMethod::Null);
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,

@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use tinyvec::ArrayVec;
+use arrayvec::ArrayVec;
 
 use aws_lc_rs::hmac;
 use rand::random;
@@ -59,10 +59,10 @@ pub struct Server {
     negotiated_srtp_profile: Option<SrtpProfile>,
 
     /// Client's offered supported_groups (if any)
-    client_supported_groups: Option<ArrayVec<[NamedGroup; 16]>>,
+    client_supported_groups: Option<ArrayVec<NamedGroup, 16>>,
 
     /// Client's offered signature_algorithms (if any)
-    client_signature_algorithms: Option<ArrayVec<[SignatureAndHashAlgorithm; 32]>>,
+    client_signature_algorithms: Option<ArrayVec<SignatureAndHashAlgorithm, 32>>,
 
     /// Client random. Set by ClientHello.
     client_random: Option<Random>,
@@ -311,10 +311,9 @@ impl State {
 
         // Process client extensions: SRTP, EMS, SupportedGroups and SignatureAlgorithms
         let mut client_offers_ems = false;
-        let mut client_srtp_profiles: Option<ArrayVec<[SrtpProfileId; 32]>> = None;
-        let mut client_supported_groups: Option<ArrayVec<[NamedGroup; 16]>> = None;
-        let mut client_signature_algorithms: Option<ArrayVec<[SignatureAndHashAlgorithm; 32]>> =
-            None;
+        let mut client_srtp_profiles: Option<ArrayVec<SrtpProfileId, 32>> = None;
+        let mut client_supported_groups: Option<ArrayVec<NamedGroup, 16>> = None;
+        let mut client_signature_algorithms: Option<ArrayVec<SignatureAndHashAlgorithm, 32>> = None;
         for ext in ch.extensions {
             match ext.extension_type {
                 ExtensionType::UseSrtp => {
@@ -924,7 +923,7 @@ fn handshake_create_server_key_exchange(
 
 fn handshake_serialize_certificate_request(
     body: &mut Buf,
-    sig_algs: &ArrayVec<[SignatureAndHashAlgorithm; 32]>,
+    sig_algs: &ArrayVec<SignatureAndHashAlgorithm, 32>,
 ) -> Result<(), Error> {
     // Advertise RSA_SIGN and ECDSA_SIGN; empty CA list
     let mut cert_types = ArrayVec::new();
@@ -933,7 +932,7 @@ fn handshake_serialize_certificate_request(
 
     // If intersection is empty (e.g., client didn't advertise), fall back to our supported set
     // Build the selected list with the capacity expected by CertificateRequest
-    let mut selected: ArrayVec<[SignatureAndHashAlgorithm; 32]> = ArrayVec::new();
+    let mut selected: ArrayVec<SignatureAndHashAlgorithm, 32> = ArrayVec::new();
     if sig_algs.is_empty() {
         let fallback = SignatureAndHashAlgorithm::supported();
         for alg in fallback.iter() {
@@ -945,14 +944,14 @@ fn handshake_serialize_certificate_request(
         }
     }
 
-    let cert_auths: ArrayVec<[DistinguishedName<'static>; 32]> = ArrayVec::new();
+    let cert_auths: ArrayVec<DistinguishedName<'static>, 32> = ArrayVec::new();
 
     let cr = CertificateRequest::new(cert_types, selected, cert_auths);
     cr.serialize(body);
     Ok(())
 }
 
-fn select_named_curve(client_groups: Option<&ArrayVec<[NamedGroup; 16]>>) -> NamedCurve {
+fn select_named_curve(client_groups: Option<&ArrayVec<NamedGroup, 16>>) -> NamedCurve {
     // Server preference order
     let preferred = [NamedGroup::Secp256r1, NamedGroup::Secp384r1];
     if let Some(groups) = client_groups {
@@ -977,7 +976,7 @@ fn map_named_group_to_named_curve(group: NamedGroup) -> Option<NamedCurve> {
 }
 
 fn select_ske_signature_algorithm(
-    client_algs: Option<&ArrayVec<[SignatureAndHashAlgorithm; 32]>>,
+    client_algs: Option<&ArrayVec<SignatureAndHashAlgorithm, 32>>,
     our_sig: SignatureAlgorithm,
 ) -> SignatureAndHashAlgorithm {
     // Our hash preference order
@@ -1008,8 +1007,8 @@ fn engine_default_hash_for_sig(sig: SignatureAlgorithm) -> HashAlgorithm {
 }
 
 fn select_certificate_request_sig_algs(
-    client_algs: Option<&ArrayVec<[SignatureAndHashAlgorithm; 32]>>,
-) -> ArrayVec<[SignatureAndHashAlgorithm; 32]> {
+    client_algs: Option<&ArrayVec<SignatureAndHashAlgorithm, 32>>,
+) -> ArrayVec<SignatureAndHashAlgorithm, 32> {
     // Our supported set (RSA/ECDSA with SHA256/384)
     let ours = SignatureAndHashAlgorithm::supported();
 

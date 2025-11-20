@@ -1,6 +1,6 @@
 use crate::buffer::Buf;
+use arrayvec::ArrayVec;
 use nom::{number::complete::be_u16, IResult};
-use tinyvec::ArrayVec;
 
 /// Supported Groups (previously known as EllipticCurves) extension
 /// RFC 8422 Section 5.1.1
@@ -39,7 +39,7 @@ impl NamedGroup {
 /// SupportedGroups extension as defined in RFC 8422
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupportedGroupsExtension {
-    pub groups: ArrayVec<[NamedGroup; 16]>,
+    pub groups: ArrayVec<NamedGroup, 16>,
 }
 
 impl SupportedGroupsExtension {
@@ -84,15 +84,14 @@ impl SupportedGroupsExtension {
 mod tests {
     use super::*;
     use crate::buffer::Buf;
-    use tinyvec::array_vec;
 
     #[test]
     fn test_supported_groups_extension() {
-        let groups = array_vec![NamedGroup::X25519, NamedGroup::Secp256r1];
+        let mut groups = ArrayVec::new();
+        groups.push(NamedGroup::X25519);
+        groups.push(NamedGroup::Secp256r1);
 
-        let ext = SupportedGroupsExtension {
-            groups: groups.clone(),
-        };
+        let ext = SupportedGroupsExtension { groups };
 
         let mut serialized = Buf::new();
         ext.serialize(&mut serialized);
@@ -107,7 +106,7 @@ mod tests {
 
         let (_, parsed) = SupportedGroupsExtension::parse(&serialized).unwrap();
 
-        assert_eq!(parsed.groups, groups);
+        assert_eq!(parsed.groups.as_slice(), ext.groups.as_slice());
     }
 
     #[test]
@@ -124,8 +123,8 @@ mod tests {
 
         // Expect only the known groups in order as they appear
         assert_eq!(
-            parsed.groups,
-            array_vec![
+            parsed.groups.as_slice(),
+            &[
                 NamedGroup::X25519,
                 NamedGroup::Secp256r1,
                 NamedGroup::Secp384r1
