@@ -682,20 +682,23 @@ impl Engine {
         f(&mut body_buffer, self)?;
 
         // Create the handshake header with the next sequence number
-        let handshake = Handshake {
-            header: Header {
-                msg_type,
-                length: body_buffer.len() as u32,
-                message_seq: self.next_handshake_seq_no,
-                fragment_offset: 0,
-                fragment_length: body_buffer.len() as u32,
-            },
-            body: Body::Fragment(&body_buffer),
-            handled: AtomicBool::new(false),
+        let handshake_header = Header {
+            msg_type,
+            length: body_buffer.len() as u32,
+            message_seq: self.next_handshake_seq_no,
+            fragment_offset: 0,
+            fragment_length: body_buffer.len() as u32,
         };
 
         let mut buffer_full = self.buffers_free.pop();
-        handshake.serialize(&mut buffer_full);
+        {
+            let handshake = Handshake {
+                header: handshake_header,
+                body: Body::Fragment(&body_buffer),
+                handled: AtomicBool::new(false),
+            };
+            handshake.serialize(&mut buffer_full);
+        }
         self.transcript.extend_from_slice(&buffer_full);
         self.buffers_free.push(buffer_full);
 
@@ -752,8 +755,8 @@ impl Engine {
             let frag_handshake = Handshake {
                 header: Header {
                     msg_type,
-                    length: handshake.header.length,
-                    message_seq: handshake.header.message_seq,
+                    length: handshake_header.length,
+                    message_seq: handshake_header.message_seq,
                     fragment_offset: offset as u32,
                     fragment_length: chunk_len as u32,
                 },

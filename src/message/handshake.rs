@@ -14,7 +14,7 @@ use nom::{
     IResult,
 };
 
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
 pub struct Header {
     pub msg_type: MessageType,
     pub length: u32,
@@ -458,9 +458,8 @@ impl<'a> Body<'a> {
 
 #[cfg(test)]
 mod tests {
+    use arrayvec::ArrayVec;
     use std::collections::VecDeque;
-
-    use tinyvec::array_vec;
 
     use super::*;
     use crate::buffer::Buf;
@@ -516,11 +515,11 @@ mod tests {
         let random = Random::parse(&MESSAGE[14..46]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
-        let cipher_suites = array_vec![
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-        ];
-        let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
+        let mut cipher_suites = ArrayVec::new();
+        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
+        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
+        let mut compression_methods = ArrayVec::new();
+        compression_methods.push(CompressionMethod::Null);
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,
@@ -559,11 +558,11 @@ mod tests {
         let random = Random::parse(&MESSAGE[14..46]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
-        let cipher_suites = array_vec![
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-        ];
-        let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
+        let mut cipher_suites = ArrayVec::new();
+        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
+        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
+        let mut compression_methods = ArrayVec::new();
+        compression_methods.push(CompressionMethod::Null);
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,

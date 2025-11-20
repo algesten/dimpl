@@ -1,6 +1,6 @@
 use crate::buffer::Buf;
+use arrayvec::ArrayVec;
 use nom::{number::complete::be_u8, IResult};
-use tinyvec::ArrayVec;
 
 /// EC Point Format as defined in RFC 4492 Section 5.1.2
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -38,7 +38,7 @@ impl ECPointFormat {
 /// ECPointFormats extension as defined in RFC 4492
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ECPointFormatsExtension {
-    pub formats: ArrayVec<[ECPointFormat; 3]>,
+    pub formats: ArrayVec<ECPointFormat, 3>,
 }
 
 impl ECPointFormatsExtension {
@@ -83,18 +83,14 @@ impl ECPointFormatsExtension {
 mod tests {
     use super::*;
     use crate::buffer::Buf;
-    use tinyvec::array_vec;
 
     #[test]
     fn test_ec_point_formats_extension() {
-        let formats = array_vec![
-            ECPointFormat::Uncompressed,
-            ECPointFormat::AnsiX962CompressedPrime
-        ];
+        let mut formats = ArrayVec::new();
+        formats.push(ECPointFormat::Uncompressed);
+        formats.push(ECPointFormat::AnsiX962CompressedPrime);
 
-        let ext = ECPointFormatsExtension {
-            formats: formats.clone(),
-        };
+        let ext = ECPointFormatsExtension { formats };
 
         let mut serialized = Buf::new();
         ext.serialize(&mut serialized);
@@ -109,6 +105,6 @@ mod tests {
 
         let (_, parsed) = ECPointFormatsExtension::parse(&serialized).unwrap();
 
-        assert_eq!(parsed.formats, formats);
+        assert_eq!(parsed.formats.as_slice(), ext.formats.as_slice());
     }
 }

@@ -2,8 +2,8 @@
 
 use std::ops::Deref;
 
+use arrayvec::ArrayVec;
 use aws_lc_rs::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P384_SHA384_ASN1};
-use tinyvec::{array_vec, ArrayVec};
 
 // Internal module imports
 mod encryption;
@@ -156,7 +156,7 @@ pub struct CryptoContext {
     server_mac_key: Option<Buf>,
 
     /// Master secret
-    master_secret: Option<ArrayVec<[u8; 128]>>,
+    master_secret: Option<ArrayVec<u8, 128>>,
 
     /// Pre-master secret (temporary)
     pre_master_secret: Option<Buf>,
@@ -174,10 +174,10 @@ pub struct CryptoContext {
     private_key: ParsedKey,
 
     /// Client random (needed for SRTP key export per RFC 5705)
-    client_random: Option<ArrayVec<[u8; 32]>>,
+    client_random: Option<ArrayVec<u8, 32>>,
 
     /// Server random (needed for SRTP key export per RFC 5705)
-    server_random: Option<ArrayVec<[u8; 32]>>,
+    server_random: Option<ArrayVec<u8, 32>>,
 }
 
 impl CryptoContext {
@@ -304,11 +304,15 @@ impl CryptoContext {
 
         // Store the randoms for later SRTP key export (RFC 5705)
         let mut client_random_arr = ArrayVec::new();
-        client_random_arr.extend_from_slice(client_random);
+        client_random_arr
+            .try_extend_from_slice(client_random)
+            .expect("client_random too long");
         self.client_random = Some(client_random_arr);
 
         let mut server_random_arr = ArrayVec::new();
-        server_random_arr.extend_from_slice(server_random);
+        server_random_arr
+            .try_extend_from_slice(server_random)
+            .expect("server_random too long");
         self.server_random = Some(server_random_arr);
 
         // Key sizes depend on the cipher suite
@@ -432,7 +436,8 @@ impl CryptoContext {
     pub fn get_client_certificate(&self) -> Certificate {
         // We validate in constructor, so we can assume we have a certificate
         let cert = Asn1Cert(self.certificate.as_slice());
-        let certs = array_vec![[Asn1Cert; 32] => cert];
+        let mut certs = ArrayVec::new();
+        certs.push(cert);
         Certificate::new(certs)
     }
 
@@ -449,7 +454,7 @@ impl CryptoContext {
         handshake_hash: &[u8],
         is_client: bool,
         hash: HashAlgorithm,
-    ) -> Result<ArrayVec<[u8; 128]>, String> {
+    ) -> Result<ArrayVec<u8, 128>, String> {
         let master_secret = match &self.master_secret {
             Some(ms) => ms,
             None => return Err("No master secret available".to_string()),
@@ -471,7 +476,7 @@ impl CryptoContext {
         &self,
         profile: SrtpProfile,
         hash: HashAlgorithm,
-    ) -> Result<ArrayVec<[u8; 128]>, String> {
+    ) -> Result<ArrayVec<u8, 128>, String> {
         const DTLS_SRTP_KEY_LABEL: &str = "EXTRACTOR-dtls_srtp";
 
         let master_secret = match &self.master_secret {
@@ -491,9 +496,11 @@ impl CryptoContext {
 
         // Per RFC 5705, the exporter uses: PRF(master_secret, label, client_random + server_random)
         // The seed for DTLS-SRTP exporter is client_random + server_random (no additional context)
-        let mut seed = ArrayVec::<[u8; 64]>::new();
-        seed.extend_from_slice(client_random);
-        seed.extend_from_slice(server_random);
+        let mut seed = ArrayVec::<u8, 64>::new();
+        seed.try_extend_from_slice(client_random)
+            .expect("client_random too long");
+        seed.try_extend_from_slice(server_random)
+            .expect("server_random too long");
 
         let keying_material = prf_tls12(
             master_secret,

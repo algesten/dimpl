@@ -15,7 +15,7 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use tinyvec::{array_vec, ArrayVec};
+use arrayvec::ArrayVec;
 
 use crate::buffer::{Buf, ToBuf};
 use crate::engine::Engine;
@@ -80,7 +80,7 @@ pub struct Client {
 pub(crate) enum LocalEvent {
     PeerCert,
     Connected,
-    KeyingMaterial(ArrayVec<[u8; 128]>, SrtpProfile),
+    KeyingMaterial(ArrayVec<u8, 128>, SrtpProfile),
 }
 
 impl Client {
@@ -922,7 +922,7 @@ fn handshake_create_client_hello(
     let compatible_suites = CipherSuite::compatible_with_certificate(cert_type);
 
     // Offer only suites that are both allowed by Config and compatible with our key
-    let cipher_suites: ArrayVec<[CipherSuite; 32]> = compatible_suites
+    let cipher_suites: ArrayVec<CipherSuite, 32> = compatible_suites
         .iter()
         .copied()
         .filter(|suite| {
@@ -940,7 +940,8 @@ fn handshake_create_client_hello(
         cipher_suites.len()
     );
 
-    let compression_methods = array_vec![[CompressionMethod; 4] => CompressionMethod::Null];
+    let mut compression_methods = ArrayVec::new();
+    compression_methods.push(CompressionMethod::Null);
 
     // Create ClientHello with all required extensions
     let client_hello = ClientHello::new(
