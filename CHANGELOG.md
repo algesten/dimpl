@@ -1,5 +1,8 @@
 # Unreleased
 
+  * Replace self_cell with indexes #14
+  * Fix bug not retuning pooled Buf #14
+  * Replace tinyvec with arrayvec #14
   * Remove zeroize - for now #13
 
 # 0.1.4
