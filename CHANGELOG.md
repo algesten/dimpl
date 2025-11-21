@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Optimize parse speed using Box #14
   * Replace self_cell with indexes #14
   * Fix bug not retuning pooled Buf #14
   * Replace tinyvec with arrayvec #14

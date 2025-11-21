@@ -12,7 +12,9 @@ use crate::Error;
 
 /// Holds both the UDP packet and the parsed result of that packet.
 pub struct Incoming {
-    records: Records,
+    // Box is here to reduce the size of the Incoming struct
+    // to be passed in register instead of using memmove.
+    records: Box<Records>,
 }
 
 impl Incoming {
@@ -49,6 +51,8 @@ impl Incoming {
             return Ok(None);
         }
 
+        let records = Box::new(records);
+
         Ok(Some(Incoming { records }))
     }
 }
@@ -56,7 +60,7 @@ impl Incoming {
 /// A number of records parsed from a single UDP packet.
 #[derive(Debug)]
 pub struct Records {
-    pub records: ArrayVec<Record, 32>,
+    pub records: ArrayVec<Record, 8>,
 }
 
 impl Records {
@@ -107,7 +111,9 @@ impl Deref for Records {
 
 pub struct Record {
     buffer: Buf,
-    parsed: ParsedRecord,
+    // Box is here to reduce the size of the Record struct
+    // to be passed in register instead of using memmove.
+    parsed: Box<ParsedRecord>,
 }
 
 impl Record {
@@ -118,6 +124,7 @@ impl Record {
         let mut buffer = Buf::new();
         buffer.extend_from_slice(record_slice);
         let parsed = ParsedRecord::parse(&buffer, engine, 0)?;
+        let parsed = Box::new(parsed);
         let record = Record { buffer, parsed };
 
         // It is not enough to only look at the epoch, since to be able to decrypt the entire
@@ -164,6 +171,7 @@ impl Record {
         buffer[12] = new_len as u8;
 
         let parsed = ParsedRecord::parse(&buffer, engine, DTLS_EXPLICIT_NONCE_LEN)?;
+        let parsed = Box::new(parsed);
 
         Ok(Some(Record { buffer, parsed }))
     }
@@ -243,19 +251,6 @@ impl fmt::Debug for Record {
             .field("record", &self.parsed.record)
             .field("handshake", &self.parsed.handshake)
             .finish()
-    }
-}
-
-impl Default for Record {
-    fn default() -> Self {
-        Record {
-            buffer: Buf::new(),
-            parsed: ParsedRecord {
-                record: DTLSRecord::default(),
-                handshake: None,
-                handled: AtomicBool::new(false),
-            },
-        }
     }
 }
 
