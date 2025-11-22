@@ -4,7 +4,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{CipherSuite, Config, Dtls, Output, SignatureAlgorithm};
+use dimpl::crypto::{CipherSuite, SignatureAlgorithm};
+use dimpl::{Config, Dtls, Output};
 use ossl::{DtlsCertOptions, DtlsEvent, DtlsPKeyType, OsslDtlsCert};
 
 #[test]

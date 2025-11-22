@@ -1,9 +1,11 @@
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::crypto::CryptoProvider;
 use crate::message::CipherSuite;
 
 /// DTLS configuration
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Max transmission unit.
     ///
@@ -46,6 +48,12 @@ pub struct Config {
     ///
     /// Defaults to 40s.
     pub handshake_timeout: Duration,
+
+    /// Cryptographic provider.
+    ///
+    /// Provides all cryptographic operations (ciphers, key exchange, signing, etc.).
+    /// If None, uses the default aws-lc-rs provider.
+    pub crypto_provider: Option<Arc<CryptoProvider>>,
 }
 
 impl Default for Config {
@@ -59,6 +67,17 @@ impl Default for Config {
             flight_start_rto: Duration::from_secs(1),
             flight_retries: 4,
             handshake_timeout: Duration::from_secs(40),
+            crypto_provider: None,
         }
+    }
+}
+
+impl Config {
+    /// Set a custom crypto provider.
+    ///
+    /// If not set, the default aws-lc-rs provider will be used.
+    pub fn with_crypto_provider(mut self, provider: CryptoProvider) -> Self {
+        self.crypto_provider = Some(Arc::new(provider));
+        self
     }
 }
