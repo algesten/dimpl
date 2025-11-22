@@ -189,12 +189,10 @@ mod server;
 use server::Server;
 
 mod message;
-pub use message::{CipherSuite, SignatureAlgorithm};
 
 mod time_tricks;
 
-mod buffer;
-mod crypto;
+pub mod buffer;
 mod engine;
 mod incoming;
 mod window;
@@ -208,6 +206,7 @@ mod config;
 pub use config::Config;
 
 pub mod certificate;
+pub mod crypto;
 
 pub use crypto::{KeyingMaterial, SrtpProfile};
 

@@ -1,28 +1,20 @@
-use std::panic::UnwindSafe;
+//! Cipher suite implementations using aws-lc-rs.
 
 use aws_lc_rs::aead::{Aad as AwsAad, LessSafeKey, Nonce as AwsNonce};
 use aws_lc_rs::aead::{UnboundKey, AES_128_GCM, AES_256_GCM};
 
 use crate::buffer::{Buf, TmpBuf};
+use crate::crypto::provider::{Cipher, SupportedCipherSuite};
 use crate::crypto::{Aad, Nonce};
+use crate::message::{CipherSuite, HashAlgorithm};
 
-/// Cipher trait for DTLS encryption and decryption
-pub trait Cipher: Send + Sync + UnwindSafe {
-    /// Encrypt plaintext in-place
-    fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String>;
-
-    /// Decrypt ciphertext in-place
-    fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String>;
-}
-
-/// AES-GCM implementation using aws-lc-rs
-pub struct AesGcm {
+/// AES-GCM cipher implementation using aws-lc-rs.
+struct AesGcm {
     key: LessSafeKey,
 }
 
 impl AesGcm {
-    /// Create a new AES-GCM cipher with the specified key size
-    pub fn new(key: &[u8]) -> Result<Self, String> {
+    fn new(key: &[u8]) -> Result<Self, String> {
         let algorithm = match key.len() {
             16 => &AES_128_GCM,
             32 => &AES_256_GCM,
@@ -53,7 +45,6 @@ impl Cipher for AesGcm {
     }
 
     fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String> {
-        // Make sure we have enough data for the tag (16 bytes)
         if ciphertext.len() < 16 {
             return Err(format!("Ciphertext too short: {}", ciphertext.len()));
         }
@@ -68,10 +59,61 @@ impl Cipher for AesGcm {
             .open_in_place(aws_nonce, aws_aad, ciphertext.as_mut())
             .map_err(|_| "AES-GCM decryption failed".to_string())?;
 
-        // Truncate buffer to plaintext length (removes the tag)
         let plaintext_len = plaintext.len();
         ciphertext.truncate(plaintext_len);
 
         Ok(())
     }
 }
+
+/// TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 cipher suite.
+#[derive(Debug)]
+struct Aes128GcmSha256;
+
+impl SupportedCipherSuite for Aes128GcmSha256 {
+    fn suite(&self) -> CipherSuite {
+        CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA256
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        (0, 16, 4) // (mac_key_len, enc_key_len, fixed_iv_len)
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
+/// TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 cipher suite.
+#[derive(Debug)]
+struct Aes256GcmSha384;
+
+impl SupportedCipherSuite for Aes256GcmSha384 {
+    fn suite(&self) -> CipherSuite {
+        CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA384
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        (0, 32, 4) // (mac_key_len, enc_key_len, fixed_iv_len)
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
+/// Static instances of supported cipher suites.
+static AES_128_GCM_SHA256: Aes128GcmSha256 = Aes128GcmSha256;
+static AES_256_GCM_SHA384: Aes256GcmSha384 = Aes256GcmSha384;
+
+/// All supported cipher suites.
+pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedCipherSuite] =
+    &[&AES_128_GCM_SHA256, &AES_256_GCM_SHA384];
