@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::buffer::{Buf, BufferPool, TmpBuf};
-use crate::crypto::{Aad, CryptoContext, Hash};
-use crate::crypto::{Iv, DTLS_AEAD_OVERHEAD};
-use crate::crypto::{Nonce, DTLS_EXPLICIT_NONCE_LEN};
+use crate::crypto::dtls_aead::{Aad, Iv, DTLS_AEAD_OVERHEAD};
+use crate::crypto::dtls_aead::{Nonce, DTLS_EXPLICIT_NONCE_LEN};
+use crate::crypto::CryptoContext;
 use crate::incoming::{Incoming, Record};
 use crate::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
@@ -100,6 +100,9 @@ impl Engine {
         let flight_backoff =
             ExponentialBackoff::new(config.flight_start_rto, config.flight_retries);
 
+        let crypto_context =
+            CryptoContext::new(certificate, private_key, config.crypto_provider.clone());
+
         Self {
             config,
             buffers_free: BufferPool::default(),
@@ -108,7 +111,7 @@ impl Engine {
             queue_rx: VecDeque::new(),
             queue_tx: VecDeque::new(),
             cipher_suite: None,
-            crypto_context: CryptoContext::new(certificate, private_key),
+            crypto_context,
             peer_encryption_enabled: false,
             is_client: false,
             peer_handshake_seq_no: 0,
@@ -835,7 +838,7 @@ impl Engine {
     }
 
     pub fn transcript_hash(&self, algorithm: HashAlgorithm) -> Vec<u8> {
-        let mut hash = Hash::new(algorithm);
+        let mut hash = self.crypto_context.create_hash(algorithm);
         hash.update(&self.transcript);
         hash.clone_and_finalize()
     }

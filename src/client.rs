@@ -18,12 +18,13 @@ use std::time::Instant;
 use arrayvec::ArrayVec;
 
 use crate::buffer::{Buf, ToBuf};
+use crate::crypto::CipherSuite;
 use crate::engine::Engine;
 use crate::message::{Body, ClientHello, ClientKeyExchange};
 use crate::message::{CompressionMethod, ContentType, Cookie};
 use crate::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
-use crate::{CipherSuite, Error, KeyingMaterial, Output, Server, SrtpProfile};
+use crate::{Error, KeyingMaterial, Output, Server, SrtpProfile};
 
 /// DTLS client
 pub struct Client {

@@ -1,139 +1,52 @@
 //! Cryptographic primitives and helpers used by the DTLS engine.
 
 use std::ops::Deref;
+use std::sync::Arc;
 
 use arrayvec::ArrayVec;
-use aws_lc_rs::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P384_SHA384_ASN1};
 
 // Internal module imports
-mod encryption;
-mod hash;
-mod key_exchange;
+pub(crate) mod dtls_aead;
 mod keying;
-mod parsed_key;
-mod prf;
-mod signing;
 
-pub use encryption::{AesGcm, Cipher};
-pub use hash::Hash;
-pub use key_exchange::KeyExchange;
+// Provider traits and implementations
+pub mod aws_lc_rs;
+mod provider;
+
 pub use keying::{KeyingMaterial, SrtpProfile};
-pub use parsed_key::ParsedKey;
-pub use prf::calculate_extended_master_secret;
-pub use prf::{key_expansion, prf_tls12};
+
+// Re-export message enums needed for provider trait implementations
+pub use crate::message::{CipherSuite, HashAlgorithm, NamedCurve, SignatureAlgorithm};
+
+// Re-export all provider traits and types (similar to rustls structure)
+// This allows users to do: use dimpl::crypto::{CryptoProvider, SupportedCipherSuite, ...};
+pub use provider::{
+    ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext, HashProvider,
+};
+pub use provider::{KeyProvider, PrfProvider};
+pub use provider::{SecureRandom, SignatureVerifier, SigningKey};
+pub use provider::{SupportedCipherSuite, SupportedKxGroup};
 
 use crate::buffer::{Buf, TmpBuf, ToBuf};
-use crate::message::{Asn1Cert, Certificate, CipherSuite, ContentType, CurveType};
-use crate::message::{DigitallySigned, HashAlgorithm};
-use crate::message::{NamedCurve, Sequence, SignatureAlgorithm};
+use crate::message::DigitallySigned;
+use crate::message::{Asn1Cert, Certificate, CurveType};
 
-use der::Decode;
-use spki::ObjectIdentifier;
-use x509_cert::Certificate as X509Certificate;
-
-/// DTLS AEAD (AES-GCM) record formatting constants
-///
-/// For GCM ciphers in DTLS (RFC 6347 + RFC 5288):
-/// - Each encrypted record fragment starts with an 8-byte explicit nonce
-/// - The GCM authentication tag is 16 bytes and appended to the ciphertext
-/// - The AAD length is the plaintext length (TLSCompressed.length / DTLSCompressed.length)
-///
-/// Explicit nonce length for DTLS AEAD records.
-///
-/// The explicit nonce is transmitted with each record.
-pub const DTLS_EXPLICIT_NONCE_LEN: usize = 8;
-/// GCM authentication tag length.
-///
-/// The tag is appended to the ciphertext.
-pub const GCM_TAG_LEN: usize = 16;
-/// Overhead per AEAD record (explicit nonce + tag).
-///
-/// This equals 24 bytes for DTLS AES-GCM.
-pub const DTLS_AEAD_OVERHEAD: usize = DTLS_EXPLICIT_NONCE_LEN + GCM_TAG_LEN; // 24
-
-/// Return the AAD length given a plaintext length. For DTLS AEAD this is the plaintext length.
-#[inline]
-#[allow(dead_code)]
-/// Compute AAD length from plaintext length for AEAD records.
-pub fn aad_len_from_plaintext_len(plaintext_len: u16) -> u16 {
-    plaintext_len
-}
-
-/// Compute the DTLS record fragment length given a plaintext length for AEAD ciphers.
-/// fragment_len = explicit_nonce(8) + ciphertext(plaintext_len + 16 tag)
-#[inline]
-#[allow(dead_code)]
-/// Compute fragment length from plaintext length for AEAD records.
-pub fn fragment_len_from_plaintext_len(plaintext_len: usize) -> usize {
-    DTLS_EXPLICIT_NONCE_LEN + plaintext_len + GCM_TAG_LEN
-}
-
-/// Compute the plaintext length from a DTLS AEAD record fragment length.
-/// Returns None if the fragment is smaller than the mandatory AEAD overhead.
-#[inline]
-#[allow(dead_code)]
-/// Compute plaintext length from fragment length, if large enough.
-pub fn plaintext_len_from_fragment_len(fragment_len: usize) -> Option<usize> {
-    fragment_len.checked_sub(DTLS_AEAD_OVERHEAD)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Fixed IV portion for DTLS AEAD.
-pub struct Iv(pub [u8; 4]);
-impl Iv {
-    fn new(iv: &[u8]) -> Self {
-        // invariant: the iv is 4 bytes.
-        Self(iv.try_into().unwrap())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Full AEAD nonce (fixed IV + explicit nonce).
-pub struct Nonce(pub [u8; 12]);
-
-impl Nonce {
-    pub fn new(iv: Iv, explicit_nonce: &[u8]) -> Self {
-        let mut nonce = [0u8; 12];
-        nonce[..4].copy_from_slice(&iv.0);
-        nonce[4..].copy_from_slice(explicit_nonce);
-        Self(nonce)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Additional Authenticated Data for DTLS records.
-pub struct Aad(pub [u8; 13]);
-
-impl Aad {
-    pub fn new(content_type: ContentType, sequence: Sequence, length: u16) -> Self {
-        // Exactly match the format used in the working dtls implementation
-        let mut aad = [0u8; 13];
-
-        // First set the full 8-byte sequence number
-        aad[..8].copy_from_slice(&sequence.sequence_number.to_be_bytes());
-
-        // Then overwrite the first 2 bytes with epoch
-        aad[..2].copy_from_slice(&sequence.epoch.to_be_bytes());
-
-        // Content type at index 8
-        aad[8] = content_type.as_u8();
-
-        // Protocol version bytes (major:minor) at indexes 9-10
-        aad[9] = 0xfe; // DTLS 1.2 major version
-        aad[10] = 0xfd; // DTLS 1.2 minor version
-
-        // Payload length (2 bytes) at indexes 11-12
-        aad[11..].copy_from_slice(&length.to_be_bytes());
-
-        Aad(aad)
-    }
-}
+use dtls_aead::{Aad, Iv, Nonce};
 
 /// DTLS crypto context
 /// Crypto context holding negotiated keys and ciphers for a DTLS session.
-pub struct CryptoContext {
+pub(crate) struct CryptoContext {
+    /// Crypto provider
+    provider: Arc<provider::CryptoProvider>,
+
     /// Key exchange mechanism
-    key_exchange: Option<KeyExchange>,
+    key_exchange: Option<Box<dyn provider::ActiveKeyExchange>>,
+
+    /// Our public key from the key exchange (stored for reuse)
+    key_exchange_public_key: Option<Vec<u8>>,
+
+    /// Curve info from the key exchange (stored for reuse)
+    key_exchange_curve: Option<NamedCurve>,
 
     /// Client write key
     client_write_key: Option<Buf>,
@@ -160,16 +73,16 @@ pub struct CryptoContext {
     pre_master_secret: Option<Buf>,
 
     /// Client cipher
-    client_cipher: Option<Box<dyn Cipher>>,
+    client_cipher: Option<Box<dyn provider::Cipher>>,
 
     /// Server cipher
-    server_cipher: Option<Box<dyn Cipher>>,
+    server_cipher: Option<Box<dyn provider::Cipher>>,
 
     /// Certificate (DER format)
     certificate: Vec<u8>,
 
     /// Parsed private key for the certificate with signature algorithm
-    private_key: ParsedKey,
+    private_key: Arc<dyn provider::SigningKey>,
 
     /// Client random (needed for SRTP key export per RFC 5705)
     client_random: Option<ArrayVec<u8, 32>>,
@@ -180,22 +93,34 @@ pub struct CryptoContext {
 
 impl CryptoContext {
     /// Create a new crypto context
-    pub fn new(certificate: Vec<u8>, private_key: Vec<u8>) -> Self {
+    pub fn new(
+        certificate: Vec<u8>,
+        private_key_bytes: Vec<u8>,
+        provider: Option<Arc<provider::CryptoProvider>>,
+    ) -> Self {
         // Validate that we have a certificate and private key
         if certificate.is_empty() {
             panic!("Client certificate cannot be empty");
         }
 
-        if private_key.is_empty() {
+        if private_key_bytes.is_empty() {
             panic!("Client private key cannot be empty");
         }
 
-        // Parse the private key
-        let private_key =
-            ParsedKey::try_parse_key(&private_key).expect("Failed to parse client private key");
+        // Use provided provider or default to aws_lc_rs
+        let provider = provider.unwrap_or_else(|| Arc::new(aws_lc_rs::default_provider()));
+
+        // Parse the private key using the provider
+        let private_key = provider
+            .key_provider
+            .load_private_key(&private_key_bytes)
+            .expect("Failed to parse client private key");
 
         CryptoContext {
+            provider,
             key_exchange: None,
+            key_exchange_public_key: None,
+            key_exchange_curve: None,
             client_write_key: None,
             server_write_key: None,
             client_write_iv: None,
@@ -215,32 +140,46 @@ impl CryptoContext {
 
     /// Generate key exchange public key
     pub fn maybe_init_key_exchange(&mut self) -> Result<&[u8], String> {
-        match &mut self.key_exchange {
-            Some(ke) => Ok(ke.maybe_init()),
+        // If we already have the public key stored, return it
+        if let Some(ref pk) = self.key_exchange_public_key {
+            return Ok(pk);
+        }
+
+        // Otherwise, get it from the key exchange and store it
+        match &self.key_exchange {
+            Some(ke) => {
+                let pub_key = ke.pub_key().to_vec();
+                let curve = ke.group();
+                self.key_exchange_public_key = Some(pub_key);
+                self.key_exchange_curve = Some(curve);
+                Ok(self.key_exchange_public_key.as_ref().unwrap())
+            }
             None => Err("Key exchange not initialized".to_string()),
         }
     }
 
     /// Process peer's public key and compute shared secret
     pub fn compute_shared_secret(&mut self, peer_public_key: &[u8]) -> Result<(), String> {
-        match &mut self.key_exchange {
-            Some(ke) => {
-                self.pre_master_secret = Some(ke.compute_shared_secret(peer_public_key)?);
-                Ok(())
-            }
-            None => Err("Key exchange not initialized".to_string()),
-        }
+        let ke = self
+            .key_exchange
+            .take()
+            .ok_or_else(|| "Key exchange not initialized".to_string())?;
+        self.pre_master_secret = Some(ke.complete(peer_public_key)?);
+        // Note: we keep key_exchange_public_key since it may be needed later
+        Ok(())
     }
 
     /// Initialize ECDHE key exchange (server role) and return our ephemeral public key
     pub fn init_ecdh_server(&mut self, named_curve: NamedCurve) -> Result<&[u8], String> {
-        // Only support P-256 and P-384 for now
-        match named_curve {
-            NamedCurve::Secp256r1 | NamedCurve::Secp384r1 => {}
-            _ => return Err("Unsupported ECDHE named curve".to_string()),
-        }
+        // Find the matching key exchange group from the provider
+        let kx_group = self
+            .provider
+            .kx_groups
+            .iter()
+            .find(|g| g.name() == named_curve)
+            .ok_or_else(|| format!("Unsupported ECDHE named curve: {:?}", named_curve))?;
 
-        self.key_exchange = Some(KeyExchange::new_ecdh(named_curve));
+        self.key_exchange = Some(kx_group.start_exchange()?);
         self.maybe_init_key_exchange()
     }
 
@@ -250,14 +189,16 @@ impl CryptoContext {
         curve: NamedCurve,
         server_public: &[u8],
     ) -> Result<(), String> {
-        // Only support P-256 and P-384
-        match curve {
-            NamedCurve::Secp256r1 | NamedCurve::Secp384r1 => {}
-            _ => return Err("Unsupported ECDHE named curve".to_string()),
-        }
+        // Find the matching key exchange group from the provider
+        let kx_group = self
+            .provider
+            .kx_groups
+            .iter()
+            .find(|g| g.name() == curve)
+            .ok_or_else(|| format!("Unsupported ECDHE named curve: {:?}", curve))?;
 
         // Create a new ECDH key exchange
-        self.key_exchange = Some(KeyExchange::new_ecdh(curve));
+        self.key_exchange = Some(kx_group.start_exchange()?);
 
         // Generate our keypair
         let _our_public = self.maybe_init_key_exchange()?;
@@ -278,7 +219,18 @@ impl CryptoContext {
         let Some(pms) = &self.pre_master_secret else {
             return Err("Pre-master secret not available".to_string());
         };
-        self.master_secret = Some(calculate_extended_master_secret(pms, session_hash, hash)?);
+        let master_secret_vec = self.provider.prf_provider.prf_tls12(
+            pms,
+            "extended master secret",
+            session_hash,
+            48,
+            hash,
+        )?;
+        let mut master_secret = ArrayVec::new();
+        master_secret
+            .try_extend_from_slice(&master_secret_vec)
+            .map_err(|_| "Master secret too long".to_string())?;
+        self.master_secret = Some(master_secret);
         // Clear pre-master secret after use (security measure)
         self.pre_master_secret = None;
         Ok(())
@@ -308,25 +260,30 @@ impl CryptoContext {
             .expect("server_random too long");
         self.server_random = Some(server_random_arr);
 
-        // Key sizes depend on the cipher suite
-        let (mac_key_len, enc_key_len, fixed_iv_len) = match cipher_suite {
-            // AES-128-GCM suites
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => (0, 16, 4),
+        // Find the cipher suite from the provider
+        let supported_cipher_suite = self
+            .provider
+            .cipher_suites
+            .iter()
+            .find(|cs| cs.suite() == cipher_suite)
+            .ok_or_else(|| format!("Unsupported cipher suite: {:?}", cipher_suite))?;
 
-            // AES-256-GCM suites
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => (0, 32, 4),
-
-            _ => return Err("Unsupported cipher suite for key derivation".to_string()),
-        };
+        // Get key sizes from the provider
+        let (mac_key_len, enc_key_len, fixed_iv_len) = supported_cipher_suite.key_lengths();
 
         // Calculate total key material length
         let key_material_len = 2 * (mac_key_len + enc_key_len + fixed_iv_len);
 
-        // Generate key material
-        let key_block = key_expansion(
+        // Compute seed for key expansion: server_random + client_random
+        let mut seed = Vec::with_capacity(server_random.len() + client_random.len());
+        seed.extend_from_slice(server_random);
+        seed.extend_from_slice(client_random);
+
+        // Generate key material using PRF
+        let key_block = self.provider.prf_provider.prf_tls12(
             master_secret,
-            client_random,
-            server_random,
+            "key expansion",
+            &seed,
             key_material_len,
             cipher_suite.hash_algorithm(),
         )?;
@@ -353,24 +310,14 @@ impl CryptoContext {
         offset += fixed_iv_len;
         self.server_write_iv = Some(Iv::new(&key_block[offset..offset + fixed_iv_len]));
 
-        // Initialize ciphers
-        match cipher_suite {
-            // AES-GCM suites
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-            | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => {
-                // AES-GCM ciphers
-                self.client_cipher = Some(Box::new(AesGcm::new(
-                    self.client_write_key.as_ref().unwrap(),
-                )?));
+        // Initialize ciphers using the provider
+        self.client_cipher =
+            Some(supported_cipher_suite.create_cipher(self.client_write_key.as_ref().unwrap())?);
 
-                self.server_cipher = Some(Box::new(AesGcm::new(
-                    self.server_write_key.as_ref().unwrap(),
-                )?));
+        self.server_cipher =
+            Some(supported_cipher_suite.create_cipher(self.server_write_key.as_ref().unwrap())?);
 
-                Ok(())
-            }
-            _ => Err("Unsupported cipher suite".to_string()),
-        }
+        Ok(())
     }
 
     /// Encrypt data (client to server)
@@ -444,8 +391,7 @@ impl CryptoContext {
     /// Sign the provided data using the client's private key
     /// Returns the signature or an error if signing fails
     pub fn sign_data(&self, data: &[u8], _hash_alg: HashAlgorithm) -> Result<Vec<u8>, String> {
-        // Use the signing module to sign the data
-        signing::sign_data(&self.private_key, data)
+        self.private_key.sign(data)
     }
 
     /// Generate verify data for a Finished message using PRF
@@ -467,7 +413,15 @@ impl CryptoContext {
         };
 
         // Generate 12 bytes of verify data using PRF
-        prf_tls12(master_secret, label, handshake_hash, 12, hash)
+        let verify_data_vec =
+            self.provider
+                .prf_provider
+                .prf_tls12(master_secret, label, handshake_hash, 12, hash)?;
+        let mut verify_data = ArrayVec::new();
+        verify_data
+            .try_extend_from_slice(&verify_data_vec)
+            .map_err(|_| "Verify data too long".to_string())?;
+        Ok(verify_data)
     }
 
     /// Extract SRTP keying material from the master secret
@@ -502,49 +456,61 @@ impl CryptoContext {
         seed.try_extend_from_slice(server_random)
             .expect("server_random too long");
 
-        let keying_material = prf_tls12(
+        let keying_material_vec = self.provider.prf_provider.prf_tls12(
             master_secret,
             DTLS_SRTP_KEY_LABEL,
             &seed,
             profile.keying_material_len(),
             hash,
         )?;
+        let mut keying_material = ArrayVec::new();
+        keying_material
+            .try_extend_from_slice(&keying_material_vec)
+            .map_err(|_| "Keying material too long".to_string())?;
 
         Ok(keying_material)
     }
 
     /// Get curve info for ECDHE key exchange
     pub fn get_key_exchange_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
+        // Use stored curve if available (after key exchange is consumed)
+        if let Some(curve) = self.key_exchange_curve {
+            return Some((CurveType::NamedCurve, curve));
+        }
+
+        // Otherwise get it from the active key exchange
         let Some(ke) = &self.key_exchange else {
             return None;
         };
-        ke.get_curve_info()
+        Some((CurveType::NamedCurve, ke.group()))
     }
 
     /// Signature algorithm for the configured private key
     pub fn signature_algorithm(&self) -> SignatureAlgorithm {
-        self.private_key.signature_algorithm()
+        self.private_key.algorithm()
     }
 
     /// Default hash algorithm for the configured private key
     pub fn private_key_default_hash_algorithm(&self) -> HashAlgorithm {
-        self.private_key.default_hash_algorithm()
+        self.private_key.hash_algorithm()
     }
 
-    /// Check if the client's private key is compatible with a given cipher suite
-    /// Whether the configured private key is compatible with the cipher suite
+    /// Create a hash context for the given algorithm
+    pub fn create_hash(&self, algorithm: HashAlgorithm) -> Box<dyn provider::HashContext> {
+        self.provider.hash_provider.create_hash(algorithm)
+    }
+
+    /// Check if the client's private key is compatible with a given cipher suite.
     pub fn is_cipher_suite_compatible(&self, cipher_suite: CipherSuite) -> bool {
         self.private_key.is_compatible(cipher_suite)
     }
 
-    /// Get client write IV
-    /// Get the client write IV if derived
+    /// Get the client write IV if derived.
     pub fn get_client_write_iv(&self) -> Option<Iv> {
         self.client_write_iv
     }
 
-    /// Get server write IV
-    /// Get the server write IV if derived
+    /// Get the server write IV if derived.
     pub fn get_server_write_iv(&self) -> Option<Iv> {
         self.server_write_iv
     }
@@ -557,86 +523,12 @@ impl CryptoContext {
         signature_buf: &[u8],
         cert_der: &[u8],
     ) -> Result<(), String> {
-        // Parse the server certificate to extract SubjectPublicKeyInfo
-        let cert = X509Certificate::from_der(cert_der)
-            .map_err(|e| format!("Failed to parse server certificate: {e}"))?;
-        let spki = &cert.tbs_certificate.subject_public_key_info;
-
-        // OIDs we care about
-        // id-ecPublicKey: 1.2.840.10045.2.1
-        const OID_EC_PUBLIC_KEY: ObjectIdentifier =
-            ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
-
-        let alg_oid = spki.algorithm.oid;
-
-        match alg_oid {
-            OID_EC_PUBLIC_KEY => {
-                // Signature type must be ECDSA
-                if signature.algorithm.signature != SignatureAlgorithm::ECDSA {
-                    return Err("Signature algorithm mismatch: expected ECDSA".to_string());
-                }
-
-                // Extract uncompressed EC point bytes
-                let pubkey_bytes = spki
-                    .subject_public_key
-                    .as_bytes()
-                    .ok_or_else(|| "Invalid EC subject_public_key bitstring".to_string())?;
-
-                // Determine the algorithm based on hash and key size
-                let algorithm = match signature.algorithm.hash {
-                    HashAlgorithm::SHA256 => {
-                        // P-256 with SHA-256
-                        &ECDSA_P256_SHA256_ASN1
-                    }
-                    HashAlgorithm::SHA384 => {
-                        // P-384 with SHA-384
-                        &ECDSA_P384_SHA384_ASN1
-                    }
-                    _ => {
-                        return Err(format!(
-                            "Unsupported hash algorithm for ECDSA: {:?}",
-                            signature.algorithm.hash
-                        ));
-                    }
-                };
-
-                let public_key = UnparsedPublicKey::new(algorithm, pubkey_bytes);
-
-                public_key
-                    .verify(data, signature.signature(signature_buf))
-                    .map_err(|_| {
-                        format!(
-                            "ECDSA signature verification failed for {:?}",
-                            signature.algorithm.hash
-                        )
-                    })
-            }
-            other => Err(format!(
-                "Unsupported public key algorithm OID in certificate: {other}"
-            )),
-        }
-    }
-}
-
-impl CipherSuite {
-    /// Return (mac_key_len, enc_key_len, fixed_iv_len) for this suite.
-    pub fn key_length(&self) -> (usize, usize, usize) {
-        match self {
-            // AES-128-GCM suites
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => (0, 16, 4),
-
-            // AES-256-GCM suites
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => (0, 32, 4),
-
-            CipherSuite::Unknown(_) => (0, 32, 4), // Default to AES-256-GCM
-        }
-    }
-
-    /// Whether this suite is an AEAD GCM cipher.
-    pub fn is_gcm(&self) -> bool {
-        matches!(
-            self,
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+        self.provider.signature_verification.verify_signature(
+            cert_der,
+            data,
+            signature.signature(signature_buf),
+            signature.algorithm.hash,
+            signature.algorithm.signature,
         )
     }
 }
@@ -652,33 +544,5 @@ impl Deref for Nonce {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn aead_constants_and_length_helpers() {
-        assert_eq!(DTLS_EXPLICIT_NONCE_LEN, 8);
-        assert_eq!(GCM_TAG_LEN, 16);
-        assert_eq!(DTLS_AEAD_OVERHEAD, 24);
-
-        for &pt_len in &[0usize, 1, 37, 512, 1350, 16384] {
-            let aad_len = aad_len_from_plaintext_len(pt_len as u16);
-            assert_eq!(aad_len as usize, pt_len);
-
-            let frag_len = fragment_len_from_plaintext_len(pt_len);
-            assert_eq!(frag_len, DTLS_EXPLICIT_NONCE_LEN + pt_len + GCM_TAG_LEN);
-
-            let roundtrip =
-                plaintext_len_from_fragment_len(frag_len).expect("frag_len >= overhead");
-            assert_eq!(roundtrip, pt_len);
-        }
-
-        assert!(plaintext_len_from_fragment_len(0).is_none());
-        assert!(plaintext_len_from_fragment_len(3).is_none());
-        assert!(plaintext_len_from_fragment_len(DTLS_AEAD_OVERHEAD - 1).is_none());
     }
 }

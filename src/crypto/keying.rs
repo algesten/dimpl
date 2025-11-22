@@ -36,9 +36,7 @@ pub enum SrtpProfile {
     AeadAes256Gcm,
 }
 
-#[allow(dead_code)]
 impl SrtpProfile {
-    // All the profiles we support, ordered from most preferred to least.
     /// All supported profiles ordered by preference.
     pub const ALL: &'static [SrtpProfile] = &[
         SrtpProfile::AeadAes256Gcm,
