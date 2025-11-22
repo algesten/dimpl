@@ -364,16 +364,27 @@ impl SignatureAlgorithm {
     }
 }
 
+/// Hash algorithms used in TLS 1.2 (RFC 5246).
+///
+/// Specifies the hash algorithm to be used in digital signatures and PRF operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum HashAlgorithm {
+    /// No hash (not used in DTLS 1.2).
     None,
+    /// MD5 hash (deprecated, not supported).
     MD5,
+    /// SHA-1 hash (deprecated, not supported).
     SHA1,
+    /// SHA-224 hash.
     SHA224,
+    /// SHA-256 hash (supported by dimpl).
     SHA256,
+    /// SHA-384 hash (supported by dimpl).
     SHA384,
+    /// SHA-512 hash.
     SHA512,
+    /// Unknown or unsupported hash algorithm.
     Unknown(u8),
 }
 
@@ -384,6 +395,7 @@ impl Default for HashAlgorithm {
 }
 
 impl HashAlgorithm {
+    /// Convert a wire format u8 value to a `HashAlgorithm`.
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => HashAlgorithm::None,
@@ -397,6 +409,7 @@ impl HashAlgorithm {
         }
     }
 
+    /// Convert this `HashAlgorithm` to its wire format u8 value.
     pub fn as_u8(&self) -> u8 {
         match self {
             HashAlgorithm::None => 0,
@@ -410,6 +423,7 @@ impl HashAlgorithm {
         }
     }
 
+    /// Parse a `HashAlgorithm` from wire format.
     pub fn parse(input: &[u8]) -> IResult<&[u8], HashAlgorithm> {
         let (input, value) = be_u8(input)?;
         Ok((input, HashAlgorithm::from_u8(value)))

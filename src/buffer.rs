@@ -1,7 +1,18 @@
+//! Buffer management for efficient memory reuse.
+//!
+//! This module provides buffer types used throughout dimpl for managing byte data
+//! with minimal allocations. The [`BufferPool`] allows reusing buffers, and [`Buf`]
+//! wraps `Vec<u8>` with convenient operations for protocol data handling.
+
 use std::collections::VecDeque;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
+/// Buffer pool for reusing allocated buffers.
+///
+/// This pool manages a collection of reusable `Buf` instances to reduce allocations
+/// during DTLS operations. Buffers are returned to the pool when no longer needed
+/// and can be reused for subsequent operations.
 #[derive(Default)]
 pub struct BufferPool {
     free: VecDeque<Buf>,
@@ -34,30 +45,40 @@ impl fmt::Debug for BufferPool {
     }
 }
 
+/// Growable buffer wrapper used throughout dimpl for efficient memory management.
+///
+/// This is a newtype around `Vec<u8>` that provides convenient access to byte buffers
+/// and integrates with dimpl's buffer pooling system.
 #[derive(Default)]
 pub struct Buf(Vec<u8>);
 
 impl Buf {
+    /// Create a new empty buffer.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Clear the buffer, removing all data.
     pub fn clear(&mut self) {
         self.0.clear();
     }
 
+    /// Extend the buffer with a slice of bytes.
     pub fn extend_from_slice(&mut self, other: &[u8]) {
         self.0.extend_from_slice(other);
     }
 
+    /// Push a single byte onto the buffer.
     pub fn push(&mut self, byte: u8) {
         self.0.push(byte);
     }
 
+    /// Resize the buffer to the specified length, filling with the given value.
     pub fn resize(&mut self, len: usize, value: u8) {
         self.0.resize(len, value);
     }
 
+    /// Convert the buffer into the underlying `Vec<u8>`.
     pub fn into_vec(mut self) -> Vec<u8> {
         std::mem::take(&mut self.0)
     }
@@ -102,7 +123,9 @@ impl fmt::Debug for Buf {
     }
 }
 
+/// Trait for types that can be converted into a `Buf`.
 pub trait ToBuf {
+    /// Convert this value into a `Buf`.
     fn to_buf(self) -> Buf;
 }
 
@@ -118,9 +141,14 @@ impl ToBuf for &[u8] {
     }
 }
 
+/// Temporary mutable buffer wrapper for in-place operations.
+///
+/// Used primarily for decryption operations where data needs to be modified in-place.
+/// Provides mutable access to a slice with tracked length.
 pub struct TmpBuf<'a>(&'a mut [u8], usize);
 
 impl<'a> TmpBuf<'a> {
+    /// Create a new temporary buffer from a mutable slice.
     pub fn new(buf: &'a mut [u8]) -> Self {
         Self(buf, buf.len())
     }

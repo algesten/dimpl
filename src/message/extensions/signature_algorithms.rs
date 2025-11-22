@@ -59,8 +59,8 @@ impl SignatureAlgorithmsExtension {
 
 #[cfg(test)]
 mod tests {
+    use crate::crypto::SignatureAlgorithm;
     use crate::message::HashAlgorithm;
-    use crate::SignatureAlgorithm;
 
     use super::*;
 
