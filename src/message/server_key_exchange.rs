@@ -1,4 +1,4 @@
-use super::{CurveType, DigitallySigned, KeyExchangeAlgorithm, NamedCurve};
+use super::{CurveType, DigitallySigned, KeyExchangeAlgorithm, NamedGroup};
 use crate::buffer::Buf;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
@@ -51,7 +51,7 @@ impl ServerKeyExchange {
 #[derive(Debug, PartialEq, Eq)]
 pub struct EcdhParams {
     pub curve_type: CurveType,
-    pub named_curve: NamedCurve,
+    pub named_group: NamedGroup,
     pub public_key_range: Range<usize>,
     pub signature: Option<DigitallySigned>,
 }
@@ -64,7 +64,7 @@ impl EcdhParams {
     pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], EcdhParams> {
         let original_input = input;
         let (input, curve_type) = CurveType::parse(input)?;
-        let (input, named_curve) = NamedCurve::parse(input)?;
+        let (input, named_group) = NamedGroup::parse(input)?;
 
         // First byte is the length of the public key
         let (input, public_key_len) = be_u8(input)?;
@@ -91,7 +91,7 @@ impl EcdhParams {
             input,
             EcdhParams {
                 curve_type,
-                named_curve,
+                named_group,
                 public_key_range,
                 signature,
             },
@@ -101,7 +101,7 @@ impl EcdhParams {
     pub fn serialize(&self, buf: &[u8], output: &mut Buf, with_signature: bool) {
         let public_key = self.public_key(buf);
         output.push(self.curve_type.as_u8());
-        output.extend_from_slice(&self.named_curve.as_u16().to_be_bytes());
+        output.extend_from_slice(&self.named_group.as_u16().to_be_bytes());
         output.push(public_key.len() as u8);
         output.extend_from_slice(public_key);
 
@@ -121,7 +121,7 @@ mod test {
 
     const MESSAGE_ECDH_PUBKEY: &[u8] = &[
         0x03, // curve_type
-        0x00, 0x17, // named_curve
+        0x00, 0x17, // named_group
         0x04, // public_key length
         0x01, 0x02, 0x03, 0x04, // public_key
     ];

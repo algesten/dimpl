@@ -1,41 +1,8 @@
 use crate::buffer::Buf;
 use crate::crypto::CryptoProvider;
+use crate::message::NamedGroup;
 use arrayvec::ArrayVec;
-use nom::{number::complete::be_u16, IResult};
-
-/// Supported Groups (previously known as EllipticCurves) extension
-/// RFC 8422 Section 5.1.1
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum NamedGroup {
-    #[default]
-    Secp256r1 = 0x0017, // NIST P-256
-    Secp384r1 = 0x0018, // NIST P-384
-    Secp521r1 = 0x0019, // NIST P-521
-    X25519 = 0x001D,    // Curve25519
-    X448 = 0x001E,      // Curve448
-}
-
-impl NamedGroup {
-    pub fn parse_opt(input: &[u8]) -> IResult<&[u8], Option<NamedGroup>> {
-        let (input, value) = be_u16(input)?;
-        Ok((input, NamedGroup::from_u16(value)))
-    }
-
-    fn from_u16(value: u16) -> Option<Self> {
-        match value {
-            0x0017 => Some(NamedGroup::Secp256r1),
-            0x0018 => Some(NamedGroup::Secp384r1),
-            0x0019 => Some(NamedGroup::Secp521r1),
-            0x001D => Some(NamedGroup::X25519),
-            0x001E => Some(NamedGroup::X448),
-            _ => None,
-        }
-    }
-
-    pub fn as_u16(&self) -> u16 {
-        *self as u16
-    }
-}
+use nom::IResult;
 
 /// SupportedGroups extension as defined in RFC 8422
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,31 +13,25 @@ pub struct SupportedGroupsExtension {
 impl SupportedGroupsExtension {
     /// Create a SupportedGroupsExtension from a crypto provider
     pub fn from_provider(provider: &CryptoProvider) -> Self {
-        use crate::message::NamedCurve;
-
         let mut groups = ArrayVec::new();
         for kx_group in provider.supported_kx_groups() {
-            let group = match kx_group.name() {
-                NamedCurve::Secp256r1 => NamedGroup::Secp256r1,
-                NamedCurve::Secp384r1 => NamedGroup::Secp384r1,
-                _ => continue,
-            };
-            groups.push(group);
+            groups.push(kx_group.name());
         }
         SupportedGroupsExtension { groups }
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], SupportedGroupsExtension> {
-        let (mut input, list_len) = be_u16(input)?;
+        let (mut input, list_len) = nom::number::complete::be_u16(input)?;
         let mut groups = ArrayVec::new();
         let mut remaining = list_len as usize;
 
-        // Parse groups; ignore unknown/unsupported ones (delegating to NamedGroup)
+        // Parse groups; only include known groups (ignore Unknown variants)
         while remaining >= 2 {
-            let (rest, maybe_group) = NamedGroup::parse_opt(input)?;
+            let (rest, group) = NamedGroup::parse(input)?;
             input = rest;
             remaining -= 2;
-            if let Some(group) = maybe_group {
+            // Only add known groups (skip Unknown variants)
+            if !matches!(group, NamedGroup::Unknown(_)) {
                 groups.push(group);
             }
         }

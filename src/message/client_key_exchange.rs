@@ -1,5 +1,5 @@
 use super::KeyExchangeAlgorithm;
-use super::{CurveType, NamedCurve};
+use super::{CurveType, NamedGroup};
 use crate::buffer::Buf;
 use nom::bytes::complete::take;
 use nom::error::Error;
@@ -21,7 +21,7 @@ pub enum ExchangeKeys {
 #[derive(Debug, PartialEq, Eq)]
 pub struct ClientEcdhKeys {
     pub curve_type: CurveType,
-    pub named_curve: NamedCurve,
+    pub named_group: NamedGroup,
     pub public_key_range: Range<usize>,
 }
 
@@ -39,10 +39,10 @@ impl ClientEcdhKeys {
         Ok((
             input,
             ClientEcdhKeys {
-                // In ClientKeyExchange, we don't include curve_type and named_curve
+                // In ClientKeyExchange, we don't include curve_type and named_group
                 // since they're already established during ServerKeyExchange
                 curve_type: CurveType::NamedCurve,  // Default
-                named_curve: NamedCurve::Secp256r1, // Default
+                named_group: NamedGroup::Secp256r1, // Default
                 public_key_range: start..end,
             },
         ))
@@ -54,7 +54,7 @@ impl ClientEcdhKeys {
 
     pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
         // For client key exchange, we only need to include the public key length and value
-        // The curve_type and named_curve are already established during ServerKeyExchange
+        // The curve_type and named_group are already established during ServerKeyExchange
         let public_key = self.public_key(buf);
         output.push(public_key.len() as u8);
         output.extend_from_slice(public_key);

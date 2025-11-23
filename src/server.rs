@@ -29,7 +29,7 @@ use crate::message::{Body, CertificateRequest, CipherSuite, ClientCertificateTyp
 use crate::message::{CompressionMethod, ContentType, Cookie, CurveType};
 use crate::message::{DistinguishedName, ExchangeKeys, ExtensionType};
 use crate::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
-use crate::message::{MessageType, NamedCurve, NamedGroup, ProtocolVersion, Random, ServerHello};
+use crate::message::{MessageType, NamedGroup, ProtocolVersion, Random, ServerHello};
 use crate::message::{SessionId, SignatureAlgorithm};
 use crate::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId};
 use crate::message::{SupportedGroupsExtension, UseSrtpExtension};
@@ -431,8 +431,8 @@ impl State {
         // unwrap: is ok because we set the random in handle_timeout
         let server_random = server.random.unwrap();
 
-        // Select ECDHE curve from client offers (prefer P-256, then P-384). If none present, default to P-256.
-        let selected_named_curve = select_named_curve(server.client_supported_groups.as_ref());
+        // Select ECDHE group from client offers (prefer P-256, then P-384). If none present, default to P-256.
+        let selected_named_group = select_named_group(server.client_supported_groups.as_ref());
 
         // Select signature/hash for SKE by intersecting client's list with our key type (prefer SHA256, then SHA384)
         let selected_signature = select_ske_signature_algorithm(
@@ -441,8 +441,8 @@ impl State {
         );
 
         debug!(
-            "ServerKeyExchange params: curve={:?}, signature_alg={:?}",
-            selected_named_curve, selected_signature
+            "ServerKeyExchange params: group={:?}, signature_alg={:?}",
+            selected_named_group, selected_signature
         );
 
         server
@@ -453,7 +453,7 @@ impl State {
                     engine,
                     client_random,
                     server_random,
-                    selected_named_curve,
+                    selected_named_group,
                     selected_signature,
                 )
             })?;
@@ -906,7 +906,7 @@ fn handshake_create_server_key_exchange(
     engine: &mut Engine,
     client_random: Random,
     server_random: Random,
-    named_curve: NamedCurve,
+    named_group: NamedGroup,
     algorithm: SignatureAndHashAlgorithm,
 ) -> Result<(), Error> {
     let Some(cipher_suite) = engine.cipher_suite() else {
@@ -923,15 +923,15 @@ fn handshake_create_server_key_exchange(
 
     match key_exchange_algorithm {
         KeyExchangeAlgorithm::EECDH => {
-            let (curve_type, named_curve) = (CurveType::NamedCurve, named_curve);
+            let (curve_type, named_group) = (CurveType::NamedCurve, named_group);
             let pubkey = engine
                 .crypto_context_mut()
-                .init_ecdh_server(named_curve)
+                .init_ecdh_server(named_group)
                 .map_err(|e| Error::CryptoError(format!("Failed to init ECDHE: {}", e)))?;
 
             trace!(
-                "SKE ECDHE: curve={:?}, pubkey_len={}",
-                named_curve,
+                "SKE ECDHE: group={:?}, pubkey_len={}",
+                named_group,
                 pubkey.len()
             );
 
@@ -941,7 +941,7 @@ fn handshake_create_server_key_exchange(
             server_random.serialize(&mut signed_data);
             // Write params directly for signing
             signed_data.push(curve_type.as_u8());
-            signed_data.extend_from_slice(&named_curve.as_u16().to_be_bytes());
+            signed_data.extend_from_slice(&named_group.as_u16().to_be_bytes());
             signed_data.push(pubkey.len() as u8);
             signed_data.extend_from_slice(pubkey);
 
@@ -962,7 +962,7 @@ fn handshake_create_server_key_exchange(
 
             // For sending, we don't use DigitallySigned struct, just write the params and signature directly
             body.push(curve_type.as_u8());
-            body.extend_from_slice(&named_curve.as_u16().to_be_bytes());
+            body.extend_from_slice(&named_group.as_u16().to_be_bytes());
             body.push(pubkey.len() as u8);
             body.extend_from_slice(pubkey);
 
@@ -1009,28 +1009,18 @@ fn handshake_serialize_certificate_request(
     Ok(())
 }
 
-fn select_named_curve(client_groups: Option<&ArrayVec<NamedGroup, 16>>) -> NamedCurve {
+fn select_named_group(client_groups: Option<&ArrayVec<NamedGroup, 16>>) -> NamedGroup {
     // Server preference order
     let preferred = [NamedGroup::Secp256r1, NamedGroup::Secp384r1];
     if let Some(groups) = client_groups {
         for p in preferred.iter() {
             if groups.iter().any(|g| g == p) {
-                if let Some(curve) = map_named_group_to_named_curve(*p) {
-                    return curve;
-                }
+                return *p;
             }
         }
     }
     // Fallback if client did not advertise groups or only unsupported ones
-    NamedCurve::Secp256r1
-}
-
-fn map_named_group_to_named_curve(group: NamedGroup) -> Option<NamedCurve> {
-    match group {
-        NamedGroup::Secp256r1 => Some(NamedCurve::Secp256r1),
-        NamedGroup::Secp384r1 => Some(NamedCurve::Secp384r1),
-        _ => None,
-    }
+    NamedGroup::Secp256r1
 }
 
 fn select_ske_signature_algorithm(

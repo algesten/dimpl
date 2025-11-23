@@ -17,7 +17,7 @@ mod validation;
 pub use keying::{KeyingMaterial, SrtpProfile};
 
 // Re-export message enums needed for provider trait implementations
-pub use crate::message::{CipherSuite, HashAlgorithm, NamedCurve, SignatureAlgorithm};
+pub use crate::message::{CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
 // Re-export all provider traits and types (similar to rustls structure)
 // This allows users to do: use dimpl::crypto::{CryptoProvider, SupportedCipherSuite, ...};
@@ -46,8 +46,8 @@ pub(crate) struct CryptoContext {
     /// Our public key from the key exchange (stored for reuse)
     key_exchange_public_key: Option<Vec<u8>>,
 
-    /// Curve info from the key exchange (stored for reuse)
-    key_exchange_curve: Option<NamedCurve>,
+    /// Group info from the key exchange (stored for reuse)
+    key_exchange_group: Option<NamedGroup>,
 
     /// Client write key
     client_write_key: Option<Buf>,
@@ -119,7 +119,7 @@ impl CryptoContext {
             config,
             key_exchange: None,
             key_exchange_public_key: None,
-            key_exchange_curve: None,
+            key_exchange_group: None,
             client_write_key: None,
             server_write_key: None,
             client_write_iv: None,
@@ -152,9 +152,9 @@ impl CryptoContext {
         match &self.key_exchange {
             Some(ke) => {
                 let pub_key = ke.pub_key().to_vec();
-                let curve = ke.group();
+                let group = ke.group();
                 self.key_exchange_public_key = Some(pub_key);
-                self.key_exchange_curve = Some(curve);
+                self.key_exchange_group = Some(group);
                 Ok(self.key_exchange_public_key.as_ref().unwrap())
             }
             None => Err("Key exchange not initialized".to_string()),
@@ -173,14 +173,14 @@ impl CryptoContext {
     }
 
     /// Initialize ECDHE key exchange (server role) and return our ephemeral public key
-    pub fn init_ecdh_server(&mut self, named_curve: NamedCurve) -> Result<&[u8], String> {
+    pub fn init_ecdh_server(&mut self, named_group: NamedGroup) -> Result<&[u8], String> {
         // Find the matching key exchange group from the provider
         let kx_group = self
             .provider()
             .kx_groups
             .iter()
-            .find(|g| g.name() == named_curve)
-            .ok_or_else(|| format!("Unsupported ECDHE named curve: {:?}", named_curve))?;
+            .find(|g| g.name() == named_group)
+            .ok_or_else(|| format!("Unsupported ECDHE named group: {:?}", named_group))?;
 
         self.key_exchange = Some(kx_group.start_exchange()?);
         self.maybe_init_key_exchange()
@@ -189,7 +189,7 @@ impl CryptoContext {
     /// Process a ServerKeyExchange message and set up key exchange accordingly
     pub fn process_ecdh_params(
         &mut self,
-        curve: NamedCurve,
+        group: NamedGroup,
         server_public: &[u8],
     ) -> Result<(), String> {
         // Find the matching key exchange group from the provider
@@ -197,8 +197,8 @@ impl CryptoContext {
             .provider()
             .kx_groups
             .iter()
-            .find(|g| g.name() == curve)
-            .ok_or_else(|| format!("Unsupported ECDHE named curve: {:?}", curve))?;
+            .find(|g| g.name() == group)
+            .ok_or_else(|| format!("Unsupported ECDHE named group: {:?}", group))?;
 
         // Create a new ECDH key exchange
         self.key_exchange = Some(kx_group.start_exchange()?);
@@ -477,11 +477,11 @@ impl CryptoContext {
         Ok(keying_material)
     }
 
-    /// Get curve info for ECDHE key exchange
-    pub fn get_key_exchange_curve_info(&self) -> Option<(CurveType, NamedCurve)> {
-        // Use stored curve if available (after key exchange is consumed)
-        if let Some(curve) = self.key_exchange_curve {
-            return Some((CurveType::NamedCurve, curve));
+    /// Get group info for ECDHE key exchange
+    pub fn get_key_exchange_group_info(&self) -> Option<(CurveType, NamedGroup)> {
+        // Use stored group if available (after key exchange is consumed)
+        if let Some(group) = self.key_exchange_group {
+            return Some((CurveType::NamedCurve, group));
         }
 
         // Otherwise get it from the active key exchange

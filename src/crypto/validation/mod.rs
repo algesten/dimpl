@@ -5,7 +5,7 @@
 
 use crate::crypto::provider::{CryptoProvider, SupportedCipherSuite, SupportedKxGroup};
 use crate::crypto::HashAlgorithm;
-use crate::message::{CipherSuite, NamedCurve, SignatureAlgorithm};
+use crate::message::{CipherSuite, NamedGroup, SignatureAlgorithm};
 use crate::Error;
 
 impl CryptoProvider {
@@ -35,7 +35,7 @@ impl CryptoProvider {
         self.kx_groups
             .iter()
             .copied()
-            .filter(|kx| matches!(kx.name(), NamedCurve::Secp256r1 | NamedCurve::Secp384r1))
+            .filter(|kx| matches!(kx.name(), NamedGroup::Secp256r1 | NamedGroup::Secp384r1))
     }
 
     /// Returns cipher suites compatible with a specific signature algorithm.

@@ -5,21 +5,21 @@ use aws_lc_rs::agreement::{UnparsedPublicKey, ECDH_P256, ECDH_P384};
 
 use crate::buffer::Buf;
 use crate::crypto::provider::{ActiveKeyExchange, SupportedKxGroup};
-use crate::message::NamedCurve;
+use crate::message::NamedGroup;
 
 /// ECDHE key exchange implementation.
 struct EcdhKeyExchange {
-    curve: NamedCurve,
+    group: NamedGroup,
     private_key: EphemeralPrivateKey,
     public_key: Vec<u8>,
 }
 
 impl EcdhKeyExchange {
-    fn new(curve: NamedCurve) -> Result<Self, String> {
-        let algorithm = match curve {
-            NamedCurve::Secp256r1 => &ECDH_P256,
-            NamedCurve::Secp384r1 => &ECDH_P384,
-            _ => return Err("Unsupported curve".to_string()),
+    fn new(group: NamedGroup) -> Result<Self, String> {
+        let algorithm = match group {
+            NamedGroup::Secp256r1 => &ECDH_P256,
+            NamedGroup::Secp384r1 => &ECDH_P384,
+            _ => return Err("Unsupported group".to_string()),
         };
 
         let rng = aws_lc_rs::rand::SystemRandom::new();
@@ -32,17 +32,17 @@ impl EcdhKeyExchange {
             .map_err(|_| "Failed to compute public key".to_string())?;
 
         Ok(EcdhKeyExchange {
-            curve,
+            group,
             private_key,
             public_key,
         })
     }
 
     fn algorithm(&self) -> &'static aws_lc_rs::agreement::Algorithm {
-        match self.curve {
-            NamedCurve::Secp256r1 => &ECDH_P256,
-            NamedCurve::Secp384r1 => &ECDH_P384,
-            _ => unreachable!("Unsupported curve"),
+        match self.group {
+            NamedGroup::Secp256r1 => &ECDH_P256,
+            NamedGroup::Secp384r1 => &ECDH_P384,
+            _ => unreachable!("Unsupported group"),
         }
     }
 }
@@ -69,8 +69,8 @@ impl ActiveKeyExchange for EcdhKeyExchange {
         .map_err(|e| e.to_string())
     }
 
-    fn group(&self) -> NamedCurve {
-        self.curve
+    fn group(&self) -> NamedGroup {
+        self.group
     }
 }
 
@@ -79,12 +79,12 @@ impl ActiveKeyExchange for EcdhKeyExchange {
 struct P256;
 
 impl SupportedKxGroup for P256 {
-    fn name(&self) -> NamedCurve {
-        NamedCurve::Secp256r1
+    fn name(&self) -> NamedGroup {
+        NamedGroup::Secp256r1
     }
 
     fn start_exchange(&self) -> Result<Box<dyn ActiveKeyExchange>, String> {
-        Ok(Box::new(EcdhKeyExchange::new(NamedCurve::Secp256r1)?))
+        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp256r1)?))
     }
 }
 
@@ -93,12 +93,12 @@ impl SupportedKxGroup for P256 {
 struct P384;
 
 impl SupportedKxGroup for P384 {
-    fn name(&self) -> NamedCurve {
-        NamedCurve::Secp384r1
+    fn name(&self) -> NamedGroup {
+        NamedGroup::Secp384r1
     }
 
     fn start_exchange(&self) -> Result<Box<dyn ActiveKeyExchange>, String> {
-        Ok(Box::new(EcdhKeyExchange::new(NamedCurve::Secp384r1)?))
+        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp384r1)?))
     }
 }
 

@@ -3,10 +3,10 @@ use nom::IResult;
 
 /// Elliptic curves for ECDHE key exchange (RFC 4492, RFC 8422).
 ///
-/// Specifies the named curve to use for Elliptic Curve Diffie-Hellman Ephemeral (ECDHE)
+/// Specifies the named group to use for Elliptic Curve Diffie-Hellman Ephemeral (ECDHE)
 /// key exchange. dimpl supports P-256 (Secp256r1) and P-384 (Secp384r1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NamedCurve {
+pub enum NamedGroup {
     /// sect163k1 (deprecated).
     Sect163k1,
     /// sect163r1 (deprecated).
@@ -61,82 +61,82 @@ pub enum NamedCurve {
     X25519,
     /// X448 (Curve448 for ECDHE).
     X448,
-    /// Unknown or unsupported curve.
+    /// Unknown or unsupported group.
     Unknown(u16),
 }
 
-impl NamedCurve {
+impl NamedGroup {
     /// Convert a wire format u16 value to a `NamedCurve`.
     pub fn from_u16(value: u16) -> Self {
         match value {
-            1 => NamedCurve::Sect163k1,
-            2 => NamedCurve::Sect163r1,
-            3 => NamedCurve::Sect163r2,
-            4 => NamedCurve::Sect193r1,
-            5 => NamedCurve::Sect193r2,
-            6 => NamedCurve::Sect233k1,
-            7 => NamedCurve::Sect233r1,
-            8 => NamedCurve::Sect239k1,
-            9 => NamedCurve::Sect283k1,
-            10 => NamedCurve::Sect283r1,
-            11 => NamedCurve::Sect409k1,
-            12 => NamedCurve::Sect409r1,
-            13 => NamedCurve::Sect571k1,
-            14 => NamedCurve::Sect571r1,
-            15 => NamedCurve::Secp160k1,
-            16 => NamedCurve::Secp160r1,
-            17 => NamedCurve::Secp160r2,
-            18 => NamedCurve::Secp192k1,
-            19 => NamedCurve::Secp192r1,
-            20 => NamedCurve::Secp224k1,
-            21 => NamedCurve::Secp224r1,
-            22 => NamedCurve::Secp256k1,
-            23 => NamedCurve::Secp256r1,
-            24 => NamedCurve::Secp384r1,
-            25 => NamedCurve::Secp521r1,
-            29 => NamedCurve::X25519,
-            30 => NamedCurve::X448,
-            _ => NamedCurve::Unknown(value),
+            1 => NamedGroup::Sect163k1,
+            2 => NamedGroup::Sect163r1,
+            3 => NamedGroup::Sect163r2,
+            4 => NamedGroup::Sect193r1,
+            5 => NamedGroup::Sect193r2,
+            6 => NamedGroup::Sect233k1,
+            7 => NamedGroup::Sect233r1,
+            8 => NamedGroup::Sect239k1,
+            9 => NamedGroup::Sect283k1,
+            10 => NamedGroup::Sect283r1,
+            11 => NamedGroup::Sect409k1,
+            12 => NamedGroup::Sect409r1,
+            13 => NamedGroup::Sect571k1,
+            14 => NamedGroup::Sect571r1,
+            15 => NamedGroup::Secp160k1,
+            16 => NamedGroup::Secp160r1,
+            17 => NamedGroup::Secp160r2,
+            18 => NamedGroup::Secp192k1,
+            19 => NamedGroup::Secp192r1,
+            20 => NamedGroup::Secp224k1,
+            21 => NamedGroup::Secp224r1,
+            22 => NamedGroup::Secp256k1,
+            23 => NamedGroup::Secp256r1,
+            24 => NamedGroup::Secp384r1,
+            25 => NamedGroup::Secp521r1,
+            29 => NamedGroup::X25519,
+            30 => NamedGroup::X448,
+            _ => NamedGroup::Unknown(value),
         }
     }
 
     /// Convert this `NamedCurve` to its wire format u16 value.
     pub fn as_u16(&self) -> u16 {
         match self {
-            NamedCurve::Sect163k1 => 1,
-            NamedCurve::Sect163r1 => 2,
-            NamedCurve::Sect163r2 => 3,
-            NamedCurve::Sect193r1 => 4,
-            NamedCurve::Sect193r2 => 5,
-            NamedCurve::Sect233k1 => 6,
-            NamedCurve::Sect233r1 => 7,
-            NamedCurve::Sect239k1 => 8,
-            NamedCurve::Sect283k1 => 9,
-            NamedCurve::Sect283r1 => 10,
-            NamedCurve::Sect409k1 => 11,
-            NamedCurve::Sect409r1 => 12,
-            NamedCurve::Sect571k1 => 13,
-            NamedCurve::Sect571r1 => 14,
-            NamedCurve::Secp160k1 => 15,
-            NamedCurve::Secp160r1 => 16,
-            NamedCurve::Secp160r2 => 17,
-            NamedCurve::Secp192k1 => 18,
-            NamedCurve::Secp192r1 => 19,
-            NamedCurve::Secp224k1 => 20,
-            NamedCurve::Secp224r1 => 21,
-            NamedCurve::Secp256k1 => 22,
-            NamedCurve::Secp256r1 => 23,
-            NamedCurve::Secp384r1 => 24,
-            NamedCurve::Secp521r1 => 25,
-            NamedCurve::X25519 => 29,
-            NamedCurve::X448 => 30,
-            NamedCurve::Unknown(value) => *value,
+            NamedGroup::Sect163k1 => 1,
+            NamedGroup::Sect163r1 => 2,
+            NamedGroup::Sect163r2 => 3,
+            NamedGroup::Sect193r1 => 4,
+            NamedGroup::Sect193r2 => 5,
+            NamedGroup::Sect233k1 => 6,
+            NamedGroup::Sect233r1 => 7,
+            NamedGroup::Sect239k1 => 8,
+            NamedGroup::Sect283k1 => 9,
+            NamedGroup::Sect283r1 => 10,
+            NamedGroup::Sect409k1 => 11,
+            NamedGroup::Sect409r1 => 12,
+            NamedGroup::Sect571k1 => 13,
+            NamedGroup::Sect571r1 => 14,
+            NamedGroup::Secp160k1 => 15,
+            NamedGroup::Secp160r1 => 16,
+            NamedGroup::Secp160r2 => 17,
+            NamedGroup::Secp192k1 => 18,
+            NamedGroup::Secp192r1 => 19,
+            NamedGroup::Secp224k1 => 20,
+            NamedGroup::Secp224r1 => 21,
+            NamedGroup::Secp256k1 => 22,
+            NamedGroup::Secp256r1 => 23,
+            NamedGroup::Secp384r1 => 24,
+            NamedGroup::Secp521r1 => 25,
+            NamedGroup::X25519 => 29,
+            NamedGroup::X448 => 30,
+            NamedGroup::Unknown(value) => *value,
         }
     }
 
-    pub(crate) fn parse(input: &[u8]) -> IResult<&[u8], NamedCurve> {
+    pub(crate) fn parse(input: &[u8]) -> IResult<&[u8], NamedGroup> {
         let (input, value) = be_u16(input)?;
-        Ok((input, NamedCurve::from_u16(value)))
+        Ok((input, NamedGroup::from_u16(value)))
     }
 }
 

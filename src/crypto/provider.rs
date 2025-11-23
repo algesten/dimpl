@@ -112,7 +112,7 @@ use std::sync::Arc;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
-use crate::message::{CipherSuite, HashAlgorithm, NamedCurve, SignatureAlgorithm};
+use crate::message::{CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
 // ============================================================================
 // Marker Trait
@@ -177,8 +177,8 @@ pub trait ActiveKeyExchange: Send + Sync + UnwindSafe {
     /// Complete exchange with peer's public key, returning shared secret.
     fn complete(self: Box<Self>, peer_pub: &[u8]) -> Result<Buf, String>;
 
-    /// Get the named curve for this exchange.
-    fn group(&self) -> NamedCurve;
+    /// Get the named group for this exchange.
+    fn group(&self) -> NamedGroup;
 }
 
 // ============================================================================
@@ -202,8 +202,8 @@ pub trait SupportedCipherSuite: CryptoSafe {
 
 /// Key exchange group support (factory for ActiveKeyExchange).
 pub trait SupportedKxGroup: CryptoSafe {
-    /// Named curve for this group.
-    fn name(&self) -> NamedCurve;
+    /// Named group for this key exchange group.
+    fn name(&self) -> NamedGroup;
 
     /// Start a new key exchange, generating ephemeral keypair.
     fn start_exchange(&self) -> Result<Box<dyn ActiveKeyExchange>, String>;

@@ -472,7 +472,7 @@ impl State {
         };
 
         // Extract all ranges/data we need before accessing buffer
-        let (signature_range, signature_algorithm, curve_type, named_curve, public_key_range) = {
+        let (signature_range, signature_algorithm, curve_type, named_group, public_key_range) = {
             let handshake = maybe.as_ref().unwrap();
             let Body::ServerKeyExchange(server_key_exchange) = &handshake.body else {
                 unreachable!()
@@ -489,10 +489,10 @@ impl State {
             let signature_algorithm = d_signed.algorithm;
 
             // Extract ECDH params ranges
-            let (curve_type, named_curve, public_key_range) = match &server_key_exchange.params {
+            let (curve_type, named_group, public_key_range) = match &server_key_exchange.params {
                 crate::message::ServerKeyExchangeParams::Ecdh(ecdh) => (
                     ecdh.curve_type,
-                    ecdh.named_curve,
+                    ecdh.named_group,
                     ecdh.public_key_range.clone(),
                 ),
             };
@@ -501,7 +501,7 @@ impl State {
                 signature_range,
                 signature_algorithm,
                 curve_type,
-                named_curve,
+                named_group,
                 public_key_range,
             )
         };
@@ -523,7 +523,7 @@ impl State {
         server_random.serialize(&mut signed_data);
         // Manually serialize SKE params
         signed_data.push(curve_type.as_u8());
-        signed_data.extend_from_slice(&named_curve.as_u16().to_be_bytes());
+        signed_data.extend_from_slice(&named_group.as_u16().to_be_bytes());
         signed_data.push(public_key_vec.len() as u8);
         signed_data.extend_from_slice(&public_key_vec);
 
@@ -579,7 +579,7 @@ impl State {
         client
             .engine
             .crypto_context_mut()
-            .process_ecdh_params(named_curve, &public_key_vec)
+            .process_ecdh_params(named_group, &public_key_vec)
             .map_err(|e| {
                 Error::CryptoError(format!("Failed to process server key exchange: {}", e))
             })?;
@@ -1029,9 +1029,9 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
 
     debug!("Using key exchange algorithm: {:?}", key_exchange_algorithm);
 
-    // For ECDHE, get curve info before we create the handshake (to avoid borrow issues)
-    let curve_info = if key_exchange_algorithm == KeyExchangeAlgorithm::EECDH {
-        engine.crypto_context().get_key_exchange_curve_info()
+    // For ECDHE, get group info before we create the handshake (to avoid borrow issues)
+    let group_info = if key_exchange_algorithm == KeyExchangeAlgorithm::EECDH {
+        engine.crypto_context().get_key_exchange_group_info()
     } else {
         None
     };
@@ -1048,15 +1048,15 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
     // Validate key exchange algorithm
     match key_exchange_algorithm {
         KeyExchangeAlgorithm::EECDH => {
-            // For ECDHE, use the curve information we retrieved earlier
-            let Some((curve_type, named_curve)) = curve_info else {
-                unreachable!("No curve info available for ECDHE");
+            // For ECDHE, use the group information we retrieved earlier
+            let Some((curve_type, named_group)) = group_info else {
+                unreachable!("No group info available for ECDHE");
             };
 
             trace!(
-                "Using ECDHE curve info: {:?}, {:?}",
+                "Using ECDHE group info: {:?}, {:?}",
                 curve_type,
-                named_curve
+                named_group
             );
         }
         _ => {
