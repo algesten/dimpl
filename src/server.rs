@@ -431,10 +431,12 @@ impl State {
         // unwrap: is ok because we set the random in handle_timeout
         let server_random = server.random.unwrap();
 
-        // Select ECDHE group from client offers (prefer P-256, then P-384). If none present, default to P-256.
+        // Select ECDHE group from client offers (prefer P-256, then P-384).
+        // If none present, default to P-256.
         let selected_named_group = select_named_group(server.client_supported_groups.as_ref());
 
-        // Select signature/hash for SKE by intersecting client's list with our key type (prefer SHA256, then SHA384)
+        // Select signature/hash for SKE by intersecting client's list
+        // with our key type (prefer SHA256, then SHA384)
         let selected_signature = select_ske_signature_algorithm(
             server.client_signature_algorithms.as_ref(),
             server.engine.crypto_context().signature_algorithm(),
