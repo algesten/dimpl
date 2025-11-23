@@ -1,68 +1,28 @@
-use std::sync::Arc;
 use std::time::Duration;
 
-use crate::crypto::CryptoProvider;
-use crate::message::CipherSuite;
+use crate::crypto::{aws_lc_rs, CryptoProvider};
+use crate::Error;
 
 /// DTLS configuration
 #[derive(Clone)]
 pub struct Config {
-    /// Max transmission unit.
-    ///
-    /// The largest size UDP packets we will produce.
-    ///
-    /// Defaults to 1150
-    pub mtu: usize,
-
-    /// Max amount of incoming packets to buffer before rejecting more input.
-    pub max_queue_rx: usize,
-
-    /// Max amount of outgoing packets to buffer.
-    pub max_queue_tx: usize,
-
-    /// The allowed cipher suites.
-    pub cipher_suites: Vec<CipherSuite>,
-
-    /// For a server, require a client certificate.
-    ///
-    /// This will cause the server to send a CertificateRequest message.
-    /// Makes the server fail if the client does not send a certificate.
-    pub require_client_certificate: bool,
-
-    /// Time of first retry.
-    ///
-    /// * Every flight restarts with this value.
-    /// * Doubled for every retry with a ±25% jitter.
-    ///
-    /// Defaults to 1 second.
-    pub flight_start_rto: Duration,
-
-    /// Max number of retries per flight.
-    ///
-    /// The default retry timeouts are: 1s, 2s, 4s, 8s, 16s.
-    ///
-    /// Defaults to 5.
-    pub flight_retries: usize,
-
-    /// Timeout for the entire handshake, regardless of flights
-    ///
-    /// Defaults to 40s.
-    pub handshake_timeout: Duration,
-
-    /// Cryptographic provider.
-    ///
-    /// Provides all cryptographic operations (ciphers, key exchange, signing, etc.).
-    /// If None, uses the default aws-lc-rs provider.
-    pub crypto_provider: Option<Arc<CryptoProvider>>,
+    mtu: usize,
+    max_queue_rx: usize,
+    max_queue_tx: usize,
+    require_client_certificate: bool,
+    flight_start_rto: Duration,
+    flight_retries: usize,
+    handshake_timeout: Duration,
+    crypto_provider: CryptoProvider,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
+impl Config {
+    /// Create a new configuration builder.
+    pub fn builder() -> ConfigBuilder {
+        ConfigBuilder {
             mtu: 1150,
             max_queue_rx: 30,
             max_queue_tx: 10,
-            cipher_suites: CipherSuite::all().to_vec(),
             require_client_certificate: true,
             flight_start_rto: Duration::from_secs(1),
             flight_retries: 4,
@@ -70,14 +30,177 @@ impl Default for Config {
             crypto_provider: None,
         }
     }
+
+    /// Max transmission unit.
+    ///
+    /// The largest size UDP packets we will produce.
+    #[inline(always)]
+    pub fn mtu(&self) -> usize {
+        self.mtu
+    }
+
+    /// Max amount of incoming packets to buffer before rejecting more input.
+    #[inline(always)]
+    pub fn max_queue_rx(&self) -> usize {
+        self.max_queue_rx
+    }
+
+    /// Max amount of outgoing packets to buffer.
+    #[inline(always)]
+    pub fn max_queue_tx(&self) -> usize {
+        self.max_queue_tx
+    }
+
+    /// For a server, require a client certificate.
+    ///
+    /// This will cause the server to send a CertificateRequest message.
+    /// Makes the server fail if the client does not send a certificate.
+    #[inline(always)]
+    pub fn require_client_certificate(&self) -> bool {
+        self.require_client_certificate
+    }
+
+    /// Time of first retry.
+    ///
+    /// Every flight restarts with this value.
+    /// Doubled for every retry with a ±25% jitter.
+    #[inline(always)]
+    pub fn flight_start_rto(&self) -> Duration {
+        self.flight_start_rto
+    }
+
+    /// Max number of retries per flight.
+    #[inline(always)]
+    pub fn flight_retries(&self) -> usize {
+        self.flight_retries
+    }
+
+    /// Timeout for the entire handshake, regardless of flights.
+    #[inline(always)]
+    pub fn handshake_timeout(&self) -> Duration {
+        self.handshake_timeout
+    }
+
+    /// Cryptographic provider.
+    ///
+    /// Provides all cryptographic operations (ciphers, key exchange, signing, etc.).
+    #[inline(always)]
+    pub fn crypto_provider(&self) -> &CryptoProvider {
+        &self.crypto_provider
+    }
 }
 
-impl Config {
+/// Builder for DTLS configuration.
+pub struct ConfigBuilder {
+    mtu: usize,
+    max_queue_rx: usize,
+    max_queue_tx: usize,
+    require_client_certificate: bool,
+    flight_start_rto: Duration,
+    flight_retries: usize,
+    handshake_timeout: Duration,
+    crypto_provider: Option<CryptoProvider>,
+}
+
+impl ConfigBuilder {
+    /// Set the max transmission unit (MTU).
+    ///
+    /// The largest size UDP packets we will produce.
+    /// Defaults to 1150.
+    pub fn mtu(mut self, mtu: usize) -> Self {
+        self.mtu = mtu;
+        self
+    }
+
+    /// Set the max amount of incoming packets to buffer before rejecting more input.
+    ///
+    /// Defaults to 30.
+    pub fn max_queue_rx(mut self, max_queue_rx: usize) -> Self {
+        self.max_queue_rx = max_queue_rx;
+        self
+    }
+
+    /// Set the max amount of outgoing packets to buffer.
+    ///
+    /// Defaults to 10.
+    pub fn max_queue_tx(mut self, max_queue_tx: usize) -> Self {
+        self.max_queue_tx = max_queue_tx;
+        self
+    }
+
+    /// Set whether to require a client certificate (for servers).
+    ///
+    /// This will cause the server to send a CertificateRequest message.
+    /// Makes the server fail if the client does not send a certificate.
+    /// Defaults to true.
+    pub fn require_client_certificate(mut self, require: bool) -> Self {
+        self.require_client_certificate = require;
+        self
+    }
+
+    /// Set the time of first retry.
+    ///
+    /// Every flight restarts with this value.
+    /// Doubled for every retry with a ±25% jitter.
+    /// Defaults to 1 second.
+    pub fn flight_start_rto(mut self, rto: Duration) -> Self {
+        self.flight_start_rto = rto;
+        self
+    }
+
+    /// Set the max number of retries per flight.
+    ///
+    /// Defaults to 4.
+    pub fn flight_retries(mut self, retries: usize) -> Self {
+        self.flight_retries = retries;
+        self
+    }
+
+    /// Set the timeout for the entire handshake, regardless of flights.
+    ///
+    /// Defaults to 40 seconds.
+    pub fn handshake_timeout(mut self, timeout: Duration) -> Self {
+        self.handshake_timeout = timeout;
+        self
+    }
+
     /// Set a custom crypto provider.
     ///
     /// If not set, the default aws-lc-rs provider will be used.
     pub fn with_crypto_provider(mut self, provider: CryptoProvider) -> Self {
-        self.crypto_provider = Some(Arc::new(provider));
+        self.crypto_provider = Some(provider);
         self
+    }
+
+    /// Build the configuration.
+    ///
+    /// This validates the crypto provider before returning the configuration.
+    /// Returns `Error::ConfigError` if the provider is invalid.
+    pub fn build(self) -> Result<Config, Error> {
+        let crypto_provider = self
+            .crypto_provider
+            .unwrap_or_else(aws_lc_rs::default_provider);
+
+        // Always validate the crypto provider
+        crypto_provider.validate()?;
+
+        Ok(Config {
+            mtu: self.mtu,
+            max_queue_rx: self.max_queue_rx,
+            max_queue_tx: self.max_queue_tx,
+            require_client_certificate: self.require_client_certificate,
+            flight_start_rto: self.flight_start_rto,
+            flight_retries: self.flight_retries,
+            handshake_timeout: self.handshake_timeout,
+            crypto_provider,
+        })
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config::builder()
+            .build()
+            .expect("Default config should always validate")
     }
 }

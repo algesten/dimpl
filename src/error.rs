@@ -23,6 +23,8 @@ pub enum Error {
     IncompleteServerHello,
     /// Something timed out
     Timeout(&'static str),
+    /// Configuration error (e.g., invalid crypto provider)
+    ConfigError(String),
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {
@@ -50,6 +52,7 @@ impl std::fmt::Display for Error {
             Error::TransmitQueueFull => write!(f, "transmit queue full"),
             Error::IncompleteServerHello => write!(f, "incomplete ServerHello"),
             Error::Timeout(what) => write!(f, "timeout: {}", what),
+            Error::ConfigError(msg) => write!(f, "config error: {}", msg),
         }
     }
 }

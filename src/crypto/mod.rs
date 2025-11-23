@@ -12,6 +12,7 @@ mod keying;
 // Provider traits and implementations
 pub mod aws_lc_rs;
 mod provider;
+mod validation;
 
 pub use keying::{KeyingMaterial, SrtpProfile};
 
@@ -36,8 +37,8 @@ use dtls_aead::{Aad, Iv, Nonce};
 /// DTLS crypto context
 /// Crypto context holding negotiated keys and ciphers for a DTLS session.
 pub(crate) struct CryptoContext {
-    /// Crypto provider
-    provider: Arc<provider::CryptoProvider>,
+    /// Configuration (contains crypto provider)
+    config: Arc<crate::Config>,
 
     /// Key exchange mechanism
     key_exchange: Option<Box<dyn provider::ActiveKeyExchange>>,
@@ -96,7 +97,7 @@ impl CryptoContext {
     pub fn new(
         certificate: Vec<u8>,
         private_key_bytes: Vec<u8>,
-        provider: Option<Arc<provider::CryptoProvider>>,
+        config: Arc<crate::Config>,
     ) -> Self {
         // Validate that we have a certificate and private key
         if certificate.is_empty() {
@@ -107,17 +108,15 @@ impl CryptoContext {
             panic!("Client private key cannot be empty");
         }
 
-        // Use provided provider or default to aws_lc_rs
-        let provider = provider.unwrap_or_else(|| Arc::new(aws_lc_rs::default_provider()));
-
         // Parse the private key using the provider
-        let private_key = provider
+        let private_key = config
+            .crypto_provider()
             .key_provider
             .load_private_key(&private_key_bytes)
             .expect("Failed to parse client private key");
 
         CryptoContext {
-            provider,
+            config,
             key_exchange: None,
             key_exchange_public_key: None,
             key_exchange_curve: None,
@@ -136,6 +135,10 @@ impl CryptoContext {
             client_random: None,
             server_random: None,
         }
+    }
+
+    pub fn provider(&self) -> &provider::CryptoProvider {
+        self.config.crypto_provider()
     }
 
     /// Generate key exchange public key
@@ -173,7 +176,7 @@ impl CryptoContext {
     pub fn init_ecdh_server(&mut self, named_curve: NamedCurve) -> Result<&[u8], String> {
         // Find the matching key exchange group from the provider
         let kx_group = self
-            .provider
+            .provider()
             .kx_groups
             .iter()
             .find(|g| g.name() == named_curve)
@@ -191,7 +194,7 @@ impl CryptoContext {
     ) -> Result<(), String> {
         // Find the matching key exchange group from the provider
         let kx_group = self
-            .provider
+            .provider()
             .kx_groups
             .iter()
             .find(|g| g.name() == curve)
@@ -219,7 +222,7 @@ impl CryptoContext {
         let Some(pms) = &self.pre_master_secret else {
             return Err("Pre-master secret not available".to_string());
         };
-        let master_secret_vec = self.provider.prf_provider.prf_tls12(
+        let master_secret_vec = self.provider().prf_provider.prf_tls12(
             pms,
             "extended master secret",
             session_hash,
@@ -262,7 +265,7 @@ impl CryptoContext {
 
         // Find the cipher suite from the provider
         let supported_cipher_suite = self
-            .provider
+            .provider()
             .cipher_suites
             .iter()
             .find(|cs| cs.suite() == cipher_suite)
@@ -280,7 +283,7 @@ impl CryptoContext {
         seed.extend_from_slice(client_random);
 
         // Generate key material using PRF
-        let key_block = self.provider.prf_provider.prf_tls12(
+        let key_block = self.provider().prf_provider.prf_tls12(
             master_secret,
             "key expansion",
             &seed,
@@ -413,10 +416,13 @@ impl CryptoContext {
         };
 
         // Generate 12 bytes of verify data using PRF
-        let verify_data_vec =
-            self.provider
-                .prf_provider
-                .prf_tls12(master_secret, label, handshake_hash, 12, hash)?;
+        let verify_data_vec = self.provider().prf_provider.prf_tls12(
+            master_secret,
+            label,
+            handshake_hash,
+            12,
+            hash,
+        )?;
         let mut verify_data = ArrayVec::new();
         verify_data
             .try_extend_from_slice(&verify_data_vec)
@@ -456,7 +462,7 @@ impl CryptoContext {
         seed.try_extend_from_slice(server_random)
             .expect("server_random too long");
 
-        let keying_material_vec = self.provider.prf_provider.prf_tls12(
+        let keying_material_vec = self.provider().prf_provider.prf_tls12(
             master_secret,
             DTLS_SRTP_KEY_LABEL,
             &seed,
@@ -497,7 +503,7 @@ impl CryptoContext {
 
     /// Create a hash context for the given algorithm
     pub fn create_hash(&self, algorithm: HashAlgorithm) -> Box<dyn provider::HashContext> {
-        self.provider.hash_provider.create_hash(algorithm)
+        self.provider().hash_provider.create_hash(algorithm)
     }
 
     /// Check if the client's private key is compatible with a given cipher suite.
@@ -523,7 +529,7 @@ impl CryptoContext {
         signature_buf: &[u8],
         cert_der: &[u8],
     ) -> Result<(), String> {
-        self.provider.signature_verification.verify_signature(
+        self.provider().signature_verification.verify_signature(
             cert_der,
             data,
             signature.signature(signature_buf),

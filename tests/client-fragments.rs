@@ -27,9 +27,12 @@ fn run_client_server_with_mtu(mtu: usize) -> (usize, usize) {
     server.set_active(false);
 
     // Initialize client
-    let mut cfg = Config::default();
-    cfg.mtu = mtu;
-    let config = Arc::new(cfg);
+    let config = Arc::new(
+        Config::builder()
+            .mtu(mtu)
+            .build()
+            .expect("Failed to build config"),
+    );
 
     // Get client certificate as DER encoded bytes
     let client_x509_der = client_cert

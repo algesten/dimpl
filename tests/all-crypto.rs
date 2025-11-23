@@ -48,9 +48,8 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: CipherSuite) {
     server.set_active(false);
 
     // Initialize dimpl client restricted to the single suite
-    let mut cfg = Config::default();
-    cfg.cipher_suites = vec![suite];
-    let config = Arc::new(cfg);
+    // Note: cipher suites are determined by the crypto provider
+    let config = Arc::new(Config::default());
 
     // DER encodings for our client
     let client_x509_der = client_cert.x509.to_der().expect("client cert der");
@@ -143,9 +142,8 @@ fn run_ossl_client_vs_dimpl_server_for_suite(suite: CipherSuite) {
     ossl_client.set_active(true);
 
     // dimpl server with single-suite config
-    let mut cfg = Config::default();
-    cfg.cipher_suites = vec![suite];
-    let config = Arc::new(cfg);
+    // Note: cipher suites are determined by the crypto provider
+    let config = Arc::new(Config::default());
 
     let server_x509_der = server_cert.x509.to_der().expect("server cert der");
     let server_pkey_der = server_cert
