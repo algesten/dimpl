@@ -978,21 +978,12 @@ fn handshake_create_client_hello(
 ) -> Result<(), Error> {
     let client_version = ProtocolVersion::DTLS1_2;
 
-    // Get the client certificate type
-    let cert_type = engine.crypto_context().signature_algorithm();
-
-    // Get compatible cipher suites for our certificate type
-    let compatible_suites = CipherSuite::compatible_with_certificate(cert_type);
-
-    // Offer only suites that are both allowed by Config and compatible with our key
-    let cipher_suites: ArrayVec<CipherSuite, 32> = compatible_suites
-        .iter()
-        .copied()
-        .filter(|suite| {
-            let is_allowed = engine.is_cipher_suite_allowed(*suite);
-            let is_compatible = engine.crypto_context().is_cipher_suite_compatible(*suite);
-            is_allowed && is_compatible
-        })
+    // Get cipher suites from provider that are compatible with our key
+    let provider = engine.crypto_context().provider();
+    let cipher_suites: ArrayVec<CipherSuite, 32> = provider
+        .supported_cipher_suites()
+        .map(|cs| cs.suite())
+        .filter(|suite| engine.crypto_context().is_cipher_suite_compatible(*suite))
         .take(32)
         .collect();
 
@@ -1015,7 +1006,7 @@ fn handshake_create_client_hello(
         cipher_suites,
         compression_methods,
     )
-    .with_extensions(extension_data);
+    .with_extensions(extension_data, provider);
 
     client_hello.serialize(extension_data, body);
     Ok(())

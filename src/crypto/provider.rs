@@ -28,17 +28,28 @@
 //! ```rust,ignore
 //! use std::sync::Arc;
 //! use dimpl::{Config, Dtls};
-//! use dimpl::crypto::{CryptoProvider, aws_lc_rs};
+//! use dimpl::crypto::aws_lc_rs;
 //!
-//! let mut config = Config::default();
+//! // Use the default aws-lc-rs provider (implicit)
+//! let config = Arc::new(Config::default());
 //!
-//! // Use the default aws-lc-rs provider
-//! config.crypto_provider = Some(Arc::new(aws_lc_rs::default_provider()));
+//! // Or explicitly set the provider
+//! let config = Arc::new(
+//!     Config::builder()
+//!         .with_crypto_provider(aws_lc_rs::default_provider())
+//!         .build()
+//!         .unwrap()
+//! );
 //!
-//! // Or create your own custom provider
-//! // config.crypto_provider = Some(Arc::new(my_custom_provider()));
+//! // Or use your own custom provider
+//! // let config = Arc::new(
+//! //     Config::builder()
+//! //         .with_crypto_provider(my_custom_provider())
+//! //         .build()
+//! //         .unwrap()
+//! // );
 //!
-//! let dtls = Dtls::new(config);
+//! let dtls = Dtls::new(config, cert.certificate, cert.private_key);
 //! ```
 //!
 //! # Implementing a Custom Provider

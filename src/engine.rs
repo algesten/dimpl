@@ -98,10 +98,9 @@ struct Entry {
 impl Engine {
     pub fn new(config: Arc<Config>, certificate: Vec<u8>, private_key: Vec<u8>) -> Self {
         let flight_backoff =
-            ExponentialBackoff::new(config.flight_start_rto, config.flight_retries);
+            ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries());
 
-        let crypto_context =
-            CryptoContext::new(certificate, private_key, config.crypto_provider.clone());
+        let crypto_context = CryptoContext::new(certificate, private_key, Arc::clone(&config));
 
         Self {
             config,
@@ -141,7 +140,10 @@ impl Engine {
 
     /// Is the given cipher suite allowed by configuration
     pub fn is_cipher_suite_allowed(&self, suite: CipherSuite) -> bool {
-        self.config.cipher_suites.contains(&suite)
+        self.crypto_context
+            .provider()
+            .supported_cipher_suites()
+            .any(|cs| cs.suite() == suite)
     }
 
     /// Get a reference to the crypto context
@@ -170,7 +172,7 @@ impl Engine {
     ///
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
         // Capacity guard
-        if self.queue_rx.len() >= self.config.max_queue_rx {
+        if self.queue_rx.len() >= self.config.max_queue_rx() {
             return Err(Error::ReceiveQueueFull);
         }
 
@@ -254,9 +256,9 @@ impl Engine {
         if self.connect_timeout == Timeout::Unarmed {
             debug!(
                 "Connect timeout in: {:.03}s",
-                self.config.handshake_timeout.as_secs_f32()
+                self.config.handshake_timeout().as_secs_f32()
             );
-            let timeout = now + self.config.handshake_timeout;
+            let timeout = now + self.config.handshake_timeout();
             self.connect_timeout = Timeout::Armed(timeout);
         }
         if self.flight_timeout == Timeout::Unarmed {
@@ -589,11 +591,11 @@ impl Engine {
         let can_append = self
             .queue_tx
             .back()
-            .map(|b| b.len() + record_wire_len <= self.config.mtu)
+            .map(|b| b.len() + record_wire_len <= self.config.mtu())
             .unwrap_or(false);
 
         // If we cannot append, ensure we have space for a new datagram
-        if !can_append && self.queue_tx.len() >= self.config.max_queue_tx {
+        if !can_append && self.queue_tx.len() >= self.config.max_queue_tx() {
             return Err(Error::TransmitQueueFull);
         }
 
@@ -728,7 +730,7 @@ impl Engine {
         while offset < total_len || (total_len == 0 && offset == 0) {
             // How many bytes are already used in the current datagram (if any)?
             let already_used_in_current = self.queue_tx.back().map(|b| b.len()).unwrap_or(0);
-            let available_in_current = self.config.mtu.saturating_sub(already_used_in_current);
+            let available_in_current = self.config.mtu().saturating_sub(already_used_in_current);
 
             // Fixed overhead per handshake record on the wire:
             // DTLS record header + handshake header + AEAD overhead (if epoch >= 1)
@@ -741,7 +743,7 @@ impl Engine {
                 available_in_current - fixed_overhead
             } else {
                 // Not enough space in the current datagram for any body bytes; start a fresh datagram
-                self.config.mtu.saturating_sub(fixed_overhead)
+                self.config.mtu().saturating_sub(fixed_overhead)
             };
 
             // Remaining bytes from the handshake body we still need to send.

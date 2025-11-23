@@ -1,4 +1,5 @@
 use crate::buffer::Buf;
+use crate::crypto::CryptoProvider;
 use arrayvec::ArrayVec;
 use nom::{number::complete::be_u16, IResult};
 
@@ -43,11 +44,19 @@ pub struct SupportedGroupsExtension {
 }
 
 impl SupportedGroupsExtension {
-    /// Create a default SupportedGroupsExtension with standard curves
-    pub fn default() -> Self {
+    /// Create a SupportedGroupsExtension from a crypto provider
+    pub fn from_provider(provider: &CryptoProvider) -> Self {
+        use crate::message::NamedCurve;
+
         let mut groups = ArrayVec::new();
-        groups.push(NamedGroup::Secp256r1); // NIST P-256 (widely supported)
-        groups.push(NamedGroup::Secp384r1); // NIST P-384 (stronger)
+        for kx_group in provider.supported_kx_groups() {
+            let group = match kx_group.name() {
+                NamedCurve::Secp256r1 => NamedGroup::Secp256r1,
+                NamedCurve::Secp384r1 => NamedGroup::Secp384r1,
+                _ => continue,
+            };
+            groups.push(group);
+        }
         SupportedGroupsExtension { groups }
     }
 

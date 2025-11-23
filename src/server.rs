@@ -458,7 +458,7 @@ impl State {
                 )
             })?;
 
-        if server.engine.config().require_client_certificate {
+        if server.engine.config().require_client_certificate() {
             Ok(Self::SendCertificateRequest)
         } else {
             Ok(Self::SendServerHelloDone)
@@ -491,7 +491,7 @@ impl State {
             .engine
             .create_handshake(MessageType::ServerHelloDone, |_, _| Ok(()))?;
 
-        if server.engine.config().require_client_certificate {
+        if server.engine.config().require_client_certificate() {
             Ok(Self::AwaitCertificate)
         } else {
             Ok(Self::AwaitClientKeyExchange)

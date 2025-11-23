@@ -1,19 +1,15 @@
-use super::extensions::{
-    ECPointFormatsExtension, SignatureAlgorithmsExtension, SupportedGroupsExtension,
-    UseSrtpExtension,
-};
+use super::extensions::{ECPointFormatsExtension, SignatureAlgorithmsExtension};
+use super::extensions::{SupportedGroupsExtension, UseSrtpExtension};
 use super::{CipherSuite, CompressionMethod, ProtocolVersion};
 use super::{Cookie, Extension, ExtensionType, Random, SessionId};
 use arrayvec::ArrayVec;
+use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
-use nom::Err;
-use nom::{
-    bytes::complete::take,
-    number::complete::{be_u16, be_u8},
-    IResult,
-};
+use nom::number::complete::{be_u16, be_u8};
+use nom::{Err, IResult};
 
 use crate::buffer::Buf;
+use crate::crypto::CryptoProvider;
 use crate::util::many1;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -48,20 +44,20 @@ impl ClientHello {
     }
 
     /// Add all required extensions for DTLS handshake
-    pub fn with_extensions(mut self, buf: &mut Buf) -> Self {
+    pub fn with_extensions(mut self, buf: &mut Buf, provider: &CryptoProvider) -> Self {
         // Clear the extension data buffer
         buf.clear();
 
         // First write all extension data
         let mut ranges = ArrayVec::<(ExtensionType, usize, usize), 8>::new();
 
-        // Check if we have any ECC-based cipher suites
-        let has_ecc = self.cipher_suites.iter().any(|suite| suite.has_ecc());
+        // Check if provider has ECDH support
+        let has_ecdh = provider.has_ecdh();
 
-        // Add supported groups and EC point formats if using ECC
-        if has_ecc {
-            // Add supported groups extension
-            let supported_groups = SupportedGroupsExtension::default();
+        // Add supported groups and EC point formats if using ECDH
+        if has_ecdh {
+            // Add supported groups extension from provider
+            let supported_groups = SupportedGroupsExtension::from_provider(provider);
             let start_pos = buf.len();
             supported_groups.serialize(buf);
             ranges.push((ExtensionType::SupportedGroups, start_pos, buf.len()));

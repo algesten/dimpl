@@ -79,11 +79,6 @@ fn trigger_resend(ep: &mut Dtls, now: &mut Instant) {
 #[test]
 fn duplicate_triggers_server_resend_of_final_flight() {
     // Use a small MTU to make record packing simple and deterministic.
-    let mut cfg_client = Config::default();
-    let mut cfg_server = Config::default();
-    cfg_client.mtu = 115; // modestly small but enough to keep flights split
-    cfg_server.mtu = 115;
-
     let now0 = Instant::now();
     let mut now = now0;
 
@@ -91,8 +86,18 @@ fn duplicate_triggers_server_resend_of_final_flight() {
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
 
-    let config_client = Arc::new(cfg_client);
-    let config_server = Arc::new(cfg_server);
+    let config_client = Arc::new(
+        Config::builder()
+            .mtu(115) // modestly small but enough to keep flights split
+            .build()
+            .expect("Failed to build config"),
+    );
+    let config_server = Arc::new(
+        Config::builder()
+            .mtu(115) // modestly small but enough to keep flights split
+            .build()
+            .expect("Failed to build config"),
+    );
 
     // Client
     let mut client = Dtls::new(
