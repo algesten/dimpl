@@ -108,7 +108,7 @@
 
 use std::fmt::Debug;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
@@ -317,4 +317,62 @@ pub struct CryptoProvider {
 
     /// PRF for TLS 1.2 key derivation.
     pub prf_provider: &'static dyn PrfProvider,
+
+    /// HMAC provider for computing HMAC signatures.
+    pub hmac_provider: &'static dyn HmacProvider,
+}
+
+/// Static storage for the default crypto provider.
+///
+/// This is set by `install_default()` and retrieved by `get_default()`.
+static DEFAULT: OnceLock<CryptoProvider> = OnceLock::new();
+
+impl CryptoProvider {
+    /// Install a default crypto provider for the process.
+    ///
+    /// This sets a global default provider that will be used by
+    /// [`Config::builder()`](crate::Config::builder)
+    /// when no explicit provider is specified. This is useful for applications that want
+    /// to override the default provider per process.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called more than once. The default provider can only be set once per process.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use dimpl::crypto::{CryptoProvider, aws_lc_rs};
+    ///
+    /// // Install a custom default provider
+    /// CryptoProvider::install_default(my_custom_provider());
+    ///
+    /// // Now Config::default() will use the installed provider
+    /// ```
+    pub fn install_default(provider: CryptoProvider) {
+        DEFAULT
+            .set(provider)
+            .expect("CryptoProvider::install_default() called more than once");
+    }
+
+    /// Get the default crypto provider, if one has been installed.
+    ///
+    /// Returns `Some(&provider)` if a default provider has been installed via
+    /// [`Self::install_default()`], or `None` if no default provider is available.
+    ///
+    /// This method does not panic. Use [`Config::builder()`](crate::Config::builder) which will handle
+    /// the fallback logic automatically.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use dimpl::crypto::CryptoProvider;
+    ///
+    /// if let Some(provider) = CryptoProvider::get_default() {
+    ///     // Use the installed default provider
+    /// }
+    /// ```
+    pub fn get_default() -> Option<&'static CryptoProvider> {
+        DEFAULT.get()
+    }
 }

@@ -1,7 +1,10 @@
 use std::time::Duration;
 
-use crate::crypto::{aws_lc_rs, CryptoProvider};
+use crate::crypto::CryptoProvider;
 use crate::Error;
+
+#[cfg(feature = "aws-lc-rs")]
+use crate::crypto::aws_lc_rs;
 
 /// DTLS configuration
 #[derive(Clone)]
@@ -166,7 +169,8 @@ impl ConfigBuilder {
 
     /// Set a custom crypto provider.
     ///
-    /// If not set, the default aws-lc-rs provider will be used.
+    /// If not set, the default aws-lc-rs provider will be used, if the feature
+    /// flag `aws-lc-rs` is enabled.
     pub fn with_crypto_provider(mut self, provider: CryptoProvider) -> Self {
         self.crypto_provider = Some(provider);
         self
@@ -176,10 +180,31 @@ impl ConfigBuilder {
     ///
     /// This validates the crypto provider before returning the configuration.
     /// Returns `Error::ConfigError` if the provider is invalid.
+    ///
+    /// The crypto provider is selected in the following priority order:
+    /// 1. Explicit provider set via `with_crypto_provider()`
+    /// 2. Default provider installed via `CryptoProvider::install_default()`
+    /// 3. AWS-LC provider (if `aws-lc-rs` feature is enabled)
+    /// 4. Panic if no provider is available
     pub fn build(self) -> Result<Config, Error> {
         let crypto_provider = self
             .crypto_provider
-            .unwrap_or_else(aws_lc_rs::default_provider);
+            .or_else(|| CryptoProvider::get_default().cloned())
+            .or_else(|| {
+                #[cfg(feature = "aws-lc-rs")]
+                {
+                    Some(aws_lc_rs::default_provider())
+                }
+                #[cfg(not(feature = "aws-lc-rs"))]
+                {
+                    None
+                }
+            })
+            .expect(
+                "No crypto provider available. Either set one explicitly, install
+                 a default via CryptoProvider::install_default(),
+                 or enable the 'aws-lc-rs' feature.",
+            );
 
         // Always validate the crypto provider
         crypto_provider.validate()?;

@@ -66,6 +66,8 @@
 //! # Example (Sans‑IO loop)
 //!
 //! ```rust,no_run
+//! # #[cfg(feature = "rcgen")]
+//! # {
 //! use std::sync::Arc;
 //! use std::time::Instant;
 //!
@@ -123,6 +125,7 @@
 //! // Putting it together
 //! let dtls = mk_dtls_client();
 //! let _ = example_event_loop(dtls);
+//! # }
 //! ```
 //!
 //! ### MSRV
@@ -205,7 +208,9 @@ pub use error::Error;
 mod config;
 pub use config::Config;
 
+#[cfg(feature = "rcgen")]
 pub mod certificate;
+
 pub mod crypto;
 
 pub use crypto::{KeyingMaterial, SrtpProfile};
@@ -333,6 +338,7 @@ impl fmt::Debug for Output<'_> {
 }
 
 #[cfg(test)]
+#[cfg(feature = "rcgen")]
 mod test {
     use std::panic::UnwindSafe;
 

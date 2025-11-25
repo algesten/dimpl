@@ -1,7 +1,9 @@
+#![allow(unused)]
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{certificate::generate_self_signed_certificate, Config, Dtls, Output};
+use dimpl::{Config, Dtls, Output};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RecHdr {
@@ -77,9 +79,12 @@ fn trigger_resend(ep: &mut Dtls, now: &mut Instant) {
 }
 
 #[test]
+#[cfg(feature = "rcgen")]
 fn resends_each_flight_epoch_and_sequence_increase() {
     let now0 = Instant::now();
     let mut now = now0;
+
+    use dimpl::certificate::generate_self_signed_certificate;
 
     // Certificates for client and server
     let client_cert = generate_self_signed_certificate().expect("gen client cert");

@@ -41,6 +41,8 @@ pub struct DtlsCertificate {
 }
 
 /// Generate a self-signed certificate for DTLS
+///
+/// This function requires the `rcgen` feature to be enabled.
 pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, CertificateError> {
     // Create a key pair for the certificate
     let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
@@ -90,6 +92,8 @@ pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, Certificate
 }
 
 /// Calculate a certificate fingerprint using SHA-256
+///
+/// This function requires the `rcgen` feature to be enabled.
 pub fn calculate_fingerprint(cert_der: &[u8]) -> Vec<u8> {
     // Use SHA-256 to calculate the fingerprint
     digest::digest(&digest::SHA256, cert_der).as_ref().to_vec()
@@ -110,6 +114,8 @@ impl DtlsCertificate {
     ///
     /// The fingerprint is computed by hashing the DER-encoded certificate
     /// with SHA-256 and is therefore 32 bytes long.
+    ///
+    /// This method requires the `rcgen` feature to be enabled.
     pub fn fingerprint(&self) -> Vec<u8> {
         calculate_fingerprint(&self.certificate)
     }
@@ -118,6 +124,8 @@ impl DtlsCertificate {
     ///
     /// The string is the SHA-256 fingerprint formatted as uppercase
     /// hex byte pairs separated by colons, for example "AF:12:F6:...".
+    ///
+    /// This method requires the `rcgen` feature to be enabled.
     pub fn fingerprint_str(&self) -> String {
         format_fingerprint(&self.fingerprint())
     }

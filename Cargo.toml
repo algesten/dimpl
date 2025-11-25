@@ -13,6 +13,11 @@ categories = ["network-programming", "cryptography", "security"]
 # MSRV
 rust-version = "1.81.0"
 
+[features]
+default = ["aws-lc-rs", "rcgen"]
+aws-lc-rs = ["dep:aws-lc-rs"]
+rcgen = ["aws-lc-rs", "dep:rcgen"]
+
 [dependencies]
 log = "0.4.22"
 nom = { version = "7.1.3", default-features = false, features = ["std"] }
@@ -28,13 +33,8 @@ sec1 = "0.7"
 signature = "2.1"
 spki = "0.7"
 x509-cert = { version = "0.2", features = ["builder", "signature"] }
-aws-lc-rs = { version = "1", default-features = false, features = [
-    "aws-lc-sys",
-    "prebuilt-nasm",
-] }
-rcgen = { version = "0.14.5", default-features = false, features = [
-    "aws_lc_rs",
-] }
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"], optional = true }
+rcgen = { version = "0.14.5", default-features = false, features = ["aws_lc_rs"], optional = true }
 
 [dev-dependencies]
 openssl = { version = "0.10.70", features = ["vendored"] }
