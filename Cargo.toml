@@ -14,7 +14,7 @@ categories = ["network-programming", "cryptography", "security"]
 rust-version = "1.81.0"
 
 [features]
-default = ["aws-lc-rs", "rcgen", "rust-crypto"]
+default = ["aws-lc-rs", "rcgen"]
 
 # Default crypto provider
 aws-lc-rs = ["dep:aws-lc-rs"]
