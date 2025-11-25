@@ -10,7 +10,9 @@ pub(crate) mod dtls_aead;
 mod keying;
 
 // Provider traits and implementations
+#[cfg(feature = "aws-lc-rs")]
 pub mod aws_lc_rs;
+
 mod provider;
 mod validation;
 
@@ -24,7 +26,7 @@ pub use crate::message::{CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgori
 pub use provider::{
     ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext, HashProvider,
 };
-pub use provider::{KeyProvider, PrfProvider};
+pub use provider::{HmacProvider, KeyProvider, PrfProvider};
 pub use provider::{SecureRandom, SignatureVerifier, SigningKey};
 pub use provider::{SupportedCipherSuite, SupportedKxGroup};
 

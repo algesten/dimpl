@@ -333,6 +333,7 @@ const VALIDATION_P384_CERT: &[u8] = include_bytes!("p384_cert.der");
 const VALIDATION_P384_SHA384_SIG: &[u8] = include_bytes!("p384_sha384_sig.der");
 
 #[cfg(test)]
+#[cfg(feature = "aws-lc-rs")]
 mod tests {
     use super::*;
     use crate::crypto::aws_lc_rs;
