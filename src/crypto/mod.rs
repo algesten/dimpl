@@ -13,6 +13,9 @@ mod keying;
 #[cfg(feature = "aws-lc-rs")]
 pub mod aws_lc_rs;
 
+#[cfg(feature = "rust-crypto")]
+pub mod rust_crypto;
+
 mod provider;
 mod validation;
 
