@@ -1,5 +1,6 @@
 //! TLS 1.2 PRF, random number generation, and HMAC using aws-lc-rs.
 
+use crate::buffer::Buf;
 use crate::crypto::provider::{HmacProvider, PrfProvider, SecureRandom};
 use crate::message::HashAlgorithm;
 
@@ -15,18 +16,20 @@ impl PrfProvider for AwsLcPrfProvider {
         secret: &[u8],
         label: &str,
         seed: &[u8],
+        out: &mut Buf,
         output_len: usize,
+        scratch: &mut Buf,
         hash: HashAlgorithm,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<(), String> {
         assert!(label.is_ascii(), "Label must be ASCII");
 
-        // Compute full_seed = label + seed
-        let mut full_seed = Vec::with_capacity(label.len() + seed.len());
-        full_seed.extend_from_slice(label.as_bytes());
-        full_seed.extend_from_slice(seed);
+        // Use scratch buffer for full_seed concatenation
+        scratch.clear();
+        scratch.extend_from_slice(label.as_bytes());
+        scratch.extend_from_slice(seed);
 
         let algorithm = hmac::hmac_algorithm(hash)?;
-        hmac::p_hash(algorithm, secret, &full_seed, output_len)
+        hmac::p_hash(algorithm, secret, scratch, out, output_len)
     }
 }
 
@@ -48,11 +51,13 @@ impl SecureRandom for AwsLcSecureRandom {
 pub(super) struct AwsLcHmacProvider;
 
 impl HmacProvider for AwsLcHmacProvider {
-    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<Vec<u8>, String> {
+    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String> {
         use aws_lc_rs::hmac;
         let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, key);
         let tag = hmac::sign(&hmac_key, data);
-        Ok(tag.as_ref().to_vec())
+        let mut result = [0u8; 32];
+        result.copy_from_slice(tag.as_ref());
+        Ok(result)
     }
 }
 

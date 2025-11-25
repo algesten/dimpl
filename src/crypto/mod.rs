@@ -85,7 +85,7 @@ pub(crate) struct CryptoContext {
     certificate: Vec<u8>,
 
     /// Parsed private key for the certificate with signature algorithm
-    private_key: Arc<dyn provider::SigningKey>,
+    private_key: Box<dyn provider::SigningKey>,
 
     /// Client random (needed for SRTP key export per RFC 5705)
     client_random: Option<ArrayVec<u8, 32>>,
@@ -164,18 +164,27 @@ impl CryptoContext {
     }
 
     /// Process peer's public key and compute shared secret
-    pub fn compute_shared_secret(&mut self, peer_public_key: &[u8]) -> Result<(), String> {
+    pub fn compute_shared_secret(
+        &mut self,
+        peer_public_key: &[u8],
+        buf: &mut Buf,
+    ) -> Result<(), String> {
         let ke = self
             .key_exchange
             .take()
             .ok_or_else(|| "Key exchange not initialized".to_string())?;
-        self.pre_master_secret = Some(ke.complete(peer_public_key)?);
+        ke.complete(peer_public_key, buf)?;
+        self.pre_master_secret = Some(core::mem::take(buf));
         // Note: we keep key_exchange_public_key since it may be needed later
         Ok(())
     }
 
     /// Initialize ECDHE key exchange (server role) and return our ephemeral public key
-    pub fn init_ecdh_server(&mut self, named_group: NamedGroup) -> Result<&[u8], String> {
+    pub fn init_ecdh_server(
+        &mut self,
+        named_group: NamedGroup,
+        kx_buf: &mut Buf,
+    ) -> Result<&[u8], String> {
         // Find the matching key exchange group from the provider
         let kx_group = self
             .provider()
@@ -184,7 +193,8 @@ impl CryptoContext {
             .find(|g| g.name() == named_group)
             .ok_or_else(|| format!("Unsupported ECDHE named group: {:?}", named_group))?;
 
-        self.key_exchange = Some(kx_group.start_exchange()?);
+        kx_buf.clear();
+        self.key_exchange = Some(kx_group.start_exchange(core::mem::take(kx_buf))?);
         self.maybe_init_key_exchange()
     }
 
@@ -193,6 +203,7 @@ impl CryptoContext {
         &mut self,
         group: NamedGroup,
         server_public: &[u8],
+        kx_buf: &mut Buf,
     ) -> Result<(), String> {
         // Find the matching key exchange group from the provider
         let kx_group = self
@@ -203,13 +214,14 @@ impl CryptoContext {
             .ok_or_else(|| format!("Unsupported ECDHE named group: {:?}", group))?;
 
         // Create a new ECDH key exchange
-        self.key_exchange = Some(kx_group.start_exchange()?);
+        kx_buf.clear();
+        self.key_exchange = Some(kx_group.start_exchange(core::mem::take(kx_buf))?);
 
         // Generate our keypair
         let _our_public = self.maybe_init_key_exchange()?;
 
         // Compute shared secret with the server's public key
-        self.compute_shared_secret(server_public)?;
+        self.compute_shared_secret(server_public, kx_buf)?;
 
         Ok(())
     }
@@ -219,21 +231,25 @@ impl CryptoContext {
         &mut self,
         session_hash: &[u8],
         hash: HashAlgorithm,
+        out: &mut Buf,
+        scratch: &mut Buf,
     ) -> Result<(), String> {
         trace!("Deriving extended master secret");
         let Some(pms) = &self.pre_master_secret else {
             return Err("Pre-master secret not available".to_string());
         };
-        let master_secret_vec = self.provider().prf_provider.prf_tls12(
+        self.provider().prf_provider.prf_tls12(
             pms,
             "extended master secret",
             session_hash,
+            out,
             48,
+            scratch,
             hash,
         )?;
         let mut master_secret = ArrayVec::new();
         master_secret
-            .try_extend_from_slice(&master_secret_vec)
+            .try_extend_from_slice(out)
             .map_err(|_| "Master secret too long".to_string())?;
         self.master_secret = Some(master_secret);
         // Clear pre-master secret after use (security measure)
@@ -247,6 +263,8 @@ impl CryptoContext {
         cipher_suite: CipherSuite,
         client_random: &[u8],
         server_random: &[u8],
+        key_block: &mut Buf,
+        scratch: &mut Buf,
     ) -> Result<(), String> {
         let Some(master_secret) = &self.master_secret else {
             return Err("Master secret not available".to_string());
@@ -280,16 +298,18 @@ impl CryptoContext {
         let key_material_len = 2 * (mac_key_len + enc_key_len + fixed_iv_len);
 
         // Compute seed for key expansion: server_random + client_random
-        let mut seed = Vec::with_capacity(server_random.len() + client_random.len());
-        seed.extend_from_slice(server_random);
-        seed.extend_from_slice(client_random);
+        let mut seed = [0u8; 64];
+        seed[..32].copy_from_slice(server_random);
+        seed[32..].copy_from_slice(client_random);
 
         // Generate key material using PRF
-        let key_block = self.provider().prf_provider.prf_tls12(
+        self.provider().prf_provider.prf_tls12(
             master_secret,
             "key expansion",
             &seed,
+            key_block,
             key_material_len,
+            scratch,
             cipher_suite.hash_algorithm(),
         )?;
 
@@ -395,8 +415,13 @@ impl CryptoContext {
 
     /// Sign the provided data using the client's private key
     /// Returns the signature or an error if signing fails
-    pub fn sign_data(&self, data: &[u8], _hash_alg: HashAlgorithm) -> Result<Vec<u8>, String> {
-        self.private_key.sign(data)
+    pub fn sign_data(
+        &mut self,
+        data: &[u8],
+        _hash_alg: HashAlgorithm,
+        out: &mut Buf,
+    ) -> Result<(), String> {
+        self.private_key.sign(data, out)
     }
 
     /// Generate verify data for a Finished message using PRF
@@ -405,6 +430,8 @@ impl CryptoContext {
         handshake_hash: &[u8],
         is_client: bool,
         hash: HashAlgorithm,
+        out: &mut Buf,
+        scratch: &mut Buf,
     ) -> Result<ArrayVec<u8, 128>, String> {
         let master_secret = match &self.master_secret {
             Some(ms) => ms,
@@ -418,16 +445,18 @@ impl CryptoContext {
         };
 
         // Generate 12 bytes of verify data using PRF
-        let verify_data_vec = self.provider().prf_provider.prf_tls12(
+        self.provider().prf_provider.prf_tls12(
             master_secret,
             label,
             handshake_hash,
+            out,
             12,
+            scratch,
             hash,
         )?;
         let mut verify_data = ArrayVec::new();
         verify_data
-            .try_extend_from_slice(&verify_data_vec)
+            .try_extend_from_slice(out)
             .map_err(|_| "Verify data too long".to_string())?;
         Ok(verify_data)
     }
@@ -438,6 +467,8 @@ impl CryptoContext {
         &self,
         profile: SrtpProfile,
         hash: HashAlgorithm,
+        out: &mut Buf,
+        scratch: &mut Buf,
     ) -> Result<ArrayVec<u8, 128>, String> {
         const DTLS_SRTP_KEY_LABEL: &str = "EXTRACTOR-dtls_srtp";
 
@@ -464,16 +495,18 @@ impl CryptoContext {
         seed.try_extend_from_slice(server_random)
             .expect("server_random too long");
 
-        let keying_material_vec = self.provider().prf_provider.prf_tls12(
+        self.provider().prf_provider.prf_tls12(
             master_secret,
             DTLS_SRTP_KEY_LABEL,
             &seed,
+            out,
             profile.keying_material_len(),
+            scratch,
             hash,
         )?;
         let mut keying_material = ArrayVec::new();
         keying_material
-            .try_extend_from_slice(&keying_material_vec)
+            .try_extend_from_slice(out)
             .map_err(|_| "Keying material too long".to_string())?;
 
         Ok(keying_material)

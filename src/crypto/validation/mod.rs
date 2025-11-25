@@ -3,6 +3,7 @@
 //! This module defines the validation rules for crypto providers used with dimpl,
 //! based on the documented support in lib.rs.
 
+use crate::buffer::Buf;
 use crate::crypto::provider::{CryptoProvider, SupportedCipherSuite, SupportedKxGroup};
 use crate::crypto::HashAlgorithm;
 use crate::message::{CipherSuite, NamedGroup, SignatureAlgorithm};
@@ -122,7 +123,8 @@ impl CryptoProvider {
 
             // Test with empty input - use known hash values
             hasher.update(&[]);
-            let result = hasher.clone_and_finalize();
+            let mut result = Buf::new();
+            hasher.clone_and_finalize(&mut result);
 
             let maybe_expected = HASH_TEST_VECTORS
                 .iter()
@@ -136,7 +138,7 @@ impl CryptoProvider {
                 )));
             };
 
-            if result.as_slice() != *expected {
+            if result.as_ref() != *expected {
                 return Err(Error::ConfigError(format!(
                     "Hash provider {:?} produced incorrect result",
                     hash_alg
@@ -158,9 +160,18 @@ impl CryptoProvider {
 
         // Test PRF for each validated hash algorithm
         for &hash_alg in validated_hashes {
-            let result = self
-                .prf_provider
-                .prf_tls12(secret, label, seed, output_len, hash_alg)
+            let mut result = Buf::new();
+            let mut scratch = Buf::new();
+            self.prf_provider
+                .prf_tls12(
+                    secret,
+                    label,
+                    seed,
+                    &mut result,
+                    output_len,
+                    &mut scratch,
+                    hash_alg,
+                )
                 .map_err(|e| {
                     Error::ConfigError(format!("PRF provider failed for {:?}: {}", hash_alg, e))
                 })?;
@@ -187,7 +198,7 @@ impl CryptoProvider {
                 )));
             };
 
-            if result.as_slice() != *expected {
+            if result.as_ref() != *expected {
                 return Err(Error::ConfigError(format!(
                     "PRF provider {:?} produced incorrect result",
                     hash_alg
