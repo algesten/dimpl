@@ -45,7 +45,7 @@ pub struct Engine {
     cipher_suite: Option<CipherSuite>,
 
     /// Cryptographic context for handling encryption/decryption
-    crypto_context: CryptoContext,
+    pub(crate) crypto_context: CryptoContext,
 
     /// Whether the remote peer has enabled encryption
     peer_encryption_enabled: bool,
@@ -60,7 +60,9 @@ pub struct Engine {
     next_handshake_seq_no: u16,
 
     /// Handshakes collected for hash computation.
-    transcript: Buf,
+    ///
+    /// NB: pub(crate) because we need to sign it in client.rs
+    pub(crate) transcript: Buf,
 
     /// Anti-replay window state (per current epoch)
     replay: ReplayWindow,
@@ -799,6 +801,16 @@ impl Engine {
         self.release_app_data = true;
     }
 
+    /// Pop a buffer from the buffer pool for temporary use
+    pub(crate) fn pop_buffer(&mut self) -> Buf {
+        self.buffers_free.pop()
+    }
+
+    /// Return a buffer to the buffer pool
+    pub(crate) fn push_buffer(&mut self, buf: Buf) {
+        self.buffers_free.push(buf);
+    }
+
     /// Encrypt data appropriate for the role (client or server)
     fn encrypt_data(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), Error> {
         if self.is_client {
@@ -839,10 +851,10 @@ impl Engine {
         self.transcript.clear();
     }
 
-    pub fn transcript_hash(&self, algorithm: HashAlgorithm) -> Vec<u8> {
+    pub fn transcript_hash(&self, algorithm: HashAlgorithm, out: &mut Buf) {
         let mut hash = self.crypto_context.create_hash(algorithm);
         hash.update(&self.transcript);
-        hash.clone_and_finalize()
+        hash.clone_and_finalize(out);
     }
 
     pub fn transcript(&self) -> &[u8] {
@@ -909,19 +921,28 @@ impl Engine {
         (aad, nonce)
     }
 
-    pub fn generate_verify_data(&self, is_client: bool) -> Result<[u8; 12], Error> {
+    pub fn generate_verify_data(&mut self, is_client: bool) -> Result<[u8; 12], Error> {
         let Some(suite) = self.cipher_suite() else {
             return Err(Error::UnexpectedMessage(
                 "No cipher suite selected".to_string(),
             ));
         };
         let algorithm = suite.hash_algorithm();
-        let handshake_hash = self.transcript_hash(algorithm);
+        let mut handshake_hash = self.buffers_free.pop();
+        self.transcript_hash(algorithm, &mut handshake_hash);
 
         let suite_hash = suite.hash_algorithm();
+        let mut out = self.buffers_free.pop();
+        let mut scratch = self.buffers_free.pop();
         let verify_data_vec = self
             .crypto_context()
-            .generate_verify_data(&handshake_hash, is_client, suite_hash)
+            .generate_verify_data(
+                &handshake_hash,
+                is_client,
+                suite_hash,
+                &mut out,
+                &mut scratch,
+            )
             .map_err(|e| Error::CryptoError(format!("Failed to generate verify data: {}", e)))?;
 
         if verify_data_vec.len() != 12 {
@@ -930,6 +951,10 @@ impl Engine {
 
         let mut verify_data = [0u8; 12];
         verify_data.copy_from_slice(&verify_data_vec);
+
+        self.buffers_free.push(handshake_hash);
+        self.buffers_free.push(out);
+        self.buffers_free.push(scratch);
 
         Ok(verify_data)
     }

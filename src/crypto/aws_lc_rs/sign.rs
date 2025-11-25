@@ -1,7 +1,6 @@
 //! Signing and key loading implementations using aws-lc-rs.
 
 use std::str;
-use std::sync::Arc;
 
 use aws_lc_rs::signature::{EcdsaKeyPair, EcdsaSigningAlgorithm, UnparsedPublicKey};
 use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_ASN1_SIGNING};
@@ -10,24 +9,34 @@ use der::{Decode, Encode};
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
+use crate::buffer::Buf;
 use crate::crypto::provider::{KeyProvider, SignatureVerifier, SigningKey};
 use crate::message::{CipherSuite, HashAlgorithm, SignatureAlgorithm};
 
 /// ECDSA signing key implementation.
-#[derive(Debug)]
 struct EcdsaSigningKey {
     key_pair: EcdsaKeyPair,
     signing_algorithm: &'static EcdsaSigningAlgorithm,
 }
 
+impl std::fmt::Debug for EcdsaSigningKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EcdsaSigningKey")
+            .field("signing_algorithm", &self.signing_algorithm)
+            .finish()
+    }
+}
+
 impl SigningKey for EcdsaSigningKey {
-    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, String> {
+    fn sign(&mut self, data: &[u8], buf: &mut Buf) -> Result<(), String> {
         let rng = aws_lc_rs::rand::SystemRandom::new();
         let signature = self
             .key_pair
             .sign(&rng, data)
             .map_err(|_| "Signing failed".to_string())?;
-        Ok(signature.as_ref().to_vec())
+        buf.clear();
+        buf.extend_from_slice(signature.as_ref());
+        Ok(())
     }
 
     fn algorithm(&self) -> SignatureAlgorithm {
@@ -57,16 +66,16 @@ impl SigningKey for EcdsaSigningKey {
 pub(super) struct AwsLcKeyProvider;
 
 impl KeyProvider for AwsLcKeyProvider {
-    fn load_private_key(&self, key_der: &[u8]) -> Result<Arc<dyn SigningKey>, String> {
+    fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKey>, String> {
         // Try PKCS#8 DER format first (most common)
         if let Ok(key_pair) = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, key_der) {
-            return Ok(Arc::new(EcdsaSigningKey {
+            return Ok(Box::new(EcdsaSigningKey {
                 key_pair,
                 signing_algorithm: &ECDSA_P256_SHA256_ASN1_SIGNING,
             }));
         }
         if let Ok(key_pair) = EcdsaKeyPair::from_pkcs8(&ECDSA_P384_SHA384_ASN1_SIGNING, key_der) {
-            return Ok(Arc::new(EcdsaSigningKey {
+            return Ok(Box::new(EcdsaSigningKey {
                 key_pair,
                 signing_algorithm: &ECDSA_P384_SHA384_ASN1_SIGNING,
             }));
@@ -116,7 +125,7 @@ impl KeyProvider for AwsLcKeyProvider {
                     if let Ok(key_pair) =
                         EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &pkcs8_der)
                     {
-                        return Ok(Arc::new(EcdsaSigningKey {
+                        return Ok(Box::new(EcdsaSigningKey {
                             key_pair,
                             signing_algorithm: &ECDSA_P256_SHA256_ASN1_SIGNING,
                         }));
@@ -128,7 +137,7 @@ impl KeyProvider for AwsLcKeyProvider {
                     if let Ok(key_pair) =
                         EcdsaKeyPair::from_pkcs8(&ECDSA_P384_SHA384_ASN1_SIGNING, &pkcs8_der)
                     {
-                        return Ok(Arc::new(EcdsaSigningKey {
+                        return Ok(Box::new(EcdsaSigningKey {
                             key_pair,
                             signing_algorithm: &ECDSA_P384_SHA384_ASN1_SIGNING,
                         }));

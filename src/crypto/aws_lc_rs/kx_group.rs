@@ -11,11 +11,20 @@ use crate::message::NamedGroup;
 struct EcdhKeyExchange {
     group: NamedGroup,
     private_key: EphemeralPrivateKey,
-    public_key: Vec<u8>,
+    public_key: Buf,
+}
+
+impl std::fmt::Debug for EcdhKeyExchange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EcdhKeyExchange")
+            .field("group", &self.group)
+            .field("public_key_len", &self.public_key.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl EcdhKeyExchange {
-    fn new(group: NamedGroup) -> Result<Self, String> {
+    fn new(group: NamedGroup, mut buf: Buf) -> Result<Self, String> {
         let algorithm = match group {
             NamedGroup::Secp256r1 => &ECDH_P256,
             NamedGroup::Secp384r1 => &ECDH_P384,
@@ -26,15 +35,17 @@ impl EcdhKeyExchange {
         let private_key = EphemeralPrivateKey::generate(algorithm, &rng)
             .map_err(|_| "Failed to generate ephemeral key".to_string())?;
 
-        let public_key = private_key
+        let pk = private_key
             .compute_public_key()
-            .map(|pk| pk.as_ref().to_vec())
             .map_err(|_| "Failed to compute public key".to_string())?;
+
+        buf.clear();
+        buf.extend_from_slice(pk.as_ref());
 
         Ok(EcdhKeyExchange {
             group,
             private_key,
-            public_key,
+            public_key: buf,
         })
     }
 
@@ -52,7 +63,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
         &self.public_key
     }
 
-    fn complete(self: Box<Self>, peer_pub: &[u8]) -> Result<Buf, String> {
+    fn complete(self: Box<Self>, peer_pub: &[u8], out: &mut Buf) -> Result<(), String> {
         let algorithm = self.algorithm();
         let peer_key = UnparsedPublicKey::new(algorithm, peer_pub);
 
@@ -61,9 +72,9 @@ impl ActiveKeyExchange for EcdhKeyExchange {
             peer_key,
             "ECDH agreement failed",
             |secret| {
-                let mut buf = Buf::new();
-                buf.extend_from_slice(secret);
-                Ok(buf)
+                out.clear();
+                out.extend_from_slice(secret);
+                Ok(())
             },
         )
         .map_err(|e| e.to_string())
@@ -83,8 +94,8 @@ impl SupportedKxGroup for P256 {
         NamedGroup::Secp256r1
     }
 
-    fn start_exchange(&self) -> Result<Box<dyn ActiveKeyExchange>, String> {
-        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp256r1)?))
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String> {
+        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp256r1, buf)?))
     }
 }
 
@@ -97,8 +108,8 @@ impl SupportedKxGroup for P384 {
         NamedGroup::Secp384r1
     }
 
-    fn start_exchange(&self) -> Result<Box<dyn ActiveKeyExchange>, String> {
-        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp384r1)?))
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String> {
+        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp384r1, buf)?))
     }
 }
 

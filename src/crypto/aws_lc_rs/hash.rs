@@ -2,6 +2,7 @@
 
 use aws_lc_rs::digest::{Context, SHA256, SHA384};
 
+use crate::buffer::Buf;
 use crate::crypto::provider::{HashContext, HashProvider};
 use crate::message::HashAlgorithm;
 
@@ -15,8 +16,10 @@ impl HashContext for AwsLcHashContext {
         self.context.update(data);
     }
 
-    fn clone_and_finalize(&self) -> Vec<u8> {
-        self.context.clone().finish().as_ref().to_vec()
+    fn clone_and_finalize(&self, out: &mut Buf) {
+        let digest = self.context.clone().finish();
+        out.clear();
+        out.extend_from_slice(digest.as_ref());
     }
 }
 

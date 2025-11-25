@@ -65,7 +65,7 @@ pub struct Client {
 
     /// Captured session hash for Extended Master Secret (RFC 7627)
     /// This is captured after ServerHelloDone to include the correct handshake messages
-    captured_session_hash: Option<Vec<u8>>,
+    captured_session_hash: Option<Buf>,
 
     /// The last now we seen
     last_now: Option<Instant>,
@@ -514,8 +514,8 @@ impl State {
         drop(maybe);
 
         // Now we can access the buffer to get the actual bytes
-        let signature_bytes = client.defragment_buffer[signature_range].to_vec();
-        let public_key_vec = client.defragment_buffer[public_key_range].to_vec();
+        let signature_bytes = &client.defragment_buffer[signature_range];
+        let public_key_vec = &client.defragment_buffer[public_key_range];
 
         // Build signed_data = client_random || server_random || SKE params (without signature)
         let mut signed_data = Buf::new();
@@ -525,7 +525,7 @@ impl State {
         signed_data.push(curve_type.as_u8());
         signed_data.extend_from_slice(&named_group.as_u16().to_be_bytes());
         signed_data.push(public_key_vec.len() as u8);
-        signed_data.extend_from_slice(&public_key_vec);
+        signed_data.extend_from_slice(public_key_vec);
 
         let cipher_suite = client
             .engine
@@ -561,7 +561,7 @@ impl State {
         client
             .engine
             .crypto_context_mut()
-            .verify_signature(&signed_data, &temp_signed, &signature_bytes, cert_der)
+            .verify_signature(&signed_data, &temp_signed, signature_bytes, cert_der)
             .map_err(|e| {
                 Error::CryptoError(format!(
                     "Failed to verify server key exchange signature: {}",
@@ -576,13 +576,15 @@ impl State {
 
         // Process the server key exchange parameters
         // We already have the curve and public key extracted
+        let mut kx_buf = client.engine.pop_buffer();
         client
             .engine
             .crypto_context_mut()
-            .process_ecdh_params(named_group, &public_key_vec)
+            .process_ecdh_params(named_group, public_key_vec, &mut kx_buf)
             .map_err(|e| {
                 Error::CryptoError(format!("Failed to process server key exchange: {}", e))
             })?;
+        client.engine.push_buffer(kx_buf);
 
         Ok(Self::AwaitCertificateRequest)
     }
@@ -708,7 +710,9 @@ impl State {
             .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
 
         let suite_hash = cipher_suite.hash_algorithm();
-        client.captured_session_hash = Some(client.engine.transcript_hash(suite_hash));
+        let mut buf = Buf::new();
+        client.engine.transcript_hash(suite_hash, &mut buf);
+        client.captured_session_hash = Some(buf);
 
         if client.certificate_verify {
             Ok(Self::SendCertificateVerify)
@@ -768,8 +772,8 @@ impl State {
         // unwrap: is ok because we set the random in handle_timeout
         client.random.unwrap().serialize(&mut client_random_buf_b);
         server_random.serialize(&mut server_random_buf_b);
-        let client_random_buf = client_random_buf_b.into_vec();
-        let server_random_buf = server_random_buf_b.into_vec();
+        let client_random_buf = client_random_buf_b;
+        let server_random_buf = server_random_buf_b;
 
         // Derive master secret (use EMS if negotiated)
         let suite_hash = cipher_suite.hash_algorithm();
@@ -784,10 +788,12 @@ impl State {
             "Using captured session hash for Extended Master Secret (length: {})",
             session_hash.len()
         );
+        let mut out = client.engine.pop_buffer();
+        let mut scratch = client.engine.pop_buffer();
         client
             .engine
             .crypto_context_mut()
-            .derive_extended_master_secret(session_hash, suite_hash)
+            .derive_extended_master_secret(session_hash, suite_hash, &mut out, &mut scratch)
             .map_err(|e| {
                 Error::CryptoError(format!("Failed to derive extended master secret: {}", e))
             })?;
@@ -796,8 +802,17 @@ impl State {
         client
             .engine
             .crypto_context_mut()
-            .derive_keys(cipher_suite, &client_random_buf, &server_random_buf)
+            .derive_keys(
+                cipher_suite,
+                &client_random_buf,
+                &server_random_buf,
+                &mut out,
+                &mut scratch,
+            )
             .map_err(|e| Error::CryptoError(format!("Failed to derive keys: {}", e)))?;
+
+        client.engine.push_buffer(out);
+        client.engine.push_buffer(scratch);
 
         Ok(())
     }
@@ -921,11 +936,15 @@ impl State {
         if let Some(profile) = client.negotiated_srtp_profile {
             let suite_hash = client.engine.cipher_suite().unwrap().hash_algorithm();
 
+            let mut out = client.engine.pop_buffer();
+            let mut scratch = client.engine.pop_buffer();
             if let Ok(keying_material) = client
                 .engine
                 .crypto_context()
-                .extract_srtp_keying_material(profile, suite_hash)
+                .extract_srtp_keying_material(profile, suite_hash, &mut out, &mut scratch)
             {
+                client.engine.push_buffer(out);
+                client.engine.push_buffer(scratch);
                 // Emit the keying material event with the negotiated profile
                 debug!(
                     "SRTP keying material extracted ({} bytes) for profile: {:?}",
@@ -939,6 +958,9 @@ impl State {
                 client
                     .local_events
                     .push_back(LocalEvent::KeyingMaterial(keying_material, profile));
+            } else {
+                client.engine.push_buffer(out);
+                client.engine.push_buffer(scratch);
             }
         }
 
@@ -1040,8 +1062,7 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
     let public_key = engine
         .crypto_context_mut()
         .maybe_init_key_exchange()
-        .map_err(|e| Error::CryptoError(format!("Failed to generate key exchange: {}", e)))?
-        .to_vec();
+        .map_err(|e| Error::CryptoError(format!("Failed to generate key exchange: {}", e)))?;
 
     trace!("Generated public key size: {} bytes", public_key.len());
 
@@ -1067,7 +1088,7 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
     }
 
     // Serialize the public key directly
-    ClientKeyExchange::serialize_from_bytes(&public_key, body);
+    ClientKeyExchange::serialize_from_bytes(public_key, body);
 
     Ok(())
 }
@@ -1088,12 +1109,13 @@ fn handshake_create_certificate_verify(body: &mut Buf, engine: &mut Engine) -> R
     // Create the signature algorithm
     let algorithm = SignatureAndHashAlgorithm::new(hash_alg, sig_alg);
 
-    let handshake_data = engine.transcript();
+    let mut signature = engine.pop_buffer();
 
     // Sign all handshake messages
-    let signature = engine
-        .crypto_context()
-        .sign_data(handshake_data, hash_alg)
+    let handshake_data = &engine.transcript;
+    engine
+        .crypto_context
+        .sign_data(handshake_data, hash_alg, &mut signature)
         .map_err(|e| Error::CryptoError(format!("Failed to sign handshake messages: {}", e)))?;
 
     debug!("Generated signature size: {} bytes", signature.len());
@@ -1102,6 +1124,8 @@ fn handshake_create_certificate_verify(body: &mut Buf, engine: &mut Engine) -> R
     body.extend_from_slice(&algorithm.as_u16().to_be_bytes());
     body.extend_from_slice(&(signature.len() as u16).to_be_bytes());
     body.extend_from_slice(&signature);
+
+    engine.push_buffer(signature);
 
     Ok(())
 }

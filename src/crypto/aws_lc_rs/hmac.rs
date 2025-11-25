@@ -2,6 +2,7 @@
 
 use aws_lc_rs::hmac;
 
+use crate::buffer::Buf;
 use crate::message::HashAlgorithm;
 
 /// Compute HMAC using TLS 1.2 P_hash algorithm.
@@ -9,33 +10,34 @@ pub(super) fn p_hash(
     algorithm: hmac::Algorithm,
     secret: &[u8],
     full_seed: &[u8],
+    out: &mut Buf,
     output_len: usize,
-) -> Result<Vec<u8>, String> {
-    let mut result = Vec::new();
+) -> Result<(), String> {
+    out.clear();
 
     let key = hmac::Key::new(algorithm, secret);
 
     // A(1) = HMAC_hash(secret, A(0)) where A(0) = seed
     let mut a = hmac::sign(&key, full_seed);
 
-    while result.len() < output_len {
+    while out.len() < output_len {
         // HMAC_hash(secret, A(i) + seed)
         let mut ctx = hmac::Context::with_key(&key);
         ctx.update(a.as_ref());
         ctx.update(full_seed);
         let output = ctx.sign();
 
-        let remaining = output_len - result.len();
+        let remaining = output_len - out.len();
         let to_copy = std::cmp::min(remaining, output.as_ref().len());
-        result.extend_from_slice(&output.as_ref()[..to_copy]);
+        out.extend_from_slice(&output.as_ref()[..to_copy]);
 
-        if result.len() < output_len {
+        if out.len() < output_len {
             // A(i+1) = HMAC_hash(secret, A(i))
             a = hmac::sign(&key, a.as_ref());
         }
     }
 
-    Ok(result)
+    Ok(())
 }
 
 /// Get HMAC algorithm from hash algorithm.

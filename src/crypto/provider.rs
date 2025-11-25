@@ -20,6 +20,7 @@
 //! - **Secure Random** ([`SecureRandom`]): Cryptographically secure RNG
 //! - **Hash Provider** ([`HashProvider`]): Factory for hash contexts
 //! - **PRF Provider** ([`PrfProvider`]): TLS 1.2 PRF for key derivation
+//! - **HMAC Provider** ([`HmacProvider`]): Compute HMAC signatures
 //!
 //! # Using a Custom Provider
 //!
@@ -108,7 +109,7 @@
 
 use std::fmt::Debug;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
@@ -136,7 +137,7 @@ impl<T: Send + Sync + Debug + UnwindSafe + RefUnwindSafe> CryptoSafe for T {}
 // ============================================================================
 
 /// AEAD cipher for in-place encryption/decryption.
-pub trait Cipher: Send + Sync + UnwindSafe {
+pub trait Cipher: CryptoSafe {
     /// Encrypt plaintext in-place, appending authentication tag.
     fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String>;
 
@@ -145,19 +146,19 @@ pub trait Cipher: Send + Sync + UnwindSafe {
 }
 
 /// Stateful hash context for incremental hashing.
-pub trait HashContext: Send {
+pub trait HashContext {
     /// Update the hash with new data.
     fn update(&mut self, data: &[u8]);
 
-    /// Clone the context and finalize it, returning the hash.
+    /// Clone the context and finalize it, writing the hash to `out`.
     /// The original context can continue to be updated.
-    fn clone_and_finalize(&self) -> Vec<u8>;
+    fn clone_and_finalize(&self, out: &mut Buf);
 }
 
 /// Signing key for generating digital signatures.
-pub trait SigningKey: Send + Sync + Debug + RefUnwindSafe {
+pub trait SigningKey: CryptoSafe {
     /// Sign data and return the signature.
-    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, String>;
+    fn sign(&mut self, data: &[u8], out: &mut Buf) -> Result<(), String>;
 
     /// Signature algorithm used by this key.
     fn algorithm(&self) -> SignatureAlgorithm;
@@ -170,12 +171,12 @@ pub trait SigningKey: Send + Sync + Debug + RefUnwindSafe {
 }
 
 /// Active key exchange instance (ephemeral keypair for one handshake).
-pub trait ActiveKeyExchange: Send + Sync + UnwindSafe {
+pub trait ActiveKeyExchange: CryptoSafe {
     /// Get the public key for this exchange.
     fn pub_key(&self) -> &[u8];
 
     /// Complete exchange with peer's public key, returning shared secret.
-    fn complete(self: Box<Self>, peer_pub: &[u8]) -> Result<Buf, String>;
+    fn complete(self: Box<Self>, peer_pub: &[u8], out: &mut Buf) -> Result<(), String>;
 
     /// Get the named group for this exchange.
     fn group(&self) -> NamedGroup;
@@ -206,7 +207,8 @@ pub trait SupportedKxGroup: CryptoSafe {
     fn name(&self) -> NamedGroup;
 
     /// Start a new key exchange, generating ephemeral keypair.
-    fn start_exchange(&self) -> Result<Box<dyn ActiveKeyExchange>, String>;
+    /// The provided `buf` will be used to store the public key.
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String>;
 }
 
 /// Signature verification against certificates.
@@ -225,7 +227,7 @@ pub trait SignatureVerifier: CryptoSafe {
 /// Private key parser (factory for SigningKey).
 pub trait KeyProvider: CryptoSafe {
     /// Parse and load a private key from DER/PEM bytes.
-    fn load_private_key(&self, key_der: &[u8]) -> Result<Arc<dyn SigningKey>, String>;
+    fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKey>, String>;
 }
 
 /// Secure random number generator.
@@ -242,21 +244,25 @@ pub trait HashProvider: CryptoSafe {
 
 /// PRF (Pseudo-Random Function) for TLS 1.2 key derivation.
 pub trait PrfProvider: CryptoSafe {
-    /// TLS 1.2 PRF: PRF(secret, label, seed) with specified output length.
+    /// TLS 1.2 PRF: PRF(secret, label, seed) writing output to `out`.
+    /// Uses `scratch` for temporary concatenation of label+seed.
+    #[allow(clippy::too_many_arguments)]
     fn prf_tls12(
         &self,
         secret: &[u8],
         label: &str,
         seed: &[u8],
+        out: &mut Buf,
         output_len: usize,
+        scratch: &mut Buf,
         hash: HashAlgorithm,
-    ) -> Result<Vec<u8>, String>;
+    ) -> Result<(), String>;
 }
 
 /// HMAC provider for computing HMAC signatures.
 pub trait HmacProvider: CryptoSafe {
     /// Compute HMAC-SHA256(key, data) and return the result.
-    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<Vec<u8>, String>;
+    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String>;
 }
 
 // ============================================================================

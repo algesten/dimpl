@@ -73,7 +73,7 @@ pub struct Server {
     defragment_buffer: Buf,
 
     /// Captured session hash for Extended Master Secret (RFC 7627)
-    captured_session_hash: Option<Vec<u8>>,
+    captured_session_hash: Option<Buf>,
 
     /// The last now we seen
     last_now: Option<Instant>,
@@ -581,28 +581,30 @@ impl State {
         let client_pub = &server.defragment_buffer[public_key_range];
 
         // Compute shared secret
+        let mut buf = server.engine.pop_buffer();
         server
             .engine
             .crypto_context_mut()
-            .compute_shared_secret(client_pub)
+            .compute_shared_secret(client_pub, &mut buf)
             .map_err(|e| Error::CryptoError(format!("Failed to compute shared secret: {}", e)))?;
 
         // Capture session hash for EMS now (up to ClientKeyExchange)
         let suite_hash = suite.hash_algorithm();
-        server.captured_session_hash = Some(server.engine.transcript_hash(suite_hash));
+        server.engine.transcript_hash(suite_hash, &mut buf);
+        server.captured_session_hash = Some(buf);
 
         // Derive master secret and keys (needed to decrypt client's Finished)
         let suite_hash = suite.hash_algorithm();
         let client_random_buf = {
             let mut b = Buf::new();
             server.client_random.unwrap().serialize(&mut b);
-            b.into_vec()
+            b
         };
         let server_random_buf = {
             let mut b = Buf::new();
             // unwrap: is ok because we set the random in handle_timeout
             server.random.unwrap().serialize(&mut b);
-            b.into_vec()
+            b
         };
 
         let session_hash = server.captured_session_hash.as_ref().ok_or_else(|| {
@@ -611,10 +613,12 @@ impl State {
             )
         })?;
 
+        let mut out = server.engine.pop_buffer();
+        let mut scratch = server.engine.pop_buffer();
         server
             .engine
             .crypto_context_mut()
-            .derive_extended_master_secret(session_hash, suite_hash)
+            .derive_extended_master_secret(session_hash, suite_hash, &mut out, &mut scratch)
             .map_err(|e| {
                 Error::CryptoError(format!("Failed to derive extended master secret: {}", e))
             })?;
@@ -622,8 +626,17 @@ impl State {
         server
             .engine
             .crypto_context_mut()
-            .derive_keys(suite, &client_random_buf, &server_random_buf)
+            .derive_keys(
+                suite,
+                &client_random_buf,
+                &server_random_buf,
+                &mut out,
+                &mut scratch,
+            )
             .map_err(|e| Error::CryptoError(format!("Failed to derive keys: {}", e)))?;
+
+        server.engine.push_buffer(out);
+        server.engine.push_buffer(scratch);
 
         trace!(
             "Captured session hash length for EMS: {}",
@@ -800,11 +813,15 @@ impl State {
         // Emit SRTP keying material if negotiated
         if let Some(profile) = server.negotiated_srtp_profile {
             let suite_hash = server.engine.cipher_suite().unwrap().hash_algorithm();
+            let mut out = server.engine.pop_buffer();
+            let mut scratch = server.engine.pop_buffer();
             if let Ok(keying_material) = server
                 .engine
                 .crypto_context()
-                .extract_srtp_keying_material(profile, suite_hash)
+                .extract_srtp_keying_material(profile, suite_hash, &mut out, &mut scratch)
             {
+                server.engine.push_buffer(out);
+                server.engine.push_buffer(scratch);
                 debug!(
                     "SRTP keying material extracted ({} bytes) for profile: {:?}",
                     keying_material.len(),
@@ -817,6 +834,9 @@ impl State {
                 server
                     .local_events
                     .push_back(LocalEvent::KeyingMaterial(keying_material, profile));
+            } else {
+                server.engine.push_buffer(out);
+                server.engine.push_buffer(scratch);
             }
         }
 
@@ -856,7 +876,7 @@ fn compute_cookie(
     let tag = hmac_provider
         .hmac_sha256(secret, &buf)
         .map_err(|e| Error::CryptoError(format!("Failed to compute HMAC: {}", e)))?;
-    let cookie = Cookie::try_new(&tag[..32])
+    let cookie = Cookie::try_new(&tag)
         .map_err(|_| Error::CryptoError("Failed to build cookie from HMAC output".to_string()))?;
     Ok(cookie)
 }
@@ -939,9 +959,10 @@ fn handshake_create_server_key_exchange(
     match key_exchange_algorithm {
         KeyExchangeAlgorithm::EECDH => {
             let (curve_type, named_group) = (CurveType::NamedCurve, named_group);
+            let mut kx_buf = engine.pop_buffer();
             let pubkey = engine
                 .crypto_context_mut()
-                .init_ecdh_server(named_group)
+                .init_ecdh_server(named_group, &mut kx_buf)
                 .map_err(|e| Error::CryptoError(format!("Failed to init ECDHE: {}", e)))?;
 
             trace!(
@@ -960,10 +981,14 @@ fn handshake_create_server_key_exchange(
             signed_data.push(pubkey.len() as u8);
             signed_data.extend_from_slice(pubkey);
 
+            engine.push_buffer(kx_buf);
+
+            let mut signature = engine.pop_buffer();
+
             trace!("SKE signature hash: {:?}", hash_alg);
-            let signature = engine
-                .crypto_context()
-                .sign_data(&signed_data, hash_alg)
+            engine
+                .crypto_context
+                .sign_data(&signed_data, hash_alg, &mut signature)
                 .map_err(|e| {
                     Error::CryptoError(format!("Failed to sign server key exchange: {}", e))
                 })?;
@@ -985,6 +1010,8 @@ fn handshake_create_server_key_exchange(
             body.extend_from_slice(&algorithm.as_u16().to_be_bytes());
             body.extend_from_slice(&(signature.len() as u16).to_be_bytes());
             body.extend_from_slice(&signature);
+
+            engine.push_buffer(signature);
 
             Ok(())
         }

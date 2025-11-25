@@ -13,6 +13,12 @@ struct AesGcm {
     key: LessSafeKey,
 }
 
+impl std::fmt::Debug for AesGcm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AesGcm").finish_non_exhaustive()
+    }
+}
+
 impl AesGcm {
     fn new(key: &[u8]) -> Result<Self, String> {
         let algorithm = match key.len() {
