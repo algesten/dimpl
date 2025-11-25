@@ -18,7 +18,6 @@ use std::time::Instant;
 
 use arrayvec::ArrayVec;
 
-use aws_lc_rs::hmac;
 use rand::random;
 
 use crate::buffer::{Buf, ToBuf};
@@ -260,10 +259,16 @@ impl State {
 
         // Stateless cookie: require 32-byte cookie matching HMAC(secret, client_random)
         let client_random = ch.random;
-        if !verify_cookie(&server.cookie_secret, client_random, ch.cookie) {
+        let hmac_provider = server.engine.config().crypto_provider().hmac_provider;
+        if !verify_cookie(
+            hmac_provider,
+            &server.cookie_secret,
+            client_random,
+            ch.cookie,
+        ) {
             debug!("Invalid/missing cookie; sending HelloVerifyRequest");
 
-            let cookie = compute_cookie(&server.cookie_secret, client_random)?;
+            let cookie = compute_cookie(hmac_provider, &server.cookie_secret, client_random)?;
             // Start/restart flight timer for server Flight 2 (HelloVerifyRequest)
             server.engine.flight_begin(2);
             server
@@ -277,8 +282,6 @@ impl State {
             // The HelloVerifyRequest exchange is not part of the main handshake transcript.
             // Clear transcript so subsequent CertificateVerify/Finished cover only the real handshake.
             server.engine.transcript_reset();
-
-            // After HelloVerifyRequest, await a new ClientHello
             return Ok(self);
         }
 
@@ -842,22 +845,32 @@ impl State {
     }
 }
 
-fn compute_cookie(secret: &[u8], client_random: Random) -> Result<Cookie, Error> {
+fn compute_cookie(
+    hmac_provider: &dyn crate::crypto::HmacProvider,
+    secret: &[u8],
+    client_random: Random,
+) -> Result<Cookie, Error> {
     // cookie = trunc_32(HMAC(secret, client_random))
-    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
     let mut buf = Buf::new();
     client_random.serialize(&mut buf);
-    let tag = hmac::sign(&key, &buf);
-    let cookie = Cookie::try_new(&tag.as_ref()[..32])
+    let tag = hmac_provider
+        .hmac_sha256(secret, &buf)
+        .map_err(|e| Error::CryptoError(format!("Failed to compute HMAC: {}", e)))?;
+    let cookie = Cookie::try_new(&tag[..32])
         .map_err(|_| Error::CryptoError("Failed to build cookie from HMAC output".to_string()))?;
     Ok(cookie)
 }
 
-fn verify_cookie(secret: &[u8], client_random: Random, cookie: Cookie) -> bool {
+fn verify_cookie(
+    hmac_provider: &dyn crate::crypto::HmacProvider,
+    secret: &[u8],
+    client_random: Random,
+    cookie: Cookie,
+) -> bool {
     if cookie.len() != 32 {
         return false;
     }
-    match compute_cookie(secret, client_random) {
+    match compute_cookie(hmac_provider, secret, client_random) {
         Ok(expected) => *expected == *cookie,
         Err(_) => false,
     }

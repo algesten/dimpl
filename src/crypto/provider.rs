@@ -253,6 +253,12 @@ pub trait PrfProvider: CryptoSafe {
     ) -> Result<Vec<u8>, String>;
 }
 
+/// HMAC provider for computing HMAC signatures.
+pub trait HmacProvider: CryptoSafe {
+    /// Compute HMAC-SHA256(key, data) and return the result.
+    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<Vec<u8>, String>;
+}
+
 // ============================================================================
 // Core Provider Struct
 // ============================================================================
@@ -286,6 +292,7 @@ pub trait PrfProvider: CryptoSafe {
 ///     secure_random: &my_rng::RNG,
 ///     hash_provider: &my_hash::HASH_PROVIDER,
 ///     prf_provider: &my_prf::PRF_PROVIDER,
+///     hmac_provider: &my_hmac::HMAC_PROVIDER,
 /// };
 /// ```
 #[derive(Debug, Clone)]

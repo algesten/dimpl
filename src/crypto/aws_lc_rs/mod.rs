@@ -92,5 +92,6 @@ pub fn default_provider() -> CryptoProvider {
         secure_random: &tls12::SECURE_RANDOM,
         hash_provider: &hash::HASH_PROVIDER,
         prf_provider: &tls12::PRF_PROVIDER,
+        hmac_provider: &tls12::HMAC_PROVIDER,
     }
 }

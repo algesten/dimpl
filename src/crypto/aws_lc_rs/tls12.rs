@@ -1,6 +1,6 @@
-//! TLS 1.2 PRF and random number generation using aws-lc-rs.
+//! TLS 1.2 PRF, random number generation, and HMAC using aws-lc-rs.
 
-use crate::crypto::provider::{PrfProvider, SecureRandom};
+use crate::crypto::provider::{HmacProvider, PrfProvider, SecureRandom};
 use crate::message::HashAlgorithm;
 
 use super::hmac;
@@ -43,8 +43,24 @@ impl SecureRandom for AwsLcSecureRandom {
     }
 }
 
+/// HMAC provider implementation.
+#[derive(Debug)]
+pub(super) struct AwsLcHmacProvider;
+
+impl HmacProvider for AwsLcHmacProvider {
+    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<Vec<u8>, String> {
+        use aws_lc_rs::hmac;
+        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, key);
+        let tag = hmac::sign(&hmac_key, data);
+        Ok(tag.as_ref().to_vec())
+    }
+}
+
 /// Static instance of the PRF provider.
 pub(super) static PRF_PROVIDER: AwsLcPrfProvider = AwsLcPrfProvider;
 
 /// Static instance of the secure random generator.
 pub(super) static SECURE_RANDOM: AwsLcSecureRandom = AwsLcSecureRandom;
+
+/// Static instance of the HMAC provider.
+pub(super) static HMAC_PROVIDER: AwsLcHmacProvider = AwsLcHmacProvider;

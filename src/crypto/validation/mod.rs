@@ -68,6 +68,7 @@ impl CryptoProvider {
     /// - At least one supported cipher suite
     /// - ECDH cipher suites have matching key exchange groups
     /// - Hash providers support required algorithms
+    /// - HMAC provider supports required operations
     ///
     /// Returns `Error::ConfigError` if validation fails.
     pub fn validate(&self) -> Result<(), Error> {
@@ -76,6 +77,7 @@ impl CryptoProvider {
         let validated_hashes = self.validate_hash_providers()?;
         self.validate_prf_provider(&validated_hashes)?;
         self.validate_signature_verifier(&validated_hashes)?;
+        self.validate_hmac_provider()?;
         Ok(())
     }
 
@@ -238,6 +240,40 @@ impl CryptoProvider {
 
         Ok(())
     }
+
+    /// Validate that HMAC provider supports required operations.
+    ///
+    /// We require HMAC-SHA256 for DTLS cookie computation.
+    fn validate_hmac_provider(&self) -> Result<(), Error> {
+        // Test HMAC-SHA256 with known test vector (RFC 2104 test case)
+        // HMAC-SHA256(key="key", data="The quick brown fox jumps over the lazy dog")
+        let key = b"key";
+        let data = b"The quick brown fox jumps over the lazy dog";
+
+        let result = self
+            .hmac_provider
+            .hmac_sha256(key, data)
+            .map_err(|e| Error::ConfigError(format!("HMAC provider failed: {}", e)))?;
+
+        // Verify the result matches expected HMAC-SHA256 output
+        // Expected: HMAC-SHA256("key", "The quick brown fox jumps over the lazy dog")
+        // This is a standard test vector for HMAC-SHA256
+        if result.len() != 32 {
+            return Err(Error::ConfigError(format!(
+                "HMAC provider returned wrong length: expected 32 bytes, got {}",
+                result.len()
+            )));
+        }
+
+        // Verify against known HMAC-SHA256 test vector
+        if result.as_slice() != HMAC_SHA256_TEST_VECTOR {
+            return Err(Error::ConfigError(
+                "HMAC provider produced incorrect result for HMAC-SHA256".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 const HASH_TEST_VECTORS: &[(HashAlgorithm, &[u8])] = &[
@@ -279,6 +315,14 @@ const PRF_TEST_VECTORS: &[(HashAlgorithm, &[u8])] = &[
             0x2b, 0xe4, 0x7e, 0x8b,
         ],
     ),
+];
+
+// Test vector for HMAC-SHA256
+// HMAC-SHA256(key="key", data="The quick brown fox jumps over the lazy dog")
+// Computed using standard HMAC-SHA256 implementation
+const HMAC_SHA256_TEST_VECTOR: &[u8] = &[
+    0xf7, 0xbc, 0x83, 0xf4, 0x30, 0x53, 0x84, 0x24, 0xb1, 0x32, 0x98, 0xe6, 0xaa, 0x6f, 0xb1, 0x43,
+    0xef, 0x4d, 0x59, 0xa1, 0x49, 0x46, 0x17, 0x59, 0x97, 0x47, 0x9d, 0xbc, 0x2d, 0x1a, 0x3c, 0xd8,
 ];
 
 // Test certificates and signatures for signature verification validation
