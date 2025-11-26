@@ -34,7 +34,7 @@ pub const K_CC_AES_KEY_SIZE_256: usize = 32;
 
 // SHA context sizes - these are the sizes of the internal state structures
 /// Size of CC_SHA256_CTX structure
-pub const CC_SHA256_CTX_SIZE: usize = 96;
+pub const CC_SHA256_CTX_SIZE: usize = 104;
 /// Size of CC_SHA512_CTX structure (used for SHA-384)
 pub const CC_SHA512_CTX_SIZE: usize = 208;
 

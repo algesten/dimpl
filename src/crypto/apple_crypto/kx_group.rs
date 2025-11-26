@@ -3,6 +3,7 @@
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::data::CFData;
 use core_foundation::dictionary::CFMutableDictionary;
+use core_foundation::error::CFError;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use security_framework::key::{GenerateKeyOptions, KeyType, SecKey};
@@ -134,23 +135,29 @@ impl ActiveKeyExchange for EcdhKeyExchange {
         };
 
         // Create peer public key from data
-        let mut error: *const std::ffi::c_void = std::ptr::null();
+        let mut error: core_foundation::error::CFErrorRef = std::ptr::null_mut();
         let peer_public_key = unsafe {
             SecKeyCreateWithData(
                 peer_key_data.as_concrete_TypeRef() as *const _,
                 attributes.as_concrete_TypeRef() as *const _,
-                &mut error,
+                &mut error as *mut _ as *mut *const std::ffi::c_void,
             )
         };
 
         if peer_public_key.is_null() {
-            return Err("Failed to import peer public key".to_string());
+            let error_msg = if !error.is_null() {
+                let cf_error = unsafe { CFError::wrap_under_create_rule(error) };
+                format!("{}", cf_error)
+            } else {
+                "Unknown error".to_string()
+            };
+            return Err(format!("Failed to import peer public key: {}", error_msg));
         }
 
         let peer_public_key = unsafe { SecKey::wrap_under_create_rule(peer_public_key as *mut _) };
 
         // Perform ECDH key exchange
-        let mut error: *const std::ffi::c_void = std::ptr::null();
+        let mut error: core_foundation::error::CFErrorRef = std::ptr::null_mut();
 
         let shared_secret = unsafe {
             SecKeyCopyKeyExchangeResult(
@@ -158,12 +165,18 @@ impl ActiveKeyExchange for EcdhKeyExchange {
                 kSecKeyAlgorithmECDHKeyExchangeStandard,
                 peer_public_key.as_concrete_TypeRef() as *const _,
                 std::ptr::null(),
-                &mut error,
+                &mut error as *mut _ as *mut *const std::ffi::c_void,
             )
         };
 
         if shared_secret.is_null() {
-            return Err("ECDH key exchange failed".to_string());
+            let error_msg = if !error.is_null() {
+                let cf_error = unsafe { CFError::wrap_under_create_rule(error) };
+                format!("{}", cf_error)
+            } else {
+                "Unknown error".to_string()
+            };
+            return Err(format!("ECDH key exchange failed: {}", error_msg));
         }
 
         let shared_secret_data =

@@ -31,6 +31,9 @@
 //! let dtls = Dtls::new(config, cert.certificate, cert.private_key);
 //! ```
 
+// This module requires unsafe code for FFI bindings to Apple's native crypto frameworks
+#![allow(unsafe_code)]
+
 mod cipher_suite;
 mod common_crypto;
 mod hash;
@@ -83,6 +86,7 @@ use crate::crypto::provider::CryptoProvider;
 /// # Random Number Generation
 ///
 /// Uses `OsRng` from the `rand` crate for cryptographically secure random number generation.
+#[must_use]
 pub fn default_provider() -> CryptoProvider {
     CryptoProvider {
         cipher_suites: cipher_suite::ALL_CIPHER_SUITES,

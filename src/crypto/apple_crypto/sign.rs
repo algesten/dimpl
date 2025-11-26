@@ -18,10 +18,7 @@ use crate::buffer::Buf;
 use crate::crypto::provider::{KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
 use crate::message::{CipherSuite, HashAlgorithm, SignatureAlgorithm};
 
-use super::common_crypto::CC_SHA384_DIGEST_LENGTH;
-use super::common_crypto::{CC_SHA256_Final, CC_SHA256_Init, CC_SHA256_Update};
-use super::common_crypto::{CC_SHA384_Final, CC_SHA384_Init, CC_SHA384_Update};
-use super::common_crypto::{CcSha256Ctx, CcSha512Ctx, CC_SHA256_DIGEST_LENGTH};
+use super::hash::{sha256, sha384};
 
 // Security framework FFI bindings
 #[link(name = "Security", kind = "framework")]
@@ -64,27 +61,15 @@ impl std::fmt::Debug for EcdsaSigningKey {
 impl SigningKeyTrait for EcdsaSigningKey {
     fn sign(&mut self, data: &[u8], out: &mut Buf) -> Result<(), String> {
         // Hash the data first (Security framework needs pre-hashed data for digest algorithms)
-        let (hash, algorithm) = match self.curve {
-            EcCurve::P256 => {
-                let mut hash = [0u8; CC_SHA256_DIGEST_LENGTH];
-                unsafe {
-                    let mut ctx = std::mem::zeroed::<CcSha256Ctx>();
-                    CC_SHA256_Init(&mut ctx);
-                    CC_SHA256_Update(&mut ctx, data.as_ptr() as *const c_void, data.len() as u32);
-                    CC_SHA256_Final(hash.as_mut_ptr(), &mut ctx);
-                }
-                (hash.to_vec(), Algorithm::ECDSASignatureDigestX962SHA256)
-            }
-            EcCurve::P384 => {
-                let mut hash = [0u8; CC_SHA384_DIGEST_LENGTH];
-                unsafe {
-                    let mut ctx = std::mem::zeroed::<CcSha512Ctx>();
-                    CC_SHA384_Init(&mut ctx);
-                    CC_SHA384_Update(&mut ctx, data.as_ptr() as *const c_void, data.len() as u32);
-                    CC_SHA384_Final(hash.as_mut_ptr(), &mut ctx);
-                }
-                (hash.to_vec(), Algorithm::ECDSASignatureDigestX962SHA384)
-            }
+        let (hash, algorithm): (Vec<u8>, Algorithm) = match self.curve {
+            EcCurve::P256 => (
+                sha256(data).to_vec(),
+                Algorithm::ECDSASignatureDigestX962SHA256,
+            ),
+            EcCurve::P384 => (
+                sha384(data).to_vec(),
+                Algorithm::ECDSASignatureDigestX962SHA384,
+            ),
         };
 
         // Sign using Security framework
@@ -323,27 +308,15 @@ impl SignatureVerifier for AppleCryptoSignatureVerifier {
         };
 
         // Hash the data
-        let (hash, algorithm) = match hash_alg {
-            HashAlgorithm::SHA256 => {
-                let mut hash = [0u8; CC_SHA256_DIGEST_LENGTH];
-                unsafe {
-                    let mut ctx = std::mem::zeroed::<CcSha256Ctx>();
-                    CC_SHA256_Init(&mut ctx);
-                    CC_SHA256_Update(&mut ctx, data.as_ptr() as *const c_void, data.len() as u32);
-                    CC_SHA256_Final(hash.as_mut_ptr(), &mut ctx);
-                }
-                (hash.to_vec(), Algorithm::ECDSASignatureDigestX962SHA256)
-            }
-            HashAlgorithm::SHA384 => {
-                let mut hash = [0u8; CC_SHA384_DIGEST_LENGTH];
-                unsafe {
-                    let mut ctx = std::mem::zeroed::<CcSha512Ctx>();
-                    CC_SHA384_Init(&mut ctx);
-                    CC_SHA384_Update(&mut ctx, data.as_ptr() as *const c_void, data.len() as u32);
-                    CC_SHA384_Final(hash.as_mut_ptr(), &mut ctx);
-                }
-                (hash.to_vec(), Algorithm::ECDSASignatureDigestX962SHA384)
-            }
+        let (hash, algorithm): (Vec<u8>, Algorithm) = match hash_alg {
+            HashAlgorithm::SHA256 => (
+                sha256(data).to_vec(),
+                Algorithm::ECDSASignatureDigestX962SHA256,
+            ),
+            HashAlgorithm::SHA384 => (
+                sha384(data).to_vec(),
+                Algorithm::ECDSASignatureDigestX962SHA384,
+            ),
             _ => {
                 return Err(format!(
                     "Unsupported hash algorithm for ECDSA: {:?}",
@@ -375,17 +348,26 @@ impl SignatureVerifier for AppleCryptoSignatureVerifier {
         };
 
         // Create key from data
-        let mut error: *const c_void = std::ptr::null();
+        let mut error: core_foundation::error::CFErrorRef = std::ptr::null_mut();
         let key_ref = unsafe {
             SecKeyCreateWithData(
                 key_data.as_concrete_TypeRef() as *const _,
                 attributes.as_concrete_TypeRef() as *const _,
-                &mut error,
+                &mut error as *mut _ as *mut *const c_void,
             )
         };
 
         if key_ref.is_null() {
-            return Err("Failed to create public key for verification".to_string());
+            let error_msg = if !error.is_null() {
+                let cf_error = unsafe { CFError::wrap_under_create_rule(error) };
+                format!("{}", cf_error)
+            } else {
+                "Unknown error".to_string()
+            };
+            return Err(format!(
+                "Failed to create public key for verification: {}",
+                error_msg
+            ));
         }
 
         let public_key = unsafe { SecKey::wrap_under_create_rule(key_ref as *mut _) };

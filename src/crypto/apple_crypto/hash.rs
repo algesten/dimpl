@@ -8,6 +8,30 @@ use crate::message::HashAlgorithm;
 
 use super::common_crypto::*;
 
+/// Compute SHA-256 hash of data in one shot.
+pub(super) fn sha256(data: &[u8]) -> [u8; CC_SHA256_DIGEST_LENGTH] {
+    let mut hash = [0u8; CC_SHA256_DIGEST_LENGTH];
+    unsafe {
+        let mut ctx = std::mem::zeroed::<CcSha256Ctx>();
+        CC_SHA256_Init(&mut ctx);
+        CC_SHA256_Update(&mut ctx, data.as_ptr() as *const c_void, data.len() as u32);
+        CC_SHA256_Final(hash.as_mut_ptr(), &mut ctx);
+    }
+    hash
+}
+
+/// Compute SHA-384 hash of data in one shot.
+pub(super) fn sha384(data: &[u8]) -> [u8; CC_SHA384_DIGEST_LENGTH] {
+    let mut hash = [0u8; CC_SHA384_DIGEST_LENGTH];
+    unsafe {
+        let mut ctx = std::mem::zeroed::<CcSha512Ctx>();
+        CC_SHA384_Init(&mut ctx);
+        CC_SHA384_Update(&mut ctx, data.as_ptr() as *const c_void, data.len() as u32);
+        CC_SHA384_Final(hash.as_mut_ptr(), &mut ctx);
+    }
+    hash
+}
+
 /// Hash context implementation using CommonCrypto streaming API.
 enum AppleCryptoHashContext {
     Sha256(CcSha256Ctx),
