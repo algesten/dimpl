@@ -85,7 +85,7 @@ use crate::crypto::provider::CryptoProvider;
 ///
 /// # Random Number Generation
 ///
-/// Uses `OsRng` from the `rand` crate for cryptographically secure random number generation.
+/// Uses `SecRandomCopyBytes` from Apple's Security framework for cryptographically secure random number generation.
 #[must_use]
 pub fn default_provider() -> CryptoProvider {
     CryptoProvider {

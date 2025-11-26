@@ -386,3 +386,134 @@ pub(super) static KEY_PROVIDER: AppleCryptoKeyProvider = AppleCryptoKeyProvider;
 
 /// Static instance of the signature verifier.
 pub(super) static SIGNATURE_VERIFIER: AppleCryptoSignatureVerifier = AppleCryptoSignatureVerifier;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openssl::ec::{EcGroup, EcKey};
+    use openssl::nid::Nid;
+    use openssl::pkey::PKey;
+
+    #[test]
+    fn test_extract_p256_keys() {
+        // Generate P-256 key using OpenSSL
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let key = EcKey::generate(&group).unwrap();
+
+        // Test SEC1 format
+        let sec1_der = key.private_key_to_der().unwrap();
+        let (curve, key_data) =
+            extract_apple_key_data(&sec1_der).expect("Failed to parse SEC1 P-256");
+
+        assert!(matches!(curve, EcCurve::P256));
+        // P-256: 04 (1) + X (32) + Y (32) + D (32) = 97 bytes
+        assert_eq!(key_data.len(), 97);
+        assert_eq!(key_data[0], 0x04);
+
+        // Test PKCS#8 format
+        let pkey = PKey::from_ec_key(key).unwrap();
+        let pkcs8_der = pkey.private_key_to_der().unwrap();
+        let (curve, key_data_pkcs8) =
+            extract_apple_key_data(&pkcs8_der).expect("Failed to parse PKCS#8 P-256");
+
+        assert!(matches!(curve, EcCurve::P256));
+        assert_eq!(key_data_pkcs8.len(), 97);
+        assert_eq!(key_data, key_data_pkcs8);
+    }
+
+    #[test]
+    fn test_extract_p384_keys() {
+        // Generate P-384 key using OpenSSL
+        let group = EcGroup::from_curve_name(Nid::SECP384R1).unwrap();
+        let key = EcKey::generate(&group).unwrap();
+
+        // Test SEC1 format
+        let sec1_der = key.private_key_to_der().unwrap();
+        let (curve, key_data) =
+            extract_apple_key_data(&sec1_der).expect("Failed to parse SEC1 P-384");
+
+        assert!(matches!(curve, EcCurve::P384));
+        // P-384: 04 (1) + X (48) + Y (48) + D (48) = 145 bytes
+        assert_eq!(key_data.len(), 145);
+        assert_eq!(key_data[0], 0x04);
+
+        // Test PKCS#8 format
+        let pkey = PKey::from_ec_key(key).unwrap();
+        let pkcs8_der = pkey.private_key_to_der().unwrap();
+        let (curve, key_data_pkcs8) =
+            extract_apple_key_data(&pkcs8_der).expect("Failed to parse PKCS#8 P-384");
+
+        assert!(matches!(curve, EcCurve::P384));
+        assert_eq!(key_data_pkcs8.len(), 145);
+        assert_eq!(key_data, key_data_pkcs8);
+    }
+
+    #[test]
+    fn test_invalid_keys() {
+        // Random garbage
+        let garbage = vec![0u8; 100];
+        assert!(extract_apple_key_data(&garbage).is_err());
+
+        // Invalid curve (secp256k1)
+        let group = EcGroup::from_curve_name(Nid::SECP256K1).unwrap();
+        let key = EcKey::generate(&group).unwrap();
+        let sec1_der = key.private_key_to_der().unwrap();
+
+        // Should fail as we only support P-256 and P-384
+        assert!(extract_apple_key_data(&sec1_der).is_err());
+    }
+
+    #[test]
+    fn test_sign_verify_p256() {
+        // Generate P-256 key using OpenSSL
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let key = EcKey::generate(&group).unwrap();
+        let pkey = PKey::from_ec_key(key.clone()).unwrap();
+        let pkcs8_der = pkey.private_key_to_der().unwrap();
+
+        // Load key using Apple provider
+        let mut signing_key = KEY_PROVIDER
+            .load_private_key(&pkcs8_der)
+            .expect("Failed to load key");
+
+        // Sign data
+        let data = b"Hello, world!";
+        let mut signature = Buf::new();
+        signing_key
+            .sign(data, &mut signature)
+            .expect("Failed to sign");
+
+        // Verify using OpenSSL
+        let mut verifier =
+            openssl::sign::Verifier::new(openssl::hash::MessageDigest::sha256(), &pkey).unwrap();
+        verifier.update(data).unwrap();
+        assert!(verifier.verify(&signature).unwrap());
+    }
+
+    #[test]
+    fn test_sign_verify_p384() {
+        // Generate P-384 key using OpenSSL
+        let group = EcGroup::from_curve_name(Nid::SECP384R1).unwrap();
+        let key = EcKey::generate(&group).unwrap();
+        let pkey = PKey::from_ec_key(key.clone()).unwrap();
+        let pkcs8_der = pkey.private_key_to_der().unwrap();
+
+        // Load key using Apple provider
+        let mut signing_key = KEY_PROVIDER
+            .load_private_key(&pkcs8_der)
+            .expect("Failed to load key");
+
+        // Sign data
+        let data = b"Hello, world!";
+        let mut signature = Buf::new();
+        signing_key
+            .sign(data, &mut signature)
+            .expect("Failed to sign");
+
+        // Verify using OpenSSL
+        let mut verifier =
+            openssl::sign::Verifier::new(openssl::hash::MessageDigest::sha384(), &pkey).unwrap();
+        verifier.update(data).unwrap();
+        assert!(verifier.verify(&signature).unwrap());
+    }
+}

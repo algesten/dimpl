@@ -12,6 +12,17 @@ use super::common_crypto::*;
 
 const AEAD_AES_GCM_TAG_LEN: usize = 16;
 
+/// RAII wrapper for CommonCrypto cryptor reference
+struct CcCryptor(*mut c_void);
+
+impl Drop for CcCryptor {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { CCCryptorRelease(self.0) };
+        }
+    }
+}
+
 /// AES-GCM cipher implementation using CommonCrypto.
 struct AesGcm {
     key_data: Vec<u8>,
@@ -48,7 +59,7 @@ impl Cipher for AesGcm {
             ));
         }
 
-        let mut cryptor: *mut c_void = ptr::null_mut();
+        let mut cryptor_ptr: *mut c_void = ptr::null_mut();
 
         // Create GCM mode cryptor
         let status = unsafe {
@@ -64,7 +75,7 @@ impl Cipher for AesGcm {
                 0,           // No tweak length
                 0,           // Default rounds
                 0,           // No mode options
-                &mut cryptor,
+                &mut cryptor_ptr,
             )
         };
 
@@ -72,17 +83,18 @@ impl Cipher for AesGcm {
             return Err(format!("Failed to create AES GCM cryptor: {}", status));
         }
 
+        // Wrap in RAII struct to ensure release
+        let cryptor = CcCryptor(cryptor_ptr);
+
         // Add IV/nonce
-        let status = unsafe { CCCryptorGCMAddIV(cryptor, nonce.as_ptr(), nonce.len()) };
+        let status = unsafe { CCCryptorGCMAddIV(cryptor.0, nonce.as_ptr(), nonce.len()) };
         if status != 0 {
-            unsafe { CCCryptorRelease(cryptor) };
             return Err(format!("Failed to add IV: {}", status));
         }
 
         // Add additional authenticated data
-        let status = unsafe { CCCryptorGCMAddAAD(cryptor, aad.as_ptr(), aad.len()) };
+        let status = unsafe { CCCryptorGCMAddAAD(cryptor.0, aad.as_ptr(), aad.len()) };
         if status != 0 {
-            unsafe { CCCryptorRelease(cryptor) };
             return Err(format!("Failed to add AAD: {}", status));
         }
 
@@ -91,19 +103,21 @@ impl Cipher for AesGcm {
         let mut cipher_text = vec![0u8; plain_len + AEAD_AES_GCM_TAG_LEN];
 
         let status = unsafe {
-            CCCryptorGCMEncrypt(cryptor, data.as_ptr(), plain_len, cipher_text.as_mut_ptr())
+            CCCryptorGCMEncrypt(
+                cryptor.0,
+                data.as_ptr(),
+                plain_len,
+                cipher_text.as_mut_ptr(),
+            )
         };
         if status != 0 {
-            unsafe { CCCryptorRelease(cryptor) };
             return Err(format!("Failed to encrypt: {}", status));
         }
 
         // Get the authentication tag
         let mut tag_len = AEAD_AES_GCM_TAG_LEN;
         let tag_ptr = unsafe { cipher_text.as_mut_ptr().add(plain_len) };
-        let status = unsafe { CCCryptorGCMFinal(cryptor, tag_ptr, &mut tag_len) };
-
-        unsafe { CCCryptorRelease(cryptor) };
+        let status = unsafe { CCCryptorGCMFinal(cryptor.0, tag_ptr, &mut tag_len) };
 
         if status != 0 {
             return Err(format!("Failed to get authentication tag: {}", status));
@@ -135,7 +149,7 @@ impl Cipher for AesGcm {
         // Get access to the underlying data for decryption in-place
         let data = ciphertext.as_mut();
 
-        let mut cryptor: *mut c_void = ptr::null_mut();
+        let mut cryptor_ptr: *mut c_void = ptr::null_mut();
 
         // Create GCM mode cryptor for decryption
         let status = unsafe {
@@ -151,7 +165,7 @@ impl Cipher for AesGcm {
                 0,           // No tweak length
                 0,           // Default rounds
                 0,           // No mode options
-                &mut cryptor,
+                &mut cryptor_ptr,
             )
         };
 
@@ -159,17 +173,18 @@ impl Cipher for AesGcm {
             return Err(format!("Failed to create AES GCM cryptor: {}", status));
         }
 
+        // Wrap in RAII struct to ensure release
+        let cryptor = CcCryptor(cryptor_ptr);
+
         // Add IV
-        let status = unsafe { CCCryptorGCMAddIV(cryptor, nonce.as_ptr(), nonce.len()) };
+        let status = unsafe { CCCryptorGCMAddIV(cryptor.0, nonce.as_ptr(), nonce.len()) };
         if status != 0 {
-            unsafe { CCCryptorRelease(cryptor) };
             return Err(format!("Failed to add IV: {}", status));
         }
 
         // Add additional authenticated data
-        let status = unsafe { CCCryptorGCMAddAAD(cryptor, aad.as_ptr(), aad.len()) };
+        let status = unsafe { CCCryptorGCMAddAAD(cryptor.0, aad.as_ptr(), aad.len()) };
         if status != 0 {
-            unsafe { CCCryptorRelease(cryptor) };
             return Err(format!("Failed to add AAD: {}", status));
         }
 
@@ -183,23 +198,21 @@ impl Cipher for AesGcm {
 
         let status = unsafe {
             CCCryptorGCMDecrypt(
-                cryptor,
+                cryptor.0,
                 data.as_ptr(),
                 cipher_data_len,
                 plain_text.as_mut_ptr(),
             )
         };
         if status != 0 {
-            unsafe { CCCryptorRelease(cryptor) };
             return Err(format!("Failed to decrypt: {}", status));
         }
 
         // Verify the authentication tag
         let mut computed_tag = [0u8; AEAD_AES_GCM_TAG_LEN];
         let mut tag_len = AEAD_AES_GCM_TAG_LEN;
-        let status = unsafe { CCCryptorGCMFinal(cryptor, computed_tag.as_mut_ptr(), &mut tag_len) };
-
-        unsafe { CCCryptorRelease(cryptor) };
+        let status =
+            unsafe { CCCryptorGCMFinal(cryptor.0, computed_tag.as_mut_ptr(), &mut tag_len) };
 
         if status != 0 {
             return Err(format!("Failed to get authentication tag: {}", status));

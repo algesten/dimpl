@@ -227,3 +227,32 @@ static KX_GROUP_P384: P384 = P384;
 
 /// All supported key exchange groups.
 pub(super) static ALL_KX_GROUPS: &[&dyn SupportedKxGroup] = &[&KX_GROUP_P256, &KX_GROUP_P384];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_p256_key_exchange_format() {
+        let buf = Buf::new();
+        let kx = KX_GROUP_P256.start_exchange(buf).unwrap();
+        let pub_key = kx.pub_key();
+
+        // P-256 public key should be 65 bytes (1 byte prefix + 32 bytes X + 32 bytes Y)
+        assert_eq!(pub_key.len(), 65);
+        // Should start with 0x04 (uncompressed)
+        assert_eq!(pub_key[0], 0x04);
+    }
+
+    #[test]
+    fn test_p384_key_exchange_format() {
+        let buf = Buf::new();
+        let kx = KX_GROUP_P384.start_exchange(buf).unwrap();
+        let pub_key = kx.pub_key();
+
+        // P-384 public key should be 97 bytes (1 byte prefix + 48 bytes X + 48 bytes Y)
+        assert_eq!(pub_key.len(), 97);
+        // Should start with 0x04 (uncompressed)
+        assert_eq!(pub_key[0], 0x04);
+    }
+}

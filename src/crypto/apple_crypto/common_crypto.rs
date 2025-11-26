@@ -39,17 +39,28 @@ pub const CC_SHA256_CTX_SIZE: usize = 104;
 pub const CC_SHA512_CTX_SIZE: usize = 208;
 
 /// Opaque SHA-256 context structure
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Clone, Copy)]
 pub struct CcSha256Ctx {
     pub data: [u8; CC_SHA256_CTX_SIZE],
 }
 
 /// Opaque SHA-512 context structure (used for SHA-384)
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Clone, Copy)]
 pub struct CcSha512Ctx {
     pub data: [u8; CC_SHA512_CTX_SIZE],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha_contexts_meet_alignment_requirements() {
+        assert!(std::mem::align_of::<CcSha256Ctx>() >= 16);
+        assert!(std::mem::align_of::<CcSha512Ctx>() >= 16);
+    }
 }
 
 // CommonCrypto function bindings
