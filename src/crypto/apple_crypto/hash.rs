@@ -17,7 +17,7 @@ enum AppleCryptoHashContext {
 impl AppleCryptoHashContext {
     fn new_sha256() -> Self {
         let mut ctx = CcSha256Ctx {
-            _data: [0u8; CC_SHA256_CTX_SIZE],
+            data: [0u8; CC_SHA256_CTX_SIZE],
         };
         unsafe {
             CC_SHA256_Init(&mut ctx);
@@ -27,7 +27,7 @@ impl AppleCryptoHashContext {
 
     fn new_sha384() -> Self {
         let mut ctx = CcSha512Ctx {
-            _data: [0u8; CC_SHA512_CTX_SIZE],
+            data: [0u8; CC_SHA512_CTX_SIZE],
         };
         unsafe {
             CC_SHA384_Init(&mut ctx);
@@ -52,7 +52,7 @@ impl HashContext for AppleCryptoHashContext {
         match self {
             AppleCryptoHashContext::Sha256(ctx) => {
                 // Clone the context by copying the internal state
-                let mut cloned = CcSha256Ctx { _data: ctx._data };
+                let mut cloned = *ctx;
                 let mut hash = [0u8; CC_SHA256_DIGEST_LENGTH];
                 unsafe {
                     CC_SHA256_Final(hash.as_mut_ptr(), &mut cloned);
@@ -62,7 +62,7 @@ impl HashContext for AppleCryptoHashContext {
             }
             AppleCryptoHashContext::Sha384(ctx) => {
                 // Clone the context by copying the internal state
-                let mut cloned = CcSha512Ctx { _data: ctx._data };
+                let mut cloned = *ctx;
                 let mut hash = [0u8; CC_SHA384_DIGEST_LENGTH];
                 unsafe {
                     CC_SHA384_Final(hash.as_mut_ptr(), &mut cloned);

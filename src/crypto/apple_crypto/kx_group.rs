@@ -2,17 +2,38 @@
 
 use core_foundation::base::TCFType;
 use core_foundation::data::CFData;
-use core_foundation::dictionary::CFDictionary;
-use core_foundation::string::CFString;
 use security_framework::key::{GenerateKeyOptions, KeyType, SecKey};
-use security_framework_sys::key::{
-    kSecAttrKeyTypeECSECPrimeRandom, kSecKeyAlgorithmECDHKeyExchangeStandard,
-    SecKeyCopyKeyExchangeResult,
-};
 
 use crate::buffer::Buf;
 use crate::crypto::provider::{ActiveKeyExchange, SupportedKxGroup};
 use crate::message::NamedGroup;
+
+// Security framework key exchange algorithm
+#[link(name = "Security", kind = "framework")]
+extern "C" {
+    static kSecKeyAlgorithmECDHKeyExchangeStandard: *const std::ffi::c_void;
+
+    fn SecKeyCopyKeyExchangeResult(
+        private_key: *const std::ffi::c_void,
+        algorithm: *const std::ffi::c_void,
+        public_key: *const std::ffi::c_void,
+        parameters: *const std::ffi::c_void,
+        error: *mut *const std::ffi::c_void,
+    ) -> *const std::ffi::c_void;
+
+    fn SecKeyCreateWithData(
+        key_data: *const std::ffi::c_void,
+        attributes: *const std::ffi::c_void,
+        error: *mut *const std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+
+    // Key attribute constants
+    static kSecAttrKeyType: *const std::ffi::c_void;
+    static kSecAttrKeyTypeECSECPrimeRandom: *const std::ffi::c_void;
+    static kSecAttrKeyClass: *const std::ffi::c_void;
+    static kSecAttrKeyClassPublic: *const std::ffi::c_void;
+    static kSecAttrKeySizeInBits: *const std::ffi::c_void;
+}
 
 /// ECDHE key exchange implementation using Security framework.
 struct EcdhKeyExchange {
@@ -84,49 +105,58 @@ impl ActiveKeyExchange for EcdhKeyExchange {
         // Import the peer's public key
         let peer_key_data = CFData::from_buffer(peer_pub);
 
-        // Create key attributes for EC public key
-        let key_type_key = unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom) };
-        let key_class_key =
-            unsafe { CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeyClass) };
-        let key_class_value = unsafe {
-            CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeyClassPublic)
-        };
-
         let key_size = match self.group {
             NamedGroup::Secp256r1 => 256,
             NamedGroup::Secp384r1 => 384,
             _ => return Err("Unsupported group".to_string()),
         };
 
-        let key_size_key = unsafe {
-            CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeySizeInBits)
+        // Build attributes dictionary using Core Foundation types
+        let key_size_cf = core_foundation::number::CFNumber::from(key_size as i32);
+
+        // Create dictionary with key attributes
+        let keys: Vec<core_foundation::string::CFString> = unsafe {
+            vec![
+                core_foundation::string::CFString::wrap_under_get_rule(
+                    kSecAttrKeyType as *const _,
+                ),
+                core_foundation::string::CFString::wrap_under_get_rule(
+                    kSecAttrKeyClass as *const _,
+                ),
+                core_foundation::string::CFString::wrap_under_get_rule(
+                    kSecAttrKeySizeInBits as *const _,
+                ),
+            ]
         };
-        let key_size_value = core_foundation::number::CFNumber::from(key_size as i32);
 
-        let key_type_attr_key =
-            unsafe { CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeyType) };
+        let values: Vec<core_foundation::base::CFType> = unsafe {
+            vec![
+                core_foundation::string::CFString::wrap_under_get_rule(
+                    kSecAttrKeyTypeECSECPrimeRandom as *const _,
+                )
+                .as_CFType(),
+                core_foundation::string::CFString::wrap_under_get_rule(
+                    kSecAttrKeyClassPublic as *const _,
+                )
+                .as_CFType(),
+                key_size_cf.as_CFType(),
+            ]
+        };
 
-        // Build attributes dictionary
-        let keys = vec![
-            key_class_key.as_CFType(),
-            key_type_attr_key.as_CFType(),
-            key_size_key.as_CFType(),
-        ];
-        let values = vec![
-            key_class_value.as_CFType(),
-            key_type_key.as_CFType(),
-            key_size_value.as_CFType(),
-        ];
+        let pairs: Vec<_> = keys
+            .iter()
+            .map(|k| k.as_CFType())
+            .zip(values.iter().cloned())
+            .collect();
 
-        let attributes =
-            CFDictionary::from_CFType_pairs(&keys.iter().zip(values.iter()).collect::<Vec<_>>());
+        let attributes = core_foundation::dictionary::CFDictionary::from_CFType_pairs(&pairs);
 
         // Create peer public key from data
-        let mut error: core_foundation::base::CFTypeRef = std::ptr::null();
+        let mut error: *const std::ffi::c_void = std::ptr::null();
         let peer_public_key = unsafe {
-            security_framework_sys::key::SecKeyCreateWithData(
-                peer_key_data.as_concrete_TypeRef(),
-                attributes.as_concrete_TypeRef(),
+            SecKeyCreateWithData(
+                peer_key_data.as_concrete_TypeRef() as *const _,
+                attributes.as_concrete_TypeRef() as *const _,
                 &mut error,
             )
         };
@@ -135,17 +165,17 @@ impl ActiveKeyExchange for EcdhKeyExchange {
             return Err("Failed to import peer public key".to_string());
         }
 
-        let peer_public_key = unsafe { SecKey::wrap_under_create_rule(peer_public_key) };
+        let peer_public_key =
+            unsafe { SecKey::wrap_under_create_rule(peer_public_key as *mut _) };
 
         // Perform ECDH key exchange
-        let algorithm = unsafe { kSecKeyAlgorithmECDHKeyExchangeStandard };
-        let mut error: core_foundation::base::CFTypeRef = std::ptr::null();
+        let mut error: *const std::ffi::c_void = std::ptr::null();
 
         let shared_secret = unsafe {
             SecKeyCopyKeyExchangeResult(
-                self.private_key.as_concrete_TypeRef(),
-                algorithm,
-                peer_public_key.as_concrete_TypeRef(),
+                self.private_key.as_concrete_TypeRef() as *const _,
+                kSecKeyAlgorithmECDHKeyExchangeStandard,
+                peer_public_key.as_concrete_TypeRef() as *const _,
                 std::ptr::null(),
                 &mut error,
             )
@@ -155,7 +185,8 @@ impl ActiveKeyExchange for EcdhKeyExchange {
             return Err("ECDH key exchange failed".to_string());
         }
 
-        let shared_secret_data = unsafe { CFData::wrap_under_create_rule(shared_secret) };
+        let shared_secret_data =
+            unsafe { CFData::wrap_under_create_rule(shared_secret as *const _) };
 
         out.clear();
         out.extend_from_slice(&shared_secret_data);

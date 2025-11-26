@@ -50,14 +50,16 @@ pub const CC_SHA512_CTX_SIZE: usize = 208;
 
 /// Opaque SHA-256 context structure
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct CcSha256Ctx {
-    _data: [u8; CC_SHA256_CTX_SIZE],
+    pub data: [u8; CC_SHA256_CTX_SIZE],
 }
 
 /// Opaque SHA-512 context structure (used for SHA-384)
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct CcSha512Ctx {
-    _data: [u8; CC_SHA512_CTX_SIZE],
+    pub data: [u8; CC_SHA512_CTX_SIZE],
 }
 
 // CommonCrypto function bindings
