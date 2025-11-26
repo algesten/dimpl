@@ -17,6 +17,8 @@ pub struct Config {
     flight_retries: usize,
     handshake_timeout: Duration,
     crypto_provider: CryptoProvider,
+    with_srtp: bool,
+    with_extended_master_secret: bool,
 }
 
 impl Config {
@@ -31,6 +33,8 @@ impl Config {
             flight_retries: 4,
             handshake_timeout: Duration::from_secs(40),
             crypto_provider: None,
+            with_srtp: true,
+            with_extended_master_secret: true,
         }
     }
 
@@ -91,6 +95,18 @@ impl Config {
     pub fn crypto_provider(&self) -> &CryptoProvider {
         &self.crypto_provider
     }
+
+    /// Whether to enable DTLS-SRTP extension (rfc5764).
+    #[inline(always)]
+    pub fn with_srtp(&self) -> bool {
+        self.with_srtp
+    }
+
+    /// Whether to enable Extended Master Secret extension (rfc7627).
+    #[inline(always)]
+    pub fn with_extended_master_secret(&self) -> bool {
+        self.with_extended_master_secret
+    }
 }
 
 /// Builder for DTLS configuration.
@@ -103,6 +119,8 @@ pub struct ConfigBuilder {
     flight_retries: usize,
     handshake_timeout: Duration,
     crypto_provider: Option<CryptoProvider>,
+    with_srtp: bool,
+    with_extended_master_secret: bool,
 }
 
 impl ConfigBuilder {
@@ -176,6 +194,22 @@ impl ConfigBuilder {
         self
     }
 
+    /// Set whether to enable DTLS-SRTP extension (rfc5764).
+    ///
+    /// Defaults to true.
+    pub fn with_srtp(mut self, require: bool) -> Self {
+        self.with_srtp = require;
+        self
+    }
+
+    /// Set whether to enable Extended Master Secret extension (rfc7627)
+    ///
+    /// Defaults to true.
+    pub fn with_extended_master_secret(mut self, require: bool) -> Self {
+        self.with_extended_master_secret = require;
+        self
+    }
+
     /// Build the configuration.
     ///
     /// This validates the crypto provider before returning the configuration.
@@ -218,6 +252,8 @@ impl ConfigBuilder {
             flight_retries: self.flight_retries,
             handshake_timeout: self.handshake_timeout,
             crypto_provider,
+            with_srtp: self.with_srtp,
+            with_extended_master_secret: self.with_extended_master_secret,
         })
     }
 }

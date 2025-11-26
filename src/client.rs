@@ -368,6 +368,7 @@ impl State {
         client.session_id = Some(server_hello.session_id);
         client.server_random = Some(server_hello.random);
 
+        let config = client.engine.config();
         let mut extended_master_secret = false;
 
         // Check for use_srtp and extended_master_secret extensions
@@ -376,7 +377,7 @@ impl State {
         };
 
         for extension in extensions {
-            if extension.extension_type == ExtensionType::UseSrtp {
+            if config.with_srtp() && extension.extension_type == ExtensionType::UseSrtp {
                 // Parse the use_srtp extension to get the selected profile
                 let extension_data = extension.extension_data(&client.defragment_buffer);
                 if let Ok((_, use_srtp)) = UseSrtpExtension::parse(extension_data) {
@@ -394,7 +395,9 @@ impl State {
             }
 
             // We are to use extended master secret
-            if extension.extension_type == ExtensionType::ExtendedMasterSecret {
+            if config.with_extended_master_secret()
+                && extension.extension_type == ExtensionType::ExtendedMasterSecret
+            {
                 extended_master_secret = true;
                 trace!("Server negotiated Extended Master Secret");
             }
@@ -402,16 +405,18 @@ impl State {
 
         // Without extended master secret, in DTLS1.2 a security attack
         // reusing the same master secret is possible.
-        if !extended_master_secret {
-            return Err(Error::SecurityError(
-                "Extended Master Secret not negotiated".to_string(),
-            ));
+        if config.with_extended_master_secret() {
+            if !extended_master_secret {
+                return Err(Error::SecurityError(
+                    "Extended Master Secret not negotiated".to_string(),
+                ));
+            }
+            trace!("Extended Master Secret enabled");
         }
 
         if let Some(profile) = client.negotiated_srtp_profile {
             debug!("Negotiated SRTP profile: {:?}", profile);
         }
-        trace!("Extended Master Secret enabled");
 
         Ok(Self::AwaitCertificate)
     }
@@ -777,26 +782,44 @@ impl State {
 
         // Derive master secret (use EMS if negotiated)
         let suite_hash = cipher_suite.hash_algorithm();
-
-        // Use the captured session hash from when ServerHelloDone was received
-        let session_hash = client.captured_session_hash.as_ref().ok_or_else(|| {
-            Error::CryptoError(
-                "Extended Master Secret negotiated but session hash not captured".to_string(),
-            )
-        })?;
-        trace!(
-            "Using captured session hash for Extended Master Secret (length: {})",
-            session_hash.len()
-        );
         let mut out = client.engine.pop_buffer();
         let mut scratch = client.engine.pop_buffer();
-        client
-            .engine
-            .crypto_context_mut()
-            .derive_extended_master_secret(session_hash, suite_hash, &mut out, &mut scratch)
-            .map_err(|e| {
-                Error::CryptoError(format!("Failed to derive extended master secret: {}", e))
+
+        let config = client.engine.config();
+        if config.with_extended_master_secret() {
+            // Use the captured session hash from when ServerHelloDone was received
+            let session_hash = client.captured_session_hash.as_ref().ok_or_else(|| {
+                Error::CryptoError(
+                    "Extended Master Secret negotiated but session hash not captured".to_string(),
+                )
             })?;
+            trace!(
+                "Using captured session hash for Extended Master Secret (length: {})",
+                session_hash.len()
+            );
+
+            client
+                .engine
+                .crypto_context_mut()
+                .derive_extended_master_secret(session_hash, suite_hash, &mut out, &mut scratch)
+                .map_err(|e| {
+                    Error::CryptoError(format!("Failed to derive extended master secret: {}", e))
+                })?;
+        } else {
+            client
+                .engine
+                .crypto_context_mut()
+                .derive_master_secret(
+                    &client_random_buf,
+                    &server_random_buf,
+                    suite_hash,
+                    &mut out,
+                    &mut scratch,
+                )
+                .map_err(|e| {
+                    Error::CryptoError(format!("Failed to derive extended master secret: {}", e))
+                })?;
+        }
 
         // Derive the encryption/decryption keys
         client
@@ -1028,7 +1051,7 @@ fn handshake_create_client_hello(
         cipher_suites,
         compression_methods,
     )
-    .with_extensions(extension_data, provider);
+    .with_extensions(extension_data, provider, engine.config());
 
     client_hello.serialize(extension_data, body);
     Ok(())

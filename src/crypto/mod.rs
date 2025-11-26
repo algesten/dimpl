@@ -226,6 +226,40 @@ impl CryptoContext {
         Ok(())
     }
 
+    /// Derive master secret
+    pub fn derive_master_secret(
+        &mut self,
+        client_random: &[u8],
+        server_random: &[u8],
+        hash: HashAlgorithm,
+        out: &mut Buf,
+        scratch: &mut Buf,
+    ) -> Result<(), String> {
+        trace!("Deriving master secret");
+        let Some(pms) = &self.pre_master_secret else {
+            return Err("Pre-master secret not available".to_string());
+        };
+
+        self.provider().prf_provider.prf_tls12(
+            pms,
+            "master secret",
+            &*[client_random, server_random].concat(),
+            out,
+            48,
+            scratch,
+            hash,
+        )?;
+        let mut master_secret = ArrayVec::new();
+        master_secret
+            .try_extend_from_slice(out)
+            .map_err(|_| "Master secret too long".to_string())?;
+        self.master_secret = Some(master_secret);
+
+        // Clear pre-master secret after use (security measure)
+        self.pre_master_secret = None;
+        Ok(())
+    }
+
     /// Derive master secret using Extended Master Secret (RFC 7627)
     pub fn derive_extended_master_secret(
         &mut self,
