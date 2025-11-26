@@ -177,8 +177,8 @@ impl Cipher for AesGcm {
         let mut expected_tag = [0u8; AEAD_AES_GCM_TAG_LEN];
         expected_tag.copy_from_slice(&data[cipher_data_len..]);
 
-        // Decrypt the ciphertext in-place (CommonCrypto supports overlapping buffers)
-        // But to be safe, we'll use a temporary buffer
+        // Decrypt the ciphertext to a temporary buffer
+        // (CommonCrypto does not guarantee in-place decryption safety)
         let mut plain_text = vec![0u8; cipher_data_len];
 
         let status = unsafe {

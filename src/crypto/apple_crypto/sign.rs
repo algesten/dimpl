@@ -223,7 +223,7 @@ fn determine_curve_from_key(key_der: &[u8]) -> Result<EcCurve, String> {
         }
     }
 
-    // Default to P-256 if we can't determine
+    // Could not determine curve from key
     Err("Could not determine EC curve from key".to_string())
 }
 

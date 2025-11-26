@@ -41,8 +41,8 @@ pub(super) struct AppleCryptoSecureRandom;
 
 impl SecureRandom for AppleCryptoSecureRandom {
     fn fill(&self, buf: &mut [u8]) -> Result<(), String> {
-        use rand::Rng;
-        rand::rng().fill(buf);
+        use rand::RngCore;
+        rand::rngs::OsRng.fill_bytes(buf);
         Ok(())
     }
 }
