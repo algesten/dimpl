@@ -1,23 +1,28 @@
-//! Cipher suite implementations using RustCrypto for Apple platforms.
-use aes_gcm::aead::{AeadInPlace, KeyInit};
-use aes_gcm::{Aes128Gcm, Aes256Gcm, Key};
+//! Cipher suite implementations using Apple CommonCrypto.
+
+use std::ffi::c_void;
+use std::ptr;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::provider::{Cipher, SupportedCipherSuite};
 use crate::crypto::{Aad, Nonce};
 use crate::message::{CipherSuite, HashAlgorithm};
 
-/// AES-GCM cipher implementation.
-enum AesGcm {
-    Aes128(Box<Aes128Gcm>),
-    Aes256(Box<Aes256Gcm>),
+use super::common_crypto::*;
+
+const AEAD_AES_GCM_TAG_LEN: usize = 16;
+
+/// AES-GCM cipher implementation using CommonCrypto.
+struct AesGcm {
+    key_data: Vec<u8>,
 }
 
 impl std::fmt::Debug for AesGcm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AesGcm::Aes128(_) => f.debug_tuple("AesGcm::Aes128").finish(),
-            AesGcm::Aes256(_) => f.debug_tuple("AesGcm::Aes256").finish(),
+        match self.key_data.len() {
+            16 => f.debug_tuple("AesGcm::Aes128").finish(),
+            32 => f.debug_tuple("AesGcm::Aes256").finish(),
+            _ => f.debug_tuple("AesGcm::Unknown").finish(),
         }
     }
 }
@@ -25,14 +30,9 @@ impl std::fmt::Debug for AesGcm {
 impl AesGcm {
     fn new(key: &[u8]) -> Result<Self, String> {
         match key.len() {
-            16 => {
-                let key = Key::<Aes128Gcm>::from_slice(key);
-                Ok(AesGcm::Aes128(Box::new(Aes128Gcm::new(key))))
-            }
-            32 => {
-                let key = Key::<Aes256Gcm>::from_slice(key);
-                Ok(AesGcm::Aes256(Box::new(Aes256Gcm::new(key))))
-            }
+            K_CC_AES_KEY_SIZE_128 | K_CC_AES_KEY_SIZE_256 => Ok(AesGcm {
+                key_data: key.to_vec(),
+            }),
             _ => Err(format!("Invalid key size for AES-GCM: {}", key.len())),
         }
     }
@@ -48,33 +48,76 @@ impl Cipher for AesGcm {
             ));
         }
 
-        // Create nonce from the provided nonce bytes
-        let nonce_array: [u8; 12] = nonce[..12].try_into().map_err(|_| "Invalid nonce")?;
+        let mut cryptor: *mut c_void = ptr::null_mut();
 
-        match self {
-            AesGcm::Aes128(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{typenum::U12, GenericArray};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
-                cipher
-                    .encrypt_in_place(&aes_nonce, &aad, data)
-                    .map_err(|_| "AES-GCM encryption failed".to_string())?;
-            }
-            AesGcm::Aes256(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{typenum::U12, GenericArray};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
-                cipher
-                    .encrypt_in_place(&aes_nonce, &aad, data)
-                    .map_err(|_| "AES-GCM encryption failed".to_string())?;
-            }
+        // Create GCM mode cryptor
+        let status = unsafe {
+            CCCryptorCreateWithMode(
+                K_CC_ENCRYPT,
+                K_CC_MODE_GCM,
+                K_CC_ALGORITHM_AES,
+                0,           // No padding for GCM
+                ptr::null(), // IV will be added separately
+                self.key_data.as_ptr(),
+                self.key_data.len(),
+                ptr::null(), // No tweak
+                0,           // No tweak length
+                0,           // Default rounds
+                0,           // No mode options
+                &mut cryptor,
+            )
+        };
+
+        if status != 0 {
+            return Err(format!("Failed to create AES GCM cryptor: {}", status));
         }
+
+        // Add IV/nonce
+        let status = unsafe { CCCryptorGCMAddIV(cryptor, nonce.as_ptr(), nonce.len()) };
+        if status != 0 {
+            unsafe { CCCryptorRelease(cryptor) };
+            return Err(format!("Failed to add IV: {}", status));
+        }
+
+        // Add additional authenticated data
+        let status = unsafe { CCCryptorGCMAddAAD(cryptor, aad.as_ptr(), aad.len()) };
+        if status != 0 {
+            unsafe { CCCryptorRelease(cryptor) };
+            return Err(format!("Failed to add AAD: {}", status));
+        }
+
+        // Encrypt the plaintext
+        let plain_len = data.len();
+        let mut cipher_text = vec![0u8; plain_len + AEAD_AES_GCM_TAG_LEN];
+
+        let status = unsafe {
+            CCCryptorGCMEncrypt(cryptor, data.as_ptr(), plain_len, cipher_text.as_mut_ptr())
+        };
+        if status != 0 {
+            unsafe { CCCryptorRelease(cryptor) };
+            return Err(format!("Failed to encrypt: {}", status));
+        }
+
+        // Get the authentication tag
+        let mut tag_len = AEAD_AES_GCM_TAG_LEN;
+        let tag_ptr = unsafe { cipher_text.as_mut_ptr().add(plain_len) };
+        let status = unsafe { CCCryptorGCMFinal(cryptor, tag_ptr, &mut tag_len) };
+
+        unsafe { CCCryptorRelease(cryptor) };
+
+        if status != 0 {
+            return Err(format!("Failed to get authentication tag: {}", status));
+        }
+
+        // Replace data with ciphertext + tag
+        data.clear();
+        data.extend_from_slice(&cipher_text[..plain_len + tag_len]);
 
         Ok(())
     }
 
     fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String> {
-        if ciphertext.len() < 16 {
+        if ciphertext.len() < AEAD_AES_GCM_TAG_LEN {
             return Err(format!("Ciphertext too short: {}", ciphertext.len()));
         }
 
@@ -86,32 +129,90 @@ impl Cipher for AesGcm {
             ));
         }
 
-        // Create nonce from the provided nonce bytes
-        let nonce_array: [u8; 12] = nonce[..12].try_into().map_err(|_| "Invalid nonce")?;
+        let (cipher_data, tag) = ciphertext.split_at(ciphertext.len() - AEAD_AES_GCM_TAG_LEN);
 
-        match self {
-            AesGcm::Aes128(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{typenum::U12, GenericArray};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
-                cipher
-                    .decrypt_in_place(&aes_nonce, &aad, ciphertext)
-                    .map_err(|_| "AES-GCM decryption failed".to_string())?;
-            }
-            AesGcm::Aes256(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{typenum::U12, GenericArray};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
-                cipher
-                    .decrypt_in_place(&aes_nonce, &aad, ciphertext)
-                    .map_err(|_| "AES-GCM decryption failed".to_string())?;
-            }
+        let mut cryptor: *mut c_void = ptr::null_mut();
+
+        // Create GCM mode cryptor for decryption
+        let status = unsafe {
+            CCCryptorCreateWithMode(
+                K_CC_DECRYPT,
+                K_CC_MODE_GCM,
+                K_CC_ALGORITHM_AES,
+                0,           // No padding for GCM
+                ptr::null(), // IV will be added separately
+                self.key_data.as_ptr(),
+                self.key_data.len(),
+                ptr::null(), // No tweak
+                0,           // No tweak length
+                0,           // Default rounds
+                0,           // No mode options
+                &mut cryptor,
+            )
+        };
+
+        if status != 0 {
+            return Err(format!("Failed to create AES GCM cryptor: {}", status));
         }
 
-        // decrypt_in_place already removes the tag and shortens the buffer
-        // No need to truncate further
+        // Add IV
+        let status = unsafe { CCCryptorGCMAddIV(cryptor, nonce.as_ptr(), nonce.len()) };
+        if status != 0 {
+            unsafe { CCCryptorRelease(cryptor) };
+            return Err(format!("Failed to add IV: {}", status));
+        }
+
+        // Add additional authenticated data
+        let status = unsafe { CCCryptorGCMAddAAD(cryptor, aad.as_ptr(), aad.len()) };
+        if status != 0 {
+            unsafe { CCCryptorRelease(cryptor) };
+            return Err(format!("Failed to add AAD: {}", status));
+        }
+
+        // Decrypt the ciphertext
+        let mut plain_text = vec![0u8; cipher_data.len()];
+
+        let status = unsafe {
+            CCCryptorGCMDecrypt(
+                cryptor,
+                cipher_data.as_ptr(),
+                cipher_data.len(),
+                plain_text.as_mut_ptr(),
+            )
+        };
+        if status != 0 {
+            unsafe { CCCryptorRelease(cryptor) };
+            return Err(format!("Failed to decrypt: {}", status));
+        }
+
+        // Verify the authentication tag
+        let mut computed_tag = [0u8; AEAD_AES_GCM_TAG_LEN];
+        let mut tag_len = AEAD_AES_GCM_TAG_LEN;
+        let status = unsafe { CCCryptorGCMFinal(cryptor, computed_tag.as_mut_ptr(), &mut tag_len) };
+
+        unsafe { CCCryptorRelease(cryptor) };
+
+        if status != 0 {
+            return Err(format!("Failed to get authentication tag: {}", status));
+        }
+
+        // Compare the tags
+        if tag != &computed_tag[..tag_len] {
+            return Err("Authentication tag verification failed".to_string());
+        }
+
+        // Replace ciphertext with plaintext
+        ciphertext.clear();
+        ciphertext.extend_from_slice(&plain_text);
 
         Ok(())
+    }
+}
+
+impl Drop for AesGcm {
+    fn drop(&mut self) {
+        // Zero out the key data for security
+        self.key_data.fill(0);
     }
 }
 

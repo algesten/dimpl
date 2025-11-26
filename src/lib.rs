@@ -7,7 +7,7 @@
 //!
 //! # Goals
 //! - **DTLS 1.2**: Implements the DTLS 1.2 handshake and record layer used by WebRTC.
-//! - **Safety**: `forbid(unsafe_code)` throughout the crate.
+//! - **Safety**: Minimal use of `unsafe` code, only for native platform crypto bindings.
 //! - **Minimal Rust‑only deps**: Uses small, well‑maintained Rust crypto crates.
 //! - **Low overhead**: Tight control over allocations and buffers; Sans‑IO integration.
 //!
@@ -146,7 +146,6 @@
 //! [`Output`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html
 //! [`Output::PeerCert`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html#variant.PeerCert
 //!
-#![forbid(unsafe_code)]
 #![warn(clippy::all)]
 #![allow(unknown_lints)]
 #![allow(clippy::upper_case_acronyms)]

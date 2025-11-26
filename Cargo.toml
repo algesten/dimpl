@@ -22,8 +22,8 @@ aws-lc-rs = ["dep:aws-lc-rs"]
 # Pure Rust crypto provider
 rust-crypto = ["dep:aes-gcm", "dep:p256", "dep:p384", "dep:sha2", "dep:hmac", "dep:ecdsa", "dep:generic-array", "dep:rand_core"]
 
-# Apple crypto provider (macOS, iOS, tvOS, watchOS only)
-apple-crypto = ["dep:aes-gcm", "dep:p256", "dep:p384", "dep:sha2", "dep:hmac", "dep:ecdsa", "dep:generic-array", "dep:rand_core"]
+# Apple crypto provider (macOS, iOS, tvOS, watchOS only) - uses native CommonCrypto
+apple-crypto = ["dep:core-foundation", "dep:security-framework", "dep:p256", "dep:p384", "dep:ecdsa", "dep:rand_core"]
 
 # Self-signed certificate generation.
 # rcgen can either use ring or aws-lc-rs. We have decided to use aws-lc-rs to limit the number
@@ -59,6 +59,10 @@ hmac = { version = "0.12", optional = true }
 ecdsa = { version = "0.16", optional = true, features = ["signing", "verifying"] }
 generic-array = { version = "0.14", optional = true }
 rand_core = { version = "0.6", optional = true }
+
+# Apple crypto backend (native CommonCrypto)
+core-foundation = { version = "0.10", optional = true }
+security-framework = { version = "3.5", optional = true }
 
 # certificate generation
 rcgen = { version = "0.14.5", default-features = false, features = ["aws_lc_rs"], optional = true }

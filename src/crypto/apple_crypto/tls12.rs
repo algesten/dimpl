@@ -1,12 +1,12 @@
-//! TLS 1.2 PRF, random number generation, and HMAC for Apple platforms.
+//! TLS 1.2 PRF, random number generation, and HMAC using Apple CommonCrypto.
 
-use ::hmac::{Hmac, Mac};
-use ::sha2::Sha256;
+use std::ffi::c_void;
 
 use crate::buffer::Buf;
 use crate::crypto::provider::{HmacProvider, PrfProvider, SecureRandom};
 use crate::message::HashAlgorithm;
 
+use super::common_crypto::*;
 use super::hmac;
 
 /// PRF provider implementation for TLS 1.2.
@@ -54,14 +54,17 @@ pub(super) struct AppleCryptoHmacProvider;
 
 impl HmacProvider for AppleCryptoHmacProvider {
     fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String> {
-        let mut mac =
-            Hmac::<Sha256>::new_from_slice(key).map_err(|_| "Invalid HMAC key".to_string())?;
-        mac.update(data);
-        let result = mac.finalize();
-        let bytes = result.into_bytes();
-
-        let mut output = [0u8; 32];
-        output.copy_from_slice(&bytes);
+        let mut output = [0u8; CC_SHA256_DIGEST_LENGTH];
+        unsafe {
+            CCHmac(
+                K_CC_HMAC_ALG_SHA256,
+                key.as_ptr() as *const c_void,
+                key.len(),
+                data.as_ptr() as *const c_void,
+                data.len(),
+                output.as_mut_ptr() as *mut c_void,
+            );
+        }
         Ok(output)
     }
 }

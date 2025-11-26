@@ -1,8 +1,8 @@
 //! Apple Crypto cryptographic provider implementation for dimpl.
 //!
-//! This module provides a cryptographic backend for dimpl using pure Rust
-//! crates from the [RustCrypto](https://github.com/RustCrypto) organization,
-//! optimized for Apple platforms (macOS and iOS).
+//! This module provides a cryptographic backend for dimpl using Apple's native
+//! CommonCrypto framework. This provides hardware-accelerated cryptographic
+//! operations on Apple platforms (macOS and iOS).
 //!
 //! # Feature Flag
 //!
@@ -32,6 +32,7 @@
 //! ```
 
 mod cipher_suite;
+mod common_crypto;
 mod hash;
 mod hmac;
 mod kx_group;
@@ -43,8 +44,8 @@ use crate::crypto::provider::CryptoProvider;
 /// Get the default Apple Crypto-based crypto provider.
 ///
 /// This provider implements all cryptographic operations required for DTLS 1.2
-/// using pure Rust crates from the RustCrypto organization, optimized for
-/// Apple platforms.
+/// using Apple's native CommonCrypto framework for hardware-accelerated
+/// cryptographic operations on Apple platforms.
 ///
 /// # Supported Cipher Suites
 ///
