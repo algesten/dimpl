@@ -11,6 +11,7 @@ use nom::{Err, IResult};
 use crate::buffer::Buf;
 use crate::crypto::CryptoProvider;
 use crate::util::many1;
+use crate::{Config, ExtensionPolicy};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ClientHello {
@@ -44,7 +45,12 @@ impl ClientHello {
     }
 
     /// Add all required extensions for DTLS handshake
-    pub fn with_extensions(mut self, buf: &mut Buf, provider: &CryptoProvider) -> Self {
+    pub fn with_extensions(
+        mut self,
+        buf: &mut Buf,
+        provider: &CryptoProvider,
+        config: &Config,
+    ) -> Self {
         // Clear the extension data buffer
         buf.clear();
 
@@ -75,11 +81,13 @@ impl ClientHello {
         signature_algorithms.serialize(buf);
         ranges.push((ExtensionType::SignatureAlgorithms, start_pos, buf.len()));
 
-        // Add use_srtp extension for DTLS-SRTP support
-        let use_srtp = UseSrtpExtension::default();
-        let start_pos = buf.len();
-        use_srtp.serialize(buf);
-        ranges.push((ExtensionType::UseSrtp, start_pos, buf.len()));
+        if config.use_srtp() == ExtensionPolicy::Required {
+            // Add use_srtp extension for DTLS-SRTP support
+            let use_srtp = UseSrtpExtension::default();
+            let start_pos = buf.len();
+            use_srtp.serialize(buf);
+            ranges.push((ExtensionType::UseSrtp, start_pos, buf.len()));
+        }
 
         // // Add session_ticket extension (empty)
         // let start_pos = buf.len();

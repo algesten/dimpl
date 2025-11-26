@@ -206,7 +206,7 @@ mod error;
 pub use error::Error;
 
 mod config;
-pub use config::Config;
+pub use config::{Config, ExtensionPolicy};
 
 #[cfg(feature = "rcgen")]
 pub mod certificate;

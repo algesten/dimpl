@@ -18,6 +18,7 @@ use std::time::Instant;
 use arrayvec::ArrayVec;
 
 use crate::buffer::{Buf, ToBuf};
+use crate::config::ExtensionPolicy;
 use crate::crypto::CipherSuite;
 use crate::engine::Engine;
 use crate::message::{Body, ClientHello, ClientKeyExchange};
@@ -368,6 +369,7 @@ impl State {
         client.session_id = Some(server_hello.session_id);
         client.server_random = Some(server_hello.random);
 
+        let config = client.engine.config();
         let mut extended_master_secret = false;
 
         // Check for use_srtp and extended_master_secret extensions
@@ -376,7 +378,9 @@ impl State {
         };
 
         for extension in extensions {
-            if extension.extension_type == ExtensionType::UseSrtp {
+            if config.use_srtp() == ExtensionPolicy::Required
+                && extension.extension_type == ExtensionType::UseSrtp
+            {
                 // Parse the use_srtp extension to get the selected profile
                 let extension_data = extension.extension_data(&client.defragment_buffer);
                 if let Ok((_, use_srtp)) = UseSrtpExtension::parse(extension_data) {
@@ -1028,7 +1032,7 @@ fn handshake_create_client_hello(
         cipher_suites,
         compression_methods,
     )
-    .with_extensions(extension_data, provider);
+    .with_extensions(extension_data, provider, engine.config());
 
     client_hello.serialize(extension_data, body);
     Ok(())

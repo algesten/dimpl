@@ -6,6 +6,17 @@ use crate::Error;
 #[cfg(feature = "aws-lc-rs")]
 use crate::crypto::aws_lc_rs;
 
+/// Declares the policy the client and server will follow for TLS extensions
+#[derive(Clone, PartialEq, Eq)]
+pub enum ExtensionPolicy {
+    /// Extension strategy is based on the peer (client) policy.
+    Request,
+    /// Extension must be enabled.
+    Required,
+    /// Extension is disabled
+    Disabled,
+}
+
 /// DTLS configuration
 #[derive(Clone)]
 pub struct Config {
@@ -17,6 +28,7 @@ pub struct Config {
     flight_retries: usize,
     handshake_timeout: Duration,
     crypto_provider: CryptoProvider,
+    use_srtp: ExtensionPolicy,
 }
 
 impl Config {
@@ -31,6 +43,7 @@ impl Config {
             flight_retries: 4,
             handshake_timeout: Duration::from_secs(40),
             crypto_provider: None,
+            use_srtp: ExtensionPolicy::Required,
         }
     }
 
@@ -91,6 +104,12 @@ impl Config {
     pub fn crypto_provider(&self) -> &CryptoProvider {
         &self.crypto_provider
     }
+
+    /// The policy the client and server will follow for use_srtp extension (rfc5764).
+    #[inline(always)]
+    pub fn use_srtp(&self) -> ExtensionPolicy {
+        self.use_srtp.clone()
+    }
 }
 
 /// Builder for DTLS configuration.
@@ -103,6 +122,7 @@ pub struct ConfigBuilder {
     flight_retries: usize,
     handshake_timeout: Duration,
     crypto_provider: Option<CryptoProvider>,
+    use_srtp: ExtensionPolicy,
 }
 
 impl ConfigBuilder {
@@ -176,6 +196,14 @@ impl ConfigBuilder {
         self
     }
 
+    /// Set the policy the client and server will follow for use_srtp extension (rfc5764).
+    ///
+    /// Defaults to ExtensionPolicy::Required.
+    pub fn use_srtp(mut self, policy: ExtensionPolicy) -> Self {
+        self.use_srtp = policy;
+        self
+    }
+
     /// Build the configuration.
     ///
     /// This validates the crypto provider before returning the configuration.
@@ -218,6 +246,7 @@ impl ConfigBuilder {
             flight_retries: self.flight_retries,
             handshake_timeout: self.handshake_timeout,
             crypto_provider,
+            use_srtp: self.use_srtp,
         })
     }
 }
