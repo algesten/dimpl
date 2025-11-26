@@ -2,6 +2,9 @@
 
 use core_foundation::base::TCFType;
 use core_foundation::data::CFData;
+use core_foundation::dictionary::CFMutableDictionary;
+use core_foundation::number::CFNumber;
+use core_foundation::string::CFString;
 use security_framework::key::{GenerateKeyOptions, KeyType, SecKey};
 
 use crate::buffer::Buf;
@@ -28,11 +31,11 @@ extern "C" {
     ) -> *mut std::ffi::c_void;
 
     // Key attribute constants
-    static kSecAttrKeyType: *const std::ffi::c_void;
-    static kSecAttrKeyTypeECSECPrimeRandom: *const std::ffi::c_void;
-    static kSecAttrKeyClass: *const std::ffi::c_void;
-    static kSecAttrKeyClassPublic: *const std::ffi::c_void;
-    static kSecAttrKeySizeInBits: *const std::ffi::c_void;
+    static kSecAttrKeyType: core_foundation::string::CFStringRef;
+    static kSecAttrKeyTypeECSECPrimeRandom: core_foundation::string::CFStringRef;
+    static kSecAttrKeyClass: core_foundation::string::CFStringRef;
+    static kSecAttrKeyClassPublic: core_foundation::string::CFStringRef;
+    static kSecAttrKeySizeInBits: core_foundation::string::CFStringRef;
 }
 
 /// ECDHE key exchange implementation using Security framework.
@@ -111,45 +114,24 @@ impl ActiveKeyExchange for EcdhKeyExchange {
             _ => return Err("Unsupported group".to_string()),
         };
 
-        // Build attributes dictionary using Core Foundation types
-        let key_size_cf = core_foundation::number::CFNumber::from(key_size as i32);
+        // Build attributes dictionary using CFMutableDictionary
+        let attributes = unsafe {
+            let dict = CFMutableDictionary::new();
 
-        // Create dictionary with key attributes
-        let keys: Vec<core_foundation::string::CFString> = unsafe {
-            vec![
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyType as *const _,
-                ),
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyClass as *const _,
-                ),
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeySizeInBits as *const _,
-                ),
-            ]
+            let key_type_key = CFString::wrap_under_get_rule(kSecAttrKeyType);
+            let key_type_value = CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom);
+            dict.set(key_type_key, key_type_value);
+
+            let key_class_key = CFString::wrap_under_get_rule(kSecAttrKeyClass);
+            let key_class_value = CFString::wrap_under_get_rule(kSecAttrKeyClassPublic);
+            dict.set(key_class_key, key_class_value);
+
+            let key_size_key = CFString::wrap_under_get_rule(kSecAttrKeySizeInBits);
+            let key_size_value = CFNumber::from(key_size as i32);
+            dict.set(key_size_key, key_size_value);
+
+            dict
         };
-
-        let values: Vec<core_foundation::base::CFType> = unsafe {
-            vec![
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyTypeECSECPrimeRandom as *const _,
-                )
-                .as_CFType(),
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyClassPublic as *const _,
-                )
-                .as_CFType(),
-                key_size_cf.as_CFType(),
-            ]
-        };
-
-        let pairs: Vec<_> = keys
-            .iter()
-            .map(|k| k.as_CFType())
-            .zip(values.iter().cloned())
-            .collect();
-
-        let attributes = core_foundation::dictionary::CFDictionary::from_CFType_pairs(&pairs);
 
         // Create peer public key from data
         let mut error: *const std::ffi::c_void = std::ptr::null();

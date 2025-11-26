@@ -5,6 +5,9 @@ use std::str;
 
 use core_foundation::base::TCFType;
 use core_foundation::data::CFData;
+use core_foundation::dictionary::CFMutableDictionary;
+use core_foundation::number::CFNumber;
+use core_foundation::string::CFString;
 use der::Decode;
 use security_framework::key::{Algorithm, SecKey};
 use spki::ObjectIdentifier;
@@ -22,26 +25,18 @@ use super::common_crypto::{
 // Security framework FFI bindings
 #[link(name = "Security", kind = "framework")]
 extern "C" {
-    static kSecAttrKeyType: *const c_void;
-    static kSecAttrKeyTypeECSECPrimeRandom: *const c_void;
-    static kSecAttrKeyClass: *const c_void;
-    static kSecAttrKeyClassPrivate: *const c_void;
-    static kSecAttrKeyClassPublic: *const c_void;
-    static kSecAttrKeySizeInBits: *const c_void;
+    static kSecAttrKeyType: core_foundation::string::CFStringRef;
+    static kSecAttrKeyTypeECSECPrimeRandom: core_foundation::string::CFStringRef;
+    static kSecAttrKeyClass: core_foundation::string::CFStringRef;
+    static kSecAttrKeyClassPrivate: core_foundation::string::CFStringRef;
+    static kSecAttrKeyClassPublic: core_foundation::string::CFStringRef;
+    static kSecAttrKeySizeInBits: core_foundation::string::CFStringRef;
 
     fn SecKeyCreateWithData(
         key_data: *const c_void,
         attributes: *const c_void,
         error: *mut *const c_void,
     ) -> *mut c_void;
-
-    fn SecKeyVerifySignature(
-        key: *const c_void,
-        algorithm: u32,
-        signed_data: *const c_void,
-        signature: *const c_void,
-        error: *mut *const c_void,
-    ) -> u8;
 }
 
 /// ECDSA signing key implementation using Security framework.
@@ -138,45 +133,24 @@ impl KeyProvider for AppleCryptoKeyProvider {
         // Create key attributes for EC private key
         let key_data = CFData::from_buffer(key_der);
 
-        // Build attributes dictionary using Core Foundation types
-        let key_size_cf = core_foundation::number::CFNumber::from(key_size as i32);
+        // Build attributes dictionary using CFMutableDictionary
+        let attributes = unsafe {
+            let dict = CFMutableDictionary::new();
 
-        // Create dictionary with key attributes
-        let keys: Vec<core_foundation::string::CFString> = unsafe {
-            vec![
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyType as *const _,
-                ),
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyClass as *const _,
-                ),
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeySizeInBits as *const _,
-                ),
-            ]
+            let key_type_key = CFString::wrap_under_get_rule(kSecAttrKeyType);
+            let key_type_value = CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom);
+            dict.set(key_type_key, key_type_value);
+
+            let key_class_key = CFString::wrap_under_get_rule(kSecAttrKeyClass);
+            let key_class_value = CFString::wrap_under_get_rule(kSecAttrKeyClassPrivate);
+            dict.set(key_class_key, key_class_value);
+
+            let key_size_key = CFString::wrap_under_get_rule(kSecAttrKeySizeInBits);
+            let key_size_value = CFNumber::from(key_size as i32);
+            dict.set(key_size_key, key_size_value);
+
+            dict
         };
-
-        let values: Vec<core_foundation::base::CFType> = unsafe {
-            vec![
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyTypeECSECPrimeRandom as *const _,
-                )
-                .as_CFType(),
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyClassPrivate as *const _,
-                )
-                .as_CFType(),
-                key_size_cf.as_CFType(),
-            ]
-        };
-
-        let pairs: Vec<_> = keys
-            .iter()
-            .map(|k| k.as_CFType())
-            .zip(values.iter().cloned())
-            .collect();
-
-        let attributes = core_foundation::dictionary::CFDictionary::from_CFType_pairs(&pairs);
 
         // Create key from data
         let mut error: *const c_void = std::ptr::null();
@@ -337,45 +311,24 @@ impl SignatureVerifier for AppleCryptoSignatureVerifier {
         // Create public key from data
         let key_data = CFData::from_buffer(pubkey_bytes);
 
-        // Build attributes dictionary using Core Foundation types
-        let key_size_cf = core_foundation::number::CFNumber::from(key_size as i32);
+        // Build attributes dictionary using CFMutableDictionary
+        let attributes = unsafe {
+            let dict = CFMutableDictionary::new();
 
-        // Create dictionary with key attributes
-        let keys: Vec<core_foundation::string::CFString> = unsafe {
-            vec![
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyType as *const _,
-                ),
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyClass as *const _,
-                ),
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeySizeInBits as *const _,
-                ),
-            ]
+            let key_type_key = CFString::wrap_under_get_rule(kSecAttrKeyType);
+            let key_type_value = CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom);
+            dict.set(key_type_key, key_type_value);
+
+            let key_class_key = CFString::wrap_under_get_rule(kSecAttrKeyClass);
+            let key_class_value = CFString::wrap_under_get_rule(kSecAttrKeyClassPublic);
+            dict.set(key_class_key, key_class_value);
+
+            let key_size_key = CFString::wrap_under_get_rule(kSecAttrKeySizeInBits);
+            let key_size_value = CFNumber::from(key_size as i32);
+            dict.set(key_size_key, key_size_value);
+
+            dict
         };
-
-        let values: Vec<core_foundation::base::CFType> = unsafe {
-            vec![
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyTypeECSECPrimeRandom as *const _,
-                )
-                .as_CFType(),
-                core_foundation::string::CFString::wrap_under_get_rule(
-                    kSecAttrKeyClassPublic as *const _,
-                )
-                .as_CFType(),
-                key_size_cf.as_CFType(),
-            ]
-        };
-
-        let pairs: Vec<_> = keys
-            .iter()
-            .map(|k| k.as_CFType())
-            .zip(values.iter().cloned())
-            .collect();
-
-        let attributes = core_foundation::dictionary::CFDictionary::from_CFType_pairs(&pairs);
 
         // Create key from data
         let mut error: *const c_void = std::ptr::null();
@@ -393,24 +346,10 @@ impl SignatureVerifier for AppleCryptoSignatureVerifier {
 
         let public_key = unsafe { SecKey::wrap_under_create_rule(key_ref as *mut _) };
 
-        // Verify the signature
-        let hash_data = CFData::from_buffer(&hash);
-        let signature_data = CFData::from_buffer(signature);
-
-        let mut error: *const c_void = std::ptr::null();
-        let result = unsafe {
-            SecKeyVerifySignature(
-                public_key.as_concrete_TypeRef() as *const _,
-                algorithm.into(),
-                hash_data.as_concrete_TypeRef() as *const _,
-                signature_data.as_concrete_TypeRef() as *const _,
-                &mut error,
-            )
-        };
-
-        if result == 0 {
-            return Err(format!("ECDSA signature verification failed for {:?}", hash_alg));
-        }
+        // Verify the signature using the high-level API
+        public_key
+            .verify_signature(algorithm, &hash, signature)
+            .map_err(|e| format!("ECDSA signature verification failed: {}", e))?;
 
         Ok(())
     }

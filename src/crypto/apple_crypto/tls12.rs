@@ -9,6 +9,19 @@ use crate::message::HashAlgorithm;
 use super::common_crypto::*;
 use super::hmac;
 
+// SecRandomCopyBytes from Security framework
+#[link(name = "Security", kind = "framework")]
+extern "C" {
+    fn SecRandomCopyBytes(
+        rnd: *const c_void,
+        count: usize,
+        bytes: *mut u8,
+    ) -> i32;
+}
+
+// kSecRandomDefault is NULL
+const K_SEC_RANDOM_DEFAULT: *const c_void = std::ptr::null();
+
 /// PRF provider implementation for TLS 1.2.
 #[derive(Debug)]
 pub(super) struct AppleCryptoPrfProvider;
@@ -35,15 +48,21 @@ impl PrfProvider for AppleCryptoPrfProvider {
     }
 }
 
-/// Secure random number generator implementation.
+/// Secure random number generator implementation using Apple's Security framework.
 #[derive(Debug)]
 pub(super) struct AppleCryptoSecureRandom;
 
 impl SecureRandom for AppleCryptoSecureRandom {
     fn fill(&self, buf: &mut [u8]) -> Result<(), String> {
-        use rand::RngCore;
-        rand::rngs::OsRng.fill_bytes(buf);
-        Ok(())
+        let result = unsafe {
+            SecRandomCopyBytes(K_SEC_RANDOM_DEFAULT, buf.len(), buf.as_mut_ptr())
+        };
+
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(format!("SecRandomCopyBytes failed with error: {}", result))
+        }
     }
 }
 
