@@ -196,8 +196,15 @@ impl Cipher for AesGcm {
             return Err(format!("Failed to get authentication tag: {}", status));
         }
 
-        // Compare the tags
-        if tag != &computed_tag[..tag_len] {
+        // Constant-time comparison of tags to prevent timing attacks
+        let mut diff = 0u8;
+        for (a, b) in tag.iter().zip(computed_tag[..tag_len].iter()) {
+            diff |= a ^ b;
+        }
+        // Also check length mismatch
+        diff |= (tag.len() != tag_len) as u8;
+
+        if diff != 0 {
             return Err("Authentication tag verification failed".to_string());
         }
 

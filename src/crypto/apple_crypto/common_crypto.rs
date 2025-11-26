@@ -42,6 +42,24 @@ pub const K_CC_AES_KEY_SIZE_192: usize = 24;
 /// AES-256 key size
 pub const K_CC_AES_KEY_SIZE_256: usize = 32;
 
+// SHA context sizes - these are the sizes of the internal state structures
+/// Size of CC_SHA256_CTX structure
+pub const CC_SHA256_CTX_SIZE: usize = 96;
+/// Size of CC_SHA512_CTX structure (used for SHA-384)
+pub const CC_SHA512_CTX_SIZE: usize = 208;
+
+/// Opaque SHA-256 context structure
+#[repr(C)]
+pub struct CcSha256Ctx {
+    _data: [u8; CC_SHA256_CTX_SIZE],
+}
+
+/// Opaque SHA-512 context structure (used for SHA-384)
+#[repr(C)]
+pub struct CcSha512Ctx {
+    _data: [u8; CC_SHA512_CTX_SIZE],
+}
+
 // CommonCrypto function bindings
 #[link(name = "System")]
 extern "C" {
@@ -60,6 +78,22 @@ extern "C" {
 
     /// Compute SHA-384 hash
     pub fn CC_SHA384(data: *const c_void, len: u32, md: *mut u8) -> *mut u8;
+
+    // Streaming SHA-256 functions
+    /// Initialize SHA-256 context
+    pub fn CC_SHA256_Init(ctx: *mut CcSha256Ctx) -> i32;
+    /// Update SHA-256 context with data
+    pub fn CC_SHA256_Update(ctx: *mut CcSha256Ctx, data: *const c_void, len: u32) -> i32;
+    /// Finalize SHA-256 and get digest
+    pub fn CC_SHA256_Final(md: *mut u8, ctx: *mut CcSha256Ctx) -> i32;
+
+    // Streaming SHA-384 functions
+    /// Initialize SHA-384 context
+    pub fn CC_SHA384_Init(ctx: *mut CcSha512Ctx) -> i32;
+    /// Update SHA-384 context with data
+    pub fn CC_SHA384_Update(ctx: *mut CcSha512Ctx, data: *const c_void, len: u32) -> i32;
+    /// Finalize SHA-384 and get digest
+    pub fn CC_SHA384_Final(md: *mut u8, ctx: *mut CcSha512Ctx) -> i32;
 
     /// Create a cryptor
     pub fn CCCryptorCreate(
