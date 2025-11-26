@@ -434,6 +434,7 @@ dependencies = [
  "rcgen",
  "sec1",
  "security-framework",
+ "security-framework-sys",
  "sha2",
  "signature",
  "spki",

@@ -86,7 +86,7 @@ jobs:
           targets: aarch64-apple-ios
       - uses: Swatinem/rust-cache@v1
       - name: Build apple-crypto for iOS
-        run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features apple-crypto,rcgen --target aarch64-apple-ios
+        run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features apple-crypto --target aarch64-apple-ios
 
   snowflake:
     runs-on: ubuntu-latest

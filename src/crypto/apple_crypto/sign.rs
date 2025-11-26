@@ -1,12 +1,19 @@
-//! Signing and key loading implementations for Apple platforms.
+//! Signing and key loading implementations for Apple platforms using Security framework.
 
+use std::ffi::c_void;
 use std::str;
 
+use core_foundation::base::TCFType;
+use core_foundation::data::CFData;
+use core_foundation::dictionary::CFDictionary;
+use core_foundation::string::CFString;
 use der::{Decode, Encode};
-use ecdsa::{Signature, SigningKey, VerifyingKey};
-use p256::NistP256;
-use p384::NistP384;
 use pkcs8::DecodePrivateKey;
+use security_framework::key::{Algorithm, SecKey};
+use security_framework_sys::key::{
+    kSecAttrKeyClassPrivate, kSecAttrKeyClassPublic, kSecAttrKeyTypeECSECPrimeRandom,
+    SecKeyCreateSignature, SecKeyCreateWithData, SecKeyVerifySignature,
+};
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
@@ -14,61 +21,67 @@ use crate::buffer::Buf;
 use crate::crypto::provider::{KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
 use crate::message::{CipherSuite, HashAlgorithm, SignatureAlgorithm};
 
-/// ECDSA signing key implementation.
-enum EcdsaSigningKey {
-    P256(SigningKey<NistP256>),
-    P384(SigningKey<NistP384>),
+use super::common_crypto::{
+    CcSha256Ctx, CcSha512Ctx, CC_SHA256_Final, CC_SHA256_Init, CC_SHA256_Update, CC_SHA384_Final,
+    CC_SHA384_Init, CC_SHA384_Update, CC_SHA256_DIGEST_LENGTH, CC_SHA384_DIGEST_LENGTH,
+};
+
+/// ECDSA signing key implementation using Security framework.
+struct EcdsaSigningKey {
+    key: SecKey,
+    curve: EcCurve,
+}
+
+#[derive(Clone, Copy)]
+enum EcCurve {
+    P256,
+    P384,
 }
 
 impl std::fmt::Debug for EcdsaSigningKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EcdsaSigningKey::P256(_) => f.debug_tuple("EcdsaSigningKey::P256").finish(),
-            EcdsaSigningKey::P384(_) => f.debug_tuple("EcdsaSigningKey::P384").finish(),
+        match self.curve {
+            EcCurve::P256 => f.debug_tuple("EcdsaSigningKey::P256").finish(),
+            EcCurve::P384 => f.debug_tuple("EcdsaSigningKey::P384").finish(),
         }
     }
 }
 
 impl SigningKeyTrait for EcdsaSigningKey {
     fn sign(&mut self, data: &[u8], out: &mut Buf) -> Result<(), String> {
-        match self {
-            EcdsaSigningKey::P256(key) => {
-                use ecdsa::signature::hazmat::PrehashSigner;
-                use sha2::{Digest, Sha256};
-
-                // Hash the data before signing (PrehashSigner expects a hash digest)
-                let mut hasher = Sha256::new();
-                hasher.update(data);
-                let hash = hasher.finalize();
-
-                let signature: Signature<NistP256> = key
-                    .sign_prehash(&hash)
-                    .map_err(|_| "Signing failed".to_string())?;
-                let sig_der = signature.to_der();
-                let sig_bytes = sig_der.as_bytes();
-                out.clear();
-                out.extend_from_slice(sig_bytes);
-                Ok(())
+        // Hash the data first (Security framework needs pre-hashed data for digest algorithms)
+        let (hash, algorithm) = match self.curve {
+            EcCurve::P256 => {
+                let mut hash = [0u8; CC_SHA256_DIGEST_LENGTH];
+                unsafe {
+                    let mut ctx = std::mem::zeroed::<CcSha256Ctx>();
+                    CC_SHA256_Init(&mut ctx);
+                    CC_SHA256_Update(&mut ctx, data.as_ptr() as *const c_void, data.len() as u32);
+                    CC_SHA256_Final(hash.as_mut_ptr(), &mut ctx);
+                }
+                (hash.to_vec(), Algorithm::ECDSASignatureDigestX962SHA256)
             }
-            EcdsaSigningKey::P384(key) => {
-                use ecdsa::signature::hazmat::PrehashSigner;
-                use sha2::{Digest, Sha384};
-
-                // Hash the data before signing (PrehashSigner expects a hash digest)
-                let mut hasher = Sha384::new();
-                hasher.update(data);
-                let hash = hasher.finalize();
-
-                let signature: Signature<NistP384> = key
-                    .sign_prehash(&hash)
-                    .map_err(|_| "Signing failed".to_string())?;
-                let sig_der = signature.to_der();
-                let sig_bytes = sig_der.as_bytes();
-                out.clear();
-                out.extend_from_slice(sig_bytes);
-                Ok(())
+            EcCurve::P384 => {
+                let mut hash = [0u8; CC_SHA384_DIGEST_LENGTH];
+                unsafe {
+                    let mut ctx = std::mem::zeroed::<CcSha512Ctx>();
+                    CC_SHA384_Init(&mut ctx);
+                    CC_SHA384_Update(&mut ctx, data.as_ptr() as *const c_void, data.len() as u32);
+                    CC_SHA384_Final(hash.as_mut_ptr(), &mut ctx);
+                }
+                (hash.to_vec(), Algorithm::ECDSASignatureDigestX962SHA384)
             }
-        }
+        };
+
+        // Sign using Security framework
+        let signature = self
+            .key
+            .create_signature(algorithm, &hash)
+            .map_err(|e| format!("Signing failed: {}", e))?;
+
+        out.clear();
+        out.extend_from_slice(&signature);
+        Ok(())
     }
 
     fn algorithm(&self) -> SignatureAlgorithm {
@@ -76,9 +89,9 @@ impl SigningKeyTrait for EcdsaSigningKey {
     }
 
     fn hash_algorithm(&self) -> HashAlgorithm {
-        match self {
-            EcdsaSigningKey::P256(_) => HashAlgorithm::SHA256,
-            EcdsaSigningKey::P384(_) => HashAlgorithm::SHA384,
+        match self.curve {
+            EcCurve::P256 => HashAlgorithm::SHA256,
+            EcCurve::P384 => HashAlgorithm::SHA384,
         }
     }
 
@@ -96,80 +109,122 @@ pub(super) struct AppleCryptoKeyProvider;
 
 impl KeyProvider for AppleCryptoKeyProvider {
     fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKeyTrait>, String> {
-        // Try PKCS#8 DER format first (most common)
-        if let Ok(key) = SigningKey::<NistP256>::from_pkcs8_der(key_der) {
-            return Ok(Box::new(EcdsaSigningKey::P256(key)));
-        }
-        if let Ok(key) = SigningKey::<NistP384>::from_pkcs8_der(key_der) {
-            return Ok(Box::new(EcdsaSigningKey::P384(key)));
-        }
+        // Try to parse as PKCS#8 to determine the curve
+        let curve = determine_curve_from_key(key_der)?;
 
-        // Try parsing as SEC1 DER format (OpenSSL EC private key format)
-        if let Ok(ec_key) = sec1::EcPrivateKey::try_from(key_der) {
-            let private_key_len = ec_key.private_key.len();
+        let key_size = match curve {
+            EcCurve::P256 => 256,
+            EcCurve::P384 => 384,
+        };
 
-            let curve_oid = if let Some(params) = &ec_key.parameters {
-                match params {
-                    sec1::EcParameters::NamedCurve(oid) => Some(*oid),
-                }
-            } else if private_key_len == 32 {
-                Some(ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7")) // P-256
-            } else if private_key_len == 48 {
-                Some(ObjectIdentifier::new_unwrap("1.3.132.0.34")) // P-384
-            } else {
-                None
-            };
+        // Create key attributes for EC private key
+        let key_data = CFData::from_buffer(key_der);
 
-            if let Some(curve_oid) = curve_oid {
-                let ec_alg_oid = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
-                let curve_params_der = curve_oid
-                    .to_der()
-                    .map_err(|_| "Failed to encode curve OID".to_string())?;
-                let curve_params_any = der::asn1::AnyRef::try_from(curve_params_der.as_slice())
-                    .map_err(|_| "Failed to create AnyRef".to_string())?;
+        let key_type_key =
+            unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom) };
+        let key_class_key =
+            unsafe { CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeyClass) };
+        let key_class_value = unsafe { CFString::wrap_under_get_rule(kSecAttrKeyClassPrivate) };
 
-                let algorithm = spki::AlgorithmIdentifierRef {
-                    oid: ec_alg_oid,
-                    parameters: Some(curve_params_any),
-                };
+        let key_size_key = unsafe {
+            CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeySizeInBits)
+        };
+        let key_size_value = core_foundation::number::CFNumber::from(key_size as i32);
 
-                let pkcs8 = pkcs8::PrivateKeyInfo {
-                    algorithm,
-                    private_key: key_der,
-                    public_key: None,
-                };
+        let key_type_attr_key =
+            unsafe { CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeyType) };
 
-                let pkcs8_der = pkcs8
-                    .to_der()
-                    .map_err(|_| "Failed to encode PKCS#8".to_string())?;
+        // Build attributes dictionary
+        let keys = vec![
+            key_class_key.as_CFType(),
+            key_type_attr_key.as_CFType(),
+            key_size_key.as_CFType(),
+        ];
+        let values = vec![
+            key_class_value.as_CFType(),
+            key_type_key.as_CFType(),
+            key_size_value.as_CFType(),
+        ];
 
-                let p256_curve = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
-                if curve_oid == p256_curve {
-                    if let Ok(key) = SigningKey::<NistP256>::from_pkcs8_der(pkcs8_der.as_slice()) {
-                        return Ok(Box::new(EcdsaSigningKey::P256(key)));
-                    }
-                }
+        let attributes =
+            CFDictionary::from_CFType_pairs(&keys.iter().zip(values.iter()).collect::<Vec<_>>());
 
-                let p384_curve = ObjectIdentifier::new_unwrap("1.3.132.0.34");
-                if curve_oid == p384_curve {
-                    if let Ok(key) = SigningKey::<NistP384>::from_pkcs8_der(pkcs8_der.as_slice()) {
-                        return Ok(Box::new(EcdsaSigningKey::P384(key)));
+        // Create key from data
+        let mut error: core_foundation::base::CFTypeRef = std::ptr::null();
+        let key_ref = unsafe {
+            SecKeyCreateWithData(
+                key_data.as_concrete_TypeRef(),
+                attributes.as_concrete_TypeRef(),
+                &mut error,
+            )
+        };
+
+        if key_ref.is_null() {
+            // Try to check if it's PEM encoded
+            if let Ok(pem_str) = str::from_utf8(key_der) {
+                if pem_str.contains("-----BEGIN") {
+                    if let Ok((_label, doc)) = pkcs8::Document::from_pem(pem_str) {
+                        return self.load_private_key(doc.as_bytes());
                     }
                 }
             }
+            return Err("Failed to load private key".to_string());
         }
 
-        // Check if it's a PEM encoded key
-        if let Ok(pem_str) = str::from_utf8(key_der) {
-            if pem_str.contains("-----BEGIN") {
-                if let Ok((_label, doc)) = pkcs8::Document::from_pem(pem_str) {
-                    return self.load_private_key(doc.as_bytes());
-                }
-            }
-        }
+        let key = unsafe { SecKey::wrap_under_create_rule(key_ref) };
 
-        Err("Failed to parse private key in any supported format".to_string())
+        Ok(Box::new(EcdsaSigningKey { key, curve }))
     }
+}
+
+/// Determine the EC curve from a private key DER encoding
+fn determine_curve_from_key(key_der: &[u8]) -> Result<EcCurve, String> {
+    // Try PKCS#8 format first
+    if let Ok(info) = pkcs8::PrivateKeyInfo::from_der(key_der) {
+        if let Some(params) = info.algorithm.parameters {
+            if let Ok(oid) = params.decode_as::<ObjectIdentifier>() {
+                let p256_oid = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
+                let p384_oid = ObjectIdentifier::new_unwrap("1.3.132.0.34");
+
+                if oid == p256_oid {
+                    return Ok(EcCurve::P256);
+                } else if oid == p384_oid {
+                    return Ok(EcCurve::P384);
+                }
+            }
+        }
+    }
+
+    // Try SEC1 format
+    if let Ok(ec_key) = sec1::EcPrivateKey::try_from(key_der) {
+        let private_key_len = ec_key.private_key.len();
+
+        // Check curve from parameters or infer from key length
+        if let Some(params) = &ec_key.parameters {
+            match params {
+                sec1::EcParameters::NamedCurve(oid) => {
+                    let p256_oid = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
+                    let p384_oid = ObjectIdentifier::new_unwrap("1.3.132.0.34");
+
+                    if *oid == p256_oid {
+                        return Ok(EcCurve::P256);
+                    } else if *oid == p384_oid {
+                        return Ok(EcCurve::P384);
+                    }
+                }
+            }
+        }
+
+        // Infer from key length
+        if private_key_len == 32 {
+            return Ok(EcCurve::P256);
+        } else if private_key_len == 48 {
+            return Ok(EcCurve::P384);
+        }
+    }
+
+    // Default to P-256 if we can't determine
+    Err("Could not determine EC curve from key".to_string())
 }
 
 /// Signature verifier implementation.
@@ -208,48 +263,116 @@ impl SignatureVerifier for AppleCryptoSignatureVerifier {
             .as_bytes()
             .ok_or_else(|| "Invalid EC subject_public_key bitstring".to_string())?;
 
-        match hash_alg {
+        // Determine key size from public key length or algorithm parameters
+        let key_size = if pubkey_bytes.len() == 65 {
+            256 // P-256: 1 byte prefix + 32 bytes X + 32 bytes Y
+        } else if pubkey_bytes.len() == 97 {
+            384 // P-384: 1 byte prefix + 48 bytes X + 48 bytes Y
+        } else {
+            return Err(format!(
+                "Unsupported EC public key size: {} bytes",
+                pubkey_bytes.len()
+            ));
+        };
+
+        // Hash the data
+        let (hash, algorithm) = match hash_alg {
             HashAlgorithm::SHA256 => {
-                use ecdsa::signature::hazmat::PrehashVerifier;
-                use sha2::{Digest, Sha256};
-
-                let verifying_key = VerifyingKey::<NistP256>::from_sec1_bytes(pubkey_bytes)
-                    .map_err(|_| "Invalid P-256 public key".to_string())?;
-                let signature = Signature::<NistP256>::from_der(signature)
-                    .map_err(|_| "Invalid signature format".to_string())?;
-
-                // Hash the data before verification (PrehashVerifier expects a hash digest)
-                let mut hasher = Sha256::new();
-                hasher.update(data);
-                let hash = hasher.finalize();
-
-                verifying_key
-                    .verify_prehash(&hash, &signature)
-                    .map_err(|_| format!("ECDSA signature verification failed for {:?}", hash_alg))
+                let mut hash = [0u8; CC_SHA256_DIGEST_LENGTH];
+                unsafe {
+                    let mut ctx = std::mem::zeroed::<CcSha256Ctx>();
+                    CC_SHA256_Init(&mut ctx);
+                    CC_SHA256_Update(&mut ctx, data.as_ptr() as *const c_void, data.len() as u32);
+                    CC_SHA256_Final(hash.as_mut_ptr(), &mut ctx);
+                }
+                (hash.to_vec(), Algorithm::ECDSASignatureDigestX962SHA256)
             }
             HashAlgorithm::SHA384 => {
-                use ecdsa::signature::hazmat::PrehashVerifier;
-                use sha2::{Digest, Sha384};
-
-                let verifying_key = VerifyingKey::<NistP384>::from_sec1_bytes(pubkey_bytes)
-                    .map_err(|_| "Invalid P-384 public key".to_string())?;
-                let signature = Signature::<NistP384>::from_der(signature)
-                    .map_err(|_| "Invalid signature format".to_string())?;
-
-                // Hash the data before verification (PrehashVerifier expects a hash digest)
-                let mut hasher = Sha384::new();
-                hasher.update(data);
-                let hash = hasher.finalize();
-
-                verifying_key
-                    .verify_prehash(&hash, &signature)
-                    .map_err(|_| format!("ECDSA signature verification failed for {:?}", hash_alg))
+                let mut hash = [0u8; CC_SHA384_DIGEST_LENGTH];
+                unsafe {
+                    let mut ctx = std::mem::zeroed::<CcSha512Ctx>();
+                    CC_SHA384_Init(&mut ctx);
+                    CC_SHA384_Update(&mut ctx, data.as_ptr() as *const c_void, data.len() as u32);
+                    CC_SHA384_Final(hash.as_mut_ptr(), &mut ctx);
+                }
+                (hash.to_vec(), Algorithm::ECDSASignatureDigestX962SHA384)
             }
-            _ => Err(format!(
-                "Unsupported hash algorithm for ECDSA: {:?}",
-                hash_alg
-            )),
+            _ => {
+                return Err(format!(
+                    "Unsupported hash algorithm for ECDSA: {:?}",
+                    hash_alg
+                ))
+            }
+        };
+
+        // Create public key from data
+        let key_data = CFData::from_buffer(pubkey_bytes);
+
+        let key_type_key =
+            unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom) };
+        let key_class_key =
+            unsafe { CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeyClass) };
+        let key_class_value = unsafe { CFString::wrap_under_get_rule(kSecAttrKeyClassPublic) };
+
+        let key_size_key = unsafe {
+            CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeySizeInBits)
+        };
+        let key_size_value = core_foundation::number::CFNumber::from(key_size as i32);
+
+        let key_type_attr_key =
+            unsafe { CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeyType) };
+
+        // Build attributes dictionary
+        let keys = vec![
+            key_class_key.as_CFType(),
+            key_type_attr_key.as_CFType(),
+            key_size_key.as_CFType(),
+        ];
+        let values = vec![
+            key_class_value.as_CFType(),
+            key_type_key.as_CFType(),
+            key_size_value.as_CFType(),
+        ];
+
+        let attributes =
+            CFDictionary::from_CFType_pairs(&keys.iter().zip(values.iter()).collect::<Vec<_>>());
+
+        // Create key from data
+        let mut error: core_foundation::base::CFTypeRef = std::ptr::null();
+        let key_ref = unsafe {
+            SecKeyCreateWithData(
+                key_data.as_concrete_TypeRef(),
+                attributes.as_concrete_TypeRef(),
+                &mut error,
+            )
+        };
+
+        if key_ref.is_null() {
+            return Err("Failed to create public key for verification".to_string());
         }
+
+        let public_key = unsafe { SecKey::wrap_under_create_rule(key_ref) };
+
+        // Verify the signature
+        let hash_data = CFData::from_buffer(&hash);
+        let signature_data = CFData::from_buffer(signature);
+
+        let mut error: core_foundation::base::CFTypeRef = std::ptr::null();
+        let result = unsafe {
+            SecKeyVerifySignature(
+                public_key.as_concrete_TypeRef(),
+                algorithm.into(),
+                hash_data.as_concrete_TypeRef(),
+                signature_data.as_concrete_TypeRef(),
+                &mut error,
+            )
+        };
+
+        if result == 0 {
+            return Err(format!("ECDSA signature verification failed for {:?}", hash_alg));
+        }
+
+        Ok(())
     }
 }
 

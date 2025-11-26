@@ -1,34 +1,39 @@
-//! Key exchange group implementations for Apple platforms.
+//! Key exchange group implementations for Apple platforms using Security framework.
 
-use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey};
-use p384::{ecdh::EphemeralSecret as P384EphemeralSecret, PublicKey as P384PublicKey};
+use core_foundation::base::TCFType;
+use core_foundation::data::CFData;
+use core_foundation::dictionary::CFDictionary;
+use core_foundation::string::CFString;
+use security_framework::key::{GenerateKeyOptions, KeyType, SecKey};
+use security_framework_sys::key::{
+    kSecAttrKeyTypeECSECPrimeRandom, kSecKeyAlgorithmECDHKeyExchangeStandard,
+    SecKeyCopyKeyExchangeResult,
+};
 
 use crate::buffer::Buf;
 use crate::crypto::provider::{ActiveKeyExchange, SupportedKxGroup};
 use crate::message::NamedGroup;
 
-/// ECDHE key exchange implementation.
-enum EcdhKeyExchange {
-    P256 {
-        secret: EphemeralSecret,
-        public_key: Buf,
-    },
-    P384 {
-        secret: P384EphemeralSecret,
-        public_key: Buf,
-    },
+/// ECDHE key exchange implementation using Security framework.
+struct EcdhKeyExchange {
+    private_key: SecKey,
+    public_key_bytes: Buf,
+    group: NamedGroup,
 }
 
 impl std::fmt::Debug for EcdhKeyExchange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EcdhKeyExchange::P256 { public_key, .. } => f
+        match self.group {
+            NamedGroup::Secp256r1 => f
                 .debug_struct("EcdhKeyExchange::P256")
-                .field("public_key_len", &public_key.len())
+                .field("public_key_len", &self.public_key_bytes.len())
                 .finish_non_exhaustive(),
-            EcdhKeyExchange::P384 { public_key, .. } => f
+            NamedGroup::Secp384r1 => f
                 .debug_struct("EcdhKeyExchange::P384")
-                .field("public_key_len", &public_key.len())
+                .field("public_key_len", &self.public_key_bytes.len())
+                .finish_non_exhaustive(),
+            _ => f
+                .debug_struct("EcdhKeyExchange::Unknown")
                 .finish_non_exhaustive(),
         }
     }
@@ -36,70 +41,130 @@ impl std::fmt::Debug for EcdhKeyExchange {
 
 impl EcdhKeyExchange {
     fn new(group: NamedGroup, mut buf: Buf) -> Result<Self, String> {
-        match group {
-            NamedGroup::Secp256r1 => {
-                use rand_core::OsRng;
-                let secret = EphemeralSecret::random(&mut OsRng);
-                let public_key_obj = P256PublicKey::from(&secret);
-                let public_key_bytes = public_key_obj.to_sec1_bytes();
-                buf.clear();
-                buf.extend_from_slice(&public_key_bytes);
-                Ok(EcdhKeyExchange::P256 {
-                    secret,
-                    public_key: buf,
-                })
-            }
-            NamedGroup::Secp384r1 => {
-                use rand_core::OsRng;
-                let secret = P384EphemeralSecret::random(&mut OsRng);
-                let public_key_obj = P384PublicKey::from(&secret);
-                let public_key_bytes = public_key_obj.to_sec1_bytes();
-                buf.clear();
-                buf.extend_from_slice(&public_key_bytes);
-                Ok(EcdhKeyExchange::P384 {
-                    secret,
-                    public_key: buf,
-                })
-            }
-            _ => Err("Unsupported group".to_string()),
-        }
+        let key_size = match group {
+            NamedGroup::Secp256r1 => 256,
+            NamedGroup::Secp384r1 => 384,
+            _ => return Err("Unsupported group".to_string()),
+        };
+
+        // Generate ephemeral EC key pair using Security framework
+        let mut options = GenerateKeyOptions::default();
+        options.set_key_type(KeyType::ec());
+        options.set_size_in_bits(key_size);
+
+        let private_key = SecKey::new(&options)
+            .map_err(|e| format!("Failed to generate EC key pair: {}", e))?;
+
+        let public_key = private_key
+            .public_key()
+            .ok_or_else(|| "Failed to get public key".to_string())?;
+
+        // Export public key as SEC1 uncompressed point format
+        let public_key_data = public_key
+            .external_representation()
+            .ok_or_else(|| "Failed to export public key".to_string())?;
+
+        buf.clear();
+        buf.extend_from_slice(&public_key_data);
+
+        Ok(EcdhKeyExchange {
+            private_key,
+            public_key_bytes: buf,
+            group,
+        })
     }
 }
 
 impl ActiveKeyExchange for EcdhKeyExchange {
     fn pub_key(&self) -> &[u8] {
-        match self {
-            EcdhKeyExchange::P256 { public_key, .. } => public_key,
-            EcdhKeyExchange::P384 { public_key, .. } => public_key,
-        }
+        &self.public_key_bytes
     }
 
     fn complete(self: Box<Self>, peer_pub: &[u8], out: &mut Buf) -> Result<(), String> {
-        match *self {
-            EcdhKeyExchange::P256 { secret, .. } => {
-                let peer_key = P256PublicKey::from_sec1_bytes(peer_pub)
-                    .map_err(|_| "Invalid P-256 public key".to_string())?;
-                let shared_secret = secret.diffie_hellman(&peer_key);
-                out.clear();
-                out.extend_from_slice(shared_secret.raw_secret_bytes().as_slice());
-                Ok(())
-            }
-            EcdhKeyExchange::P384 { secret, .. } => {
-                let peer_key = P384PublicKey::from_sec1_bytes(peer_pub)
-                    .map_err(|_| "Invalid P-384 public key".to_string())?;
-                let shared_secret = secret.diffie_hellman(&peer_key);
-                out.clear();
-                out.extend_from_slice(shared_secret.raw_secret_bytes().as_slice());
-                Ok(())
-            }
+        // Import the peer's public key
+        let peer_key_data = CFData::from_buffer(peer_pub);
+
+        // Create key attributes for EC public key
+        let key_type_key = unsafe { CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom) };
+        let key_class_key =
+            unsafe { CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeyClass) };
+        let key_class_value = unsafe {
+            CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeyClassPublic)
+        };
+
+        let key_size = match self.group {
+            NamedGroup::Secp256r1 => 256,
+            NamedGroup::Secp384r1 => 384,
+            _ => return Err("Unsupported group".to_string()),
+        };
+
+        let key_size_key = unsafe {
+            CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeySizeInBits)
+        };
+        let key_size_value = core_foundation::number::CFNumber::from(key_size as i32);
+
+        let key_type_attr_key =
+            unsafe { CFString::wrap_under_get_rule(security_framework_sys::key::kSecAttrKeyType) };
+
+        // Build attributes dictionary
+        let keys = vec![
+            key_class_key.as_CFType(),
+            key_type_attr_key.as_CFType(),
+            key_size_key.as_CFType(),
+        ];
+        let values = vec![
+            key_class_value.as_CFType(),
+            key_type_key.as_CFType(),
+            key_size_value.as_CFType(),
+        ];
+
+        let attributes =
+            CFDictionary::from_CFType_pairs(&keys.iter().zip(values.iter()).collect::<Vec<_>>());
+
+        // Create peer public key from data
+        let mut error: core_foundation::base::CFTypeRef = std::ptr::null();
+        let peer_public_key = unsafe {
+            security_framework_sys::key::SecKeyCreateWithData(
+                peer_key_data.as_concrete_TypeRef(),
+                attributes.as_concrete_TypeRef(),
+                &mut error,
+            )
+        };
+
+        if peer_public_key.is_null() {
+            return Err("Failed to import peer public key".to_string());
         }
+
+        let peer_public_key = unsafe { SecKey::wrap_under_create_rule(peer_public_key) };
+
+        // Perform ECDH key exchange
+        let algorithm = unsafe { kSecKeyAlgorithmECDHKeyExchangeStandard };
+        let mut error: core_foundation::base::CFTypeRef = std::ptr::null();
+
+        let shared_secret = unsafe {
+            SecKeyCopyKeyExchangeResult(
+                self.private_key.as_concrete_TypeRef(),
+                algorithm,
+                peer_public_key.as_concrete_TypeRef(),
+                std::ptr::null(),
+                &mut error,
+            )
+        };
+
+        if shared_secret.is_null() {
+            return Err("ECDH key exchange failed".to_string());
+        }
+
+        let shared_secret_data = unsafe { CFData::wrap_under_create_rule(shared_secret) };
+
+        out.clear();
+        out.extend_from_slice(&shared_secret_data);
+
+        Ok(())
     }
 
     fn group(&self) -> NamedGroup {
-        match self {
-            EcdhKeyExchange::P256 { .. } => NamedGroup::Secp256r1,
-            EcdhKeyExchange::P384 { .. } => NamedGroup::Secp384r1,
-        }
+        self.group
     }
 }
 

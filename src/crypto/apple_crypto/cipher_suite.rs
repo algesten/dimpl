@@ -129,7 +129,11 @@ impl Cipher for AesGcm {
             ));
         }
 
-        let (cipher_data, tag) = ciphertext.split_at(ciphertext.len() - AEAD_AES_GCM_TAG_LEN);
+        let ciphertext_len = ciphertext.len();
+        let cipher_data_len = ciphertext_len - AEAD_AES_GCM_TAG_LEN;
+
+        // Get access to the underlying data for decryption in-place
+        let data = ciphertext.as_mut();
 
         let mut cryptor: *mut c_void = ptr::null_mut();
 
@@ -169,14 +173,19 @@ impl Cipher for AesGcm {
             return Err(format!("Failed to add AAD: {}", status));
         }
 
-        // Decrypt the ciphertext
-        let mut plain_text = vec![0u8; cipher_data.len()];
+        // Copy the tag before we overwrite the buffer
+        let mut expected_tag = [0u8; AEAD_AES_GCM_TAG_LEN];
+        expected_tag.copy_from_slice(&data[cipher_data_len..]);
+
+        // Decrypt the ciphertext in-place (CommonCrypto supports overlapping buffers)
+        // But to be safe, we'll use a temporary buffer
+        let mut plain_text = vec![0u8; cipher_data_len];
 
         let status = unsafe {
             CCCryptorGCMDecrypt(
                 cryptor,
-                cipher_data.as_ptr(),
-                cipher_data.len(),
+                data.as_ptr(),
+                cipher_data_len,
                 plain_text.as_mut_ptr(),
             )
         };
@@ -198,19 +207,19 @@ impl Cipher for AesGcm {
 
         // Constant-time comparison of tags to prevent timing attacks
         let mut diff = 0u8;
-        for (a, b) in tag.iter().zip(computed_tag[..tag_len].iter()) {
+        for (a, b) in expected_tag.iter().zip(computed_tag[..tag_len].iter()) {
             diff |= a ^ b;
         }
         // Also check length mismatch
-        diff |= (tag.len() != tag_len) as u8;
+        diff |= (expected_tag.len() != tag_len) as u8;
 
         if diff != 0 {
             return Err("Authentication tag verification failed".to_string());
         }
 
-        // Replace ciphertext with plaintext
-        ciphertext.clear();
-        ciphertext.extend_from_slice(&plain_text);
+        // Copy plaintext back to the buffer and truncate
+        data[..cipher_data_len].copy_from_slice(&plain_text);
+        ciphertext.truncate(cipher_data_len);
 
         Ok(())
     }
