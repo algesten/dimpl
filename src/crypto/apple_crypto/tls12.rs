@@ -12,11 +12,7 @@ use super::hmac;
 // SecRandomCopyBytes from Security framework
 #[link(name = "Security", kind = "framework")]
 extern "C" {
-    fn SecRandomCopyBytes(
-        rnd: *const c_void,
-        count: usize,
-        bytes: *mut u8,
-    ) -> i32;
+    fn SecRandomCopyBytes(rnd: *const c_void, count: usize, bytes: *mut u8) -> i32;
 }
 
 // kSecRandomDefault is NULL
@@ -54,9 +50,8 @@ pub(super) struct AppleCryptoSecureRandom;
 
 impl SecureRandom for AppleCryptoSecureRandom {
     fn fill(&self, buf: &mut [u8]) -> Result<(), String> {
-        let result = unsafe {
-            SecRandomCopyBytes(K_SEC_RANDOM_DEFAULT, buf.len(), buf.as_mut_ptr())
-        };
+        let result =
+            unsafe { SecRandomCopyBytes(K_SEC_RANDOM_DEFAULT, buf.len(), buf.as_mut_ptr()) };
 
         if result == 0 {
             Ok(())

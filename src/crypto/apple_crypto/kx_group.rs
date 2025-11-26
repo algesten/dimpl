@@ -1,6 +1,6 @@
 //! Key exchange group implementations for Apple platforms using Security framework.
 
-use core_foundation::base::TCFType;
+use core_foundation::base::{CFType, TCFType};
 use core_foundation::data::CFData;
 use core_foundation::dictionary::CFMutableDictionary;
 use core_foundation::number::CFNumber;
@@ -76,8 +76,8 @@ impl EcdhKeyExchange {
         options.set_key_type(KeyType::ec());
         options.set_size_in_bits(key_size);
 
-        let private_key = SecKey::new(&options)
-            .map_err(|e| format!("Failed to generate EC key pair: {}", e))?;
+        let private_key =
+            SecKey::new(&options).map_err(|e| format!("Failed to generate EC key pair: {}", e))?;
 
         let public_key = private_key
             .public_key()
@@ -116,19 +116,19 @@ impl ActiveKeyExchange for EcdhKeyExchange {
 
         // Build attributes dictionary using CFMutableDictionary
         let attributes = unsafe {
-            let dict = CFMutableDictionary::new();
+            let mut dict: CFMutableDictionary<CFString, CFType> = CFMutableDictionary::new();
 
             let key_type_key = CFString::wrap_under_get_rule(kSecAttrKeyType);
             let key_type_value = CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom);
-            dict.set(key_type_key, key_type_value);
+            dict.set(key_type_key, key_type_value.as_CFType());
 
             let key_class_key = CFString::wrap_under_get_rule(kSecAttrKeyClass);
             let key_class_value = CFString::wrap_under_get_rule(kSecAttrKeyClassPublic);
-            dict.set(key_class_key, key_class_value);
+            dict.set(key_class_key, key_class_value.as_CFType());
 
             let key_size_key = CFString::wrap_under_get_rule(kSecAttrKeySizeInBits);
-            let key_size_value = CFNumber::from(key_size as i32);
-            dict.set(key_size_key, key_size_value);
+            let key_size_value = CFNumber::from(key_size);
+            dict.set(key_size_key, key_size_value.as_CFType());
 
             dict
         };
@@ -147,8 +147,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
             return Err("Failed to import peer public key".to_string());
         }
 
-        let peer_public_key =
-            unsafe { SecKey::wrap_under_create_rule(peer_public_key as *mut _) };
+        let peer_public_key = unsafe { SecKey::wrap_under_create_rule(peer_public_key as *mut _) };
 
         // Perform ECDH key exchange
         let mut error: *const std::ffi::c_void = std::ptr::null();

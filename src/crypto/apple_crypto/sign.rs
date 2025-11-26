@@ -3,9 +3,10 @@
 use std::ffi::c_void;
 use std::str;
 
-use core_foundation::base::TCFType;
+use core_foundation::base::{CFType, TCFType};
 use core_foundation::data::CFData;
 use core_foundation::dictionary::CFMutableDictionary;
+use core_foundation::error::CFError;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use der::Decode;
@@ -18,8 +19,8 @@ use crate::crypto::provider::{KeyProvider, SignatureVerifier, SigningKey as Sign
 use crate::message::{CipherSuite, HashAlgorithm, SignatureAlgorithm};
 
 use super::common_crypto::{
-    CcSha256Ctx, CcSha512Ctx, CC_SHA256_Final, CC_SHA256_Init, CC_SHA256_Update, CC_SHA384_Final,
-    CC_SHA384_Init, CC_SHA384_Update, CC_SHA256_DIGEST_LENGTH, CC_SHA384_DIGEST_LENGTH,
+    CC_SHA256_Final, CC_SHA256_Init, CC_SHA256_Update, CC_SHA384_Final, CC_SHA384_Init,
+    CC_SHA384_Update, CcSha256Ctx, CcSha512Ctx, CC_SHA256_DIGEST_LENGTH, CC_SHA384_DIGEST_LENGTH,
 };
 
 // Security framework FFI bindings
@@ -45,7 +46,7 @@ struct EcdsaSigningKey {
     curve: EcCurve,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum EcCurve {
     P256,
     P384,
@@ -122,8 +123,18 @@ pub(super) struct AppleCryptoKeyProvider;
 
 impl KeyProvider for AppleCryptoKeyProvider {
     fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKeyTrait>, String> {
-        // Try to parse as PKCS#8 to determine the curve
-        let curve = determine_curve_from_key(key_der)?;
+        // Try to check if it's PEM encoded first
+        if let Ok(pem_str) = str::from_utf8(key_der) {
+            if pem_str.contains("-----BEGIN") {
+                if let Ok((_label, doc)) = pkcs8::Document::from_pem(pem_str) {
+                    return self.load_private_key(doc.as_bytes());
+                }
+            }
+        }
+
+        // Extract raw key bytes in format Apple expects
+        let (curve, apple_key_data) = extract_apple_key_data(key_der)
+            .map_err(|e| format!("Failed to extract key data: {}", e))?;
 
         let key_size = match curve {
             EcCurve::P256 => 256,
@@ -131,47 +142,50 @@ impl KeyProvider for AppleCryptoKeyProvider {
         };
 
         // Create key attributes for EC private key
-        let key_data = CFData::from_buffer(key_der);
+        let key_data = CFData::from_buffer(&apple_key_data);
 
         // Build attributes dictionary using CFMutableDictionary
         let attributes = unsafe {
-            let dict = CFMutableDictionary::new();
+            let mut dict: CFMutableDictionary<CFString, CFType> = CFMutableDictionary::new();
 
             let key_type_key = CFString::wrap_under_get_rule(kSecAttrKeyType);
             let key_type_value = CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom);
-            dict.set(key_type_key, key_type_value);
+            dict.set(key_type_key, key_type_value.as_CFType());
 
             let key_class_key = CFString::wrap_under_get_rule(kSecAttrKeyClass);
             let key_class_value = CFString::wrap_under_get_rule(kSecAttrKeyClassPrivate);
-            dict.set(key_class_key, key_class_value);
+            dict.set(key_class_key, key_class_value.as_CFType());
 
             let key_size_key = CFString::wrap_under_get_rule(kSecAttrKeySizeInBits);
-            let key_size_value = CFNumber::from(key_size as i32);
-            dict.set(key_size_key, key_size_value);
+            let key_size_value = CFNumber::from(key_size);
+            dict.set(key_size_key, key_size_value.as_CFType());
 
             dict
         };
 
         // Create key from data
-        let mut error: *const c_void = std::ptr::null();
+        let mut error: core_foundation::error::CFErrorRef = std::ptr::null_mut();
         let key_ref = unsafe {
             SecKeyCreateWithData(
                 key_data.as_concrete_TypeRef() as *const _,
                 attributes.as_concrete_TypeRef() as *const _,
-                &mut error,
+                &mut error as *mut _ as *mut *const c_void,
             )
         };
 
         if key_ref.is_null() {
-            // Try to check if it's PEM encoded
-            if let Ok(pem_str) = str::from_utf8(key_der) {
-                if pem_str.contains("-----BEGIN") {
-                    if let Ok((_label, doc)) = pkcs8::Document::from_pem(pem_str) {
-                        return self.load_private_key(doc.as_bytes());
-                    }
-                }
-            }
-            return Err("Failed to load private key".to_string());
+            let error_msg = if !error.is_null() {
+                let cf_error = unsafe { CFError::wrap_under_create_rule(error) };
+                format!("{}", cf_error)
+            } else {
+                "Unknown error".to_string()
+            };
+            return Err(format!(
+                "SecKeyCreateWithData failed for {:?} key (data len: {}): {}",
+                curve,
+                apple_key_data.len(),
+                error_msg
+            ));
         }
 
         let key = unsafe { SecKey::wrap_under_create_rule(key_ref as *mut _) };
@@ -180,54 +194,84 @@ impl KeyProvider for AppleCryptoKeyProvider {
     }
 }
 
-/// Determine the EC curve from a private key DER encoding
-fn determine_curve_from_key(key_der: &[u8]) -> Result<EcCurve, String> {
-    // Try PKCS#8 format first
-    if let Ok(info) = pkcs8::PrivateKeyInfo::from_der(key_der) {
-        if let Some(params) = info.algorithm.parameters {
-            if let Ok(oid) = params.decode_as::<ObjectIdentifier>() {
+/// Extract raw EC private key bytes for Apple Security framework from PKCS#8 or SEC1 format.
+/// Apple's SecKeyCreateWithData for EC private keys expects the raw key data in the format:
+/// For private keys: 04 || X || Y || D (uncompressed public point + private scalar)
+/// For P-256: 1 + 32 + 32 + 32 = 97 bytes
+/// For P-384: 1 + 48 + 48 + 48 = 145 bytes
+fn extract_apple_key_data(key_der: &[u8]) -> Result<(EcCurve, Vec<u8>), String> {
+    // Try PKCS#8 format first - extract the SEC1 ECPrivateKey from inside
+    let sec1_data = if let Ok(info) = pkcs8::PrivateKeyInfo::from_der(key_der) {
+        info.private_key.to_vec()
+    } else {
+        // Assume it's already SEC1 format
+        key_der.to_vec()
+    };
+
+    // Parse SEC1 ECPrivateKey structure to extract raw bytes
+    let ec_key = sec1::EcPrivateKey::try_from(sec1_data.as_slice())
+        .map_err(|e| format!("Failed to parse SEC1 ECPrivateKey: {}", e))?;
+
+    let private_key_bytes = ec_key.private_key;
+    let private_key_len = private_key_bytes.len();
+
+    // Determine curve from parameters or key length
+    let curve = if let Some(params) = &ec_key.parameters {
+        match params {
+            sec1::EcParameters::NamedCurve(oid) => {
                 let p256_oid = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
                 let p384_oid = ObjectIdentifier::new_unwrap("1.3.132.0.34");
 
-                if oid == p256_oid {
-                    return Ok(EcCurve::P256);
-                } else if oid == p384_oid {
-                    return Ok(EcCurve::P384);
+                if *oid == p256_oid {
+                    EcCurve::P256
+                } else if *oid == p384_oid {
+                    EcCurve::P384
+                } else {
+                    return Err(format!("Unsupported EC curve OID: {}", oid));
                 }
             }
         }
+    } else if private_key_len == 32 {
+        EcCurve::P256
+    } else if private_key_len == 48 {
+        EcCurve::P384
+    } else {
+        return Err(format!(
+            "Could not determine EC curve from key length: {}",
+            private_key_len
+        ));
+    };
+
+    // Apple's SecKeyCreateWithData for EC private keys expects:
+    // 04 || X (coord_size bytes) || Y (coord_size bytes) || D (private key, coord_size bytes)
+    // This is the uncompressed public point followed by the private scalar
+    let public_key_bytes = ec_key
+        .public_key
+        .as_ref()
+        .ok_or_else(|| "EC private key missing public key component".to_string())?;
+
+    let coord_size = match curve {
+        EcCurve::P256 => 32,
+        EcCurve::P384 => 48,
+    };
+
+    // Public key should be uncompressed format: 04 || X || Y
+    let expected_pub_len = 1 + 2 * coord_size;
+    if public_key_bytes.len() != expected_pub_len {
+        return Err(format!(
+            "Unexpected public key length: {} (expected {})",
+            public_key_bytes.len(),
+            expected_pub_len
+        ));
     }
 
-    // Try SEC1 format
-    if let Ok(ec_key) = sec1::EcPrivateKey::try_from(key_der) {
-        let private_key_len = ec_key.private_key.len();
+    // Build Apple format: 04 || X || Y || D
+    // The public key already has the 04 prefix
+    let mut apple_key_data = Vec::with_capacity(expected_pub_len + coord_size);
+    apple_key_data.extend_from_slice(public_key_bytes.as_ref()); // 04 || X || Y
+    apple_key_data.extend_from_slice(private_key_bytes); // D
 
-        // Check curve from parameters or infer from key length
-        if let Some(params) = &ec_key.parameters {
-            match params {
-                sec1::EcParameters::NamedCurve(oid) => {
-                    let p256_oid = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
-                    let p384_oid = ObjectIdentifier::new_unwrap("1.3.132.0.34");
-
-                    if *oid == p256_oid {
-                        return Ok(EcCurve::P256);
-                    } else if *oid == p384_oid {
-                        return Ok(EcCurve::P384);
-                    }
-                }
-            }
-        }
-
-        // Infer from key length
-        if private_key_len == 32 {
-            return Ok(EcCurve::P256);
-        } else if private_key_len == 48 {
-            return Ok(EcCurve::P384);
-        }
-    }
-
-    // Could not determine curve from key
-    Err("Could not determine EC curve from key".to_string())
+    Ok((curve, apple_key_data))
 }
 
 /// Signature verifier implementation.
@@ -313,19 +357,19 @@ impl SignatureVerifier for AppleCryptoSignatureVerifier {
 
         // Build attributes dictionary using CFMutableDictionary
         let attributes = unsafe {
-            let dict = CFMutableDictionary::new();
+            let mut dict: CFMutableDictionary<CFString, CFType> = CFMutableDictionary::new();
 
             let key_type_key = CFString::wrap_under_get_rule(kSecAttrKeyType);
             let key_type_value = CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom);
-            dict.set(key_type_key, key_type_value);
+            dict.set(key_type_key, key_type_value.as_CFType());
 
             let key_class_key = CFString::wrap_under_get_rule(kSecAttrKeyClass);
             let key_class_value = CFString::wrap_under_get_rule(kSecAttrKeyClassPublic);
-            dict.set(key_class_key, key_class_value);
+            dict.set(key_class_key, key_class_value.as_CFType());
 
             let key_size_key = CFString::wrap_under_get_rule(kSecAttrKeySizeInBits);
-            let key_size_value = CFNumber::from(key_size as i32);
-            dict.set(key_size_key, key_size_value);
+            let key_size_value = CFNumber::from(key_size);
+            dict.set(key_size_key, key_size_value.as_CFType());
 
             dict
         };

@@ -6,8 +6,6 @@
 use std::ffi::c_void;
 
 // CommonCrypto constants
-/// HMAC algorithm for SHA-1
-pub const K_CC_HMAC_ALG_SHA1: u32 = 0;
 /// HMAC algorithm for SHA-256
 pub const K_CC_HMAC_ALG_SHA256: u32 = 2;
 /// HMAC algorithm for SHA-384
@@ -15,8 +13,6 @@ pub const K_CC_HMAC_ALG_SHA384: u32 = 3;
 
 /// AES algorithm
 pub const K_CC_ALGORITHM_AES: u32 = 0;
-/// ECB mode option
-pub const K_CC_OPTION_ECB_MODE: u32 = 1;
 /// GCM mode
 pub const K_CC_MODE_GCM: u32 = 11;
 /// Encryption operation
@@ -30,15 +26,9 @@ pub const CC_SHA256_DIGEST_LENGTH: usize = 32;
 /// SHA-384 digest length
 pub const CC_SHA384_DIGEST_LENGTH: usize = 48;
 
-// HMAC SHA-1 digest length
-/// SHA-1 digest length
-pub const CC_SHA1_DIGEST_LENGTH: usize = 20;
-
 // AES key sizes
 /// AES-128 key size
 pub const K_CC_AES_KEY_SIZE_128: usize = 16;
-/// AES-192 key size
-pub const K_CC_AES_KEY_SIZE_192: usize = 24;
 /// AES-256 key size
 pub const K_CC_AES_KEY_SIZE_256: usize = 32;
 
@@ -75,12 +65,6 @@ extern "C" {
         mac_out: *mut c_void,
     );
 
-    /// Compute SHA-256 hash
-    pub fn CC_SHA256(data: *const c_void, len: u32, md: *mut u8) -> *mut u8;
-
-    /// Compute SHA-384 hash
-    pub fn CC_SHA384(data: *const c_void, len: u32, md: *mut u8) -> *mut u8;
-
     // Streaming SHA-256 functions
     /// Initialize SHA-256 context
     pub fn CC_SHA256_Init(ctx: *mut CcSha256Ctx) -> i32;
@@ -97,17 +81,6 @@ extern "C" {
     /// Finalize SHA-384 and get digest
     pub fn CC_SHA384_Final(md: *mut u8, ctx: *mut CcSha512Ctx) -> i32;
 
-    /// Create a cryptor
-    pub fn CCCryptorCreate(
-        op: u32,
-        alg: u32,
-        options: u32,
-        key: *const u8,
-        key_length: usize,
-        iv: *const u8,
-        cryptor_ref: *mut *mut c_void,
-    ) -> i32;
-
     /// Create a cryptor with specific mode
     pub fn CCCryptorCreateWithMode(
         op: u32,
@@ -122,24 +95,6 @@ extern "C" {
         num_rounds: i32,
         mode_options: u32,
         cryptor_ref: *mut *mut c_void,
-    ) -> i32;
-
-    /// Process data through the cryptor
-    pub fn CCCryptorUpdate(
-        cryptor_ref: *mut c_void,
-        data_in: *const u8,
-        data_in_length: usize,
-        data_out: *mut u8,
-        data_out_available: usize,
-        data_out_moved: *mut usize,
-    ) -> i32;
-
-    /// Finalize the cryptor
-    pub fn CCCryptorFinal(
-        cryptor_ref: *mut c_void,
-        data_out: *mut u8,
-        data_out_available: usize,
-        data_out_moved: *mut usize,
     ) -> i32;
 
     /// Release the cryptor
