@@ -18,10 +18,10 @@ use crate::buffer::Buf;
 use crate::crypto::provider::{KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
 use crate::message::{CipherSuite, HashAlgorithm, SignatureAlgorithm};
 
-use super::common_crypto::{
-    CC_SHA256_Final, CC_SHA256_Init, CC_SHA256_Update, CC_SHA384_Final, CC_SHA384_Init,
-    CC_SHA384_Update, CcSha256Ctx, CcSha512Ctx, CC_SHA256_DIGEST_LENGTH, CC_SHA384_DIGEST_LENGTH,
-};
+use super::common_crypto::CC_SHA384_DIGEST_LENGTH;
+use super::common_crypto::{CC_SHA256_Final, CC_SHA256_Init, CC_SHA256_Update};
+use super::common_crypto::{CC_SHA384_Final, CC_SHA384_Init, CC_SHA384_Update};
+use super::common_crypto::{CcSha256Ctx, CcSha512Ctx, CC_SHA256_DIGEST_LENGTH};
 
 // Security framework FFI bindings
 #[link(name = "Security", kind = "framework")]
