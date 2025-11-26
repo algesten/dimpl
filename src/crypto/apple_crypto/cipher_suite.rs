@@ -1,0 +1,168 @@
+//! Cipher suite implementations using RustCrypto for Apple platforms.
+use aes_gcm::aead::{AeadInPlace, KeyInit};
+use aes_gcm::{Aes128Gcm, Aes256Gcm, Key};
+
+use crate::buffer::{Buf, TmpBuf};
+use crate::crypto::provider::{Cipher, SupportedCipherSuite};
+use crate::crypto::{Aad, Nonce};
+use crate::message::{CipherSuite, HashAlgorithm};
+
+/// AES-GCM cipher implementation.
+enum AesGcm {
+    Aes128(Box<Aes128Gcm>),
+    Aes256(Box<Aes256Gcm>),
+}
+
+impl std::fmt::Debug for AesGcm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AesGcm::Aes128(_) => f.debug_tuple("AesGcm::Aes128").finish(),
+            AesGcm::Aes256(_) => f.debug_tuple("AesGcm::Aes256").finish(),
+        }
+    }
+}
+
+impl AesGcm {
+    fn new(key: &[u8]) -> Result<Self, String> {
+        match key.len() {
+            16 => {
+                let key = Key::<Aes128Gcm>::from_slice(key);
+                Ok(AesGcm::Aes128(Box::new(Aes128Gcm::new(key))))
+            }
+            32 => {
+                let key = Key::<Aes256Gcm>::from_slice(key);
+                Ok(AesGcm::Aes256(Box::new(Aes256Gcm::new(key))))
+            }
+            _ => Err(format!("Invalid key size for AES-GCM: {}", key.len())),
+        }
+    }
+}
+
+impl Cipher for AesGcm {
+    fn encrypt(&mut self, data: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String> {
+        // AES-GCM nonce is 12 bytes
+        if nonce.len() != 12 {
+            return Err(format!(
+                "Invalid nonce length: expected 12, got {}",
+                nonce.len()
+            ));
+        }
+
+        // Create nonce from the provided nonce bytes
+        let nonce_array: [u8; 12] = nonce[..12].try_into().map_err(|_| "Invalid nonce")?;
+
+        match self {
+            AesGcm::Aes128(cipher) => {
+                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
+                use generic_array::{typenum::U12, GenericArray};
+                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+                cipher
+                    .encrypt_in_place(&aes_nonce, &aad, data)
+                    .map_err(|_| "AES-GCM encryption failed".to_string())?;
+            }
+            AesGcm::Aes256(cipher) => {
+                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
+                use generic_array::{typenum::U12, GenericArray};
+                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+                cipher
+                    .encrypt_in_place(&aes_nonce, &aad, data)
+                    .map_err(|_| "AES-GCM encryption failed".to_string())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String> {
+        if ciphertext.len() < 16 {
+            return Err(format!("Ciphertext too short: {}", ciphertext.len()));
+        }
+
+        // AES-GCM nonce is 12 bytes
+        if nonce.len() != 12 {
+            return Err(format!(
+                "Invalid nonce length: expected 12, got {}",
+                nonce.len()
+            ));
+        }
+
+        // Create nonce from the provided nonce bytes
+        let nonce_array: [u8; 12] = nonce[..12].try_into().map_err(|_| "Invalid nonce")?;
+
+        match self {
+            AesGcm::Aes128(cipher) => {
+                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
+                use generic_array::{typenum::U12, GenericArray};
+                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+                cipher
+                    .decrypt_in_place(&aes_nonce, &aad, ciphertext)
+                    .map_err(|_| "AES-GCM decryption failed".to_string())?;
+            }
+            AesGcm::Aes256(cipher) => {
+                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
+                use generic_array::{typenum::U12, GenericArray};
+                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+                cipher
+                    .decrypt_in_place(&aes_nonce, &aad, ciphertext)
+                    .map_err(|_| "AES-GCM decryption failed".to_string())?;
+            }
+        }
+
+        // decrypt_in_place already removes the tag and shortens the buffer
+        // No need to truncate further
+
+        Ok(())
+    }
+}
+
+/// TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 cipher suite.
+#[derive(Debug)]
+struct Aes128GcmSha256;
+
+impl SupportedCipherSuite for Aes128GcmSha256 {
+    fn suite(&self) -> CipherSuite {
+        CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA256
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        (0, 16, 4) // (mac_key_len, enc_key_len, fixed_iv_len)
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
+/// TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 cipher suite.
+#[derive(Debug)]
+struct Aes256GcmSha384;
+
+impl SupportedCipherSuite for Aes256GcmSha384 {
+    fn suite(&self) -> CipherSuite {
+        CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA384
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        (0, 32, 4) // (mac_key_len, enc_key_len, fixed_iv_len)
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
+/// Static instances of supported cipher suites.
+static AES_128_GCM_SHA256: Aes128GcmSha256 = Aes128GcmSha256;
+static AES_256_GCM_SHA384: Aes256GcmSha384 = Aes256GcmSha384;
+
+/// All supported cipher suites.
+pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedCipherSuite] =
+    &[&AES_128_GCM_SHA256, &AES_256_GCM_SHA384];

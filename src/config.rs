@@ -9,6 +9,17 @@ use crate::crypto::aws_lc_rs;
 #[cfg(feature = "rust-crypto")]
 use crate::crypto::rust_crypto;
 
+#[cfg(all(
+    feature = "apple-crypto",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos"
+    )
+))]
+use crate::crypto::apple_crypto;
+
 /// DTLS configuration
 #[derive(Clone)]
 pub struct Config {
@@ -188,8 +199,9 @@ impl ConfigBuilder {
     /// 1. Explicit provider set via `with_crypto_provider()`
     /// 2. Default provider installed via `CryptoProvider::install_default()`
     /// 3. AWS-LC provider (if `aws-lc-rs` feature is enabled)
-    /// 4. RustCrypto provider (if `rust-crypto` feature is enabled)
-    /// 5. Panic if no provider is available
+    /// 4. Apple Crypto provider (if `apple-crypto` feature is enabled on Apple platforms)
+    /// 5. RustCrypto provider (if `rust-crypto` feature is enabled)
+    /// 6. Panic if no provider is available
     pub fn build(self) -> Result<Config, Error> {
         let crypto_provider = self
             .crypto_provider
@@ -198,13 +210,24 @@ impl ConfigBuilder {
         #[cfg(feature = "aws-lc-rs")]
         let crypto_provider = crypto_provider.or_else(|| Some(aws_lc_rs::default_provider()));
 
+        #[cfg(all(
+            feature = "apple-crypto",
+            any(
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "tvos",
+                target_os = "watchos"
+            )
+        ))]
+        let crypto_provider = crypto_provider.or_else(|| Some(apple_crypto::default_provider()));
+
         #[cfg(feature = "rust-crypto")]
         let crypto_provider = crypto_provider.or_else(|| Some(rust_crypto::default_provider()));
 
         let crypto_provider = crypto_provider.expect(
             "No crypto provider available. Either set one explicitly, install
                  a default via CryptoProvider::install_default(),
-                 or enable the 'aws-lc-rs' or 'rust-crypto' feature.",
+                 or enable the 'aws-lc-rs', 'apple-crypto', or 'rust-crypto' feature.",
         );
 
         // Always validate the crypto provider

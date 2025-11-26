@@ -51,6 +51,43 @@ jobs:
       - name: Test
         run: cargo +${{steps.toolchain.outputs.name}} test --no-default-features --features ${{ matrix.feature }}
 
+  test_apple_crypto:
+    strategy:
+      matrix:
+        rust: [stable, beta, 1.81.0]
+
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: dtolnay/rust-toolchain@master
+        id: toolchain
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v1
+      - name: Build apple-crypto
+        run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features apple-crypto,rcgen
+      - name: Test apple-crypto
+        run: cargo +${{steps.toolchain.outputs.name}} test --no-default-features --features apple-crypto,rcgen
+
+  test_apple_crypto_ios:
+    strategy:
+      matrix:
+        rust: [stable]
+
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: dtolnay/rust-toolchain@master
+        id: toolchain
+        with:
+          toolchain: ${{ matrix.rust }}
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v1
+      - name: Build apple-crypto for iOS
+        run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features apple-crypto,rcgen --target aarch64-apple-ios
+
   snowflake:
     runs-on: ubuntu-latest
     steps:

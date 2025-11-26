@@ -16,6 +16,17 @@ pub mod aws_lc_rs;
 #[cfg(feature = "rust-crypto")]
 pub mod rust_crypto;
 
+#[cfg(all(
+    feature = "apple-crypto",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos"
+    )
+))]
+pub mod apple_crypto;
+
 mod provider;
 mod validation;
 

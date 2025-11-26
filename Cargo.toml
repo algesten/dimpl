@@ -22,6 +22,9 @@ aws-lc-rs = ["dep:aws-lc-rs"]
 # Pure Rust crypto provider
 rust-crypto = ["dep:aes-gcm", "dep:p256", "dep:p384", "dep:sha2", "dep:hmac", "dep:ecdsa", "dep:generic-array", "dep:rand_core"]
 
+# Apple crypto provider (macOS, iOS, tvOS, watchOS only)
+apple-crypto = ["dep:aes-gcm", "dep:p256", "dep:p384", "dep:sha2", "dep:hmac", "dep:ecdsa", "dep:generic-array", "dep:rand_core"]
+
 # Self-signed certificate generation.
 # rcgen can either use ring or aws-lc-rs. We have decided to use aws-lc-rs to limit the number
 # of crypto libraries we depend upon. If you enable rcgen, you are implicitly also compiling aws-lc-rs.
