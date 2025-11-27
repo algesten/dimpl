@@ -472,7 +472,7 @@ impl CryptoContext {
         hash: HashAlgorithm,
         out: &mut Buf,
         scratch: &mut Buf,
-    ) -> Result<ArrayVec<u8, 128>, String> {
+    ) -> Result<ArrayVec<u8, 88>, String> {
         const DTLS_SRTP_KEY_LABEL: &str = "EXTRACTOR-dtls_srtp";
 
         let master_secret = match &self.master_secret {

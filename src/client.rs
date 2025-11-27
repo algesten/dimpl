@@ -81,7 +81,7 @@ pub struct Client {
 pub(crate) enum LocalEvent {
     PeerCert,
     Connected,
-    KeyingMaterial(ArrayVec<u8, 128>, SrtpProfile),
+    KeyingMaterial(ArrayVec<u8, 88>, SrtpProfile),
 }
 
 impl Client {
@@ -1144,14 +1144,7 @@ impl LocalEvent {
             }
             LocalEvent::Connected => Output::Connected,
             LocalEvent::KeyingMaterial(m, profile) => {
-                let l = m.len();
-                assert!(
-                    l <= buf.len(),
-                    "Output buffer too small for keying material"
-                );
-                buf[..l].copy_from_slice(&m);
-                let km = KeyingMaterial::new(buf[..l].to_vec());
-                Output::KeyingMaterial(km, profile)
+                Output::KeyingMaterial(KeyingMaterial::new(&m), profile)
             }
         }
     }
