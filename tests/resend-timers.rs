@@ -94,19 +94,11 @@ fn resends_each_flight_epoch_and_sequence_increase() {
     let config_server = Arc::new(Config::default());
 
     // Client
-    let mut client = Dtls::new(
-        config_client,
-        client_cert.certificate.clone(),
-        client_cert.private_key.clone(),
-    );
+    let mut client = Dtls::new(config_client, client_cert.clone());
     client.set_active(true);
 
     // Server
-    let mut server = Dtls::new(
-        config_server,
-        server_cert.certificate.clone(),
-        server_cert.private_key.clone(),
-    );
+    let mut server = Dtls::new(config_server, server_cert.clone());
     server.set_active(false);
 
     // FLIGHT 1 (ClientHello): block initial, deliver resend

@@ -37,7 +37,13 @@ fn server_ossl() {
         .private_key_to_der()
         .expect("Failed to get server private key DER");
 
-    let mut server = Dtls::new(config, server_x509_der, server_pkey_der);
+    let mut server = Dtls::new(
+        config,
+        dimpl::DtlsCertificate {
+            certificate: server_x509_der,
+            private_key: server_pkey_der,
+        },
+    );
     server.set_active(false);
 
     // Buffers and flags

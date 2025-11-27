@@ -113,11 +113,7 @@ fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
 fn mk_dtls_client() -> Dtls {
     let cert = certificate::generate_self_signed_certificate().unwrap();
     let cfg = Arc::new(Config::default());
-    let mut dtls = Dtls::new(
-        cfg,
-        cert.certificate,
-        cert.private_key,
-    );
+    let mut dtls = Dtls::new(cfg, cert);
     dtls.set_active(true); // client role
     dtls
 }
