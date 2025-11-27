@@ -39,7 +39,13 @@ fn client_ossl() {
         .private_key_to_der()
         .expect("Failed to get client private key DER");
 
-    let mut client = Dtls::new(config, client_x509_der, client_pkey_der);
+    let mut client = Dtls::new(
+        config,
+        dimpl::DtlsCertificate {
+            certificate: client_x509_der,
+            private_key: client_pkey_der,
+        },
+    );
     client.set_active(true);
 
     // Collection to store server events

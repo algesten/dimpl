@@ -113,11 +113,7 @@
 //! fn mk_dtls_client() -> Dtls {
 //!     let cert = certificate::generate_self_signed_certificate().unwrap();
 //!     let cfg = Arc::new(Config::default());
-//!     let mut dtls = Dtls::new(
-//!         cfg,
-//!         cert.certificate,
-//!         cert.private_key,
-//!     );
+//!     let mut dtls = Dtls::new(cfg, cert);
 //!     dtls.set_active(true); // client role
 //!     dtls
 //! }
@@ -218,6 +214,24 @@ pub use crypto::{KeyingMaterial, SrtpProfile};
 
 mod timer;
 
+/// Certificate and private key pair.
+#[derive(Clone)]
+pub struct DtlsCertificate {
+    /// Certificate in DER format.
+    pub certificate: Vec<u8>,
+    /// Private key in DER format.
+    pub private_key: Vec<u8>,
+}
+
+impl std::fmt::Debug for DtlsCertificate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DtlsCertificate")
+            .field("certificate", &self.certificate.len())
+            .field("private_key", &self.private_key.len())
+            .finish()
+    }
+}
+
 /// Public DTLS endpoint wrapping either a client or server state.
 ///
 /// Use the role helpers to query or switch between client and server modes
@@ -234,14 +248,13 @@ enum Inner {
 impl Dtls {
     /// Create a new DTLS instance.
     ///
-    /// The instance is initialized with the provided `config`,
-    /// certificate and private key.
+    /// The instance is initialized with the provided `config` and `certificate`.
     ///
     /// During the handshake, the peer's leaf certificate is surfaced via
     /// [`Output::PeerCert`]. It is up to the application to validate that
     /// certificate according to its security policy.
-    pub fn new(config: Arc<Config>, certificate: Vec<u8>, private_key: Vec<u8>) -> Self {
-        let inner = Inner::Server(Server::new(config, certificate, private_key));
+    pub fn new(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
+        let inner = Inner::Server(Server::new(config, certificate));
         Dtls { inner: Some(inner) }
     }
 
@@ -320,7 +333,7 @@ pub enum Output<'a> {
     /// name/EKU checks, pinning, etc.).
     PeerCert(&'a [u8]),
     /// Extracted DTLS-SRTP keying material and selected SRTP profile.
-    KeyingMaterial(KeyingMaterial<'a>, SrtpProfile),
+    KeyingMaterial(KeyingMaterial, SrtpProfile),
     /// Received application data plaintext.
     ApplicationData(&'a [u8]),
 }
@@ -354,7 +367,7 @@ mod test {
         // Initialize client
         let config = Arc::new(Config::default());
 
-        Dtls::new(config, client_cert.certificate, client_cert.private_key)
+        Dtls::new(config, client_cert)
     }
 
     #[test]

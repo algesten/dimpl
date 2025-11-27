@@ -98,11 +98,15 @@ struct Entry {
 }
 
 impl Engine {
-    pub fn new(config: Arc<Config>, certificate: Vec<u8>, private_key: Vec<u8>) -> Self {
+    pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate) -> Self {
         let flight_backoff =
             ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries());
 
-        let crypto_context = CryptoContext::new(certificate, private_key, Arc::clone(&config));
+        let crypto_context = CryptoContext::new(
+            certificate.certificate,
+            certificate.private_key,
+            Arc::clone(&config),
+        );
 
         Self {
             config,

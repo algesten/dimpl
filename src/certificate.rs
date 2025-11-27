@@ -31,14 +31,7 @@ impl fmt::Display for CertificateError {
 
 impl std::error::Error for CertificateError {}
 
-/// Certificate and private key pair
-#[derive(Clone)]
-pub struct DtlsCertificate {
-    /// Certificate in DER format
-    pub certificate: Vec<u8>,
-    /// Private key in DER format
-    pub private_key: Vec<u8>,
-}
+pub use crate::DtlsCertificate;
 
 /// Generate a self-signed certificate for DTLS
 ///
@@ -128,15 +121,6 @@ impl DtlsCertificate {
     /// This method requires the `rcgen` feature to be enabled.
     pub fn fingerprint_str(&self) -> String {
         format_fingerprint(&self.fingerprint())
-    }
-}
-
-impl fmt::Debug for DtlsCertificate {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DtlsCertificate")
-            .field("certificate", &self.certificate.len())
-            .field("private_key", &self.private_key.len())
-            .finish()
     }
 }
 

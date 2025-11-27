@@ -50,7 +50,7 @@
 //! //         .unwrap()
 //! // );
 //!
-//! let dtls = Dtls::new(config, cert.certificate, cert.private_key);
+//! let dtls = Dtls::new(config, cert);
 //! ```
 //!
 //! # Implementing a Custom Provider

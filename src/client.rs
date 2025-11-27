@@ -1150,7 +1150,7 @@ impl LocalEvent {
                     "Output buffer too small for keying material"
                 );
                 buf[..l].copy_from_slice(&m);
-                let km = KeyingMaterial::new(&buf[..l]);
+                let km = KeyingMaterial::new(buf[..l].to_vec());
                 Output::KeyingMaterial(km, profile)
             }
         }

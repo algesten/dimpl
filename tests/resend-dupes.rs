@@ -105,19 +105,11 @@ fn duplicate_triggers_server_resend_of_final_flight() {
     );
 
     // Client
-    let mut client = Dtls::new(
-        config_client,
-        client_cert.certificate.clone(),
-        client_cert.private_key.clone(),
-    );
+    let mut client = Dtls::new(config_client, client_cert.clone());
     client.set_active(true);
 
     // Server
-    let mut server = Dtls::new(
-        config_server,
-        server_cert.certificate.clone(),
-        server_cert.private_key.clone(),
-    );
+    let mut server = Dtls::new(config_server, server_cert.clone());
     server.set_active(false);
 
     // FLIGHT 1 (ClientHello)

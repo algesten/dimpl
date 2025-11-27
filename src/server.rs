@@ -106,8 +106,8 @@ enum State {
 
 impl Server {
     /// Create a new DTLS server
-    pub fn new(config: Arc<Config>, certificate: Vec<u8>, private_key: Vec<u8>) -> Server {
-        let engine = Engine::new(config, certificate, private_key);
+    pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate) -> Server {
+        let engine = Engine::new(config, certificate);
         Self::new_with_engine(engine)
     }
 
