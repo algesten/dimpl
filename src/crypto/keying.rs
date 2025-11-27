@@ -6,7 +6,7 @@ pub struct KeyingMaterial(Vec<u8>);
 
 impl KeyingMaterial {
     /// Create a new wrapper for DTLS-SRTP keying material bytes.
-    pub(crate) fn new(m: &[u8]) -> Self {
+    pub fn new(m: &[u8]) -> Self {
         KeyingMaterial(m.to_vec())
     }
 }
