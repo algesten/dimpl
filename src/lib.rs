@@ -145,9 +145,6 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 #![allow(unknown_lints)]
-#![allow(clippy::upper_case_acronyms)]
-#![allow(mismatched_lifetime_syntaxes)]
-#![allow(clippy::len_without_is_empty)]
 #![deny(missing_docs)]
 
 // This is the full DTLS 1.2 handshake flow

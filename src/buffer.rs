@@ -145,6 +145,7 @@ impl ToBuf for &[u8] {
 ///
 /// Used primarily for decryption operations where data needs to be modified in-place.
 /// Provides mutable access to a slice with tracked length.
+#[allow(clippy::len_without_is_empty)]
 pub struct TmpBuf<'a>(&'a mut [u8], usize);
 
 impl<'a> TmpBuf<'a> {

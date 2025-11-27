@@ -252,6 +252,7 @@ impl CompressionMethod {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum KeyExchangeAlgorithm {
     EECDH,
     Unknown,
