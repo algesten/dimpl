@@ -15,8 +15,19 @@ rust-version = "1.81.0"
 
 [features]
 default = ["aws-lc-rs", "rcgen"]
+
+# Default crypto provider
 aws-lc-rs = ["dep:aws-lc-rs"]
-rcgen = ["aws-lc-rs", "dep:rcgen"]
+
+# Pure Rust crypto provider
+rust-crypto = ["dep:aes-gcm", "dep:p256", "dep:p384", "dep:sha2", "dep:hmac", "dep:ecdsa", "dep:generic-array", "dep:rand_core"]
+
+# Self-signed certificate generation.
+# rcgen can either use ring or aws-lc-rs. We have decided to use aws-lc-rs to limit the number
+# of crypto libraries we depend upon. If you enable rcgen, you are implicitly also compiling aws-lc-rs.
+# The self-signed certificate comes with a sha256 fingerprint that, where we use aws-lc-rs to compute it.
+# Since we are compiling aws-lc-rs anyway, enabling the feature is no extra cost.
+rcgen = ["dep:rcgen", "aws-lc-rs"]
 
 [dependencies]
 log = "0.4.22"
@@ -26,15 +37,29 @@ rand = "0.9"
 time = { version = "0.3", features = ["formatting"] }
 arrayvec = "0.7.6"
 
-# Crypto (and adjacent) dependencies
 der = "0.7"
 pkcs8 = { version = "0.10", features = ["pem"] }
 sec1 = "0.7"
 signature = "2.1"
 spki = "0.7"
 x509-cert = { version = "0.2", features = ["builder", "signature"] }
+
+# aws-lc-rs backend
 aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"], optional = true }
+
+# RustCrypto backend
+aes-gcm = { version = "0.10", optional = true }
+p256 = { version = "0.13", optional = true, features = ["ecdh"] }
+p384 = { version = "0.13", optional = true, features = ["ecdh"] }
+sha2 = { version = "0.10", optional = true }
+hmac = { version = "0.12", optional = true }
+ecdsa = { version = "0.16", optional = true, features = ["signing", "verifying"] }
+generic-array = { version = "0.14", optional = true }
+rand_core = { version = "0.6", optional = true }
+
+# certificate generation
 rcgen = { version = "0.14.5", default-features = false, features = ["aws_lc_rs"], optional = true }
+
 
 [dev-dependencies]
 openssl = { version = "0.10.70", features = ["vendored"] }

@@ -81,7 +81,7 @@ impl ClientHello {
         signature_algorithms.serialize(buf);
         ranges.push((ExtensionType::SignatureAlgorithms, start_pos, buf.len()));
 
-        if config.use_srtp() == ExtensionPolicy::Required {
+        if config.use_srtp() == ExtensionPolicy::Enabled {
             // Add use_srtp extension for DTLS-SRTP support
             let use_srtp = UseSrtpExtension::default();
             let start_pos = buf.len();

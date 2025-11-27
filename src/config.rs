@@ -6,13 +6,16 @@ use crate::Error;
 #[cfg(feature = "aws-lc-rs")]
 use crate::crypto::aws_lc_rs;
 
+#[cfg(feature = "rust-crypto")]
+use crate::crypto::rust_crypto;
+
 /// Declares the policy the client and server will follow for TLS extensions
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum ExtensionPolicy {
-    /// Extension strategy is based on the peer (client) policy.
-    Request,
-    /// Extension must be enabled.
-    Required,
+    /// Extension strategy is based on the peer policy.
+    Supported,
+    /// Extension is enabled.
+    Enabled,
     /// Extension is disabled
     Disabled,
 }
@@ -43,7 +46,7 @@ impl Config {
             flight_retries: 4,
             handshake_timeout: Duration::from_secs(40),
             crypto_provider: None,
-            use_srtp: ExtensionPolicy::Required,
+            use_srtp: ExtensionPolicy::Enabled,
         }
     }
 
@@ -108,7 +111,7 @@ impl Config {
     /// The policy the client and server will follow for use_srtp extension (rfc5764).
     #[inline(always)]
     pub fn use_srtp(&self) -> ExtensionPolicy {
-        self.use_srtp.clone()
+        self.use_srtp
     }
 }
 
@@ -213,26 +216,24 @@ impl ConfigBuilder {
     /// 1. Explicit provider set via `with_crypto_provider()`
     /// 2. Default provider installed via `CryptoProvider::install_default()`
     /// 3. AWS-LC provider (if `aws-lc-rs` feature is enabled)
-    /// 4. Panic if no provider is available
+    /// 4. RustCrypto provider (if `rust-crypto` feature is enabled)
+    /// 5. Panic if no provider is available
     pub fn build(self) -> Result<Config, Error> {
         let crypto_provider = self
             .crypto_provider
-            .or_else(|| CryptoProvider::get_default().cloned())
-            .or_else(|| {
-                #[cfg(feature = "aws-lc-rs")]
-                {
-                    Some(aws_lc_rs::default_provider())
-                }
-                #[cfg(not(feature = "aws-lc-rs"))]
-                {
-                    None
-                }
-            })
-            .expect(
-                "No crypto provider available. Either set one explicitly, install
+            .or_else(|| CryptoProvider::get_default().cloned());
+
+        #[cfg(feature = "aws-lc-rs")]
+        let crypto_provider = crypto_provider.or_else(|| Some(aws_lc_rs::default_provider()));
+
+        #[cfg(feature = "rust-crypto")]
+        let crypto_provider = crypto_provider.or_else(|| Some(rust_crypto::default_provider()));
+
+        let crypto_provider = crypto_provider.expect(
+            "No crypto provider available. Either set one explicitly, install
                  a default via CryptoProvider::install_default(),
-                 or enable the 'aws-lc-rs' feature.",
-            );
+                 or enable the 'aws-lc-rs' or 'rust-crypto' feature.",
+        );
 
         // Always validate the crypto provider
         crypto_provider.validate()?;

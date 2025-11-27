@@ -378,7 +378,7 @@ impl State {
         };
 
         for extension in extensions {
-            if config.use_srtp() == ExtensionPolicy::Required
+            if config.use_srtp() == ExtensionPolicy::Enabled
                 && extension.extension_type == ExtensionType::UseSrtp
             {
                 // Parse the use_srtp extension to get the selected profile
