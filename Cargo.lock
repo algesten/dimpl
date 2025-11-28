@@ -419,6 +419,7 @@ dependencies = [
  "sha2",
  "signature",
  "spki",
+ "subtle",
  "time",
  "x509-cert",
  "x509-parser",

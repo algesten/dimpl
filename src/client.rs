@@ -16,6 +16,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use arrayvec::ArrayVec;
+use subtle::ConstantTimeEq;
 
 use crate::buffer::{Buf, ToBuf};
 use crate::crypto::CipherSuite;
@@ -918,7 +919,9 @@ impl State {
             verify_data.len(),
             expected.len()
         );
-        if verify_data != expected.as_slice() {
+        // Use constant-time comparison to prevent timing attacks
+        let is_eq: bool = verify_data.ct_eq(expected.as_slice()).into();
+        if !is_eq {
             return Err(Error::SecurityError(
                 "Server Finished verification failed".to_string(),
             ));
