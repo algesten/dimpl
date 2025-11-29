@@ -56,9 +56,6 @@ impl Iv {
 }
 
 /// Full AEAD nonce (fixed IV + explicit nonce).
-///
-/// This type is public as it's used in the `Cipher` trait interface,
-/// but can only be constructed internally via `pub(crate) new()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Nonce(pub [u8; 12]);
 
@@ -73,9 +70,6 @@ impl Nonce {
 }
 
 /// Additional Authenticated Data for DTLS records.
-///
-/// This type is public as it's used in the `Cipher` trait interface,
-/// but can only be constructed internally via `pub(crate) new()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Aad(pub [u8; 13]);
 
