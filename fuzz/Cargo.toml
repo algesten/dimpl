@@ -1,0 +1,30 @@
+[package]
+name = "dimpl-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.dimpl]
+path = ".."
+# Need rcgen to generate certificates for the Dtls instance
+features = ["rcgen"]
+
+[[bin]]
+name = "fuzz_dtls_packet"
+path = "fuzz_targets/fuzz_dtls_packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_record_parse"
+path = "fuzz_targets/fuzz_record_parse.rs"
+test = false
+doc = false
+bench = false
