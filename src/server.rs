@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use arrayvec::ArrayVec;
+use subtle::ConstantTimeEq;
 
 use rand::random;
 
@@ -762,7 +763,9 @@ impl State {
 
         // Now we can access the buffer
         let verify_data = &server.defragment_buffer[verify_data_range];
-        if verify_data != expected.as_slice() {
+        // Use constant-time comparison to prevent timing attacks
+        let is_eq: bool = verify_data.ct_eq(expected.as_slice()).into();
+        if !is_eq {
             return Err(Error::SecurityError(
                 "Client Finished verification failed".to_string(),
             ));
@@ -891,7 +894,8 @@ fn verify_cookie(
         return false;
     }
     match compute_cookie(hmac_provider, secret, client_random) {
-        Ok(expected) => *expected == *cookie,
+        // Use constant-time comparison to prevent timing attacks
+        Ok(expected) => expected.as_ref().ct_eq(cookie.as_ref()).into(),
         Err(_) => false,
     }
 }
