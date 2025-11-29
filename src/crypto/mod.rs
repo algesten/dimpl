@@ -6,7 +6,6 @@ use std::sync::Arc;
 use arrayvec::ArrayVec;
 
 // Internal module imports
-pub(crate) mod dtls_aead;
 mod keying;
 
 // Provider traits and implementations
@@ -16,6 +15,7 @@ pub mod aws_lc_rs;
 #[cfg(feature = "rust-crypto")]
 pub mod rust_crypto;
 
+mod dtls_aead;
 mod provider;
 mod validation;
 
@@ -23,6 +23,12 @@ pub use keying::{KeyingMaterial, SrtpProfile};
 
 // Re-export message enums needed for provider trait implementations
 pub use crate::message::{CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
+
+// Re-export AEAD types needed for Cipher trait implementations (public API)
+pub use dtls_aead::{Aad, Nonce};
+
+// Re-export internal AEAD constants/types for crate-internal use
+pub(crate) use dtls_aead::{Iv, DTLS_AEAD_OVERHEAD, DTLS_EXPLICIT_NONCE_LEN};
 
 // Re-export all provider traits and types (similar to rustls structure)
 // This allows users to do: use dimpl::crypto::{CryptoProvider, SupportedCipherSuite, ...};
@@ -36,8 +42,6 @@ pub use provider::{SupportedCipherSuite, SupportedKxGroup};
 use crate::buffer::{Buf, TmpBuf, ToBuf};
 use crate::message::DigitallySigned;
 use crate::message::{Asn1Cert, Certificate, CurveType};
-
-use dtls_aead::{Aad, Iv, Nonce};
 
 /// DTLS crypto context
 /// Crypto context holding negotiated keys and ciphers for a DTLS session.

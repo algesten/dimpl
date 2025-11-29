@@ -6,9 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::buffer::{Buf, BufferPool, TmpBuf};
-use crate::crypto::dtls_aead::{Aad, Iv, DTLS_AEAD_OVERHEAD};
-use crate::crypto::dtls_aead::{Nonce, DTLS_EXPLICIT_NONCE_LEN};
 use crate::crypto::CryptoContext;
+use crate::crypto::{Aad, Iv, Nonce, DTLS_AEAD_OVERHEAD, DTLS_EXPLICIT_NONCE_LEN};
 use crate::incoming::{Incoming, Record};
 use crate::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::message::{CipherSuite, ContentType, DTLSRecord, Handshake};

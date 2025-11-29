@@ -202,9 +202,9 @@ impl ConfigBuilder {
         let crypto_provider = crypto_provider.or_else(|| Some(rust_crypto::default_provider()));
 
         let crypto_provider = crypto_provider.expect(
-            "No crypto provider available. Either set one explicitly, install
-                 a default via CryptoProvider::install_default(),
-                 or enable the 'aws-lc-rs' or 'rust-crypto' feature.",
+            "No crypto provider available. Either set one explicitly via \
+             with_crypto_provider(), install a default via CryptoProvider::install_default(), \
+             or enable the 'aws-lc-rs' or 'rust-crypto' feature.",
         );
 
         // Always validate the crypto provider

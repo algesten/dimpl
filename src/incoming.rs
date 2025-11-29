@@ -5,7 +5,7 @@ use arrayvec::ArrayVec;
 use std::fmt;
 
 use crate::buffer::{Buf, TmpBuf};
-use crate::crypto::dtls_aead::DTLS_EXPLICIT_NONCE_LEN;
+use crate::crypto::DTLS_EXPLICIT_NONCE_LEN;
 use crate::engine::Engine;
 use crate::message::{ContentType, DTLSRecord, Handshake};
 use crate::Error;
