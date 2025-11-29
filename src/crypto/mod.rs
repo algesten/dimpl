@@ -16,6 +16,9 @@ pub mod aws_lc_rs;
 #[cfg(feature = "rust-crypto")]
 pub mod rust_crypto;
 
+#[cfg(feature = "apple-crypto")]
+pub mod apple_crypto;
+
 mod provider;
 mod validation;
 

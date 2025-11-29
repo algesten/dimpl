@@ -35,7 +35,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         rust: [stable, beta, 1.81.0]
-        feature: [aws-lc-rs, rust-crypto, rcgen]
+        feature: [aws-lc-rs, rust-crypto, rcgen, apple-crypto]
+        exclude:
+          # apple-crypto is only for Apple oses
+          - os: ubuntu-latest
+            feature: apple-crypto
+          - os: windows-latest
+            feature: apple-crypto
 
     runs-on: ${{ matrix.os }}
 

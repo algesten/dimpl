@@ -9,6 +9,9 @@ use crate::crypto::aws_lc_rs;
 #[cfg(feature = "rust-crypto")]
 use crate::crypto::rust_crypto;
 
+#[cfg(feature = "apple-crypto")]
+use crate::crypto::apple_crypto;
+
 /// DTLS configuration
 #[derive(Clone)]
 pub struct Config {
@@ -201,10 +204,13 @@ impl ConfigBuilder {
         #[cfg(feature = "rust-crypto")]
         let crypto_provider = crypto_provider.or_else(|| Some(rust_crypto::default_provider()));
 
+        #[cfg(feature = "apple-crypto")]
+        let crypto_provider = crypto_provider.or_else(|| Some(apple_crypto::default_provider()));
+
         let crypto_provider = crypto_provider.expect(
             "No crypto provider available. Either set one explicitly, install
                  a default via CryptoProvider::install_default(),
-                 or enable the 'aws-lc-rs' or 'rust-crypto' feature.",
+                 or enable the 'aws-lc-rs', 'rust-crypto', or 'apple-crypto' feature.",
         );
 
         // Always validate the crypto provider
