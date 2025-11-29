@@ -36,11 +36,12 @@ fuzz_target!(|data: &[u8]| {
         let mut dtls = Dtls::new(Arc::clone(&config), cert);
         dtls.set_active(true); // Switch to client mode
 
-        // Initialize the client by calling poll_output (which triggers handle_timeout internally)
-        // and handle_timeout to set up the random and other state
+        // Initialize the client by calling handle_timeout to set up the random and other state
         let mut buf = vec![0u8; 2048];
         let _ = dtls.handle_timeout(now);
-        loop {
+
+        // Drain any initial packets (ClientHello) with a limit to prevent infinite loops
+        for _ in 0..10 {
             match dtls.poll_output(&mut buf) {
                 Output::Timeout(_) => break,
                 Output::Packet(_) => continue,
