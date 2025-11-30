@@ -28,7 +28,9 @@ where
                     }
 
                     i = i1;
-                    acc.push(o);
+                    if acc.try_push(o).is_err() {
+                        return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many0)));
+                    }
                 }
             }
         }
@@ -47,7 +49,10 @@ where
         Err(e) => Err(e),
         Ok((i1, o)) => {
             let mut acc = ArrayVec::new();
-            acc.push(o);
+            // Handle case where ArrayVec has insufficient capacity
+            if acc.try_push(o).is_err() {
+                return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many1)));
+            }
             i = i1;
 
             loop {
@@ -62,7 +67,9 @@ where
                         }
 
                         i = i1;
-                        acc.push(o);
+                        if acc.try_push(o).is_err() {
+                            return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many1)));
+                        }
                     }
                 }
             }

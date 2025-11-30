@@ -86,7 +86,9 @@ impl Records {
             match Record::parse(record_slice, engine) {
                 Ok(record) => {
                     if let Some(record) = record {
-                        records.push(record);
+                        if records.try_push(record).is_err() {
+                            return Err(Error::TooManyRecords);
+                        }
                     } else {
                         trace!("Discarding replayed rec");
                     }

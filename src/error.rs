@@ -25,6 +25,8 @@ pub enum Error {
     Timeout(&'static str),
     /// Configuration error (e.g., invalid crypto provider)
     ConfigError(String),
+    /// Too many records in a single packet
+    TooManyRecords,
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {
@@ -53,6 +55,7 @@ impl std::fmt::Display for Error {
             Error::IncompleteServerHello => write!(f, "incomplete ServerHello"),
             Error::Timeout(what) => write!(f, "timeout: {}", what),
             Error::ConfigError(msg) => write!(f, "config error: {}", msg),
+            Error::TooManyRecords => write!(f, "too many records in packet"),
         }
     }
 }
