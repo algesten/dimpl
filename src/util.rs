@@ -49,7 +49,7 @@ where
         Err(e) => Err(e),
         Ok((i1, o)) => {
             let mut acc = ArrayVec::new();
-            // First element, ArrayVec should have capacity for at least 1
+            // Handle case where ArrayVec has insufficient capacity
             if acc.try_push(o).is_err() {
                 return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many1)));
             }
