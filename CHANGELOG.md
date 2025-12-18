@@ -1,5 +1,17 @@
 # Unreleased
 
+  * dimpl is not compatible with aws-lc-rs < 1.14
+
+# 0.2.0
+
+  * Add fuzz testing to #32
+  * Re-export Aad and Nonce that was missing #30
+  * Add CodeQL analysis workflow configuration #27
+  * Constant time equality #26
+  * Pluggable CryptoProvider #16
+    * aws-lc-rs backend (default)
+    * rust-crypto backend (pure Rust)
+
 # 0.1.5
 
   * Optimize parse speed using Box #14
