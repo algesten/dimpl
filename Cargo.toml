@@ -46,7 +46,7 @@ spki = "0.7"
 x509-cert = { version = "0.2", default-features = false }
 
 # aws-lc-rs backend
-aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"], optional = true }
+aws-lc-rs = { version = "^1.14", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"], optional = true }
 
 # RustCrypto backend
 aes-gcm = { version = "0.10", optional = true }
