@@ -1,7 +1,7 @@
 use rand::random;
 use std::collections::VecDeque;
 use std::mem;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -455,7 +455,8 @@ impl Engine {
             .skip_while(|r| r.is_handled())
             // Cap to MAX_DEFRAGMENT_PACKETS to avoid misbehaving peers
             .take(MAX_DEFRAGMENT_PACKETS)
-            .filter_map(|r| r.handshake())
+            .flat_map(|r| r.handshakes().iter())
+            .skip_while(|h| h.handled.load(Ordering::Relaxed))
             .peekable();
 
         let maybe_first_handshake = skip_handled.peek();
@@ -511,7 +512,8 @@ impl Engine {
             .iter()
             .flat_map(|i| i.records().iter())
             .skip_while(|r| r.is_handled())
-            .filter_map(|r| r.handshake().map(|h| (h, r.buffer())));
+            .flat_map(|r| r.handshakes().iter().map(move |h| (h, r.buffer())))
+            .skip_while(|(h, _)| h.handled.load(Ordering::Relaxed));
 
         // This sets the handled flag on the handshake.
         // Passing Some(&mut self.transcript) to have defragment write to transcript
