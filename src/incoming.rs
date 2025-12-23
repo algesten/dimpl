@@ -191,17 +191,17 @@ impl Record {
     }
 
     pub fn is_handled(&self) -> bool {
-        if !self.parsed.handshakes.is_empty() {
-            self.parsed
-                .handshakes
-                .iter()
-                .all(|h| h.handled.load(Ordering::Relaxed))
-        } else {
+        if self.parsed.handshakes.is_empty() {
             self.parsed.handled.load(Ordering::Relaxed)
+        } else {
+            self.parsed.handshakes.iter().all(|h| h.is_handled())
         }
     }
 
     pub fn set_handled(&self) {
+        // Handshakes should be empty because we set_handled() on them individually
+        // during defragmentation. set_handled() on the record is only for non-handshakes.
+        assert!(self.parsed.handshakes.is_empty());
         self.parsed.handled.store(true, Ordering::Relaxed);
     }
 
