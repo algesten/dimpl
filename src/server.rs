@@ -275,7 +275,9 @@ impl State {
             server
                 .engine
                 .create_handshake(MessageType::HelloVerifyRequest, |body, _engine| {
-                    let hvr = HelloVerifyRequest::new(ProtocolVersion::DTLS1_2, cookie);
+                    // RFC 6347 4.2.1: The server_version field in the HelloVerifyRequest
+                    // message MUST be set to DTLS 1.0
+                    let hvr = HelloVerifyRequest::new(ProtocolVersion::DTLS1_0, cookie);
                     hvr.serialize(body);
                     Ok(())
                 })?;
