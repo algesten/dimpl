@@ -1,7 +1,7 @@
 use rand::random;
 use std::collections::VecDeque;
 use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -182,7 +182,7 @@ impl Engine {
         }
 
         // Dispatch to specialized handlers
-        if incoming.first().handshake().is_some() {
+        if incoming.first().first_handshake().is_some() {
             self.insert_incoming_handshake(incoming)
         } else {
             self.insert_incoming_non_handshake(incoming)
@@ -190,8 +190,10 @@ impl Engine {
     }
 
     fn insert_incoming_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
-        let first = incoming.first();
-        let handshake = first.handshake().expect("caller ensures handshake");
+        let first_record = incoming.first();
+        let handshake = first_record
+            .first_handshake()
+            .expect("caller ensures handshake");
 
         let key_current = (
             handshake.header.message_seq,
@@ -201,7 +203,7 @@ impl Engine {
         let maybe_dupe_seq = incoming
             .records()
             .iter()
-            .filter_map(|r| r.handshake())
+            .filter_map(|r| r.first_handshake())
             .filter_map(|h| h.dupe_triggers_resend())
             .next();
 
@@ -216,7 +218,7 @@ impl Engine {
         let search_result = self.queue_rx.binary_search_by(|item| {
             let key_other = item
                 .first()
-                .handshake()
+                .first_handshake()
                 .as_ref()
                 .map(|h| (h.header.message_seq, h.header.fragment_offset))
                 .unwrap_or((u16::MAX, u32::MAX));
