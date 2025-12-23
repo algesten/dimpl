@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.2.1
+
   * Fix DTLS protocol version in HelloVerifyRequest #36
   * Handle multiple Handshake in one Record #36
   * dimpl is not compatible with aws-lc-rs < 1.14 #35
