@@ -150,7 +150,7 @@ impl Handshake {
             unreachable!("Non-Fragment body in defragment()")
         };
         buffer.extend_from_slice(&first_buffer[range.clone()]);
-        first_handshake.handled.store(true, Ordering::Relaxed);
+        first_handshake.set_handled();
 
         for (handshake, source_buf) in iter {
             if handshake.header.msg_type != first_handshake.header.msg_type {
@@ -271,6 +271,14 @@ impl Handshake {
         );
 
         qualifies.then_some(self.header.message_seq)
+    }
+
+    pub fn is_handled(&self) -> bool {
+        self.handled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_handled(&self) {
+        self.handled.store(true, Ordering::Relaxed);
     }
 }
 

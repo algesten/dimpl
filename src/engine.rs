@@ -458,7 +458,7 @@ impl Engine {
             // Cap to MAX_DEFRAGMENT_PACKETS to avoid misbehaving peers
             .take(MAX_DEFRAGMENT_PACKETS)
             .flat_map(|r| r.handshakes().iter())
-            .skip_while(|h| h.handled.load(Ordering::Relaxed))
+            .skip_while(|h| h.is_handled())
             .peekable();
 
         let maybe_first_handshake = skip_handled.peek();
@@ -515,7 +515,7 @@ impl Engine {
             .flat_map(|i| i.records().iter())
             .skip_while(|r| r.is_handled())
             .flat_map(|r| r.handshakes().iter().map(move |h| (h, r.buffer())))
-            .skip_while(|(h, _)| h.handled.load(Ordering::Relaxed));
+            .skip_while(|(h, _)| h.is_handled());
 
         // This sets the handled flag on the handshake.
         // Passing Some(&mut self.transcript) to have defragment write to transcript
