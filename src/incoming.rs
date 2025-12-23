@@ -186,7 +186,7 @@ impl Record {
         &self.parsed.handshakes
     }
 
-    pub fn handshake(&self) -> Option<&Handshake> {
+    pub fn first_handshake(&self) -> Option<&Handshake> {
         self.parsed.handshakes.first()
     }
 
