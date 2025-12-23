@@ -275,8 +275,11 @@ impl State {
             unreachable!()
         };
 
-        // Enforce DTLS 1.2 version in HelloVerifyRequest
-        if h.server_version != ProtocolVersion::DTLS1_2 {
+        // RFC 6347 4.2.1: The server_version field in the HelloVerifyRequest message MUST be set to DTLS 1.0
+        // https://datatracker.ietf.org/doc/html/rfc6347#section-4.2.1
+        if h.server_version != ProtocolVersion::DTLS1_2
+            && h.server_version != ProtocolVersion::DTLS1_0
+        {
             return Err(Error::SecurityError(format!(
                 "Unsupported DTLS version in HelloVerifyRequest: {:?}",
                 h.server_version

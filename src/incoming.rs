@@ -182,16 +182,23 @@ impl Record {
         &self.parsed.record
     }
 
+    pub fn handshakes(&self) -> &[Handshake] {
+        &self.parsed.handshakes
+    }
+
     pub fn handshake(&self) -> Option<&Handshake> {
-        self.parsed.handshake.as_ref()
+        self.parsed.handshakes.first()
     }
 
     pub fn is_handled(&self) -> bool {
-        self.parsed
-            .handshake
-            .as_ref()
-            .map(|h| h.handled.load(Ordering::Relaxed))
-            .unwrap_or(self.parsed.handled.load(Ordering::Relaxed))
+        if !self.parsed.handshakes.is_empty() {
+            self.parsed
+                .handshakes
+                .iter()
+                .all(|h| h.handled.load(Ordering::Relaxed))
+        } else {
+            self.parsed.handled.load(Ordering::Relaxed)
+        }
     }
 
     pub fn set_handled(&self) {
@@ -209,7 +216,7 @@ impl Record {
 
 pub struct ParsedRecord {
     record: DTLSRecord,
-    handshake: Option<Handshake>,
+    handshakes: ArrayVec<Handshake, 8>,
     handled: AtomicBool,
 }
 
@@ -217,26 +224,44 @@ impl ParsedRecord {
     pub fn parse(input: &[u8], engine: &Engine, offset: usize) -> Result<ParsedRecord, Error> {
         let (_, record) = DTLSRecord::parse(input, 0, offset)?;
 
-        let handshake = if record.content_type == ContentType::Handshake {
+        let handshakes = if record.content_type == ContentType::Handshake {
             // This will also return None on the encrypted Finished after ChangeCipherSpec.
             // However we will then decrypt and try again.
             let fragment_offset = record.fragment_range.start;
-            maybe_handshake(record.fragment(input), fragment_offset, engine)
+            parse_handshakes(record.fragment(input), fragment_offset, engine)
         } else {
-            None
+            ArrayVec::new()
         };
 
         Ok(ParsedRecord {
             record,
-            handshake,
+            handshakes,
             handled: AtomicBool::new(false),
         })
     }
 }
 
-fn maybe_handshake(input: &[u8], base_offset: usize, engine: &Engine) -> Option<Handshake> {
-    let (_, handshake) = Handshake::parse(input, base_offset, engine.cipher_suite(), true).ok()?;
-    Some(handshake)
+fn parse_handshakes(
+    mut input: &[u8],
+    mut base_offset: usize,
+    engine: &Engine,
+) -> ArrayVec<Handshake, 8> {
+    let mut handshakes = ArrayVec::new();
+    while !input.is_empty() {
+        if let Ok((remaining, handshake)) =
+            Handshake::parse(input, base_offset, engine.cipher_suite(), true)
+        {
+            let len = input.len() - remaining.len();
+            base_offset += len;
+            input = remaining;
+            if handshakes.try_push(handshake).is_err() {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    handshakes
 }
 
 impl fmt::Debug for Incoming {
@@ -251,7 +276,7 @@ impl fmt::Debug for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Record")
             .field("record", &self.parsed.record)
-            .field("handshake", &self.parsed.handshake)
+            .field("handshakes", &self.parsed.handshakes)
             .finish()
     }
 }
