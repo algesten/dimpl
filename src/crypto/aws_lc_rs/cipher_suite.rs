@@ -50,6 +50,24 @@ impl Cipher for AesGcm {
         Ok(())
     }
 
+    fn encrypt_with_aad(
+        &mut self,
+        plaintext: &mut Buf,
+        aad: &[u8],
+        nonce: Nonce,
+    ) -> Result<(), String> {
+        let aws_nonce =
+            AwsNonce::try_assume_unique_for_key(&nonce).map_err(|_| "Invalid nonce".to_string())?;
+
+        let aws_aad = AwsAad::from(aad);
+
+        self.key
+            .seal_in_place_append_tag(aws_nonce, aws_aad, plaintext)
+            .map_err(|_| "AES-GCM encryption failed".to_string())?;
+
+        Ok(())
+    }
+
     fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String> {
         if ciphertext.len() < 16 {
             return Err(format!("Ciphertext too short: {}", ciphertext.len()));
@@ -70,9 +88,33 @@ impl Cipher for AesGcm {
 
         Ok(())
     }
-}
 
-/// TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 cipher suite.
+    fn decrypt_with_aad(
+        &mut self,
+        ciphertext: &mut TmpBuf,
+        aad: &[u8],
+        nonce: Nonce,
+    ) -> Result<(), String> {
+        if ciphertext.len() < 16 {
+            return Err(format!("Ciphertext too short: {}", ciphertext.len()));
+        }
+
+        let aws_nonce =
+            AwsNonce::try_assume_unique_for_key(&nonce).map_err(|_| "Invalid nonce".to_string())?;
+
+        let aws_aad = AwsAad::from(aad);
+
+        let plaintext = self
+            .key
+            .open_in_place(aws_nonce, aws_aad, ciphertext.as_mut())
+            .map_err(|_| "AES-GCM decryption failed".to_string())?;
+
+        let plaintext_len = plaintext.len();
+        ciphertext.truncate(plaintext_len);
+
+        Ok(())
+    }
+}
 #[derive(Debug)]
 struct Aes128GcmSha256;
 
@@ -116,10 +158,66 @@ impl SupportedCipherSuite for Aes256GcmSha384 {
     }
 }
 
+// TLS 1.3 Cipher Suites (used by DTLS 1.3)
+
+/// TLS_AES_128_GCM_SHA256 cipher suite (TLS 1.3).
+#[derive(Debug)]
+struct Tls13Aes128GcmSha256;
+
+impl SupportedCipherSuite for Tls13Aes128GcmSha256 {
+    fn suite(&self) -> CipherSuite {
+        CipherSuite::TLS_AES_128_GCM_SHA256
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA256
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        // TLS 1.3: no separate MAC key, 16-byte AES key, 12-byte IV
+        (0, 16, 12)
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
+/// TLS_AES_256_GCM_SHA384 cipher suite (TLS 1.3).
+#[derive(Debug)]
+struct Tls13Aes256GcmSha384;
+
+impl SupportedCipherSuite for Tls13Aes256GcmSha384 {
+    fn suite(&self) -> CipherSuite {
+        CipherSuite::TLS_AES_256_GCM_SHA384
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA384
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        // TLS 1.3: no separate MAC key, 32-byte AES key, 12-byte IV
+        (0, 32, 12)
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
 /// Static instances of supported cipher suites.
 static AES_128_GCM_SHA256: Aes128GcmSha256 = Aes128GcmSha256;
 static AES_256_GCM_SHA384: Aes256GcmSha384 = Aes256GcmSha384;
+static TLS13_AES_128_GCM_SHA256: Tls13Aes128GcmSha256 = Tls13Aes128GcmSha256;
+static TLS13_AES_256_GCM_SHA384: Tls13Aes256GcmSha384 = Tls13Aes256GcmSha384;
 
 /// All supported cipher suites.
-pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedCipherSuite] =
-    &[&AES_128_GCM_SHA256, &AES_256_GCM_SHA384];
+pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedCipherSuite] = &[
+    // DTLS 1.2 cipher suites
+    &AES_128_GCM_SHA256,
+    &AES_256_GCM_SHA384,
+    // DTLS 1.3 / TLS 1.3 cipher suites
+    &TLS13_AES_128_GCM_SHA256,
+    &TLS13_AES_256_GCM_SHA384,
+];

@@ -15,8 +15,9 @@ pub mod aws_lc_rs;
 #[cfg(feature = "rust-crypto")]
 pub mod rust_crypto;
 
-mod dtls_aead;
+pub(crate) mod dtls_aead;
 mod provider;
+pub mod tls13_key_schedule;
 mod validation;
 
 pub use keying::{KeyingMaterial, SrtpProfile};
@@ -35,8 +36,9 @@ pub(crate) use dtls_aead::{Iv, DTLS_AEAD_OVERHEAD, DTLS_EXPLICIT_NONCE_LEN};
 pub use provider::{
     ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext, HashProvider,
 };
-pub use provider::{HmacProvider, KeyProvider, PrfProvider};
+pub use provider::{HkdfProvider, HmacProvider, KeyProvider, PrfProvider};
 pub use provider::{SecureRandom, SignatureVerifier, SigningKey};
+pub use provider::{SnCipher, SnCipherProvider};
 pub use provider::{SupportedCipherSuite, SupportedKxGroup};
 
 use crate::buffer::{Buf, TmpBuf, ToBuf};
@@ -99,6 +101,9 @@ pub(crate) struct CryptoContext {
 
     /// Server random (needed for SRTP key export per RFC 5705)
     server_random: Option<ArrayVec<u8, 32>>,
+
+    /// TLS 1.3 exporter master secret (for SRTP key export per RFC 8446 Section 7.5)
+    exporter_master_secret: Option<Buf>,
 }
 
 impl CryptoContext {
@@ -143,6 +148,7 @@ impl CryptoContext {
             private_key,
             client_random: None,
             server_random: None,
+            exporter_master_secret: None,
         }
     }
 
@@ -181,7 +187,8 @@ impl CryptoContext {
             .take()
             .ok_or_else(|| "Key exchange not initialized".to_string())?;
         ke.complete(peer_public_key, buf)?;
-        self.pre_master_secret = Some(core::mem::take(buf));
+        // Store a copy of the shared secret for legacy DTLS 1.2 code
+        self.pre_master_secret = Some(Buf::from_slice(buf.as_ref()));
         // Note: we keep key_exchange_public_key since it may be needed later
         Ok(())
     }
@@ -201,6 +208,8 @@ impl CryptoContext {
             .ok_or_else(|| format!("Unsupported ECDHE named group: {:?}", named_group))?;
 
         kx_buf.clear();
+        // Clear any cached public key from previous key exchange
+        self.key_exchange_public_key = None;
         self.key_exchange = Some(kx_group.start_exchange(core::mem::take(kx_buf))?);
         self.maybe_init_key_exchange()
     }
@@ -414,10 +423,37 @@ impl CryptoContext {
         Certificate::new(certs)
     }
 
-    /// Serialize client certificate for authentication
+    /// Serialize client certificate for authentication (DTLS 1.2 format)
     pub fn serialize_client_certificate(&self, output: &mut Buf) {
         let cert = self.get_client_certificate();
         cert.serialize(&self.certificate, output);
+    }
+
+    /// Serialize certificate for TLS 1.3 format
+    /// Format: context(0) || cert_list_len(3) || [cert_len(3) || cert || ext_len(2)]...
+    pub fn serialize_certificate_tls13(&self, output: &mut Buf) {
+        let cert = self.get_client_certificate();
+
+        // Calculate total length: sum of (3 + cert_len + 2) for each certificate
+        let total_len: usize = cert
+            .certificate_list
+            .iter()
+            .map(|c| 3 + c.as_slice(&self.certificate).len() + 2)
+            .sum();
+
+        // certificate_list length (3 bytes)
+        output.extend_from_slice(&(total_len as u32).to_be_bytes()[1..]);
+
+        // Serialize each certificate entry
+        for asn1_cert in &cert.certificate_list {
+            let cert_data = asn1_cert.as_slice(&self.certificate);
+            // cert_data length (3 bytes)
+            output.extend_from_slice(&(cert_data.len() as u32).to_be_bytes()[1..]);
+            // cert_data
+            output.extend_from_slice(cert_data);
+            // extensions length (2 bytes) - no extensions
+            output.extend_from_slice(&0u16.to_be_bytes());
+        }
     }
 
     /// Sign the provided data using the client's private key
@@ -517,6 +553,45 @@ impl CryptoContext {
             .map_err(|_| "Keying material too long".to_string())?;
 
         Ok(keying_material)
+    }
+
+    /// Extract SRTP keying material using TLS 1.3 exporter (RFC 8446 Section 7.5)
+    /// This is used for DTLS-SRTP with DTLS 1.3.
+    pub fn extract_srtp_keying_material_tls13(
+        &self,
+        profile: SrtpProfile,
+        hash: HashAlgorithm,
+    ) -> Result<ArrayVec<u8, 88>, String> {
+        const DTLS_SRTP_KEY_LABEL: &[u8] = b"EXTRACTOR-dtls_srtp";
+
+        let exporter_secret = match &self.exporter_master_secret {
+            Some(s) => s,
+            None => return Err("No exporter master secret available".to_string()),
+        };
+
+        // Use the TLS 1.3 key schedule exporter mechanism
+        let ks = tls13_key_schedule::KeySchedule::new(self.provider().hkdf_provider, hash)?;
+
+        // For DTLS-SRTP, context is empty per RFC 5764
+        let exported = ks.export_keying_material(
+            exporter_secret,
+            DTLS_SRTP_KEY_LABEL,
+            &[], // Empty context
+            profile.keying_material_len(),
+            self.provider().hash_provider,
+        )?;
+
+        let mut keying_material = ArrayVec::new();
+        keying_material
+            .try_extend_from_slice(&exported)
+            .map_err(|_| "Keying material too long".to_string())?;
+
+        Ok(keying_material)
+    }
+
+    /// Set the TLS 1.3 exporter master secret (for SRTP key export)
+    pub fn set_exporter_master_secret(&mut self, secret: Buf) {
+        self.exporter_master_secret = Some(secret);
     }
 
     /// Get group info for ECDHE key exchange

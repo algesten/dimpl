@@ -97,7 +97,7 @@ fn server_ossl() {
                         .expect("Server failed to send app data");
                 }
                 Output::ApplicationData(data) => {
-                    server_received_data.extend_from_slice(&data);
+                    server_received_data.extend_from_slice(data);
                 }
                 Output::Timeout(_) => break,
             }
@@ -167,7 +167,7 @@ fn server_ossl() {
         "Both sides should negotiate same SRTP profile"
     );
     assert!(
-        server_km.len() > 0,
+        !server_km.is_empty(),
         "Server keying material should not be empty"
     );
     assert_eq!(

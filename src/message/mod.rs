@@ -4,40 +4,57 @@
 //! cipher suites and signature algorithms, as well as parsing wire formats.
 //! Only the public items are documented here; the rest are internal helpers.
 
+mod ack;
 mod certificate;
 mod certificate_request;
 mod certificate_verify;
 mod client_hello;
 mod client_key_exchange;
 mod digitally_signed;
+mod encrypted_extensions;
 mod extension;
 mod extensions;
 mod finished;
 mod handshake;
 mod hello_verify;
 mod id;
+mod key_update;
 mod named_group;
 mod random;
 mod record;
+pub mod record13;
 mod server_hello;
 mod server_key_exchange;
 mod wrapped;
 
+#[allow(unused_imports)]
+pub use ack::{AckMessage, RecordNumber};
+#[allow(unused_imports)]
 use arrayvec::ArrayVec;
-pub use certificate::Certificate;
-pub use certificate_request::CertificateRequest;
+pub use certificate::{Certificate, Certificate13};
+pub use certificate_request::{CertificateRequest, CertificateRequest13};
 pub use certificate_verify::CertificateVerify;
 pub use client_hello::ClientHello;
 pub use client_key_exchange::{ClientKeyExchange, ExchangeKeys};
 pub use digitally_signed::DigitallySigned;
 pub use extension::{Extension, ExtensionType};
+pub use extensions::cookie::CookieExtension;
+pub use extensions::ec_point_formats::ECPointFormatsExtension;
+pub use extensions::key_share::{
+    KeyShareClientHello, KeyShareEntry, KeyShareHelloRetryRequest, KeyShareServerHello,
+};
 pub use extensions::signature_algorithms::SignatureAlgorithmsExtension;
 pub use extensions::supported_groups::SupportedGroupsExtension;
+pub use extensions::supported_versions::{
+    SupportedVersionsClientHello, SupportedVersionsServerHello,
+};
 pub use extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
 pub use finished::Finished;
 pub use handshake::{Body, Handshake, Header, MessageType};
 pub use hello_verify::HelloVerifyRequest;
 pub use id::{Cookie, SessionId};
+#[allow(unused_imports)]
+pub use key_update::{KeyUpdate, KeyUpdateRequest};
 pub use named_group::{CurveType, NamedGroup};
 pub use random::Random;
 pub use record::{ContentType, DTLSRecord, Sequence};
@@ -91,13 +108,21 @@ impl ProtocolVersion {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
-/// Supported TLS 1.2 cipher suites for DTLS.
+/// Supported cipher suites for DTLS 1.2 and DTLS 1.3.
 pub enum CipherSuite {
-    // ECDHE with AES-GCM
+    // DTLS 1.2 cipher suites (ECDHE with AES-GCM)
     /// ECDHE with ECDSA authentication, AES-256-GCM, SHA-384
     ECDHE_ECDSA_AES256_GCM_SHA384, // 0xC02C
     /// ECDHE with ECDSA authentication, AES-128-GCM, SHA-256
     ECDHE_ECDSA_AES128_GCM_SHA256, // 0xC02B
+
+    // DTLS 1.3 / TLS 1.3 cipher suites (RFC 8446)
+    /// TLS_AES_128_GCM_SHA256 (mandatory for TLS 1.3)
+    TLS_AES_128_GCM_SHA256, // 0x1301
+    /// TLS_AES_256_GCM_SHA384
+    TLS_AES_256_GCM_SHA384, // 0x1302
+    /// TLS_CHACHA20_POLY1305_SHA256
+    TLS_CHACHA20_POLY1305_SHA256, // 0x1303
 
     /// Unknown or unsupported cipher suite by its IANA value
     Unknown(u16),
@@ -113,9 +138,13 @@ impl CipherSuite {
     /// Convert the 16-bit IANA value to a `CipherSuite`.
     pub fn from_u16(value: u16) -> Self {
         match value {
-            // ECDHE with AES-GCM
+            // DTLS 1.2 ECDHE with AES-GCM
             0xC02C => CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
             0xC02B => CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+            // TLS 1.3 cipher suites
+            0x1301 => CipherSuite::TLS_AES_128_GCM_SHA256,
+            0x1302 => CipherSuite::TLS_AES_256_GCM_SHA384,
+            0x1303 => CipherSuite::TLS_CHACHA20_POLY1305_SHA256,
 
             _ => CipherSuite::Unknown(value),
         }
@@ -124,9 +153,13 @@ impl CipherSuite {
     /// Return the 16-bit IANA value for this cipher suite.
     pub fn as_u16(&self) -> u16 {
         match self {
-            // ECDHE with AES-GCM
+            // DTLS 1.2 ECDHE with AES-GCM
             CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => 0xC02C,
             CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 0xC02B,
+            // TLS 1.3 cipher suites
+            CipherSuite::TLS_AES_128_GCM_SHA256 => 0x1301,
+            CipherSuite::TLS_AES_256_GCM_SHA384 => 0x1302,
+            CipherSuite::TLS_CHACHA20_POLY1305_SHA256 => 0x1303,
 
             CipherSuite::Unknown(value) => *value,
         }
@@ -141,20 +174,27 @@ impl CipherSuite {
     /// Length in bytes of verify_data for Finished MACs.
     pub fn verify_data_length(&self) -> usize {
         match self {
-            // AES-GCM suites
+            // DTLS 1.2 AES-GCM suites: 12 bytes (per RFC 5246)
             CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
             | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 12,
+            // TLS 1.3: verify_data is the full hash length
+            CipherSuite::TLS_AES_128_GCM_SHA256 | CipherSuite::TLS_CHACHA20_POLY1305_SHA256 => 32,
+            CipherSuite::TLS_AES_256_GCM_SHA384 => 48,
 
-            CipherSuite::Unknown(_) => 12, // Default length for unknown cipher suites
+            CipherSuite::Unknown(_) => 12,
         }
     }
 
     /// The key exchange algorithm family for this cipher suite.
     pub fn as_key_exchange_algorithm(&self) -> KeyExchangeAlgorithm {
         match self {
-            // All ECDHE ciphers
+            // DTLS 1.2 ECDHE ciphers
             CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
             | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => KeyExchangeAlgorithm::EECDH,
+            // TLS 1.3: key exchange is separate from cipher suite (via key_share extension)
+            CipherSuite::TLS_AES_128_GCM_SHA256
+            | CipherSuite::TLS_AES_256_GCM_SHA384
+            | CipherSuite::TLS_CHACHA20_POLY1305_SHA256 => KeyExchangeAlgorithm::EECDH,
 
             CipherSuite::Unknown(_) => KeyExchangeAlgorithm::Unknown,
         }
@@ -164,8 +204,39 @@ impl CipherSuite {
     pub fn has_ecc(&self) -> bool {
         matches!(
             self,
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+                | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+                | CipherSuite::TLS_AES_128_GCM_SHA256
+                | CipherSuite::TLS_AES_256_GCM_SHA384
+                | CipherSuite::TLS_CHACHA20_POLY1305_SHA256
         )
+    }
+
+    /// Whether this is a TLS 1.3 cipher suite.
+    pub fn is_tls13(&self) -> bool {
+        matches!(
+            self,
+            CipherSuite::TLS_AES_128_GCM_SHA256
+                | CipherSuite::TLS_AES_256_GCM_SHA384
+                | CipherSuite::TLS_CHACHA20_POLY1305_SHA256
+        )
+    }
+
+    /// All supported DTLS 1.2 cipher suites in server preference order.
+    pub fn all_dtls12() -> &'static [CipherSuite] {
+        &[
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+        ]
+    }
+
+    /// All supported DTLS 1.3 cipher suites in server preference order.
+    pub fn all_dtls13() -> &'static [CipherSuite] {
+        &[
+            CipherSuite::TLS_AES_256_GCM_SHA384,
+            CipherSuite::TLS_AES_128_GCM_SHA256,
+            // ChaCha20-Poly1305 could be added here when implemented
+        ]
     }
 
     /// All supported cipher suites in server preference order.
@@ -198,17 +269,27 @@ impl CipherSuite {
     /// The hash algorithm used by this cipher suite.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
         match self {
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
+            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 | CipherSuite::TLS_AES_256_GCM_SHA384 => {
+                HashAlgorithm::SHA384
+            }
+            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            | CipherSuite::TLS_AES_128_GCM_SHA256
+            | CipherSuite::TLS_CHACHA20_POLY1305_SHA256 => HashAlgorithm::SHA256,
             CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
         }
     }
 
     /// The signature algorithm associated with the suite's key exchange.
+    /// For TLS 1.3 suites, signature algorithm is separate from cipher suite.
     pub fn signature_algorithm(&self) -> SignatureAlgorithm {
         match self {
             CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => SignatureAlgorithm::ECDSA,
             CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => SignatureAlgorithm::ECDSA,
+            // TLS 1.3 cipher suites don't specify signature algorithm
+            // It's negotiated via signature_algorithms extension
+            CipherSuite::TLS_AES_128_GCM_SHA256
+            | CipherSuite::TLS_AES_256_GCM_SHA384
+            | CipherSuite::TLS_CHACHA20_POLY1305_SHA256 => SignatureAlgorithm::ECDSA,
             CipherSuite::Unknown(_) => SignatureAlgorithm::Unknown(0),
         }
     }
@@ -429,6 +510,20 @@ impl HashAlgorithm {
         let (input, value) = be_u8(input)?;
         Ok((input, HashAlgorithm::from_u8(value)))
     }
+
+    /// Returns the output length in bytes for this hash algorithm.
+    pub fn output_len(&self) -> usize {
+        match self {
+            HashAlgorithm::None => 0,
+            HashAlgorithm::MD5 => 16,
+            HashAlgorithm::SHA1 => 20,
+            HashAlgorithm::SHA224 => 28,
+            HashAlgorithm::SHA256 => 32,
+            HashAlgorithm::SHA384 => 48,
+            HashAlgorithm::SHA512 => 64,
+            HashAlgorithm::Unknown(_) => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -459,6 +554,7 @@ impl SignatureAndHashAlgorithm {
 
     pub fn supported() -> ArrayVec<SignatureAndHashAlgorithm, 8> {
         let mut algos = ArrayVec::new();
+        // ECDSA signature algorithms (TLS 1.3 format)
         algos.push(SignatureAndHashAlgorithm::new(
             HashAlgorithm::SHA256,
             SignatureAlgorithm::ECDSA,
@@ -467,6 +563,14 @@ impl SignatureAndHashAlgorithm {
             HashAlgorithm::SHA384,
             SignatureAlgorithm::ECDSA,
         ));
+        // RSA-PSS signature algorithms (required for TLS 1.3 with RSA certs)
+        // 0x0804 = rsa_pss_rsae_sha256
+        algos.push(SignatureAndHashAlgorithm::from_u16(0x0804));
+        // 0x0805 = rsa_pss_rsae_sha384
+        algos.push(SignatureAndHashAlgorithm::from_u16(0x0805));
+        // 0x0806 = rsa_pss_rsae_sha512
+        algos.push(SignatureAndHashAlgorithm::from_u16(0x0806));
+        // Legacy RSA-PKCS1 (for DTLS 1.2 compatibility)
         algos.push(SignatureAndHashAlgorithm::new(
             HashAlgorithm::SHA256,
             SignatureAlgorithm::RSA,

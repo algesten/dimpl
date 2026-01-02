@@ -79,7 +79,7 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: CipherSuite) {
             match client.poll_output(&mut out_buf) {
                 Output::Packet(data) => {
                     server
-                        .handle_receive(&data, &mut server_events)
+                        .handle_receive(data, &mut server_events)
                         .expect("Server failed to handle client packet");
                 }
                 Output::Connected => {
@@ -92,11 +92,8 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: CipherSuite) {
 
         // Process server events
         while let Some(event) = server_events.pop_front() {
-            match event {
-                DtlsEvent::Connected => {
-                    server_connected = true;
-                }
-                _ => {}
+            if let DtlsEvent::Connected = event {
+                server_connected = true;
             }
         }
 

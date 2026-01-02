@@ -1,10 +1,19 @@
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{
-    Certificate, CertificateRequest, CertificateVerify, CipherSuite, ClientHello,
-    ClientKeyExchange, Finished, HelloVerifyRequest, ServerHello, ServerKeyExchange,
-};
+use super::encrypted_extensions::EncryptedExtensions;
+use super::Certificate;
+use super::Certificate13;
+use super::CertificateRequest;
+use super::CertificateRequest13;
+use super::CertificateVerify;
+use super::CipherSuite;
+use super::ClientHello;
+use super::ClientKeyExchange;
+use super::Finished;
+use super::HelloVerifyRequest;
+use super::ServerHello;
+use super::ServerKeyExchange;
 use crate::buffer::Buf;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
@@ -92,6 +101,31 @@ impl Handshake {
         let original_input = input;
         let (input, header) = Self::parse_header(input)?;
 
+        // Sanity check: reject clearly corrupted length values
+        // DTLS records can be at most ~16KB, so a handshake message length shouldn't exceed ~32KB
+        // to account for fragmentation across multiple records
+        const MAX_HANDSHAKE_LENGTH: u32 = 32 * 1024;
+        if header.length > MAX_HANDSHAKE_LENGTH {
+            return Err(nom::Err::Failure(Error::new(input, ErrorKind::TooLarge)));
+        }
+
+        // Also check fragment_length doesn't exceed length
+        if header.fragment_length > header.length {
+            return Err(nom::Err::Failure(Error::new(input, ErrorKind::TooLarge)));
+        }
+
+        // Check that fragment_offset + fragment_length doesn't exceed the total message length.
+        // This prevents invalid fragment bounds that could cause reassembly logic errors.
+        // Note: is_some_and requires Rust 1.82+, but MSRV is 1.81
+        #[allow(clippy::unnecessary_map_or)]
+        let valid_bounds = header
+            .fragment_offset
+            .checked_add(header.fragment_length)
+            .map_or(false, |end| end <= header.length);
+        if !valid_bounds {
+            return Err(nom::Err::Failure(Error::new(input, ErrorKind::TooLarge)));
+        }
+
         let is_fragment = header.fragment_offset > 0 || header.fragment_length < header.length;
 
         if !as_fragment && is_fragment {
@@ -134,12 +168,21 @@ impl Handshake {
         self.body.serialize(source_buf, output);
     }
 
+    /// Serialize as TLS-style handshake (without DTLS-specific fields).
+    /// Used for DTLS 1.3 transcript per RFC 9147 Section 5.2.
+    pub fn serialize_tls(&self, source_buf: &[u8], output: &mut Buf) {
+        output.push(self.header.msg_type.as_u8());
+        output.extend_from_slice(&self.header.length.to_be_bytes()[1..]);
+        self.body.serialize(source_buf, output);
+    }
+
     #[allow(private_interfaces)]
     pub fn defragment<'b>(
         mut iter: impl Iterator<Item = (&'b Handshake, &'b [u8])>,
         buffer: &mut Buf,
         cipher_suite: Option<CipherSuite>,
         transcript: Option<&mut Buf>,
+        dtls13: bool,
     ) -> Result<Handshake, crate::Error> {
         buffer.clear();
 
@@ -152,9 +195,18 @@ impl Handshake {
         buffer.extend_from_slice(&first_buffer[range.clone()]);
         first_handshake.set_handled();
 
+        // Track the end of collected data to skip duplicate fragments
+        let mut collected_end = first_handshake.header.fragment_length;
+
         for (handshake, source_buf) in iter {
             if handshake.header.msg_type != first_handshake.header.msg_type {
                 break;
+            }
+
+            // Skip duplicate fragments we've already collected
+            if handshake.header.fragment_offset < collected_end {
+                handshake.handled.store(true, Ordering::Relaxed);
+                continue;
             }
 
             let Body::Fragment(range) = &handshake.body else {
@@ -164,6 +216,7 @@ impl Handshake {
             handshake.handled.store(true, Ordering::Relaxed);
 
             buffer.extend_from_slice(&source_buf[range.clone()]);
+            collected_end = handshake.header.fragment_offset + handshake.header.fragment_length;
         }
 
         if buffer.len() != first_handshake.header.length as usize {
@@ -175,10 +228,18 @@ impl Handshake {
         if let Some(transcript) = transcript {
             transcript.push(first_handshake.header.msg_type.as_u8());
             transcript.extend_from_slice(&first_handshake.header.length.to_be_bytes()[1..]);
-            transcript.extend_from_slice(&first_handshake.header.message_seq.to_be_bytes());
-            // Defragmented handshake has fragment_offset=0 and fragment_length=length
-            transcript.extend_from_slice(&0u32.to_be_bytes()[1..]);
-            transcript.extend_from_slice(&first_handshake.header.length.to_be_bytes()[1..]);
+
+            // DTLS 1.3 uses TLS 1.3 transcript format (without DTLS-specific fields)
+            // RFC 9147 Section 5.2: "DTLS 1.3 omits the message_seq, fragment_offset,
+            // and fragment_length fields from the transcript hashes."
+            if !dtls13 {
+                // DTLS 1.2 format: include message_seq, fragment_offset, fragment_length
+                transcript.extend_from_slice(&first_handshake.header.message_seq.to_be_bytes());
+                // Defragmented handshake has fragment_offset=0 and fragment_length=length
+                transcript.extend_from_slice(&0u32.to_be_bytes()[1..]);
+                transcript.extend_from_slice(&first_handshake.header.length.to_be_bytes()[1..]);
+            }
+
             transcript.extend_from_slice(&buffer[..first_handshake.header.length as usize]);
         }
 
@@ -284,18 +345,23 @@ impl Handshake {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
-    HelloRequest, // empty
+    HelloRequest, // empty, DTLS 1.2 only
     ClientHello,
-    HelloVerifyRequest,
+    HelloVerifyRequest, // DTLS 1.2 only
     ServerHello,
-    Certificate,
-    ServerKeyExchange,
-    CertificateRequest,
-    ServerHelloDone, // empty
-    CertificateVerify,
-    ClientKeyExchange,
     NewSessionTicket,
+    EndOfEarlyData,      // TLS 1.3 only (but we reject it - no 0-RTT)
+    HelloRetryRequest,   // DTLS 1.3 only (alias for ServerHello with special random)
+    EncryptedExtensions, // DTLS 1.3 only
+    Certificate,
+    ServerKeyExchange, // DTLS 1.2 only
+    CertificateRequest,
+    ServerHelloDone, // empty, DTLS 1.2 only
+    CertificateVerify,
+    ClientKeyExchange, // DTLS 1.2 only
     Finished,
+    KeyUpdate,   // DTLS 1.3 only
+    MessageHash, // DTLS 1.3 only (used in HelloRetryRequest transcript)
     Unknown(u8),
 }
 
@@ -308,18 +374,23 @@ impl Default for MessageType {
 impl MessageType {
     pub fn from_u8(value: u8) -> Self {
         match value {
-            0 => MessageType::HelloRequest, // empty
+            0 => MessageType::HelloRequest,
             1 => MessageType::ClientHello,
-            3 => MessageType::HelloVerifyRequest,
             2 => MessageType::ServerHello,
+            3 => MessageType::HelloVerifyRequest,
+            4 => MessageType::NewSessionTicket,
+            5 => MessageType::EndOfEarlyData,
+            6 => MessageType::HelloRetryRequest,
+            8 => MessageType::EncryptedExtensions,
             11 => MessageType::Certificate,
             12 => MessageType::ServerKeyExchange,
             13 => MessageType::CertificateRequest,
-            14 => MessageType::ServerHelloDone, // empty
+            14 => MessageType::ServerHelloDone,
             15 => MessageType::CertificateVerify,
             16 => MessageType::ClientKeyExchange,
-            4 => MessageType::NewSessionTicket,
             20 => MessageType::Finished,
+            24 => MessageType::KeyUpdate,
+            254 => MessageType::MessageHash,
             _ => MessageType::Unknown(value),
         }
     }
@@ -328,16 +399,21 @@ impl MessageType {
         match self {
             MessageType::HelloRequest => 0,
             MessageType::ClientHello => 1,
-            MessageType::HelloVerifyRequest => 3,
             MessageType::ServerHello => 2,
+            MessageType::HelloVerifyRequest => 3,
+            MessageType::NewSessionTicket => 4,
+            MessageType::EndOfEarlyData => 5,
+            MessageType::HelloRetryRequest => 6,
+            MessageType::EncryptedExtensions => 8,
             MessageType::Certificate => 11,
             MessageType::ServerKeyExchange => 12,
             MessageType::CertificateRequest => 13,
             MessageType::ServerHelloDone => 14,
             MessageType::CertificateVerify => 15,
             MessageType::ClientKeyExchange => 16,
-            MessageType::NewSessionTicket => 4,
             MessageType::Finished => 20,
+            MessageType::KeyUpdate => 24,
+            MessageType::MessageHash => 254,
             MessageType::Unknown(value) => *value,
         }
     }
@@ -347,6 +423,10 @@ impl MessageType {
         Ok((input, Self::from_u8(byte)))
     }
 
+    /// Returns the epoch for DTLS 1.2 messages.
+    /// Note: In DTLS 1.3, epoch handling is different and this method is not used.
+    /// DTLS 1.3 uses epoch 0 for ClientHello, epoch 2 for handshake traffic,
+    /// and epoch 3 for application data.
     pub fn epoch(&self) -> u16 {
         if matches!(self, MessageType::NewSessionTicket | MessageType::Finished) {
             1
@@ -359,18 +439,30 @@ impl MessageType {
 #[derive(Debug, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Body {
-    HelloRequest, // empty
+    // Shared messages (DTLS 1.2 and 1.3)
     ClientHello(ClientHello),
-    HelloVerifyRequest(HelloVerifyRequest),
     ServerHello(ServerHello),
     Certificate(Certificate),
-    ServerKeyExchange(ServerKeyExchange),
+    Certificate13(Certificate13),
     CertificateRequest(CertificateRequest),
-    ServerHelloDone, // empty
+    CertificateRequest13(CertificateRequest13),
     CertificateVerify(CertificateVerify),
-    ClientKeyExchange(ClientKeyExchange),
     NewSessionTicket(Range<usize>),
     Finished(Finished),
+
+    // DTLS 1.2 only
+    HelloRequest, // empty
+    HelloVerifyRequest(HelloVerifyRequest),
+    ServerKeyExchange(ServerKeyExchange),
+    ServerHelloDone, // empty
+    ClientKeyExchange(ClientKeyExchange),
+
+    // DTLS 1.3 only
+    EncryptedExtensions(EncryptedExtensions),
+    KeyUpdate(Range<usize>),   // Simple message: just request_update flag
+    MessageHash(Range<usize>), // Special: hash of messages for HRR
+
+    // Unknown/fragment
     Unknown(u8),
     Fragment(Range<usize>),
 }
@@ -403,8 +495,15 @@ impl Body {
                 Ok((input, Body::ServerHello(server_hello)))
             }
             MessageType::Certificate => {
-                let (input, certificate) = Certificate::parse(input, base_offset)?;
-                Ok((input, Body::Certificate(certificate)))
+                // Check if this is TLS 1.3 format based on cipher suite
+                let is_tls13 = c.map(|cs| cs.is_tls13()).unwrap_or(false);
+                if is_tls13 {
+                    let (input, certificate) = Certificate13::parse(input, base_offset)?;
+                    Ok((input, Body::Certificate13(certificate)))
+                } else {
+                    let (input, certificate) = Certificate::parse(input, base_offset)?;
+                    Ok((input, Body::Certificate(certificate)))
+                }
             }
             MessageType::ServerKeyExchange => {
                 let cipher_suite =
@@ -415,8 +514,17 @@ impl Body {
                 Ok((input, Body::ServerKeyExchange(server_key_exchange)))
             }
             MessageType::CertificateRequest => {
-                let (input, certificate_request) = CertificateRequest::parse(input, base_offset)?;
-                Ok((input, Body::CertificateRequest(certificate_request)))
+                // Check if this is TLS 1.3 format based on cipher suite
+                let is_tls13 = c.map(|cs| cs.is_tls13()).unwrap_or(false);
+                if is_tls13 {
+                    let (input, certificate_request) =
+                        CertificateRequest13::parse(input, base_offset)?;
+                    Ok((input, Body::CertificateRequest13(certificate_request)))
+                } else {
+                    let (input, certificate_request) =
+                        CertificateRequest::parse(input, base_offset)?;
+                    Ok((input, Body::CertificateRequest(certificate_request)))
+                }
             }
             MessageType::ServerHelloDone => Ok((input, Body::ServerHelloDone)),
             MessageType::CertificateVerify => {
@@ -442,6 +550,31 @@ impl Body {
                 let (input, finished) = Finished::parse(input, cipher_suite)?;
                 Ok((input, Body::Finished(finished)))
             }
+
+            // DTLS 1.3 messages
+            MessageType::EncryptedExtensions => {
+                let (input, encrypted_extensions) = EncryptedExtensions::parse(input, base_offset)?;
+                Ok((input, Body::EncryptedExtensions(encrypted_extensions)))
+            }
+            MessageType::HelloRetryRequest => {
+                // HelloRetryRequest is encoded as a ServerHello with a special random value
+                // Per RFC 8446 Section 4.1.4
+                let (input, server_hello) = ServerHello::parse(input, base_offset)?;
+                Ok((input, Body::ServerHello(server_hello)))
+            }
+            MessageType::EndOfEarlyData => {
+                // We don't support 0-RTT, but parse it as unknown
+                Ok((input, Body::Unknown(MessageType::EndOfEarlyData.as_u8())))
+            }
+            MessageType::KeyUpdate => {
+                let range = base_offset..(base_offset + input.len());
+                Ok((&[], Body::KeyUpdate(range)))
+            }
+            MessageType::MessageHash => {
+                let range = base_offset..(base_offset + input.len());
+                Ok((&[], Body::MessageHash(range)))
+            }
+
             MessageType::Unknown(value) => Ok((input, Body::Unknown(value))),
         }
     }
@@ -463,11 +596,21 @@ impl Body {
             Body::Certificate(certificate) => {
                 certificate.serialize(source_buf, output);
             }
+            Body::Certificate13(_certificate) => {
+                // TLS 1.3 Certificate serialization - not typically needed via Body
+                // (server generates it directly, not via Body serialization)
+                unimplemented!("Certificate13 serialization via Body")
+            }
             Body::ServerKeyExchange(server_key_exchange) => {
                 server_key_exchange.serialize(source_buf, output, true);
             }
             Body::CertificateRequest(certificate_request) => {
                 certificate_request.serialize(source_buf, output);
+            }
+            Body::CertificateRequest13(_certificate_request) => {
+                // TLS 1.3 CertificateRequest serialization not typically needed
+                // (server generates it directly, not via Body serialization)
+                unimplemented!("CertificateRequest13 serialization")
             }
             Body::ServerHelloDone => {
                 // Serialize ServerHelloDone (empty)
@@ -484,6 +627,18 @@ impl Body {
             Body::Finished(finished) => {
                 finished.serialize(source_buf, output);
             }
+
+            // DTLS 1.3 messages
+            Body::EncryptedExtensions(ee) => {
+                ee.serialize(source_buf, output);
+            }
+            Body::KeyUpdate(range) => {
+                output.extend_from_slice(&source_buf[range.clone()]);
+            }
+            Body::MessageHash(range) => {
+                output.extend_from_slice(&source_buf[range.clone()]);
+            }
+
             Body::Unknown(value) => {
                 output.push(*value);
             }
@@ -630,12 +785,13 @@ mod tests {
             &mut defragmented_buffer,
             None,
             None,
+            false, // DTLS 1.2 test
         )
         .unwrap();
 
         // Serialize and compare to MESSAGE
         // Save header info and drop handshake to release buffer borrow
-        let header = defragmented_handshake.header.clone();
+        let header = defragmented_handshake.header;
         drop(defragmented_handshake);
 
         serialized.push(header.msg_type.as_u8());

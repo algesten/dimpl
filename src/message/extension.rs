@@ -2,7 +2,7 @@ use crate::buffer::Buf;
 use nom::{bytes::complete::take, number::complete::be_u16, IResult};
 use std::ops::Range;
 
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Extension {
     pub extension_type: ExtensionType,
     pub extension_data_range: Range<usize>,

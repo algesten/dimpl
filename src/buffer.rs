@@ -58,6 +58,11 @@ impl Buf {
         Self::default()
     }
 
+    /// Create a new buffer from a slice.
+    pub fn from_slice(data: &[u8]) -> Self {
+        Buf(data.to_vec())
+    }
+
     /// Clear the buffer, removing all data.
     pub fn clear(&mut self) {
         self.0.clear();
@@ -76,6 +81,12 @@ impl Buf {
     /// Resize the buffer to the specified length, filling with the given value.
     pub fn resize(&mut self, len: usize, value: u8) {
         self.0.resize(len, value);
+    }
+
+    /// Truncate the buffer to the specified length.
+    /// If `len` is greater than the buffer's current length, this has no effect.
+    pub fn truncate(&mut self, len: usize) {
+        self.0.truncate(len);
     }
 
     /// Convert the buffer into the underlying `Vec<u8>`.

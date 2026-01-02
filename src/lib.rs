@@ -1,12 +1,12 @@
-//! dimpl — DTLS 1.2 implementation (Sans‑IO, Sync)
+//! dimpl — DTLS 1.2 and 1.3 implementation (Sans‑IO, Sync)
 //!
-//! dimpl is a focused DTLS 1.2 implementation aimed at WebRTC. It is a Sans‑IO
-//! state machine you embed into your own UDP/RTC event loop: you feed incoming
-//! datagrams, poll for outgoing records or timers, and wire up certificate
-//! verification and SRTP key export yourself.
+//! dimpl is a focused DTLS implementation aimed at WebRTC, supporting both DTLS 1.2
+//! and DTLS 1.3 ([RFC 9147]). It is a Sans‑IO state machine you embed into your own
+//! UDP/RTC event loop: you feed incoming datagrams, poll for outgoing records or
+//! timers, and wire up certificate verification and SRTP key export yourself.
 //!
 //! # Goals
-//! - **DTLS 1.2**: Implements the DTLS 1.2 handshake and record layer used by WebRTC.
+//! - **DTLS 1.2 & 1.3**: Implements both DTLS 1.2 and DTLS 1.3 handshake and record layers for WebRTC.
 //! - **Safety**: `forbid(unsafe_code)` throughout the crate.
 //! - **Minimal Rust‑only deps**: Uses small, well‑maintained Rust crypto crates.
 //! - **Low overhead**: Tight control over allocations and buffers; Sans‑IO integration.
@@ -17,30 +17,30 @@
 //! - **no_std** (at least not without allocation)
 //! - **RSA**
 //! - **DHE**
-//!
-//! ## Regarding DTLS 1.3 and the future of this crate
-//!
-//! dimpl was built as a support package for [str0m](https://github.com/algesten/str0m),
-//! with WebRTC as its primary use case, which currently uses DTLS 1.2. The author
-//! is not a cryptography expert; however, our understanding is that DTLS 1.2 is acceptable
-//! provided we narrow the protocol's scope—for example, by supporting only specific
-//! cipher suites and hash algorithms and by requiring the Extended Master Secret extension.
-//!
-//! If you are interested in extending this crate to support DTLS 1.3 and/or additional
-//! cipher suites or hash algorithms, we welcome collaboration, but we are not planning
-//! to lead such initiatives.
+//! - **0-RTT** (DTLS 1.3 early data is not supported)
 //!
 //! # Cryptography surface
-//! - **Cipher suites (TLS 1.2 over DTLS)**
-//!   - `ECDHE_ECDSA_AES256_GCM_SHA384`
-//!   - `ECDHE_ECDSA_AES128_GCM_SHA256`
+//!
+//! ## DTLS 1.2
+//! - **Cipher suites**
+//!   - `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384`
+//!   - `TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256`
+//! - **Extended Master Secret** ([RFC 7627]) is negotiated and enforced.
+//!
+//! ## DTLS 1.3
+//! - **Cipher suites**
+//!   - `TLS_AES_256_GCM_SHA384`
+//!   - `TLS_AES_128_GCM_SHA256`
+//! - **Key Update**: Automatic key rotation when AEAD usage limits approach ([RFC 9147 §4.5.3]).
+//! - **ACK-based retransmission**: Selective retransmission using ACK messages ([RFC 9147 §7]).
+//!
+//! ## Common
 //! - **AEAD**: AES‑GCM 128/256 only (no CBC/EtM modes).
 //! - **Key exchange**: ECDHE (P‑256/P‑384)
 //! - **Signatures**: ECDSA P‑256/SHA‑256, ECDSA P‑384/SHA‑384
 //! - **DTLS‑SRTP**: Exports keying material for `SRTP_AEAD_AES_256_GCM`,
 //!   `SRTP_AEAD_AES_128_GCM`, and `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
-//! - **Extended Master Secret** ([RFC 7627]) is negotiated and enforced.
-//! - Not supported: PSK cipher suites.
+//! - Not supported: PSK cipher suites, 0-RTT.
 //!
 //! ## Certificate model
 //! During the handshake the engine emits [`Output::PeerCert`] with the peer's
@@ -130,11 +130,12 @@
 //! ### Status
 //! - Session resumption is not implemented (WebRTC does a full handshake on ICE restart).
 //! - Renegotiation is not implemented (WebRTC does full restart).
-//! - Only DTLS 1.2 is accepted/advertised.
+//! - DTLS 1.3 0-RTT (early data) is not supported.
 //!
 //! [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
 //! [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
 //! [RFC 7627]: https://www.rfc-editor.org/rfc/rfc7627
+//! [RFC 9147]: https://www.rfc-editor.org/rfc/rfc9147
 //!
 //! [`Dtls::handle_packet`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.handle_packet
 //! [`Dtls::poll_output`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.poll_output
@@ -147,31 +148,6 @@
 #![allow(unknown_lints)]
 #![deny(missing_docs)]
 
-// This is the full DTLS 1.2 handshake flow
-//
-// Client                                               Server
-//
-// 1     ClientHello                  -------->
-//
-// 2                                  <--------   HelloVerifyRequest
-//                                                 (contains cookie)
-//
-// 3     ClientHello                  -------->
-//       (with cookie)
-// 4                                                     ServerHello
-//                                                      Certificate*
-//                                                ServerKeyExchange*
-//                                               CertificateRequest*
-//                                    <--------      ServerHelloDone
-// 5     Certificate*
-//       ClientKeyExchange
-//       CertificateVerify*
-//       [ChangeCipherSpec]
-//       Finished                     -------->
-// 6                                              [ChangeCipherSpec]
-//                                    <--------             Finished
-//       Application Data             <------->     Application Data
-
 #[macro_use]
 extern crate log;
 
@@ -179,19 +155,21 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-mod client;
-use client::Client;
+mod dtls12;
+use dtls12::Client as Client12;
+use dtls12::Server as Server12;
 
-mod server;
-use server::Server;
+mod dtls13;
+use dtls13::Client13;
+use dtls13::Server13;
+
+mod event;
 
 mod message;
 
 mod time_tricks;
 
 pub mod buffer;
-mod engine;
-mod incoming;
 mod window;
 
 mod util;
@@ -200,7 +178,9 @@ mod error;
 pub use error::Error;
 
 mod config;
-pub use config::Config;
+pub use config::{
+    Config, DtlsVersion, DEFAULT_AEAD_DECRYPTION_FAILURE_LIMIT, DEFAULT_AEAD_ENCRYPTION_LIMIT,
+};
 
 #[cfg(feature = "rcgen")]
 pub mod certificate;
@@ -238,46 +218,74 @@ pub struct Dtls {
 }
 
 enum Inner {
-    Client(Client),
-    Server(Server),
+    Client12(Client12),
+    Server12(Server12),
+    Client13(Client13),
+    Server13(Server13),
 }
 
 impl Dtls {
     /// Create a new DTLS instance.
     ///
     /// The instance is initialized with the provided `config` and `certificate`.
+    /// The DTLS version is determined by the config (default: DTLS 1.2).
     ///
     /// During the handshake, the peer's leaf certificate is surfaced via
     /// [`Output::PeerCert`]. It is up to the application to validate that
     /// certificate according to its security policy.
     pub fn new(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
-        let inner = Inner::Server(Server::new(config, certificate));
+        let inner = match config.dtls_version() {
+            DtlsVersion::Dtls12 => Inner::Server12(Server12::new(Arc::clone(&config), certificate)),
+            DtlsVersion::Dtls13 => Inner::Server13(Server13::new(Arc::clone(&config), certificate)),
+        };
         Dtls { inner: Some(inner) }
     }
 
     /// Return true if the instance is operating in the client role.
     pub fn is_active(&self) -> bool {
-        matches!(self.inner, Some(Inner::Client(_)))
+        matches!(
+            self.inner,
+            Some(Inner::Client12(_)) | Some(Inner::Client13(_))
+        )
     }
 
     /// Switch between server and client roles.
     ///
     /// Set `active` to true for client role, false for server role.
+    /// The DTLS version is preserved when switching roles.
     pub fn set_active(&mut self, active: bool) {
-        match (self.is_active(), active) {
-            (true, false) => {
+        match (&self.inner, active) {
+            // DTLS 1.2: client -> server
+            (Some(Inner::Client12(_)), false) => {
                 let inner = self.inner.take().unwrap();
-                let Inner::Client(inner) = inner else {
+                let Inner::Client12(client) = inner else {
                     unreachable!();
                 };
-                self.inner = Some(Inner::Server(inner.into_server()));
+                self.inner = Some(Inner::Server12(client.into_server()));
             }
-            (false, true) => {
+            // DTLS 1.2: server -> client
+            (Some(Inner::Server12(_)), true) => {
                 let inner = self.inner.take().unwrap();
-                let Inner::Server(inner) = inner else {
+                let Inner::Server12(server) = inner else {
                     unreachable!();
                 };
-                self.inner = Some(Inner::Client(inner.into_client()));
+                self.inner = Some(Inner::Client12(server.into_client()));
+            }
+            // DTLS 1.3: client -> server
+            (Some(Inner::Client13(_)), false) => {
+                let inner = self.inner.take().unwrap();
+                let Inner::Client13(client) = inner else {
+                    unreachable!();
+                };
+                self.inner = Some(Inner::Server13(client.into_server()));
+            }
+            // DTLS 1.3: server -> client
+            (Some(Inner::Server13(_)), true) => {
+                let inner = self.inner.take().unwrap();
+                let Inner::Server13(server) = inner else {
+                    unreachable!();
+                };
+                self.inner = Some(Inner::Client13(server.into_client()));
             }
             _ => {}
         }
@@ -286,32 +294,134 @@ impl Dtls {
     /// Process an incoming DTLS datagram.
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.handle_packet(packet),
-            Inner::Server(server) => server.handle_packet(packet),
+            Inner::Client12(client) => client.handle_packet(packet),
+            Inner::Server12(server) => server.handle_packet(packet),
+            Inner::Client13(client) => client.handle_packet(packet),
+            Inner::Server13(server) => server.handle_packet(packet),
         }
     }
 
     /// Poll for pending output from the DTLS engine.
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.poll_output(buf),
-            Inner::Server(server) => server.poll_output(buf),
+            Inner::Client12(client) => client.poll_output(buf),
+            Inner::Server12(server) => server.poll_output(buf),
+            Inner::Client13(client) => client.poll_output(buf),
+            Inner::Server13(server) => server.poll_output(buf),
         }
     }
 
     /// Handle time-based events such as retransmission timers.
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.handle_timeout(now),
-            Inner::Server(server) => server.handle_timeout(now),
+            Inner::Client12(client) => client.handle_timeout(now),
+            Inner::Server12(server) => server.handle_timeout(now),
+            Inner::Client13(client) => client.handle_timeout(now),
+            Inner::Server13(server) => server.handle_timeout(now),
         }
     }
 
     /// Send application data over the established DTLS session.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.send_application_data(data),
-            Inner::Server(server) => server.send_application_data(data),
+            Inner::Client12(client) => client.send_application_data(data),
+            Inner::Server12(server) => server.send_application_data(data),
+            Inner::Client13(client) => client.send_application_data(data),
+            Inner::Server13(server) => server.send_application_data(data),
+        }
+    }
+
+    /// Get the number of completed outgoing KeyUpdates (DTLS 1.3 only).
+    /// Returns 0 for DTLS 1.2 connections.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn key_updates_sent(&self) -> u32 {
+        match self.inner.as_ref().unwrap() {
+            Inner::Client12(_) | Inner::Server12(_) => 0,
+            Inner::Client13(client) => client.key_updates_sent(),
+            Inner::Server13(server) => server.key_updates_sent(),
+        }
+    }
+
+    /// Get the number of processed incoming KeyUpdates (DTLS 1.3 only).
+    /// Returns 0 for DTLS 1.2 connections.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn key_updates_received(&self) -> u32 {
+        match self.inner.as_ref().unwrap() {
+            Inner::Client12(_) | Inner::Server12(_) => 0,
+            Inner::Client13(client) => client.key_updates_received(),
+            Inner::Server13(server) => server.key_updates_received(),
+        }
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    /// Test helper: number of saved epoch-2 (handshake-keys) records in the current flight.
+    pub fn test_dtls13_flight_epoch2_saved(&self) -> usize {
+        match self.inner.as_ref().unwrap() {
+            Inner::Client13(client) => client.test_dtls13_flight_epoch2_saved(),
+            Inner::Server13(server) => server.test_dtls13_flight_epoch2_saved(),
+            _ => 0,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    /// Test helper: number of epoch-2 saved records currently marked ACKed.
+    pub fn test_dtls13_flight_epoch2_acked(&self) -> usize {
+        match self.inner.as_ref().unwrap() {
+            Inner::Client13(client) => client.test_dtls13_flight_epoch2_acked(),
+            Inner::Server13(server) => server.test_dtls13_flight_epoch2_acked(),
+            _ => 0,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    /// Test helper: (count, last_ack_size) for DTLS 1.3 handshake ACKs sent in epoch 2.
+    pub fn test_dtls13_handshake_ack_epoch2_sent(&self) -> (u32, usize) {
+        match self.inner.as_ref().unwrap() {
+            Inner::Client13(client) => client.test_dtls13_handshake_ack_epoch2_sent(),
+            Inner::Server13(server) => server.test_dtls13_handshake_ack_epoch2_sent(),
+            _ => (0, 0),
+        }
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    /// Test helper: (count, last_ack_size, last_matched) for DTLS 1.3 handshake ACKs received in epoch 2.
+    pub fn test_dtls13_handshake_ack_epoch2_received(&self) -> (u32, usize, usize) {
+        match self.inner.as_ref().unwrap() {
+            Inner::Client13(client) => client.test_dtls13_handshake_ack_epoch2_received(),
+            Inner::Server13(server) => server.test_dtls13_handshake_ack_epoch2_received(),
+            _ => (0, 0, 0),
+        }
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    /// Test helper: get the scheduled handshake ACK deadline (if any).
+    /// Returns `Some(instant)` if an ACK is scheduled, `None` otherwise.
+    pub fn test_dtls13_handshake_ack_deadline(&self) -> Option<Instant> {
+        match self.inner.as_ref().unwrap() {
+            Inner::Client13(client) => client.test_dtls13_handshake_ack_deadline(),
+            Inner::Server13(server) => server.test_dtls13_handshake_ack_deadline(),
+            _ => None,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    /// Test helper: check if there's a gap in incoming handshake data.
+    /// Returns `true` if a gap is detected (missing message_seq or fragment gap).
+    pub fn test_dtls13_has_gap_in_incoming(&self) -> bool {
+        match self.inner.as_ref().unwrap() {
+            Inner::Client13(client) => client.test_dtls13_has_gap_in_incoming(),
+            Inner::Server13(server) => server.test_dtls13_has_gap_in_incoming(),
+            _ => false,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    /// Test helper: check if ACK help is needed (gap or incomplete handshake data).
+    pub fn test_dtls13_handshake_ack_help_needed(&self) -> bool {
+        match self.inner.as_ref().unwrap() {
+            Inner::Client13(client) => client.test_dtls13_handshake_ack_help_needed(),
+            Inner::Server13(server) => server.test_dtls13_handshake_ack_help_needed(),
+            _ => false,
         }
     }
 }
@@ -388,5 +498,29 @@ mod test {
     fn is_unwind_safe() {
         fn is_unwind_safe<T: UnwindSafe>(_t: T) {}
         is_unwind_safe(new_instance());
+    }
+
+    #[test]
+    fn test_dtls13_instantiation() {
+        // Test that we can create a DTLS 1.3 instance (smoke test for Phase 1)
+        let client_cert = generate_self_signed_certificate().expect("Failed to generate cert");
+
+        let config = Config::builder()
+            .dtls_version(DtlsVersion::Dtls13)
+            .build()
+            .expect("Failed to build config");
+        let config = Arc::new(config);
+
+        // Create as server (default)
+        let mut dtls = Dtls::new(config, client_cert);
+        assert!(!dtls.is_active()); // server role
+
+        // Switch to client
+        dtls.set_active(true);
+        assert!(dtls.is_active()); // client role
+
+        // Switch back to server
+        dtls.set_active(false);
+        assert!(!dtls.is_active()); // server role
     }
 }

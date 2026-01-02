@@ -27,6 +27,8 @@ pub enum Error {
     ConfigError(String),
     /// Too many records in a single packet
     TooManyRecords,
+    /// Feature not yet implemented
+    NotImplemented(&'static str),
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {
@@ -56,6 +58,7 @@ impl std::fmt::Display for Error {
             Error::Timeout(what) => write!(f, "timeout: {}", what),
             Error::ConfigError(msg) => write!(f, "config error: {}", msg),
             Error::TooManyRecords => write!(f, "too many records in packet"),
+            Error::NotImplemented(feature) => write!(f, "not implemented: {}", feature),
         }
     }
 }

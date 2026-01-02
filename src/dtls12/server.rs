@@ -22,9 +22,8 @@ use subtle::ConstantTimeEq;
 use rand::random;
 
 use crate::buffer::{Buf, ToBuf};
-use crate::client::LocalEvent;
 use crate::crypto::SrtpProfile;
-use crate::engine::Engine;
+use crate::event::LocalEvent;
 use crate::message::{Body, CertificateRequest, CipherSuite, ClientCertificateType};
 use crate::message::{CompressionMethod, ContentType, Cookie, CurveType};
 use crate::message::{DistinguishedName, ExchangeKeys, ExtensionType};
@@ -33,7 +32,10 @@ use crate::message::{MessageType, NamedGroup, ProtocolVersion, Random, ServerHel
 use crate::message::{SessionId, SignatureAlgorithm};
 use crate::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId};
 use crate::message::{SupportedGroupsExtension, UseSrtpExtension};
-use crate::{Client, Config, Error, Output};
+use crate::{Config, Error, Output};
+
+use super::client::Client;
+use super::engine::Engine;
 
 /// DTLS server
 pub struct Server {

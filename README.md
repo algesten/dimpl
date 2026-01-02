@@ -1,14 +1,14 @@
 # dimpl
 
-dimpl — DTLS 1.2 implementation (Sans‑IO, Sync)
+dimpl — DTLS 1.2 and 1.3 implementation (Sans‑IO, Sync)
 
-dimpl is a focused DTLS 1.2 implementation aimed at WebRTC. It is a Sans‑IO
-state machine you embed into your own UDP/RTC event loop: you feed incoming
-datagrams, poll for outgoing records or timers, and wire up certificate
-verification and SRTP key export yourself.
+dimpl is a focused DTLS implementation aimed at WebRTC, supporting both DTLS 1.2
+and DTLS 1.3 ([RFC 9147]). It is a Sans‑IO state machine you embed into your own
+UDP/RTC event loop: you feed incoming datagrams, poll for outgoing records or
+timers, and wire up certificate verification and SRTP key export yourself.
 
 ## Goals
-- **DTLS 1.2**: Implements the DTLS 1.2 handshake and record layer used by WebRTC.
+- **DTLS 1.2 & 1.3**: Implements both DTLS 1.2 and DTLS 1.3 handshake and record layers for WebRTC.
 - **Safety**: `forbid(unsafe_code)` throughout the crate.
 - **Minimal Rust‑only deps**: Uses small, well‑maintained Rust crypto crates.
 - **Low overhead**: Tight control over allocations and buffers; Sans‑IO integration.
@@ -19,30 +19,45 @@ verification and SRTP key export yourself.
 - **no_std** (at least not without allocation)
 - **RSA**
 - **DHE**
-
-### Regarding DTLS 1.3 and the future of this crate
-
-dimpl was built as a support package for [str0m](https://github.com/algesten/str0m),
-with WebRTC as its primary use case, which currently uses DTLS 1.2. The author
-is not a cryptography expert; however, our understanding is that DTLS 1.2 is acceptable
-provided we narrow the protocol's scope—for example, by supporting only specific
-cipher suites and hash algorithms and by requiring the Extended Master Secret extension.
-
-If you are interested in extending this crate to support DTLS 1.3 and/or additional
-cipher suites or hash algorithms, we welcome collaboration, but we are not planning
-to lead such initiatives.
+- **0-RTT** (DTLS 1.3 early data is not supported)
 
 ## Cryptography surface
-- **Cipher suites (TLS 1.2 over DTLS)**
-  - `ECDHE_ECDSA_AES256_GCM_SHA384`
-  - `ECDHE_ECDSA_AES128_GCM_SHA256`
+
+### DTLS 1.2
+- **Cipher suites**
+  - `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384`
+  - `TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256`
+- **Extended Master Secret** ([RFC 7627]) is negotiated and enforced.
+
+### DTLS 1.3
+- **Cipher suites**
+  - `TLS_AES_256_GCM_SHA384`
+  - `TLS_AES_128_GCM_SHA256`
+- **Key Update**: Automatic key rotation when AEAD usage limits approach ([RFC 9147 §4.5.3]).
+- **ACK-based retransmission**: Selective retransmission using ACK messages ([RFC 9147 §7]).
+- **Unified record header**: Encrypted sequence numbers for anti-traffic analysis.
+
+### DTLS 1.3 behavior
+
+#### ACKs (selective retransmission)
+- DTLS 1.3 uses `ContentType::Ack` (26) to acknowledge received records; ACKs are not handshake messages and are not included in the transcript.
+- The engine tracks received DTLS 1.3 record numbers (epoch + sequence number) and sends ACKs when it detects gaps (out-of-order delivery).
+- When ACKs arrive, the sender uses them to suppress unnecessary retransmits and selectively retransmit only the missing handshake records.
+
+#### Piggybacking application data with Finished
+- Application data queued during the handshake may be sent as soon as the connection is established.
+- This implementation may piggyback application data with the sender's `{Finished}` flight.
+    It emits both `{Finished}` (epoch 2) and application data (epoch 3) in the same outgoing flight/datagram.
+- The receiver may observe application data immediately after installing epoch 3 keys.
+    If application data arrives early (before epoch 3 keys are available), it is deferred and processed once keys are installed.
+
+### Common
 - **AEAD**: AES‑GCM 128/256 only (no CBC/EtM modes).
 - **Key exchange**: ECDHE (P‑256/P‑384)
 - **Signatures**: ECDSA P‑256/SHA‑256, ECDSA P‑384/SHA‑384
 - **DTLS‑SRTP**: Exports keying material for `SRTP_AEAD_AES_256_GCM`,
   `SRTP_AEAD_AES_128_GCM`, and `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
-- **Extended Master Secret** ([RFC 7627]) is negotiated and enforced.
-- Not supported: PSK cipher suites.
+- Not supported: PSK cipher suites, 0-RTT.
 
 ### Certificate model
 During the handshake the engine emits [`Output::PeerCert`] with the peer's
@@ -129,11 +144,16 @@ Rust 1.81.0
 #### Status
 - Session resumption is not implemented (WebRTC does a full handshake on ICE restart).
 - Renegotiation is not implemented (WebRTC does full restart).
-- Only DTLS 1.2 is accepted/advertised.
+- DTLS 1.3 0-RTT (early data) is not supported.
+- Post-quantum cryptography (PQ/hybrid key exchange, PQ signatures) is not implemented.
+- DTLS 1.3 Connection IDs (CID) are not supported (records with the CID bit set are discarded).
+- DTLS 1.3 cookie/DoS protection via HelloRetryRequest cookies is currently not enforced.
+- DTLS 1.3 anti-amplification (3x before address validation) is not currently enforced.
 
 [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
 [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
 [RFC 7627]: https://www.rfc-editor.org/rfc/rfc7627
+[RFC 9147]: https://www.rfc-editor.org/rfc/rfc9147
 
 [`Dtls::handle_packet`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.handle_packet
 [`Dtls::poll_output`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.poll_output

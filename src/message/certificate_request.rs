@@ -1,4 +1,4 @@
-use super::{ClientCertificateType, DistinguishedName, SignatureAndHashAlgorithm};
+use super::{ClientCertificateType, DistinguishedName, Extension, SignatureAndHashAlgorithm};
 use crate::buffer::Buf;
 use crate::util::{many0, many1};
 use arrayvec::ArrayVec;
@@ -6,12 +6,24 @@ use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u16, be_u8};
 use nom::Err;
 use nom::{bytes::complete::take, IResult};
+use std::ops::Range;
 
+/// DTLS 1.2 CertificateRequest format
 #[derive(Debug, PartialEq, Eq)]
 pub struct CertificateRequest {
     pub certificate_types: ArrayVec<ClientCertificateType, 8>,
     pub supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 32>,
     pub certificate_authorities: ArrayVec<DistinguishedName, 32>,
+}
+
+/// TLS 1.3 / DTLS 1.3 CertificateRequest format  
+/// RFC 8446 Section 4.3.2
+#[derive(Debug, PartialEq, Eq)]
+pub struct CertificateRequest13 {
+    /// Certificate request context (opaque <0..2^8-1>)
+    pub context: Range<usize>,
+    /// Extensions <2..2^16-1>
+    pub extensions: ArrayVec<Extension, 16>,
 }
 
 impl CertificateRequest {
@@ -102,6 +114,52 @@ impl CertificateRequest {
         self.supported_signature_algorithms
             .iter()
             .any(|algo| algo.hash == hash_algorithm)
+    }
+}
+
+impl CertificateRequest13 {
+    /// Parse a TLS 1.3 CertificateRequest
+    /// Format:
+    ///   certificate_request_context <0..2^8-1>
+    ///   extensions <2..2^16-1>
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], CertificateRequest13> {
+        let original_input = input;
+
+        // Context length (1 byte) + context data
+        let (input, context_len) = be_u8(input)?;
+        let (input, _context_data) = take(context_len)(input)?;
+
+        // Calculate the range for context
+        let context_start = base_offset + 1;
+        let context_end = context_start + context_len as usize;
+        let context = context_start..context_end;
+
+        // Extensions length (2 bytes) + extensions data
+        let (input, extensions_len) = be_u16(input)?;
+        let (input, extensions_data) = take(extensions_len)(input)?;
+
+        // Calculate extensions base offset
+        let extensions_base_offset =
+            base_offset + (extensions_data.as_ptr() as usize - original_input.as_ptr() as usize);
+
+        // Parse extensions
+        let (rest, extensions) = many0(|i| {
+            Extension::parse(
+                i,
+                extensions_base_offset + (extensions_data.len() - i.len()),
+            )
+        })(extensions_data)?;
+        if !rest.is_empty() {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
+        }
+
+        Ok((
+            input,
+            CertificateRequest13 {
+                context,
+                extensions,
+            },
+        ))
     }
 }
 

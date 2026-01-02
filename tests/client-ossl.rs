@@ -107,7 +107,7 @@ fn client_ossl() {
                         .expect("Failed to send client data");
                 }
                 Output::ApplicationData(data) => {
-                    client_received_data.extend_from_slice(&data);
+                    client_received_data.extend_from_slice(data);
                     println!(
                         "Client received {} bytes of application data: {:02x?}",
                         data.len(),
@@ -205,7 +205,7 @@ fn client_ossl() {
 
     // Verify keying material has the right length
     assert!(
-        client_km.len() > 0,
+        !client_km.is_empty(),
         "Client keying material should not be empty"
     );
     assert_eq!(

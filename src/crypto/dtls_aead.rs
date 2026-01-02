@@ -99,6 +99,62 @@ impl Aad {
     }
 }
 
+/// Full 12-byte IV for DTLS 1.3.
+/// Unlike DTLS 1.2 which splits into 4-byte fixed + 8-byte explicit,
+/// DTLS 1.3 uses a full 12-byte IV that gets XORed with the sequence number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Iv13(pub [u8; 12]);
+
+/// DTLS 1.3 AEAD nonce.
+///
+/// Computed by XORing the 64-bit sequence number with the 12-byte IV.
+/// The sequence number is left-padded with zeros and XORed into the rightmost bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Nonce13(pub [u8; 12]);
+
+impl Nonce13 {
+    /// Create a DTLS 1.3 nonce by XORing the sequence number with the IV.
+    ///
+    /// ```text
+    /// nonce = iv XOR (0^32 || sequence_number)
+    /// ```
+    pub(crate) fn new(iv: Iv13, sequence_number: u64) -> Self {
+        let mut nonce = iv.0;
+        // XOR the sequence number into the rightmost 8 bytes
+        let seq_bytes = sequence_number.to_be_bytes();
+        for i in 0..8 {
+            nonce[4 + i] ^= seq_bytes[i];
+        }
+        Nonce13(nonce)
+    }
+}
+
+/// DTLS 1.3 Additional Authenticated Data.
+///
+/// For DTLS 1.3, the AAD is the record header bytes (the unified header).
+/// Unlike DTLS 1.2, the content type is encrypted inside the record,
+/// so the AAD is just the header bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Aad13 {
+    data: [u8; 16],
+    len: usize,
+}
+
+impl Aad13 {
+    /// Create AAD from the unified header bytes.
+    pub(crate) fn from_header(header: &[u8]) -> Self {
+        let mut data = [0u8; 16];
+        let len = header.len().min(16);
+        data[..len].copy_from_slice(&header[..len]);
+        Aad13 { data, len }
+    }
+
+    /// Get the AAD bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.data[..self.len]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
