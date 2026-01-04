@@ -16,6 +16,13 @@ impl ReplayWindow {
         Self::default()
     }
 
+    /// Reset the replay window while keeping the same epoch.
+    /// Used after KeyUpdate to allow sequence numbers to restart from 0.
+    pub fn reset_for_key_update(&mut self) {
+        self.max_seq = 0;
+        self.window = 0;
+    }
+
     /// Check if the given sequence is acceptable and update the window state.
     /// Returns true if fresh/acceptable, false if duplicate/too old/old epoch.
     pub fn check_and_update(&mut self, seq: Sequence) -> bool {

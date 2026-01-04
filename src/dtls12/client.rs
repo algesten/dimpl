@@ -20,12 +20,15 @@ use subtle::ConstantTimeEq;
 
 use crate::buffer::{Buf, ToBuf};
 use crate::crypto::CipherSuite;
-use crate::engine::Engine;
+use crate::event::LocalEvent;
 use crate::message::{Body, ClientHello, ClientKeyExchange};
 use crate::message::{CompressionMethod, ContentType, Cookie};
 use crate::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
-use crate::{Error, KeyingMaterial, Output, Server, SrtpProfile};
+use crate::{Error, Output, SrtpProfile};
+
+use super::engine::Engine;
+use super::server::Server;
 
 /// DTLS client
 pub struct Client {
@@ -76,13 +79,6 @@ pub struct Client {
 
     /// Data that is sent before we are connected.
     queued_data: Vec<Buf>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum LocalEvent {
-    PeerCert,
-    Connected,
-    KeyingMaterial(ArrayVec<u8, 88>, SrtpProfile),
 }
 
 impl Client {
@@ -1134,24 +1130,4 @@ fn handshake_create_certificate_verify(body: &mut Buf, engine: &mut Engine) -> R
     engine.push_buffer(signature);
 
     Ok(())
-}
-
-impl LocalEvent {
-    pub fn into_output<'a>(self, buf: &'a mut [u8], peer_certs: &[Buf]) -> Output<'a> {
-        match self {
-            LocalEvent::PeerCert => {
-                let l = peer_certs[0].len();
-                assert!(
-                    l <= buf.len(),
-                    "Output buffer too small for peer certificate"
-                );
-                buf[..l].copy_from_slice(&peer_certs[0]);
-                Output::PeerCert(&buf[..l])
-            }
-            LocalEvent::Connected => Output::Connected,
-            LocalEvent::KeyingMaterial(m, profile) => {
-                Output::KeyingMaterial(KeyingMaterial::new(&m), profile)
-            }
-        }
-    }
 }

@@ -125,6 +125,8 @@ pub enum ContentType {
     Alert,
     Handshake,
     ApplicationData,
+    /// DTLS 1.3 ACK message (RFC 9147 Section 7)
+    Ack,
     Unknown(u8),
 }
 
@@ -141,6 +143,7 @@ impl ContentType {
             21 => ContentType::Alert,
             22 => ContentType::Handshake,
             23 => ContentType::ApplicationData,
+            26 => ContentType::Ack,
             _ => ContentType::Unknown(value),
         }
     }
@@ -151,6 +154,7 @@ impl ContentType {
             ContentType::Alert => 21,
             ContentType::Handshake => 22,
             ContentType::ApplicationData => 23,
+            ContentType::Ack => 26,
             ContentType::Unknown(value) => *value,
         }
     }
@@ -158,35 +162,6 @@ impl ContentType {
     pub fn parse(input: &[u8]) -> IResult<&[u8], ContentType> {
         let (input, byte) = be_u8(input)?;
         Ok((input, Self::from_u8(byte)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::buffer::Buf;
-
-    const RECORD: &[u8] = &[
-        0x16, // ContentType::Handshake
-        0xFE, 0xFD, // ProtocolVersion::DTLS1_2
-        0x00, 0x01, // epoch
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // sequence_number
-        0x00, 0x10, // length
-        // fragment
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
-        0x10,
-    ];
-
-    #[test]
-    fn roundtrip() {
-        // Parse the record with base_offset 0, skip_offset 0
-        let (rest, parsed) = DTLSRecord::parse(RECORD, 0, 0).unwrap();
-        assert!(rest.is_empty());
-
-        // Serialize and compare to RECORD
-        let mut serialized = Buf::new();
-        parsed.serialize(RECORD, &mut serialized);
-        assert_eq!(&*serialized, RECORD);
     }
 }
 
@@ -227,5 +202,34 @@ impl fmt::Debug for DTLSRecord {
             .field("length", &self.length)
             .field("fragment_range", &self.fragment_range)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::buffer::Buf;
+
+    const RECORD: &[u8] = &[
+        0x16, // ContentType::Handshake
+        0xFE, 0xFD, // ProtocolVersion::DTLS1_2
+        0x00, 0x01, // epoch
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // sequence_number
+        0x00, 0x10, // length
+        // fragment
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10,
+    ];
+
+    #[test]
+    fn roundtrip() {
+        // Parse the record with base_offset 0, skip_offset 0
+        let (rest, parsed) = DTLSRecord::parse(RECORD, 0, 0).unwrap();
+        assert!(rest.is_empty());
+
+        // Serialize and compare to RECORD
+        let mut serialized = Buf::new();
+        parsed.serialize(RECORD, &mut serialized);
+        assert_eq!(&*serialized, RECORD);
     }
 }

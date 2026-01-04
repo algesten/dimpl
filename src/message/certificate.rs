@@ -2,11 +2,34 @@ use super::Asn1Cert;
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
+use nom::number::complete::be_u16;
+use nom::number::complete::be_u8;
 use nom::{number::complete::be_u24, IResult};
+use std::ops::Range;
 
+/// DTLS 1.2 Certificate format
 #[derive(Debug, PartialEq, Eq)]
 pub struct Certificate {
     pub certificate_list: ArrayVec<Asn1Cert, 32>,
+}
+
+/// TLS 1.3 / DTLS 1.3 Certificate format
+/// RFC 8446 Section 4.4.2
+#[derive(Debug, PartialEq, Eq)]
+pub struct Certificate13 {
+    /// Certificate request context (opaque <0..2^8-1>)
+    pub context: Range<usize>,
+    /// Certificate entries with extensions
+    pub certificate_list: ArrayVec<CertificateEntry13, 32>,
+}
+
+/// TLS 1.3 CertificateEntry
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct CertificateEntry13 {
+    /// The certificate data
+    pub cert_data: Range<usize>,
+    /// Per-certificate extensions (we just store the range)
+    pub extensions_range: Range<usize>,
 }
 
 impl Certificate {
@@ -50,6 +73,67 @@ impl Certificate {
             output.extend_from_slice(&(cert_data.len() as u32).to_be_bytes()[1..]);
             output.extend_from_slice(cert_data);
         }
+    }
+}
+
+impl Certificate13 {
+    /// Parse a TLS 1.3 Certificate message
+    /// Format:
+    ///   certificate_request_context <0..2^8-1>
+    ///   CertificateEntry certificate_list<0..2^24-1>
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], Certificate13> {
+        let original_input = input;
+
+        // Context length (1 byte) + context data
+        let (input, context_len) = be_u8(input)?;
+        let (input, _context_data) = take(context_len)(input)?;
+
+        // Calculate the range for context
+        let context_start = base_offset + 1;
+        let context_end = context_start + context_len as usize;
+        let context = context_start..context_end;
+
+        // Certificate list length (3 bytes)
+        let (input, list_len) = be_u24(input)?;
+        let (input, list_data) = take(list_len)(input)?;
+
+        // Parse certificate entries
+        let list_base_offset =
+            base_offset + (list_data.as_ptr() as usize - original_input.as_ptr() as usize);
+        let mut certificate_list = ArrayVec::new();
+        let mut rest = list_data;
+
+        while !rest.is_empty() {
+            let entry_offset =
+                list_base_offset + (rest.as_ptr() as usize - list_data.as_ptr() as usize);
+
+            // cert_data length (3 bytes) + cert_data
+            let (r, cert_len) = be_u24(rest)?;
+            let (r, _cert_data) = take(cert_len)(r)?;
+            let cert_start = entry_offset + 3;
+            let cert_end = cert_start + cert_len as usize;
+
+            // extensions length (2 bytes) + extensions
+            let (r, ext_len) = be_u16(r)?;
+            let (r, _ext_data) = take(ext_len)(r)?;
+            let ext_start = cert_end + 2;
+            let ext_end = ext_start + ext_len as usize;
+
+            certificate_list.push(CertificateEntry13 {
+                cert_data: cert_start..cert_end,
+                extensions_range: ext_start..ext_end,
+            });
+
+            rest = r;
+        }
+
+        Ok((
+            input,
+            Certificate13 {
+                context,
+                certificate_list,
+            },
+        ))
     }
 }
 

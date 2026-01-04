@@ -45,6 +45,7 @@
 
 mod cipher_suite;
 mod hash;
+mod hkdf;
 mod hmac;
 mod kx_group;
 mod sign;
@@ -103,5 +104,7 @@ pub fn default_provider() -> CryptoProvider {
         hash_provider: &hash::HASH_PROVIDER,
         prf_provider: &tls12::PRF_PROVIDER,
         hmac_provider: &tls12::HMAC_PROVIDER,
+        hkdf_provider: &hkdf::HKDF_PROVIDER,
+        sn_cipher_provider: &tls12::SN_CIPHER_PROVIDER,
     }
 }

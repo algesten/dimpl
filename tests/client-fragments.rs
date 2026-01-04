@@ -104,7 +104,7 @@ fn run_client_server_with_mtu(mtu: usize) -> (usize, usize) {
                         .expect("Failed to send client data");
                 }
                 Output::ApplicationData(data) => {
-                    client_received_data.extend_from_slice(&data);
+                    client_received_data.extend_from_slice(data);
                 }
                 Output::Timeout(_) => {
                     continue_polling = false;
@@ -179,12 +179,12 @@ fn client_fragments() {
 
     // Tight-ish bounds informed by expected DTLS handshake/message sizes and packing
     assert!(
-        large_c2s >= 3 && large_c2s <= 8,
+        (3..=8).contains(&large_c2s),
         "large MTU client->server packets: {}",
         large_c2s
     );
     assert!(
-        small_c2s >= 4 && small_c2s <= 20,
+        (4..=20).contains(&small_c2s),
         "small MTU client->server packets: {}",
         small_c2s
     );
@@ -195,12 +195,12 @@ fn client_fragments() {
 
     // Optional checks for server->client direction with similarly tight bounds
     assert!(
-        large_s2c >= 3 && large_s2c <= 10,
+        (3..=10).contains(&large_s2c),
         "large MTU server->client packets: {}",
         large_s2c
     );
     assert!(
-        small_s2c >= 5 && small_s2c <= 20,
+        (5..=20).contains(&small_s2c),
         "small MTU server->client packets: {}",
         small_s2c
     );

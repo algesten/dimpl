@@ -29,6 +29,17 @@ impl Random {
         }
     }
 
+    /// Create a Random from raw 32 bytes (4 bytes gmt_unix_time + 28 bytes random).
+    pub fn from_bytes(bytes: &[u8; 32]) -> Self {
+        let gmt_unix_time = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let mut random_bytes = [0u8; 28];
+        random_bytes.copy_from_slice(&bytes[4..32]);
+        Self {
+            gmt_unix_time,
+            random_bytes,
+        }
+    }
+
     pub fn parse(input: &[u8]) -> IResult<&[u8], Random> {
         let (input, gmt_unix_time) = be_u32(input)?;
         let (input, input_rand) = take(28_usize)(input)?;

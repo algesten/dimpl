@@ -12,17 +12,21 @@ use crate::Error;
 impl CryptoProvider {
     /// Returns an iterator over validated cipher suites supported by dimpl.
     ///
-    /// Only cipher suites documented in lib.rs are returned:
-    /// - `TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256`
-    /// - `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384`
+    /// Supports both DTLS 1.2 and DTLS 1.3 cipher suites:
+    /// - DTLS 1.2: `TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256`, `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384`
+    /// - DTLS 1.3: `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384`
     pub fn supported_cipher_suites(
         &self,
     ) -> impl Iterator<Item = &'static dyn SupportedCipherSuite> {
         self.cipher_suites.iter().copied().filter(|cs| {
             matches!(
                 cs.suite(),
+                // DTLS 1.2 cipher suites
                 CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
                     | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+                    // DTLS 1.3 / TLS 1.3 cipher suites
+                    | CipherSuite::TLS_AES_128_GCM_SHA256
+                    | CipherSuite::TLS_AES_256_GCM_SHA384
             )
         })
     }
@@ -359,7 +363,7 @@ mod tests {
     fn test_default_provider_has_cipher_suites() {
         let provider = aws_lc_rs::default_provider();
         let count = provider.supported_cipher_suites().count();
-        assert_eq!(count, 2); // AES-128 and AES-256
+        assert_eq!(count, 4); // AES-128-GCM, AES-256-GCM (DTLS 1.2), TLS 1.3 AES-128, TLS 1.3 AES-256
     }
 
     #[test]
@@ -383,8 +387,11 @@ mod tests {
             .map(|cs| cs.suite())
             .collect();
 
-        assert_eq!(ecdsa_suites.len(), 2);
+        // DTLS 1.2 + TLS 1.3 suites that support ECDSA
+        assert_eq!(ecdsa_suites.len(), 4);
         assert!(ecdsa_suites.contains(&CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256));
         assert!(ecdsa_suites.contains(&CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384));
+        assert!(ecdsa_suites.contains(&CipherSuite::TLS_AES_128_GCM_SHA256));
+        assert!(ecdsa_suites.contains(&CipherSuite::TLS_AES_256_GCM_SHA384));
     }
 }

@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use arrayvec::ArrayVec;
 use std::fmt;
 
+use super::engine::Engine;
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::DTLS_EXPLICIT_NONCE_LEN;
-use crate::engine::Engine;
 use crate::message::{ContentType, DTLSRecord, Handshake};
 use crate::Error;
 

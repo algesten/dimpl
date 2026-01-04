@@ -27,10 +27,22 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v1
+      # Needed for wolfssl-sys to build
+      - name: Install autotools (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install autoconf automake libtool
+      - name: Install OpenSSL (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://www.firedaemon.com/download-firedaemon-openssl-3-6-zip -OutFile $env:TEMP\openssl.zip
+          if ((Get-FileHash $env:TEMP\openssl.zip -Algorithm SHA256).Hash -ne "C1C831E8BCCE7D6C204D6813AAFB87C0D44DD88841AB31105185B55CDEC1D759") { throw "Checksum mismatch" }
+          Expand-Archive $env:TEMP\openssl.zip -DestinationPath C:\openssl-3.6.0 -Force
+          echo "OPENSSL_DIR=C:\openssl-3.6.0\x64" >> $env:GITHUB_ENV
       - name: Build
         run: cargo +${{steps.toolchain.outputs.name}} build
       - name: Test
-        run: cargo +${{steps.toolchain.outputs.name}} test
+        run: cargo +${{steps.toolchain.outputs.name}} test --features test-helpers
 
   test_features:
     strategy:
@@ -48,10 +60,22 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v1
+      # Needed for wolfssl-sys to build
+      - name: Install autotools (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install autoconf automake libtool
+      - name: Install OpenSSL (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://www.firedaemon.com/download-firedaemon-openssl-3-6-zip -OutFile $env:TEMP\openssl.zip
+          if ((Get-FileHash $env:TEMP\openssl.zip -Algorithm SHA256).Hash -ne "C1C831E8BCCE7D6C204D6813AAFB87C0D44DD88841AB31105185B55CDEC1D759") { throw "Checksum mismatch" }
+          Expand-Archive $env:TEMP\openssl.zip -DestinationPath C:\openssl-3.6.0 -Force
+          echo "OPENSSL_DIR=C:\openssl-3.6.0\x64" >> $env:GITHUB_ENV
       - name: Build
-        run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features ${{ matrix.feature }}
+        run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features ${{ matrix.feature }},test-helpers
       - name: Test
-        run: cargo +${{steps.toolchain.outputs.name}} test --no-default-features --features ${{ matrix.feature }}
+        run: cargo +${{steps.toolchain.outputs.name}} test --no-default-features --features ${{ matrix.feature }},test-helpers
 
   snowflake:
     runs-on: ubuntu-latest
@@ -63,7 +87,7 @@ jobs:
         uses: algesten/snowflake@v1.0.4
         with:
           check_diff: true
-          line_width_rules: 'CHANGELOG.md:120;c_cpp_properties.json:160;Cargo.toml:130;README.md:180;README.tpl:180;*.md:110;*.rs:110;*.toml:110;DEFAULT=110'
+          line_width_rules: 'CHANGELOG.md:120;c_cpp_properties.json:160;Cargo.toml:200;README.md:180;README.tpl:180;*.md:110;*.rs:110;*.toml:200;DEFAULT=110'
 
   lint:
     runs-on: ubuntu-latest

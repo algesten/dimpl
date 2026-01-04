@@ -115,10 +115,6 @@ use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 use crate::message::{CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
-// ============================================================================
-// Marker Trait
-// ============================================================================
-
 /// Marker trait for types that are safe to use in crypto provider components.
 ///
 /// This trait combines the common bounds required for crypto provider trait objects:
@@ -132,10 +128,6 @@ pub trait CryptoSafe: Send + Sync + Debug + UnwindSafe + RefUnwindSafe {}
 /// Blanket implementation: any type satisfying the bounds implements [`CryptoSafe`].
 impl<T: Send + Sync + Debug + UnwindSafe + RefUnwindSafe> CryptoSafe for T {}
 
-// ============================================================================
-// Instance Traits (Level 2 - created by factories)
-// ============================================================================
-
 /// AEAD cipher for in-place encryption/decryption.
 pub trait Cipher: CryptoSafe {
     /// Encrypt plaintext in-place, appending authentication tag.
@@ -143,6 +135,22 @@ pub trait Cipher: CryptoSafe {
 
     /// Decrypt ciphertext in-place, verifying and removing authentication tag.
     fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String>;
+
+    /// Encrypt plaintext in-place with variable-length AAD (for DTLS 1.3).
+    fn encrypt_with_aad(
+        &mut self,
+        plaintext: &mut Buf,
+        aad: &[u8],
+        nonce: Nonce,
+    ) -> Result<(), String>;
+
+    /// Decrypt ciphertext in-place with variable-length AAD (for DTLS 1.3).
+    fn decrypt_with_aad(
+        &mut self,
+        ciphertext: &mut TmpBuf,
+        aad: &[u8],
+        nonce: Nonce,
+    ) -> Result<(), String>;
 }
 
 /// Stateful hash context for incremental hashing.
@@ -181,10 +189,6 @@ pub trait ActiveKeyExchange: CryptoSafe {
     /// Get the named group for this exchange.
     fn group(&self) -> NamedGroup;
 }
-
-// ============================================================================
-// Factory Traits (Level 1 - used by CryptoProvider)
-// ============================================================================
 
 /// Cipher suite support (factory for Cipher instances).
 pub trait SupportedCipherSuite: CryptoSafe {
@@ -263,16 +267,97 @@ pub trait PrfProvider: CryptoSafe {
 pub trait HmacProvider: CryptoSafe {
     /// Compute HMAC-SHA256(key, data) and return the result.
     fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String>;
+
+    /// Compute HMAC-SHA384(key, data) and return the result.
+    fn hmac_sha384(&self, key: &[u8], data: &[u8]) -> Result<[u8; 48], String>;
 }
 
-// ============================================================================
-// Core Provider Struct
-// ============================================================================
+/// Sequence number cipher for DTLS 1.3 header protection (RFC 9147 Section 4.2.3).
+///
+/// This trait provides AES-ECB block encryption used to generate masks for
+/// encrypting/decrypting record sequence numbers in DTLS 1.3. The mask is
+/// computed by encrypting the first 16 bytes of ciphertext with AES-ECB.
+pub trait SnCipher: CryptoSafe {
+    /// Encrypt a single 16-byte block using AES-ECB.
+    /// Used to generate the mask for sequence number encryption.
+    fn encrypt_block(&self, block: &mut [u8; 16]);
+}
+
+/// Factory for creating sequence number ciphers.
+pub trait SnCipherProvider: CryptoSafe {
+    /// Create a sequence number cipher from the given key.
+    /// Key length determines AES variant: 16 bytes for AES-128, 32 bytes for AES-256.
+    /// Returns None if the key length is not supported.
+    fn create_sn_cipher(&self, key: &[u8]) -> Option<Box<dyn SnCipher>>;
+}
+
+/// HKDF provider for TLS 1.3 key derivation (RFC 5869).
+pub trait HkdfProvider: CryptoSafe {
+    /// HKDF-Extract: Extract a pseudorandom key from input keying material.
+    /// PRK = HKDF-Extract(salt, IKM)
+    fn hkdf_extract(
+        &self,
+        hash: HashAlgorithm,
+        salt: &[u8],
+        ikm: &[u8],
+        out: &mut Buf,
+    ) -> Result<(), String>;
+
+    /// HKDF-Expand: Expand a pseudorandom key to the desired length.
+    /// OKM = HKDF-Expand(PRK, info, L)
+    fn hkdf_expand(
+        &self,
+        hash: HashAlgorithm,
+        prk: &[u8],
+        info: &[u8],
+        out: &mut Buf,
+        output_len: usize,
+    ) -> Result<(), String>;
+
+    /// HKDF-Expand-Label for TLS 1.3 (RFC 8446 Section 7.1).
+    /// Derives key material using the TLS 1.3 label format with "tls13 " prefix.
+    ///
+    /// HkdfLabel = struct {
+    ///     uint16 length;
+    ///     opaque label<7..255> = "tls13 " + Label;
+    ///     opaque context<0..255> = Context;
+    /// }
+    /// OKM = HKDF-Expand(Secret, HkdfLabel, Length)
+    fn hkdf_expand_label(
+        &self,
+        hash: HashAlgorithm,
+        secret: &[u8],
+        label: &[u8],
+        context: &[u8],
+        out: &mut Buf,
+        output_len: usize,
+    ) -> Result<(), String>;
+
+    /// HKDF-Expand-Label for DTLS 1.3 (RFC 9147).
+    /// Derives key material using the DTLS 1.3 label format with "dtls13" prefix.
+    ///
+    /// HkdfLabel = struct {
+    ///     uint16 length;
+    ///     opaque label<6..255> = "dtls13" + Label;
+    ///     opaque context<0..255> = Context;
+    /// }
+    /// OKM = HKDF-Expand(Secret, HkdfLabel, Length)
+    fn hkdf_expand_label_dtls13(
+        &self,
+        hash: HashAlgorithm,
+        secret: &[u8],
+        label: &[u8],
+        context: &[u8],
+        out: &mut Buf,
+        output_len: usize,
+    ) -> Result<(), String>;
+}
 
 /// Cryptographic provider for DTLS operations.
 ///
 /// This struct holds references to all cryptographic components needed
-/// for DTLS 1.2. Users can provide custom implementations of each component
+/// for DTLS 1.2 and DTLS 1.3. Users can provide custom implementations
+/// of each component
 /// to replace the default aws-lc-rs-based provider.
 ///
 /// # Design
@@ -326,6 +411,12 @@ pub struct CryptoProvider {
 
     /// HMAC provider for computing HMAC signatures.
     pub hmac_provider: &'static dyn HmacProvider,
+
+    /// HKDF provider for TLS 1.3 key derivation.
+    pub hkdf_provider: &'static dyn HkdfProvider,
+
+    /// Sequence number cipher provider for DTLS 1.3 header protection.
+    pub sn_cipher_provider: &'static dyn SnCipherProvider,
 }
 
 /// Static storage for the default crypto provider.

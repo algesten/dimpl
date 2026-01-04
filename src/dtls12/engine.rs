@@ -5,10 +5,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::incoming::{Incoming, Record};
 use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::CryptoContext;
 use crate::crypto::{Aad, Iv, Nonce, DTLS_AEAD_OVERHEAD, DTLS_EXPLICIT_NONCE_LEN};
-use crate::incoming::{Incoming, Record};
 use crate::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
 use crate::timer::ExponentialBackoff;
@@ -525,6 +525,7 @@ impl Engine {
             defragment_buffer,
             self.cipher_suite,
             Some(&mut self.transcript),
+            false, // DTLS 1.2
         )?;
 
         // Move the expected seq_no along

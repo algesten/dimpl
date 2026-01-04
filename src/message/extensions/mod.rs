@@ -1,6 +1,9 @@
+pub mod cookie;
 pub mod ec_point_formats;
+pub mod key_share;
 pub mod signature_algorithms;
 pub mod supported_groups;
+pub mod supported_versions;
 pub mod use_srtp;
 
 pub use ec_point_formats::ECPointFormatsExtension;
