@@ -116,6 +116,35 @@ pub struct Server13 {
     client_hs_traffic_secret: Option<Buf>,
 }
 
+/// Current state of the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    /// Await initial ClientHello
+    AwaitClientHello,
+    /// Send HelloRetryRequest (if needed for cookie or key_share)
+    SendHelloRetryRequest,
+    /// Send ServerHello
+    SendServerHello,
+    /// Send EncryptedExtensions (encrypted)
+    SendEncryptedExtensions,
+    /// Send CertificateRequest (optional, encrypted)
+    SendCertificateRequest,
+    /// Send server Certificate (encrypted)
+    SendCertificate,
+    /// Send server CertificateVerify (encrypted)
+    SendCertificateVerify,
+    /// Send server Finished (encrypted)
+    SendFinished,
+    /// Await client Certificate (if requested)
+    AwaitCertificate,
+    /// Await client CertificateVerify (if Certificate received)
+    AwaitCertificateVerify,
+    /// Await client Finished
+    AwaitFinished,
+    /// Handshake complete, ready for application data
+    Connected,
+}
+
 impl Server13 {
     /// Create a new DTLS 1.3 server.
     pub fn new(
@@ -282,34 +311,6 @@ impl Server13 {
         }
         Ok(())
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum State {
-    /// Await initial ClientHello
-    AwaitClientHello,
-    /// Send HelloRetryRequest (if needed for cookie or key_share)
-    SendHelloRetryRequest,
-    /// Send ServerHello
-    SendServerHello,
-    /// Send EncryptedExtensions (encrypted)
-    SendEncryptedExtensions,
-    /// Send CertificateRequest (optional, encrypted)
-    SendCertificateRequest,
-    /// Send server Certificate (encrypted)
-    SendCertificate,
-    /// Send server CertificateVerify (encrypted)
-    SendCertificateVerify,
-    /// Send server Finished (encrypted)
-    SendFinished,
-    /// Await client Certificate (if requested)
-    AwaitCertificate,
-    /// Await client CertificateVerify (if Certificate received)
-    AwaitCertificateVerify,
-    /// Await client Finished
-    AwaitFinished,
-    /// Handshake complete, ready for application data
-    Connected,
 }
 
 impl State {
