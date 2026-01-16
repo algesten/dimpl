@@ -192,6 +192,7 @@ mod time_tricks;
 pub mod buffer;
 mod engine;
 mod incoming;
+mod queue;
 mod window;
 
 mod util;
