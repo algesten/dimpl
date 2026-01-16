@@ -1,5 +1,9 @@
 # Unreleased
 
+# 0.2.2
+
+  * Add debug warn! for ReceiveQueueFull error #39
+
 # 0.2.1
 
   * Fix DTLS protocol version in HelloVerifyRequest #36
