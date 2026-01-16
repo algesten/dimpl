@@ -1,5 +1,4 @@
 use rand::random;
-use std::collections::VecDeque;
 use std::mem;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -11,6 +10,7 @@ use crate::crypto::{Aad, Iv, Nonce, DTLS_AEAD_OVERHEAD, DTLS_EXPLICIT_NONCE_LEN}
 use crate::incoming::{Incoming, Record};
 use crate::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
+use crate::queue::{QueueRx, QueueTx};
 use crate::timer::ExponentialBackoff;
 use crate::window::ReplayWindow;
 use crate::{Config, Error, Output};
@@ -35,10 +35,10 @@ pub struct Engine {
     sequence_epoch_n: Sequence,
 
     /// Queue of incoming packets.
-    queue_rx: VecDeque<Incoming>,
+    queue_rx: QueueRx,
 
     /// Queue of outgoing packets.
-    queue_tx: VecDeque<Buf>,
+    queue_tx: QueueTx,
 
     /// The cipher suite in use. Set by ServerHello.
     cipher_suite: Option<CipherSuite>,
@@ -112,8 +112,8 @@ impl Engine {
             buffers_free: BufferPool::default(),
             sequence_epoch_0: Sequence::new(0),
             sequence_epoch_n: Sequence::new(1),
-            queue_rx: VecDeque::new(),
-            queue_tx: VecDeque::new(),
+            queue_rx: QueueRx::new(),
+            queue_tx: QueueTx::new(),
             cipher_suite: None,
             crypto_context,
             peer_encryption_enabled: false,
@@ -178,6 +178,11 @@ impl Engine {
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
         // Capacity guard
         if self.queue_rx.len() >= self.config.max_queue_rx() {
+            warn!(
+                "Receive queue full (max {}): {:?}",
+                self.config.max_queue_rx(),
+                self.queue_rx
+            );
             return Err(Error::ReceiveQueueFull);
         }
 
@@ -213,6 +218,12 @@ impl Engine {
             if dupe_seq < self.peer_handshake_seq_no {
                 self.flight_resend("dupe triggers resend")?;
             }
+        }
+
+        // Reject new handshakes after initial handshake is complete (renegotiation not supported).
+        // Duplicates (msg_seq < peer_handshake_seq_no) are allowed for resend handling above.
+        if self.release_app_data && handshake.header.message_seq >= self.peer_handshake_seq_no {
+            return Err(Error::RenegotiationAttempt);
         }
 
         let search_result = self.queue_rx.binary_search_by(|item| {
@@ -308,6 +319,9 @@ impl Engine {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8], now: Instant) -> Output<'a> {
+        // Drain incoming queue of processed records.
+        self.purge_handled_queue_rx();
+
         // First check if we have any decrypted app data.
         let buf = match self.poll_app_data(buf) {
             Ok(p) => return Output::ApplicationData(p),
@@ -327,9 +341,6 @@ impl Engine {
         if !self.release_app_data {
             return Err(buf);
         }
-
-        // Drain incoming queue of processed records.
-        self.purge_handled_queue_rx();
 
         let mut unhandled = self
             .queue_rx
@@ -605,6 +616,11 @@ impl Engine {
 
         // If we cannot append, ensure we have space for a new datagram
         if !can_append && self.queue_tx.len() >= self.config.max_queue_tx() {
+            warn!(
+                "Transmit queue full (max {}): {:?}",
+                self.config.max_queue_tx(),
+                self.queue_tx
+            );
             return Err(Error::TransmitQueueFull);
         }
 
