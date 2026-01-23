@@ -259,12 +259,13 @@ impl State {
         // Stateless cookie: require 32-byte cookie matching HMAC(secret, client_random)
         let client_random = ch.random;
         let hmac_provider = server.engine.config().crypto_provider().hmac_provider;
-        if !verify_cookie(
+        let cookie_valid = verify_cookie(
             hmac_provider,
             &server.cookie_secret,
             client_random,
             ch.cookie,
-        ) {
+        );
+        if !cookie_valid {
             debug!("Invalid/missing cookie; sending HelloVerifyRequest");
 
             let cookie = compute_cookie(hmac_provider, &server.cookie_secret, client_random)?;
@@ -280,9 +281,9 @@ impl State {
                     Ok(())
                 })?;
 
-            // The HelloVerifyRequest exchange is not part of the main handshake transcript.
-            // Clear transcript so subsequent CertificateVerify/Finished cover only the real handshake.
-            server.engine.transcript_reset();
+            // The HelloVerifyRequest exchange is stateless per RFC 6347.
+            // Reset all handshake state so the next ClientHello (with cookie) is processed fresh.
+            server.engine.reset_server_for_hello_verify_request();
             return Ok(self);
         }
 
