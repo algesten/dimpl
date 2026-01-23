@@ -223,14 +223,20 @@ impl State {
     }
 
     fn await_client_hello(self, server: &mut Server) -> Result<Self, Error> {
-        let maybe = server
-            .engine
-            .next_handshake(MessageType::ClientHello, &mut server.defragment_buffer)?;
+        trace!("await_client_hello: checking for ClientHello");
+        // Use next_handshake_allowing_next_seq to accept both message_seq=0 (RFC-strict clients
+        // like dimpl) and message_seq=1 (OpenSSL-style clients) after HelloVerifyRequest.
+        let maybe = server.engine.next_handshake_allowing_next_seq(
+            MessageType::ClientHello,
+            &mut server.defragment_buffer,
+        )?;
 
         let Some(handshake) = maybe else {
+            trace!("await_client_hello: no ClientHello found");
             // Stay in same state
             return Ok(self);
         };
+        trace!("await_client_hello: found ClientHello");
 
         let Body::ClientHello(ch) = handshake.body else {
             unreachable!()
@@ -261,12 +267,13 @@ impl State {
         // Stateless cookie: require 32-byte cookie matching HMAC(secret, client_random)
         let client_random = ch.random;
         let hmac_provider = server.engine.config().crypto_provider().hmac_provider;
-        if !verify_cookie(
+        let cookie_valid = verify_cookie(
             hmac_provider,
             &server.cookie_secret,
             client_random,
             ch.cookie,
-        ) {
+        );
+        if !cookie_valid {
             debug!("Invalid/missing cookie; sending HelloVerifyRequest");
 
             let cookie = compute_cookie(hmac_provider, &server.cookie_secret, client_random)?;
@@ -282,9 +289,9 @@ impl State {
                     Ok(())
                 })?;
 
-            // The HelloVerifyRequest exchange is not part of the main handshake transcript.
-            // Clear transcript so subsequent CertificateVerify/Finished cover only the real handshake.
-            server.engine.transcript_reset();
+            // The HelloVerifyRequest exchange is stateless per RFC 6347.
+            // Reset all handshake state so the next ClientHello (with cookie) is processed fresh.
+            server.engine.reset_server_for_hello_verify_request();
             return Ok(self);
         }
 

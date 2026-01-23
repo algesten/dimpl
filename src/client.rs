@@ -295,10 +295,10 @@ impl State {
         client.cookie = Some(h.cookie);
 
         // HelloVerifyRequest exchange must not be part of the handshake transcript.
-        // Reset transcript so the following ClientHello (with cookie) starts a fresh transcript
-        // matching the server's expectation.
-        trace!("Resetting handshake transcript after HelloVerifyRequest");
-        client.engine.transcript_reset();
+        // Per RFC 6347 §4.2.1, the client MUST use the same message_seq (0) for the
+        // ClientHello with cookie as it did for the original ClientHello.
+        trace!("Resetting handshake state after HelloVerifyRequest");
+        client.engine.reset_client_for_hello_verify_request();
 
         // Redo ClientHello, now with cookie.
         Ok(Self::SendClientHello)

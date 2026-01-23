@@ -461,6 +461,10 @@ impl Engine {
     }
 
     pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
+        self.has_complete_handshake_with_seq(wanted, self.peer_handshake_seq_no)
+    }
+
+    fn has_complete_handshake_with_seq(&mut self, wanted: MessageType, expected_seq: u16) -> bool {
         let mut skip_handled = self
             .queue_rx
             .iter()
@@ -478,7 +482,7 @@ impl Engine {
             return false;
         };
 
-        if first.header.message_seq != self.peer_handshake_seq_no {
+        if first.header.message_seq != expected_seq {
             return false;
         }
 
@@ -870,8 +874,71 @@ impl Engine {
         self.replay.check_and_update(seq)
     }
 
-    pub fn transcript_reset(&mut self) {
+    /// Reset server handshake state after sending HelloVerifyRequest.
+    ///
+    /// Per RFC 6347, the HelloVerifyRequest exchange is stateless. After sending HVR,
+    /// the server must accept a fresh ClientHello containing the cookie.
+    ///
+    /// Different clients send the second ClientHello with different message_seq:
+    /// - Some (like dimpl) use message_seq=0 (same as original, per strict RFC reading)
+    /// - Some (like OpenSSL) use message_seq=1 (incremented)
+    ///
+    /// We reset peer_handshake_seq_no to 0 so RFC-strict clients (message_seq=0) don't
+    /// trigger duplicate detection. The server uses `next_handshake_allowing_next_seq`
+    /// to also accept OpenSSL-style clients.
+    pub fn reset_server_for_hello_verify_request(&mut self) {
         self.transcript.clear();
+        // Reset peer_handshake_seq_no to 0 so that clients sending message_seq=0 (per RFC)
+        // don't trigger duplicate detection. The server uses next_handshake_allowing_next_seq
+        // to also accept message_seq=1 from clients that increment (like OpenSSL).
+        self.peer_handshake_seq_no = 0;
+        // Clear queued incoming handshakes so the next ClientHello (with cookie)
+        // isn't rejected as a duplicate of the first ClientHello (without cookie).
+        self.queue_rx.clear();
+        // Note: Don't clear flight_saved_records here - the HelloVerifyRequest should
+        // still be resendable via timeout until we receive the valid ClientHello with cookie.
+        // The flight_begin(4) call when processing the cookie-bearing ClientHello will
+        // clear the old records.
+    }
+
+    /// Get the next handshake, accepting either the expected message_seq OR message_seq=1
+    /// when expecting 0 (for HelloVerifyRequest retry scenarios with OpenSSL-style clients).
+    pub fn next_handshake_allowing_next_seq(
+        &mut self,
+        wanted: MessageType,
+        defragment_buffer: &mut Buf,
+    ) -> Result<Option<Handshake>, Error> {
+        let current_seq = self.peer_handshake_seq_no;
+        let have_at_current_seq = self.has_complete_handshake_with_seq(wanted, current_seq);
+
+        if have_at_current_seq {
+            return self.next_handshake(wanted, defragment_buffer);
+        }
+
+        // For HelloVerifyRequest retries, also accept message_seq=1 when expecting 0.
+        // OpenSSL-style clients increment the seq after HVR, unlike RFC-strict clients.
+        let expecting_first = current_seq == 0;
+        let have_at_next_seq = self.has_complete_handshake_with_seq(wanted, 1);
+
+        if expecting_first && have_at_next_seq {
+            // Confirmed OpenSSL-style client, update state permanently
+            self.peer_handshake_seq_no = 1;
+            return self.next_handshake(wanted, defragment_buffer);
+        }
+
+        Ok(None)
+    }
+
+    /// Reset client handshake state after receiving HelloVerifyRequest.
+    /// Per RFC 6347 §4.2.1, the client MUST use the same message_seq (0) for the
+    /// ClientHello with cookie as it did for the original ClientHello.
+    /// This method resets the outgoing sequence number so the next ClientHello
+    /// is sent with message_seq=0.
+    pub fn reset_client_for_hello_verify_request(&mut self) {
+        self.transcript.clear();
+        self.next_handshake_seq_no = 0;
+        // Note: peer_handshake_seq_no stays at 1 - the next message from server
+        // (ServerHello) will have message_seq=1 per RFC 6347.
     }
 
     pub fn transcript_hash(&self, algorithm: HashAlgorithm, out: &mut Buf) {
