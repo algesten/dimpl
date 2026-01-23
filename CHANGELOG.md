@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Fix DTLS HelloVerifyRequest by clearing queue_rx after sending HVR #40
   * Configurable RNG seed for tests #41
 
 # 0.2.2

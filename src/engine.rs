@@ -466,6 +466,10 @@ impl Engine {
     }
 
     pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
+        self.has_complete_handshake_with_seq(wanted, self.peer_handshake_seq_no)
+    }
+
+    fn has_complete_handshake_with_seq(&mut self, wanted: MessageType, expected_seq: u16) -> bool {
         let mut skip_handled = self
             .queue_rx
             .iter()
@@ -483,7 +487,7 @@ impl Engine {
             return false;
         };
 
-        if first.header.message_seq != self.peer_handshake_seq_no {
+        if first.header.message_seq != expected_seq {
             return false;
         }
 
@@ -875,8 +879,43 @@ impl Engine {
         self.replay.check_and_update(seq)
     }
 
-    pub fn transcript_reset(&mut self) {
+    /// Reset server handshake state after sending HelloVerifyRequest.
+    ///
+    /// Per RFC 6347 §4.2.2, the HelloVerifyRequest exchange is stateless. After sending
+    /// HVR, the server expects a fresh ClientHello containing the cookie with message_seq=1.
+    ///
+    /// The message flow per RFC 6347 §4.2.2:
+    ///   ClientHello (seq=0)  ------>
+    ///                    <------  HelloVerifyRequest (seq=0)
+    ///   ClientHello (seq=1)  ------>  (with cookie)
+    ///                    <------  ServerHello (seq=1)
+    pub fn reset_server_for_hello_verify_request(&mut self) {
         self.transcript.clear();
+        // Per RFC 6347 §4.2.2, the next ClientHello (with cookie) has message_seq=1.
+        // We keep peer_handshake_seq_no at 1 (already incremented after first ClientHello).
+        // Clear queued incoming handshakes so the next ClientHello (with cookie)
+        // isn't rejected as a duplicate of the first ClientHello (without cookie).
+        self.queue_rx.clear();
+        // Note: Don't clear flight_saved_records here - the HelloVerifyRequest should
+        // still be resendable via timeout until we receive the valid ClientHello with cookie.
+        // The flight_begin(4) call when processing the cookie-bearing ClientHello will
+        // clear the old records.
+    }
+
+    /// Reset client handshake state after receiving HelloVerifyRequest.
+    ///
+    /// Per RFC 6347 §4.2.2, the client sends the next ClientHello (with cookie) using
+    /// message_seq=1. The transcript is cleared because the initial ClientHello and
+    /// HelloVerifyRequest are not part of the handshake transcript per RFC 6347 §4.2.1.
+    ///
+    /// Note: next_handshake_seq_no is already 1 after sending the first ClientHello,
+    /// so we don't reset it - the next ClientHello will correctly have message_seq=1.
+    pub fn reset_client_for_hello_verify_request(&mut self) {
+        self.transcript.clear();
+        // Note: next_handshake_seq_no stays at 1 - the next ClientHello (with cookie)
+        // will have message_seq=1 per RFC 6347 §4.2.2.
+        // Note: peer_handshake_seq_no stays at 1 - the next message from server
+        // (ServerHello) will have message_seq=1 per RFC 6347 §4.2.2.
     }
 
     pub fn transcript_hash(&self, algorithm: HashAlgorithm, out: &mut Buf) {
