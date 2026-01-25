@@ -212,6 +212,9 @@ pub use crypto::{KeyingMaterial, SrtpProfile};
 
 mod timer;
 
+mod rng;
+pub(crate) use rng::SeededRng;
+
 /// Certificate and private key pair.
 #[derive(Clone)]
 pub struct DtlsCertificate {

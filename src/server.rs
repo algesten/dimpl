@@ -19,8 +19,6 @@ use std::time::Instant;
 use arrayvec::ArrayVec;
 use subtle::ConstantTimeEq;
 
-use rand::random;
-
 use crate::buffer::{Buf, ToBuf};
 use crate::client::LocalEvent;
 use crate::crypto::SrtpProfile;
@@ -115,7 +113,7 @@ impl Server {
     pub(crate) fn new_with_engine(mut engine: Engine) -> Server {
         engine.set_client(false);
 
-        let cookie_secret: [u8; 32] = random();
+        let cookie_secret: [u8; 32] = engine.rng.random();
 
         Server {
             state: State::AwaitClientHello,
@@ -162,7 +160,7 @@ impl Server {
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         self.last_now = Some(now);
         if self.random.is_none() {
-            self.random = Some(Random::new(now));
+            self.random = Some(Random::new(now, &mut self.engine.rng));
         }
         self.engine.handle_timeout(now)?;
         self.make_progress()?;

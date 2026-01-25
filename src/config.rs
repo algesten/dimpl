@@ -20,6 +20,7 @@ pub struct Config {
     flight_retries: usize,
     handshake_timeout: Duration,
     crypto_provider: CryptoProvider,
+    rng_seed: Option<u64>,
 }
 
 impl Config {
@@ -34,6 +35,7 @@ impl Config {
             flight_retries: 4,
             handshake_timeout: Duration::from_secs(40),
             crypto_provider: None,
+            rng_seed: None,
         }
     }
 
@@ -94,6 +96,19 @@ impl Config {
     pub fn crypto_provider(&self) -> &CryptoProvider {
         &self.crypto_provider
     }
+
+    /// Optional seed for deterministic random number generation.
+    ///
+    /// When set, most non-cryptographic randomness (backoff jitter, TLS random bytes,
+    /// AEAD nonces, cookie secrets) will be deterministic based on this seed.
+    /// This is useful for testing and reproducibility.
+    ///
+    /// Note: Cryptographic operations (key exchange, signatures) always use
+    /// secure system randomness regardless of this setting.
+    #[inline(always)]
+    pub fn rng_seed(&self) -> Option<u64> {
+        self.rng_seed
+    }
 }
 
 /// Builder for DTLS configuration.
@@ -106,6 +121,7 @@ pub struct ConfigBuilder {
     flight_retries: usize,
     handshake_timeout: Duration,
     crypto_provider: Option<CryptoProvider>,
+    rng_seed: Option<u64>,
 }
 
 impl ConfigBuilder {
@@ -179,6 +195,20 @@ impl ConfigBuilder {
         self
     }
 
+    /// Set a seed for deterministic random number generation.
+    ///
+    /// When set, most non-cryptographic randomness (backoff jitter, TLS random bytes,
+    /// AEAD nonces, cookie secrets) will be deterministic based on this seed.
+    ///
+    /// This is useful for testing and reproducibility.
+    ///
+    /// Note: Cryptographic operations (key exchange, signatures) always use
+    /// secure system randomness regardless of this setting.
+    pub fn dangerously_set_rng_seed(mut self, seed: u64) -> Self {
+        self.rng_seed = Some(seed);
+        self
+    }
+
     /// Build the configuration.
     ///
     /// This validates the crypto provider before returning the configuration.
@@ -219,6 +249,7 @@ impl ConfigBuilder {
             flight_retries: self.flight_retries,
             handshake_timeout: self.handshake_timeout,
             crypto_provider,
+            rng_seed: self.rng_seed,
         })
     }
 }
