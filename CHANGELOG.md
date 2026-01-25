@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Configurable RNG seed for tests #41
+
 # 0.2.2
 
   * Add debug warn! for ReceiveQueueFull error #39

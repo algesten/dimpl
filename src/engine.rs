@@ -1,4 +1,3 @@
-use rand::random;
 use std::mem;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -13,13 +12,16 @@ use crate::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
 use crate::queue::{QueueRx, QueueTx};
 use crate::timer::ExponentialBackoff;
 use crate::window::ReplayWindow;
-use crate::{Config, Error, Output};
+use crate::{Config, Error, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
 // Using debug_ignore_primary since CryptoContext doesn't implement Debug
 pub struct Engine {
     config: Arc<Config>,
+
+    /// Seedable random number generator for deterministic testing
+    pub(crate) rng: SeededRng,
 
     /// Pool of buffers
     buffers_free: BufferPool,
@@ -98,8 +100,10 @@ struct Entry {
 
 impl Engine {
     pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate) -> Self {
+        let mut rng = SeededRng::new(config.rng_seed());
+
         let flight_backoff =
-            ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries());
+            ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries(), &mut rng);
 
         let crypto_context = CryptoContext::new(
             certificate.certificate,
@@ -109,6 +113,7 @@ impl Engine {
 
         Self {
             config,
+            rng,
             buffers_free: BufferPool::default(),
             sequence_epoch_0: Sequence::new(0),
             sequence_epoch_n: Sequence::new(1),
@@ -302,7 +307,7 @@ impl Engine {
 
         if now >= flight_timeout {
             if self.flight_backoff.can_retry() {
-                self.flight_backoff.attempt();
+                self.flight_backoff.attempt(&mut self.rng);
                 debug!(
                     "Re-arm flight timeout due to resend in {}",
                     self.flight_backoff.rto().as_secs_f32()
@@ -426,7 +431,7 @@ impl Engine {
 
     pub fn flight_begin(&mut self, flight_no: u8) {
         debug!("Begin flight {}", flight_no);
-        self.flight_backoff.reset();
+        self.flight_backoff.reset(&mut self.rng);
         self.flight_clear_resends();
         self.flight_timeout = Timeout::Unarmed;
     }
@@ -649,7 +654,7 @@ impl Engine {
             };
 
             // Generate 8 random bytes for the explicit part of the nonce
-            let explicit_nonce: [u8; 8] = random();
+            let explicit_nonce: [u8; 8] = self.rng.random();
 
             // Combine the fixed IV and the explicit nonce
             let nonce = Nonce::new(iv, &explicit_nonce);

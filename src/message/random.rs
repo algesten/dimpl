@@ -4,10 +4,10 @@ use std::time::Instant;
 use nom::bytes::complete::take;
 use nom::number::complete::be_u32;
 use nom::IResult;
-use rand::random;
 
 use crate::buffer::Buf;
 use crate::time_tricks::InstantExt;
+use crate::SeededRng;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Random {
@@ -16,12 +16,12 @@ pub struct Random {
 }
 
 impl Random {
-    pub fn new(now: Instant) -> Self {
+    pub fn new(now: Instant, rng: &mut SeededRng) -> Self {
         let gmt_duration = now.to_unix_duration();
         // This is valid until year 2106, at which point I will be beyond caring.
         let gmt_unix_time = gmt_duration.as_secs() as u32;
 
-        let random_bytes: [u8; 28] = random();
+        let random_bytes: [u8; 28] = rng.random();
 
         Self {
             gmt_unix_time,
