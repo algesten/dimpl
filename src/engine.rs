@@ -225,8 +225,12 @@ impl Engine {
             }
         }
 
+        // Drop old duplicates we've already processed - don't let them block newer messages.
+        if handshake.header.message_seq < self.peer_handshake_seq_no {
+            return Ok(());
+        }
+
         // Reject new handshakes after initial handshake is complete (renegotiation not supported).
-        // Duplicates (msg_seq < peer_handshake_seq_no) are allowed for resend handling above.
         if self.release_app_data && handshake.header.message_seq >= self.peer_handshake_seq_no {
             return Err(Error::RenegotiationAttempt);
         }

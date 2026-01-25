@@ -333,3 +333,118 @@ fn retransmit_no_cookie_after_cookie_sent() {
 
     println!("SUCCESS: Server correctly handled out-of-order retransmit scenario");
 }
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn retransmit_no_cookie_before_cookie_received() {
+    //! Tests the specific bug scenario from webrtc deployments:
+    //!
+    //! 1. Client sends ClientHello (seq=0, no cookie)
+    //! 2. Server sends HelloVerifyRequest, clears queue_rx
+    //! 3. Client retransmits old ClientHello (seq=0, no cookie) - HVR was lost/delayed
+    //! 4. Server resends HelloVerifyRequest (correct), but OLD ClientHello must NOT
+    //!    be inserted into queue_rx, otherwise it blocks the new ClientHello
+    //! 5. Client sends ClientHello (seq=1, with cookie)
+    //! 6. Server should process it and send ServerHello
+    //!
+    //! The bug was: old duplicate ClientHello (seq=0) was inserted into queue_rx,
+    //! causing has_complete_handshake(ClientHello, expected_seq=1) to return false
+    //! because it found seq=0 first in the queue.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let now = Instant::now();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = Arc::new(Config::builder().build().expect("Failed to build config"));
+
+    let mut client = Dtls::new(config.clone(), client_cert.clone());
+    client.set_active(true);
+
+    let mut server = Dtls::new(config.clone(), server_cert.clone());
+    server.set_active(false);
+
+    // Flight 1: ClientHello (no cookie)
+    client.handle_timeout(now).expect("client timeout");
+    client.handle_timeout(now).expect("client arm f1");
+    let f1 = collect_flight_packets(&mut client);
+    assert!(!f1.is_empty());
+
+    // Save a copy of the original no-cookie ClientHello for retransmit simulation
+    let f1_copy = f1.clone();
+
+    // Deliver to server
+    for p in &f1 {
+        server.handle_packet(p).expect("server recv f1");
+    }
+
+    // Flight 2: HelloVerifyRequest
+    server.handle_timeout(now).expect("server arm f2");
+    let f2 = collect_flight_packets(&mut server);
+    assert!(!f2.is_empty());
+
+    // Simulate: HVR is "lost" - don't deliver to client yet
+    // Instead, client's retransmit timer fires and sends the old ClientHello again
+
+    // THIS IS THE BUG TRIGGER: old ClientHello (seq=0) arrives at server
+    // BEFORE the cookie-bearing ClientHello (seq=1)
+    for p in &f1_copy {
+        server
+            .handle_packet(p)
+            .expect("server recv retransmit of no-cookie CH");
+    }
+
+    // Server should resend HelloVerifyRequest (this is correct behavior)
+    // The bug was that the old ClientHello got inserted into queue_rx
+    let f2_resend = collect_flight_packets(&mut server);
+    let f2_resend_types: Vec<u8> = f2_resend
+        .iter()
+        .flat_map(|p| parse_handshake_types(p))
+        .collect();
+    assert!(
+        f2_resend_types.contains(&HELLO_VERIFY_REQUEST),
+        "server should resend HelloVerifyRequest after duplicate, got {:?}",
+        f2_resend_types
+    );
+
+    // Now deliver the original HVR to client
+    for p in &f2 {
+        client.handle_packet(p).expect("client recv f2");
+    }
+
+    // Flight 3: ClientHello WITH cookie (seq=1)
+    client.handle_timeout(now).expect("client arm f3");
+    let f3 = collect_flight_packets(&mut client);
+    assert!(!f3.is_empty());
+
+    // Deliver to server - THIS IS WHERE THE BUG MANIFESTED
+    // Before fix: queue_rx had old ClientHello (seq=0), blocking this one
+    for p in &f3 {
+        server.handle_packet(p).expect("server recv f3 with cookie");
+    }
+
+    // Server should now send ServerHello flight
+    server.handle_timeout(now).expect("server arm f4");
+    let f4 = collect_flight_packets(&mut server);
+    assert!(!f4.is_empty(), "server should emit flight 4");
+
+    let f4_hs_types: Vec<u8> = f4.iter().flat_map(|p| parse_handshake_types(p)).collect();
+
+    // THE KEY ASSERTION: Server must NOT be stuck sending HelloVerifyRequest
+    assert!(
+        !f4_hs_types.contains(&HELLO_VERIFY_REQUEST),
+        "server should NOT resend HelloVerifyRequest after valid cookie, got {:?}",
+        f4_hs_types
+    );
+
+    // Server should send ServerHello
+    assert!(
+        f4_hs_types.contains(&SERVER_HELLO),
+        "server should send ServerHello after cookie CH, got {:?}",
+        f4_hs_types
+    );
+
+    println!("SUCCESS: Old duplicate ClientHello did not block new ClientHello with cookie");
+}

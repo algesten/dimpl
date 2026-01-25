@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Drop dupe handshakes to not block newer messages #44
+
 # 0.2.3
 
   * Fix DTLS HelloVerifyRequest by clearing queue_rx after sending HVR #40
