@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.2.4
+
   * Drop dupe handshakes to not block newer messages #44
 
 # 0.2.3
