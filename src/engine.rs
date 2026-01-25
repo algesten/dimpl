@@ -908,6 +908,13 @@ impl Engine {
         wanted: MessageType,
         defragment_buffer: &mut Buf,
     ) -> Result<Option<Handshake>, Error> {
+        // This method should only be used for ClientHello during HelloVerifyRequest cookie exchange
+        assert_eq!(
+            wanted,
+            MessageType::ClientHello,
+            "next_handshake_allowing_next_seq should only be called for ClientHello"
+        );
+
         let current_seq = self.peer_handshake_seq_no;
         let have_at_current_seq = self.has_complete_handshake_with_seq(wanted, current_seq);
 
