@@ -937,6 +937,9 @@ impl Engine {
     pub fn reset_client_for_hello_verify_request(&mut self) {
         self.transcript.clear();
         self.next_handshake_seq_no = 0;
+        // Clear queued incoming handshakes to ensure a clean slate when retrying
+        // with the cookie. This is consistent with reset_server_for_hello_verify_request.
+        self.queue_rx.clear();
         // Note: peer_handshake_seq_no stays at 1 - the next message from server
         // (ServerHello) will have message_seq=1 per RFC 6347.
     }
