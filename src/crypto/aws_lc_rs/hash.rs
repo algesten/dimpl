@@ -11,6 +11,12 @@ struct AwsLcHashContext {
     context: Context,
 }
 
+impl std::fmt::Debug for AwsLcHashContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsLcHashContext").finish_non_exhaustive()
+    }
+}
+
 impl HashContext for AwsLcHashContext {
     fn update(&mut self, data: &[u8]) {
         self.context.update(data);

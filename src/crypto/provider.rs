@@ -174,7 +174,7 @@ pub trait Cipher: CryptoSafe {
 }
 
 /// Stateful hash context for incremental hashing.
-pub trait HashContext {
+pub trait HashContext: CryptoSafe {
     /// Update the hash with new data.
     fn update(&mut self, data: &[u8]);
 

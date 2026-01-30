@@ -12,6 +12,19 @@ enum RustCryptoHashContext {
     Sha384(Sha384),
 }
 
+impl std::fmt::Debug for RustCryptoHashContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RustCryptoHashContext::Sha256(_) => {
+                f.debug_tuple("RustCryptoHashContext::Sha256").finish()
+            }
+            RustCryptoHashContext::Sha384(_) => {
+                f.debug_tuple("RustCryptoHashContext::Sha384").finish()
+            }
+        }
+    }
+}
+
 impl HashContext for RustCryptoHashContext {
     fn update(&mut self, data: &[u8]) {
         match self {
