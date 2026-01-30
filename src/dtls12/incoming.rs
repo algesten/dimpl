@@ -5,9 +5,8 @@ use arrayvec::ArrayVec;
 use std::fmt;
 
 use crate::buffer::{Buf, TmpBuf};
-use crate::crypto::DTLS_EXPLICIT_NONCE_LEN;
-use crate::dtls12::engine::Engine;
-use crate::dtls12::message::{ContentType, DTLSRecord, Handshake};
+use crate::crypto::{Aad, Nonce, DTLS_EXPLICIT_NONCE_LEN};
+use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake, Sequence};
 use crate::Error;
 
 /// Holds both the UDP packet and the parsed result of that packet.
@@ -37,13 +36,17 @@ impl Incoming {
     /// Parse an incoming UDP packet
     ///
     /// * `packet` is the data from the UDP socket.
-    /// * `engine` is a reference to the Engine for crypto context.
-    /// * `into` the buffer to return to pool (not used for storage).
+    /// * `decrypt` provides the decryption operations for encrypted records.
+    /// * `cs` is the negotiated cipher suite, if any.
     ///
     /// Will surface parser errors.
-    pub fn parse_packet(packet: &[u8], engine: &mut Engine) -> Result<Option<Self>, Error> {
+    pub fn parse_packet(
+        packet: &[u8],
+        decrypt: &mut dyn RecordDecrypt,
+        cs: Option<Dtls12CipherSuite>,
+    ) -> Result<Option<Self>, Error> {
         // Parse records directly from packet, copying each record ONCE into its own buffer
-        let records = Records::parse(packet, engine)?;
+        let records = Records::parse(packet, decrypt, cs)?;
 
         // We need at least one Record to be valid. For replayed frames, we discard
         // the records, hence this might be None
@@ -64,7 +67,11 @@ pub struct Records {
 }
 
 impl Records {
-    pub fn parse(mut packet: &[u8], engine: &mut Engine) -> Result<Records, Error> {
+    pub fn parse(
+        mut packet: &[u8],
+        decrypt: &mut dyn RecordDecrypt,
+        cs: Option<Dtls12CipherSuite>,
+    ) -> Result<Records, Error> {
         let mut records = ArrayVec::new();
 
         // Find record boundaries and copy each record ONCE from the packet
@@ -83,7 +90,7 @@ impl Records {
 
             // This is the ONLY copy: packet -> record buffer
             let record_slice = &packet[..record_end];
-            match Record::parse(record_slice, engine) {
+            match Record::parse(record_slice, decrypt, cs) {
                 Ok(record) => {
                     if let Some(record) = record {
                         if records.try_push(record).is_err() {
@@ -121,11 +128,15 @@ pub struct Record {
 impl Record {
     /// The first parse pass only parses the DTLSRecord header which is unencrypted.
     /// Copies record data from UDP packet ONCE into a pooled buffer.
-    pub fn parse(record_slice: &[u8], engine: &mut Engine) -> Result<Option<Record>, Error> {
+    pub fn parse(
+        record_slice: &[u8],
+        decrypt: &mut dyn RecordDecrypt,
+        cs: Option<Dtls12CipherSuite>,
+    ) -> Result<Option<Record>, Error> {
         // ONLY COPY: UDP packet slice -> pooled buffer
         let mut buffer = Buf::new();
         buffer.extend_from_slice(record_slice);
-        let parsed = ParsedRecord::parse(&buffer, engine, 0)?;
+        let parsed = ParsedRecord::parse(&buffer, cs, 0)?;
         let parsed = Box::new(parsed);
         let record = Record { buffer, parsed };
 
@@ -133,7 +144,7 @@ impl Record {
         // preceeding set of flights sets up the cryptographic context. In a situation with
         // packet loss, we can end up seeing epoch 1 records before we can decrypt them.
         let is_epoch_0 = record.record().sequence.epoch == 0;
-        if is_epoch_0 || !engine.is_peer_encryption_enabled() {
+        if is_epoch_0 || !decrypt.is_peer_encryption_enabled() {
             return Ok(Some(record));
         }
 
@@ -141,12 +152,12 @@ impl Record {
         let dtls = record.record();
 
         // Anti-replay check
-        if !engine.replay_check_and_update(dtls.sequence) {
+        if !decrypt.replay_check_and_update(dtls.sequence) {
             return Ok(None);
         }
 
         // Get a reference to the buffer
-        let (aad, nonce) = engine.decryption_aad_and_nonce(dtls, &record.buffer);
+        let (aad, nonce) = decrypt.decryption_aad_and_nonce(dtls, &record.buffer);
 
         // Extract the buffer for decryption
         let mut buffer = record.buffer;
@@ -163,7 +174,7 @@ impl Record {
             let mut buffer = TmpBuf::new(ciphertext);
 
             // This decrypts in place.
-            engine.decrypt_data(&mut buffer, aad, nonce)?;
+            decrypt.decrypt_data(&mut buffer, aad, nonce)?;
 
             buffer.len()
         };
@@ -172,7 +183,7 @@ impl Record {
         buffer[11] = (new_len >> 8) as u8;
         buffer[12] = new_len as u8;
 
-        let parsed = ParsedRecord::parse(&buffer, engine, DTLS_EXPLICIT_NONCE_LEN)?;
+        let parsed = ParsedRecord::parse(&buffer, cs, DTLS_EXPLICIT_NONCE_LEN)?;
         let parsed = Box::new(parsed);
 
         Ok(Some(Record { buffer, parsed }))
@@ -221,14 +232,18 @@ pub struct ParsedRecord {
 }
 
 impl ParsedRecord {
-    pub fn parse(input: &[u8], engine: &Engine, offset: usize) -> Result<ParsedRecord, Error> {
+    pub fn parse(
+        input: &[u8],
+        cipher_suite: Option<Dtls12CipherSuite>,
+        offset: usize,
+    ) -> Result<ParsedRecord, Error> {
         let (_, record) = DTLSRecord::parse(input, 0, offset)?;
 
         let handshakes = if record.content_type == ContentType::Handshake {
             // This will also return None on the encrypted Finished after ChangeCipherSpec.
             // However we will then decrypt and try again.
             let fragment_offset = record.fragment_range.start;
-            parse_handshakes(record.fragment(input), fragment_offset, engine)
+            parse_handshakes(record.fragment(input), fragment_offset, cipher_suite)
         } else {
             ArrayVec::new()
         };
@@ -241,15 +256,30 @@ impl ParsedRecord {
     }
 }
 
+/// Trait abstracting the decryption operations needed for parsing incoming records.
+///
+/// This decouples the record parser from the full `Engine`, allowing incoming record
+/// parsing to depend only on the cryptographic operations it actually uses.
+pub trait RecordDecrypt {
+    fn is_peer_encryption_enabled(&self) -> bool;
+    fn replay_check_and_update(&mut self, seq: Sequence) -> bool;
+    fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord, buf: &[u8]) -> (Aad, Nonce);
+    fn decrypt_data(
+        &mut self,
+        ciphertext: &mut TmpBuf,
+        aad: Aad,
+        nonce: Nonce,
+    ) -> Result<(), Error>;
+}
+
 fn parse_handshakes(
     mut input: &[u8],
     mut base_offset: usize,
-    engine: &Engine,
+    cipher_suite: Option<Dtls12CipherSuite>,
 ) -> ArrayVec<Handshake, 8> {
     let mut handshakes = ArrayVec::new();
     while !input.is_empty() {
-        if let Ok((remaining, handshake)) =
-            Handshake::parse(input, base_offset, engine.cipher_suite(), true)
+        if let Ok((remaining, handshake)) = Handshake::parse(input, base_offset, cipher_suite, true)
         {
             let len = input.len() - remaining.len();
             base_offset += len;
