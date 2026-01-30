@@ -350,6 +350,88 @@ struct {
 3. **No NAT rebinding**: IP:port change breaks connection
 4. **Ordered first flight**: Out-of-order ClientHello fragments may be dropped
 
+## Implementation Plan
+
+### Step 1: CLAUDE.md
+
+Create `CLAUDE.md` with code style guidance extracted from the existing codebase.
+
+### Step 2: Reorganize Repository
+
+Single commit from main reorganizing the codebase. Separate engines and crypto contexts per version.
+
+**Top-level (shared):**
+```
+src/
+├── lib.rs
+├── config.rs
+├── error.rs
+├── buffer.rs
+├── queue.rs
+├── window.rs
+├── timer.rs
+├── rng.rs
+└── crypto/
+    ├── provider.rs      # Traits only
+    ├── aws_lc_rs/       # Provider impl
+    └── rust_crypto/     # Provider impl
+```
+
+**DTLS 1.2 specific:**
+```
+src/dtls12/
+├── mod.rs
+├── client.rs
+├── server.rs
+├── engine.rs
+├── incoming.rs
+├── context.rs          # CryptoContext
+└── message/            # All message types
+```
+
+**DTLS 1.3 (new):**
+```
+src/dtls13/
+├── mod.rs
+├── client.rs
+├── server.rs
+├── engine.rs
+├── incoming.rs
+├── context.rs
+└── message/
+```
+
+### Step 3: Lift Tests from PR 38
+
+Copy test files from `dev/dtls13vibe` branch:
+- `tests/dtls13.rs` — dimpl ↔ dimpl tests
+- `tests/client-wolfssl.rs` — interop
+- `tests/server-wolfssl.rs` — interop
+- `tests/wolfssl/mod.rs` — test harness
+
+Adapt to our API as needed.
+
+### Step 4: Incremental Implementation
+
+Build incrementally with clean commits:
+
+1. Record layer (parse/serialize unified header)
+2. Key schedule (HKDF, traffic secrets)
+3. Handshake messages (EncryptedExtensions, Certificate, etc.)
+4. Client state machine (1-RTT first, then HRR)
+5. Server state machine
+6. ACK handling
+7. KeyUpdate
+8. Integration + interop tests
+
+### Prior Art
+
+PR 38 (`dev/dtls13vibe` branch) contains a WIP DTLS 1.3 implementation. We are redoing it cleanly with:
+- Separate engines (not shared)
+- Separate crypto contexts
+- Separate message modules per version
+- Cleaner commit history
+
 ## References
 
 - [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147.html) - DTLS 1.3
