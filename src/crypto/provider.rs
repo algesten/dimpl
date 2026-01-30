@@ -141,7 +141,7 @@ use std::sync::OnceLock;
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::Dtls12CipherSuite;
-use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
+use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
 // ============================================================================
 // Marker Trait
@@ -288,6 +288,69 @@ pub trait PrfProvider: CryptoSafe {
 pub trait HmacProvider: CryptoSafe {
     /// Compute HMAC-SHA256(key, data) and return the result.
     fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String>;
+}
+
+// ============================================================================
+// DTLS 1.3 Factory Traits
+// ============================================================================
+
+/// Cipher suite support for DTLS 1.3 (factory for Cipher instances).
+///
+/// Unlike DTLS 1.2 cipher suites, TLS 1.3 cipher suites only specify the
+/// AEAD algorithm and hash function. Key exchange is negotiated separately.
+pub trait SupportedDtls13CipherSuite: CryptoSafe {
+    /// The cipher suite this supports.
+    fn suite(&self) -> Dtls13CipherSuite;
+
+    /// Hash algorithm used by this suite.
+    fn hash_algorithm(&self) -> HashAlgorithm;
+
+    /// AEAD key length in bytes.
+    fn key_len(&self) -> usize;
+
+    /// AEAD nonce/IV length in bytes.
+    fn iv_len(&self) -> usize;
+
+    /// AEAD tag length in bytes.
+    fn tag_len(&self) -> usize;
+
+    /// Create a cipher instance with the given key.
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String>;
+}
+
+/// HKDF provider for TLS 1.3 key derivation (RFC 5869).
+///
+/// TLS 1.3 uses HKDF instead of the TLS 1.2 PRF for all key derivation.
+pub trait HkdfProvider: CryptoSafe {
+    /// HKDF-Extract: extract a pseudorandom key from input keying material.
+    ///
+    /// Returns the PRK (pseudorandom key) of length determined by the hash.
+    fn extract(&self, salt: &[u8], ikm: &[u8], hash: HashAlgorithm, out: &mut Buf);
+
+    /// HKDF-Expand: expand a PRK into output keying material.
+    ///
+    /// The `info` parameter is context and application-specific information.
+    fn expand(
+        &self,
+        prk: &[u8],
+        info: &[u8],
+        output_len: usize,
+        hash: HashAlgorithm,
+        out: &mut Buf,
+    ) -> Result<(), String>;
+
+    /// HKDF-Expand-Label for TLS 1.3 key schedule.
+    ///
+    /// Implements the HKDF-Expand-Label function from RFC 8446 Section 7.1.
+    fn expand_label(
+        &self,
+        secret: &[u8],
+        label: &[u8],
+        context: &[u8],
+        output_len: usize,
+        hash: HashAlgorithm,
+        out: &mut Buf,
+    ) -> Result<(), String>;
 }
 
 // ============================================================================
