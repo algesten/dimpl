@@ -9,7 +9,7 @@ use std::ops::{Deref, DerefMut};
 
 use crate::buffer::Buf;
 use crate::dtls12::incoming::Incoming;
-use crate::dtls12::message::ContentType;
+use crate::types::ContentType;
 
 /// Wrapper around the receive queue that provides safe Debug output.
 ///

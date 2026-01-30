@@ -179,6 +179,10 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
+// Shared types used by both DTLS versions
+mod types;
+pub use types::{ContentType, HashAlgorithm, NamedGroup, Sequence, SignatureAlgorithm};
+
 // DTLS version-specific modules
 mod dtls12;
 mod dtls13;
@@ -188,7 +192,6 @@ use dtls12::{Client, Server};
 mod time_tricks;
 
 pub mod buffer;
-mod queue;
 mod window;
 
 mod util;

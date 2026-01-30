@@ -1,36 +1,31 @@
-use std::cmp::Ordering;
+//! DTLS 1.2 record layer types.
+//!
+//! ContentType and Sequence are now in crate::types as they're shared between DTLS versions.
+
 use std::fmt;
 use std::ops::Range;
 
 use super::ProtocolVersion;
 use crate::buffer::Buf;
+use crate::types::{ContentType, Sequence};
 use crate::util::be_u48;
 use nom::bytes::complete::take;
-use nom::number::complete::{be_u16, be_u8};
+use nom::number::complete::be_u16;
 use nom::{Err, IResult};
 
+/// DTLS 1.2 record structure.
 #[derive(PartialEq, Eq, Default)]
 pub struct DTLSRecord {
+    /// The content type of this record.
     pub content_type: ContentType,
+    /// The protocol version.
     pub version: ProtocolVersion,
+    /// The epoch and sequence number.
     pub sequence: Sequence,
+    /// The length of the fragment.
     pub length: u16,
+    /// The range of the fragment in the source buffer.
     pub fragment_range: Range<usize>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Sequence {
-    pub epoch: u16,
-    pub sequence_number: u64, // technically u48
-}
-
-impl Sequence {
-    pub fn new(epoch: u16) -> Self {
-        Self {
-            epoch,
-            sequence_number: 0,
-        }
-    }
 }
 
 impl DTLSRecord {
@@ -43,6 +38,7 @@ impl DTLSRecord {
     /// Byte offset in the record header where the 2-byte length field is
     pub const LENGTH_OFFSET: Range<usize> = 11..13;
 
+    /// Parse a DTLS record from the input buffer.
     pub fn parse(
         input: &[u8],
         base_offset: usize,
@@ -100,10 +96,12 @@ impl DTLSRecord {
         ))
     }
 
+    /// Get the fragment data from the source buffer.
     pub fn fragment<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
         &buf[self.fragment_range.clone()]
     }
 
+    /// Serialize this record to the output buffer.
     pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
         output.push(self.content_type.as_u8());
         self.version.serialize(output);
@@ -113,51 +111,22 @@ impl DTLSRecord {
         output.extend_from_slice(self.fragment(buf));
     }
 
+    /// Get the explicit nonce from the fragment.
     pub fn nonce<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
         let fragment = self.fragment(buf);
         &fragment[..Self::EXPLICIT_NONCE_LEN]
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContentType {
-    ChangeCipherSpec,
-    Alert,
-    Handshake,
-    ApplicationData,
-    Unknown(u8),
-}
-
-impl Default for ContentType {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
-
-impl ContentType {
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            20 => ContentType::ChangeCipherSpec,
-            21 => ContentType::Alert,
-            22 => ContentType::Handshake,
-            23 => ContentType::ApplicationData,
-            _ => ContentType::Unknown(value),
-        }
-    }
-
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            ContentType::ChangeCipherSpec => 20,
-            ContentType::Alert => 21,
-            ContentType::Handshake => 22,
-            ContentType::ApplicationData => 23,
-            ContentType::Unknown(value) => *value,
-        }
-    }
-
-    pub fn parse(input: &[u8]) -> IResult<&[u8], ContentType> {
-        let (input, byte) = be_u8(input)?;
-        Ok((input, Self::from_u8(byte)))
+impl fmt::Debug for DTLSRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DTLSRecord")
+            .field("content_type", &self.content_type)
+            .field("version", &self.version)
+            .field("sequence", &self.sequence)
+            .field("length", &self.length)
+            .field("fragment_range", &self.fragment_range)
+            .finish()
     }
 }
 
@@ -187,45 +156,5 @@ mod tests {
         let mut serialized = Buf::new();
         parsed.serialize(RECORD, &mut serialized);
         assert_eq!(&*serialized, RECORD);
-    }
-}
-
-impl fmt::Display for Sequence {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "[epoch: {}, sequence_number: {}]",
-            self.epoch, self.sequence_number,
-        )
-    }
-}
-
-impl Ord for Sequence {
-    fn cmp(&self, other: &Self) -> Ordering {
-        if self.epoch < other.epoch {
-            Ordering::Less
-        } else if self.epoch > other.epoch {
-            Ordering::Greater
-        } else {
-            self.sequence_number.cmp(&other.sequence_number)
-        }
-    }
-}
-
-impl PartialOrd for Sequence {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl fmt::Debug for DTLSRecord {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DTLSRecord")
-            .field("content_type", &self.content_type)
-            .field("version", &self.version)
-            .field("sequence", &self.sequence)
-            .field("length", &self.length)
-            .field("fragment_range", &self.fragment_range)
-            .finish()
     }
 }

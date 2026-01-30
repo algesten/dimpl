@@ -38,9 +38,14 @@ pub use finished::Finished;
 pub use handshake::{Body, Handshake, Header, MessageType};
 pub use hello_verify::HelloVerifyRequest;
 pub use id::{Cookie, SessionId};
-pub use named_group::{CurveType, NamedGroup, NamedGroupVec};
+pub use named_group::CurveType;
 pub use random::Random;
-pub use record::{ContentType, DTLSRecord, Sequence};
+pub use record::DTLSRecord;
+
+// Re-export shared types for backwards compatibility
+pub use crate::types::{
+    ContentType, HashAlgorithm, NamedGroup, NamedGroupVec, Sequence, SignatureAlgorithm,
+};
 pub use server_hello::ServerHello;
 pub use server_key_exchange::{ServerKeyExchange, ServerKeyExchangeParams};
 pub use wrapped::{Asn1Cert, DistinguishedName};
@@ -357,123 +362,7 @@ impl ClientCertificateType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-/// Signature algorithms used in DTLS handshakes.
-pub enum SignatureAlgorithm {
-    /// Anonymous (no certificate)
-    Anonymous,
-    /// RSA signatures
-    RSA,
-    /// DSA signatures
-    DSA,
-    /// ECDSA signatures
-    ECDSA,
-    /// Unknown or unsupported signature algorithm
-    Unknown(u8),
-}
-
-impl Default for SignatureAlgorithm {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
-
-impl SignatureAlgorithm {
-    /// Convert an 8-bit value into a `SignatureAlgorithm`.
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0 => SignatureAlgorithm::Anonymous,
-            1 => SignatureAlgorithm::RSA,
-            2 => SignatureAlgorithm::DSA,
-            3 => SignatureAlgorithm::ECDSA,
-            _ => SignatureAlgorithm::Unknown(value),
-        }
-    }
-
-    /// Convert this `SignatureAlgorithm` into its 8-bit representation.
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            SignatureAlgorithm::Anonymous => 0,
-            SignatureAlgorithm::RSA => 1,
-            SignatureAlgorithm::DSA => 2,
-            SignatureAlgorithm::ECDSA => 3,
-            SignatureAlgorithm::Unknown(value) => *value,
-        }
-    }
-
-    /// Parse a `SignatureAlgorithm` from network bytes.
-    pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAlgorithm> {
-        let (input, value) = be_u8(input)?;
-        Ok((input, SignatureAlgorithm::from_u8(value)))
-    }
-}
-
-/// Hash algorithms used in TLS 1.2 (RFC 5246).
-///
-/// Specifies the hash algorithm to be used in digital signatures and PRF operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum HashAlgorithm {
-    /// No hash (not used in DTLS 1.2).
-    None,
-    /// MD5 hash (deprecated, not supported).
-    MD5,
-    /// SHA-1 hash (deprecated, not supported).
-    SHA1,
-    /// SHA-224 hash.
-    SHA224,
-    /// SHA-256 hash (supported by dimpl).
-    SHA256,
-    /// SHA-384 hash (supported by dimpl).
-    SHA384,
-    /// SHA-512 hash.
-    SHA512,
-    /// Unknown or unsupported hash algorithm.
-    Unknown(u8),
-}
-
-impl Default for HashAlgorithm {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
-
-impl HashAlgorithm {
-    /// Convert a wire format u8 value to a `HashAlgorithm`.
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0 => HashAlgorithm::None,
-            1 => HashAlgorithm::MD5,
-            2 => HashAlgorithm::SHA1,
-            3 => HashAlgorithm::SHA224,
-            4 => HashAlgorithm::SHA256,
-            5 => HashAlgorithm::SHA384,
-            6 => HashAlgorithm::SHA512,
-            _ => HashAlgorithm::Unknown(value),
-        }
-    }
-
-    /// Convert this `HashAlgorithm` to its wire format u8 value.
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            HashAlgorithm::None => 0,
-            HashAlgorithm::MD5 => 1,
-            HashAlgorithm::SHA1 => 2,
-            HashAlgorithm::SHA224 => 3,
-            HashAlgorithm::SHA256 => 4,
-            HashAlgorithm::SHA384 => 5,
-            HashAlgorithm::SHA512 => 6,
-            HashAlgorithm::Unknown(value) => *value,
-        }
-    }
-
-    /// Parse a `HashAlgorithm` from wire format.
-    pub fn parse(input: &[u8]) -> IResult<&[u8], HashAlgorithm> {
-        let (input, value) = be_u8(input)?;
-        Ok((input, HashAlgorithm::from_u8(value)))
-    }
-}
+// SignatureAlgorithm and HashAlgorithm are now in crate::types
 
 pub type SignatureAndHashAlgorithmVec =
     ArrayVec<SignatureAndHashAlgorithm, { SignatureAndHashAlgorithm::supported().len() }>;

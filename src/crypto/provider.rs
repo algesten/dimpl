@@ -140,7 +140,8 @@ use std::sync::OnceLock;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
-use crate::dtls12::message::{CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
+use crate::dtls12::message::CipherSuite;
+use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
 // ============================================================================
 // Marker Trait

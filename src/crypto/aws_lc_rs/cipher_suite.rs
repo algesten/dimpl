@@ -6,7 +6,8 @@ use aws_lc_rs::aead::{UnboundKey, AES_128_GCM, AES_256_GCM};
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::provider::{Cipher, SupportedCipherSuite};
 use crate::crypto::{Aad, Nonce};
-use crate::dtls12::message::{CipherSuite, HashAlgorithm};
+use crate::dtls12::message::CipherSuite;
+use crate::types::HashAlgorithm;
 
 /// AES-GCM cipher implementation using aws-lc-rs.
 struct AesGcm {

@@ -5,6 +5,7 @@ mod context;
 mod engine;
 pub mod incoming;
 pub mod message;
+mod queue;
 mod server;
 
 pub use client::Client;
