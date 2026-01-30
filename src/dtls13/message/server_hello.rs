@@ -43,10 +43,7 @@ impl ServerHello {
 
     /// Returns true if this ServerHello is actually a HelloRetryRequest.
     pub fn is_hello_retry_request(&self) -> bool {
-        let mut full_random = [0u8; 32];
-        full_random[..4].copy_from_slice(&self.random.gmt_unix_time.to_be_bytes());
-        full_random[4..].copy_from_slice(&self.random.random_bytes);
-        full_random == HRR_RANDOM
+        self.random.bytes == HRR_RANDOM
     }
 
     pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], ServerHello> {
@@ -178,14 +175,7 @@ mod test {
 
     #[test]
     fn hello_retry_request_detection() {
-        // Construct random that matches HRR_RANDOM
-        let hrr_random = Random {
-            gmt_unix_time: 0xCF21AD74,
-            random_bytes: [
-                0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91, 0xC2, 0xA2,
-                0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
-            ],
-        };
+        let hrr_random = Random { bytes: HRR_RANDOM };
 
         let sh = ServerHello::new(
             ProtocolVersion::DTLS1_2,

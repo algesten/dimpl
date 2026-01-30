@@ -423,7 +423,11 @@ Build incrementally with clean commits:
 2. Key schedule (HKDF, traffic secrets)
 3. Handshake messages (EncryptedExtensions, Certificate, etc.)
 4. Client state machine (1-RTT first, then HRR)
+   - Enforce `legacy_cookie` MUST be zero length when constructing ClientHello
+   - Transcript uses TLS 1.3-style 4-byte header (no message_seq/fragment fields)
 5. Server state machine
+   - Reject ClientHello with non-empty `legacy_cookie` (`illegal_parameter` alert)
+   - Transcript uses TLS 1.3-style 4-byte header (no message_seq/fragment fields)
 6. ACK handling
 7. KeyUpdate
 8. Integration + interop tests

@@ -1,65 +1,275 @@
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{
-    Certificate, CertificateVerify, ClientHello, Dtls13CipherSuite, EncryptedExtensions, Finished,
-    ServerHello,
-};
+use super::{Certificate, CertificateVerify, ClientHello, Dtls13CipherSuite};
+use super::{EncryptedExtensions, Finished, ServerHello};
 use crate::buffer::Buf;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
+use nom::number::complete::{be_u16, be_u24};
 use nom::Err;
-use nom::{number::complete::be_u24, IResult};
+use nom::IResult;
 
-/// TLS 1.3 handshake header (no fragmentation fields).
 #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
 pub struct Header {
     pub msg_type: MessageType,
     pub length: u32,
+    pub message_seq: u16,
+    pub fragment_offset: u32,
+    pub fragment_length: u32,
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct Handshake {
     pub header: Header,
     pub body: Body,
+    pub handled: AtomicBool,
 }
+
+impl PartialEq for Handshake {
+    fn eq(&self, other: &Self) -> bool {
+        self.header == other.header
+            && self.body == other.body
+            && self.handled.load(Ordering::Relaxed) == other.handled.load(Ordering::Relaxed)
+    }
+}
+
+impl Eq for Handshake {}
 
 impl Handshake {
     #[cfg(test)]
-    pub fn new(msg_type: MessageType, length: u32, body: Body) -> Self {
+    pub fn new(
+        msg_type: MessageType,
+        length: u32,
+        message_seq: u16,
+        fragment_offset: u32,
+        fragment_length: u32,
+        body: Body,
+    ) -> Self {
         Handshake {
-            header: Header { msg_type, length },
+            header: Header {
+                msg_type,
+                length,
+                message_seq,
+                fragment_offset,
+                fragment_length,
+            },
             body,
+            handled: AtomicBool::new(false),
         }
     }
 
     pub fn parse_header(input: &[u8]) -> IResult<&[u8], Header> {
         let (input, msg_type) = MessageType::parse(input)?;
         let (input, length) = be_u24(input)?;
+        let (input, message_seq) = be_u16(input)?;
+        let (input, fragment_offset) = be_u24(input)?;
+        let (input, fragment_length) = be_u24(input)?;
 
-        Ok((input, Header { msg_type, length }))
+        Ok((
+            input,
+            Header {
+                msg_type,
+                length,
+                message_seq,
+                fragment_offset,
+                fragment_length,
+            },
+        ))
     }
 
     pub fn parse(
         input: &[u8],
         base_offset: usize,
         c: Option<Dtls13CipherSuite>,
+        as_fragment: bool,
     ) -> IResult<&[u8], Handshake> {
         let original_input = input;
         let (input, header) = Self::parse_header(input)?;
 
-        let (input, body_bytes) = take(header.length as usize)(input)?;
-        let consumed = body_bytes.as_ptr() as usize - original_input.as_ptr() as usize;
-        let body_base_offset = base_offset + consumed;
-        let (_, body) = Body::parse(body_bytes, body_base_offset, header.msg_type, c)?;
+        let is_fragment = header.fragment_offset > 0 || header.fragment_length < header.length;
 
-        Ok((input, Handshake { header, body }))
+        if !as_fragment && is_fragment {
+            return Err(nom::Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
+
+        let (input, body) = if as_fragment {
+            let (input, fragment_slice) = take(header.fragment_length as usize)(input)?;
+            // Calculate range relative to original input
+            let relative_offset =
+                fragment_slice.as_ptr() as usize - original_input.as_ptr() as usize;
+            let start = base_offset + relative_offset;
+            let end = start + fragment_slice.len();
+            (input, Body::Fragment(start..end))
+        } else {
+            let (input, body_bytes) = take(header.length as usize)(input)?;
+            // Calculate base_offset for body parsing
+            let consumed = body_bytes.as_ptr() as usize - original_input.as_ptr() as usize;
+            let body_base_offset = base_offset + consumed;
+            let (_, body) = Body::parse(body_bytes, body_base_offset, header.msg_type, c)?;
+            (input, body)
+        };
+
+        Ok((
+            input,
+            Handshake {
+                header,
+                body,
+                handled: AtomicBool::new(false),
+            },
+        ))
     }
 
     pub fn serialize(&self, source_buf: &[u8], output: &mut Buf) {
         output.push(self.header.msg_type.as_u8());
         output.extend_from_slice(&self.header.length.to_be_bytes()[1..]);
+        output.extend_from_slice(&self.header.message_seq.to_be_bytes());
+        output.extend_from_slice(&self.header.fragment_offset.to_be_bytes()[1..]);
+        output.extend_from_slice(&self.header.fragment_length.to_be_bytes()[1..]);
         self.body.serialize(source_buf, output);
+    }
+
+    #[allow(private_interfaces)]
+    pub fn defragment<'b>(
+        mut iter: impl Iterator<Item = (&'b Handshake, &'b [u8])>,
+        buffer: &mut Buf,
+        cipher_suite: Option<Dtls13CipherSuite>,
+        transcript: Option<&mut Buf>,
+    ) -> Result<Handshake, crate::Error> {
+        buffer.clear();
+
+        // Invariant is upheld by the caller.
+        let (first_handshake, first_buffer) = iter.next().unwrap();
+
+        let Body::Fragment(range) = &first_handshake.body else {
+            unreachable!("Non-Fragment body in defragment()")
+        };
+        buffer.extend_from_slice(&first_buffer[range.clone()]);
+        first_handshake.set_handled();
+
+        for (handshake, source_buf) in iter {
+            if handshake.header.msg_type != first_handshake.header.msg_type {
+                break;
+            }
+
+            let Body::Fragment(range) = &handshake.body else {
+                unreachable!("Non-Fragment body in defragment()")
+            };
+
+            handshake.handled.store(true, Ordering::Relaxed);
+
+            buffer.extend_from_slice(&source_buf[range.clone()]);
+        }
+
+        if buffer.len() != first_handshake.header.length as usize {
+            debug!("Defragmentation failed. Fragment length mismatch");
+            return Err(crate::Error::ParseIncomplete);
+        }
+
+        // If transcript is provided, write the TLS 1.3-style header + body.
+        // Per RFC 9147 Section 5.2, the transcript uses msg_type(1) + length(3)
+        // WITHOUT the DTLS-specific message_seq, fragment_offset, fragment_length.
+        if let Some(transcript) = transcript {
+            transcript.push(first_handshake.header.msg_type.as_u8());
+            transcript.extend_from_slice(&first_handshake.header.length.to_be_bytes()[1..]);
+            transcript.extend_from_slice(&buffer[..first_handshake.header.length as usize]);
+        }
+
+        let (rest, body) = Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?;
+
+        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
+            debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
+            return Err(crate::Error::ParseIncomplete);
+        }
+
+        let handshake = Handshake {
+            header: Header {
+                msg_type: first_handshake.header.msg_type,
+                length: first_handshake.header.length,
+                message_seq: first_handshake.header.message_seq,
+                fragment_offset: 0,
+                fragment_length: first_handshake.header.length,
+            },
+            body,
+            handled: AtomicBool::new(false),
+        };
+
+        // Create a new Handshake with the merged body
+        Ok(handshake)
+    }
+
+    #[cfg(test)]
+    fn do_clone(&self) -> Handshake {
+        Handshake {
+            header: Header {
+                msg_type: self.header.msg_type,
+                length: self.header.length,
+                message_seq: self.header.message_seq,
+                fragment_offset: self.header.fragment_offset,
+                fragment_length: self.header.fragment_length,
+            },
+            body: Body::Unknown(0), // Placeholder
+            handled: AtomicBool::new(false),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn fragment<'b>(
+        &self,
+        max: usize,
+        buffer: &'b mut Buf,
+    ) -> impl Iterator<Item = Handshake> + 'b {
+        // Must be called with an empty buffer.
+        assert!(buffer.is_empty());
+
+        // Note: For fragmentize, self is already serialized data in Body::Fragment
+        // which doesn't need source_buf, so we pass an empty slice
+        self.body.serialize(&[], buffer);
+
+        // If this is wrong, the serialize has not produced the same output as we parsed.
+        assert_eq!(buffer.len(), self.header.length as usize);
+
+        let to_clone = self.do_clone();
+
+        buffer.chunks(max).enumerate().map(move |(i, chunk)| {
+            let fragment_length = chunk.len() as u32;
+            let offset = i * max;
+            let fragment_range = offset..(offset + chunk.len());
+
+            let mut fragment = to_clone.do_clone();
+            fragment.header.fragment_offset = offset as u32;
+            fragment.header.fragment_length = fragment_length;
+            fragment.header.message_seq = to_clone.header.message_seq + i as u16;
+            fragment.body = Body::Fragment(fragment_range);
+
+            fragment
+        })
+    }
+
+    // These are (unencrypted) handshakes that, when detected as
+    // duplicates, trigger a resend of the entire flight.
+    pub fn dupe_triggers_resend(&self) -> Option<u16> {
+        // Only trigger on the first fragment of a handshake message to avoid
+        // multiple resends caused by fragmented duplicates of the same message.
+        if self.header.fragment_offset != 0 {
+            return None;
+        }
+
+        let qualifies = matches!(
+            self.header.msg_type,
+            MessageType::ClientHello // flight 1
+        );
+
+        qualifies.then_some(self.header.message_seq)
+    }
+
+    pub fn is_handled(&self) -> bool {
+        self.handled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_handled(&self) {
+        self.handled.store(true, Ordering::Relaxed);
     }
 }
 
@@ -129,6 +339,7 @@ pub enum Body {
     Finished(Finished),
     KeyUpdate(Range<usize>),
     Unknown(u8),
+    Fragment(Range<usize>),
 }
 
 impl Default for Body {
@@ -212,6 +423,9 @@ impl Body {
             Body::Unknown(value) => {
                 output.push(*value);
             }
+            Body::Fragment(range) => {
+                output.extend_from_slice(&source_buf[range.clone()]);
+            }
         }
     }
 }
@@ -222,13 +436,15 @@ mod tests {
 
     use super::*;
     use crate::buffer::Buf;
-    use crate::dtls13::message::{
-        CompressionMethod, Cookie, Dtls13CipherSuite, ProtocolVersion, Random, SessionId,
-    };
+    use crate::dtls13::message::{CompressionMethod, Cookie, Dtls13CipherSuite};
+    use crate::dtls13::message::{ProtocolVersion, Random, SessionId};
 
     const MESSAGE: &[u8] = &[
         0x01, // MessageType::ClientHello
         0x00, 0x00, 0x2E, // length
+        0x00, 0x00, // message_seq
+        0x00, 0x00, 0x00, // fragment_offset
+        0x00, 0x00, 0x2E, // fragment_length
         // ClientHello
         0xFE, 0xFD, // ProtocolVersion::DTLS1_2 (legacy)
         // Random
@@ -248,9 +464,11 @@ mod tests {
 
     #[test]
     fn handshake_size() {
-        // TLS 1.3 handshake header is 4 bytes (1 type + 3 length)
         let h = Handshake::new(
             MessageType::EncryptedExtensions,
+            2,
+            0,
+            0,
             2,
             Body::EncryptedExtensions(EncryptedExtensions {
                 extensions: ArrayVec::new(),
@@ -260,15 +478,15 @@ mod tests {
         let mut v = Buf::new();
         h.serialize(&[], &mut v);
 
-        // 4 bytes header + 2 bytes (empty extensions length)
-        assert_eq!(v.len(), 6);
+        // 12 bytes header + 2 bytes (empty extensions length)
+        assert_eq!(v.len(), 14);
     }
 
     #[test]
     fn roundtrip() {
         let mut serialized = Buf::new();
 
-        let random = Random::parse(&MESSAGE[6..38]).unwrap().1;
+        let random = Random::parse(&MESSAGE[14..46]).unwrap().1;
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
         let mut cipher_suites = ArrayVec::new();
@@ -289,6 +507,9 @@ mod tests {
         let handshake = Handshake::new(
             MessageType::ClientHello,
             0x2E,
+            0,
+            0,
+            0x2E,
             Body::ClientHello(client_hello),
         );
 
@@ -297,7 +518,7 @@ mod tests {
         assert_eq!(&*serialized, MESSAGE);
 
         // Parse and compare with original
-        let (rest, parsed) = Handshake::parse(&serialized, 0, None).unwrap();
+        let (rest, parsed) = Handshake::parse(&serialized, 0, None, false).unwrap();
         assert_eq!(parsed, handshake);
 
         assert!(rest.is_empty());
