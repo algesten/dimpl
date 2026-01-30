@@ -6,8 +6,8 @@ use std::fmt;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::DTLS_EXPLICIT_NONCE_LEN;
-use crate::engine::Engine;
-use crate::message::{ContentType, DTLSRecord, Handshake};
+use crate::dtls12::engine::Engine;
+use crate::dtls12::message::{ContentType, DTLSRecord, Handshake};
 use crate::Error;
 
 /// Holds both the UDP packet and the parsed result of that packet.

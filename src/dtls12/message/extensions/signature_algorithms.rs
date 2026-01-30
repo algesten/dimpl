@@ -1,5 +1,5 @@
+use super::super::SignatureAndHashAlgorithm;
 use crate::buffer::Buf;
-use crate::message::SignatureAndHashAlgorithm;
 use arrayvec::ArrayVec;
 use nom::IResult;
 
@@ -57,8 +57,7 @@ impl SignatureAlgorithmsExtension {
 
 #[cfg(test)]
 mod tests {
-    use crate::crypto::SignatureAlgorithm;
-    use crate::message::HashAlgorithm;
+    use super::super::super::{HashAlgorithm, SignatureAlgorithm};
 
     use super::*;
 

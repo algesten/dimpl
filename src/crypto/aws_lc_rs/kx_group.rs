@@ -5,7 +5,7 @@ use aws_lc_rs::agreement::{UnparsedPublicKey, ECDH_P256, ECDH_P384};
 
 use crate::buffer::Buf;
 use crate::crypto::provider::{ActiveKeyExchange, SupportedKxGroup};
-use crate::message::NamedGroup;
+use crate::dtls12::message::NamedGroup;
 
 /// ECDHE key exchange implementation.
 struct EcdhKeyExchange {

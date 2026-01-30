@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256, Sha384};
 
 use crate::buffer::Buf;
 use crate::crypto::provider::{HashContext, HashProvider};
-use crate::message::HashAlgorithm;
+use crate::dtls12::message::HashAlgorithm;
 
 /// Hash context implementation using RustCrypto.
 enum RustCryptoHashContext {

@@ -5,7 +5,7 @@ use aes_gcm::{Aes128Gcm, Aes256Gcm, Key};
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::provider::{Cipher, SupportedCipherSuite};
 use crate::crypto::{Aad, Nonce};
-use crate::message::{CipherSuite, HashAlgorithm};
+use crate::dtls12::message::{CipherSuite, HashAlgorithm};
 
 /// AES-GCM cipher implementation using RustCrypto.
 enum AesGcm {

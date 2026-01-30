@@ -5,7 +5,7 @@ use p384::{ecdh::EphemeralSecret as P384EphemeralSecret, PublicKey as P384Public
 
 use crate::buffer::Buf;
 use crate::crypto::provider::{ActiveKeyExchange, SupportedKxGroup};
-use crate::message::NamedGroup;
+use crate::dtls12::message::NamedGroup;
 
 /// ECDHE key exchange implementation.
 enum EcdhKeyExchange {

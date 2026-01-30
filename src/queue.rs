@@ -8,8 +8,8 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 
 use crate::buffer::Buf;
-use crate::incoming::Incoming;
-use crate::message::ContentType;
+use crate::dtls12::incoming::Incoming;
+use crate::dtls12::message::ContentType;
 
 /// Wrapper around the receive queue that provides safe Debug output.
 ///

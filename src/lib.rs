@@ -179,19 +179,15 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-mod client;
-use client::Client;
+// DTLS version-specific modules
+mod dtls12;
+mod dtls13;
 
-mod server;
-use server::Server;
-
-mod message;
+use dtls12::{Client, Server};
 
 mod time_tricks;
 
 pub mod buffer;
-mod engine;
-mod incoming;
 mod queue;
 mod window;
 

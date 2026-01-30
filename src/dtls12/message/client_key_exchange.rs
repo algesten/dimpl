@@ -93,9 +93,9 @@ impl ClientKeyExchange {
 
 #[cfg(test)]
 mod test {
+    use super::super::KeyExchangeAlgorithm;
     use super::*;
     use crate::buffer::Buf;
-    use crate::message::KeyExchangeAlgorithm;
 
     const ECDH_MESSAGE: &[u8] = &[
         0x04, // Public key length

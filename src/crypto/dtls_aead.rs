@@ -3,7 +3,7 @@
 //! This module contains types and constants specific to DTLS AEAD record formatting,
 //! separate from the pluggable crypto provider abstraction.
 
-use crate::message::{ContentType, Sequence};
+use crate::dtls12::message::{ContentType, Sequence};
 
 /// Explicit nonce length for DTLS AEAD records.
 ///

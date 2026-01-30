@@ -501,8 +501,8 @@ mod tests {
 
     use super::*;
     use crate::buffer::Buf;
-    use crate::message::{
-        CipherSuite, ClientHello, CompressionMethod, Cookie, ProtocolVersion, Random, SessionId,
+    use crate::dtls12::message::{
+        CipherSuite, CompressionMethod, Cookie, ProtocolVersion, Random, SessionId,
     };
 
     const MESSAGE: &[u8] = &[

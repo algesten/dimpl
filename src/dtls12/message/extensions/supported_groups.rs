@@ -1,6 +1,6 @@
+use super::super::NamedGroup;
 use crate::buffer::Buf;
 use crate::crypto::CryptoProvider;
-use crate::message::NamedGroup;
 use arrayvec::ArrayVec;
 use nom::IResult;
 
