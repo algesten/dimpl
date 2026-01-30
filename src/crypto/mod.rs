@@ -32,11 +32,14 @@ pub use provider::{
 pub use provider::{HmacProvider, KeyProvider, PrfProvider};
 pub use provider::{SecureRandom, SignatureVerifier, SigningKey};
 pub use provider::{SupportedDtls12CipherSuite, SupportedKxGroup};
+// DTLS 1.3 provider traits
+pub use provider::{HkdfProvider, SupportedDtls13CipherSuite};
 
 // Re-export shared types for provider trait implementations
-pub use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
-// Dtls12CipherSuite is DTLS 1.2 specific (DTLS 1.3 has different cipher suites)
+pub use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm, SignatureScheme};
+// Version-specific cipher suite types
 pub use crate::dtls12::message::Dtls12CipherSuite;
+pub use crate::types::Dtls13CipherSuite;
 
 impl Deref for Aad {
     type Target = [u8];

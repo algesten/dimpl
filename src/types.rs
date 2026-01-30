@@ -445,3 +445,187 @@ impl PartialOrd for Sequence {
         Some(self.cmp(other))
     }
 }
+
+// ============================================================================
+// Signature Schemes (TLS 1.3)
+// ============================================================================
+
+/// Signature schemes used in TLS 1.3/DTLS 1.3 (RFC 8446).
+///
+/// In TLS 1.3, signature schemes combine the signature algorithm with the
+/// hash algorithm into a single identifier, unlike TLS 1.2 where they were
+/// separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum SignatureScheme {
+    /// ECDSA with P-256 and SHA-256.
+    ECDSA_SECP256R1_SHA256,
+    /// ECDSA with P-384 and SHA-384.
+    ECDSA_SECP384R1_SHA384,
+    /// ECDSA with P-521 and SHA-512.
+    ECDSA_SECP521R1_SHA512,
+    /// Ed25519.
+    ED25519,
+    /// Ed448.
+    ED448,
+    /// RSA-PSS with SHA-256 (rsaEncryption OID).
+    RSA_PSS_RSAE_SHA256,
+    /// RSA-PSS with SHA-384 (rsaEncryption OID).
+    RSA_PSS_RSAE_SHA384,
+    /// RSA-PSS with SHA-512 (rsaEncryption OID).
+    RSA_PSS_RSAE_SHA512,
+    /// RSA-PSS with SHA-256 (id-rsassa-pss OID).
+    RSA_PSS_PSS_SHA256,
+    /// RSA-PSS with SHA-384 (id-rsassa-pss OID).
+    RSA_PSS_PSS_SHA384,
+    /// RSA-PSS with SHA-512 (id-rsassa-pss OID).
+    RSA_PSS_PSS_SHA512,
+    /// RSA PKCS#1 v1.5 with SHA-256 (legacy).
+    RSA_PKCS1_SHA256,
+    /// RSA PKCS#1 v1.5 with SHA-384 (legacy).
+    RSA_PKCS1_SHA384,
+    /// RSA PKCS#1 v1.5 with SHA-512 (legacy).
+    RSA_PKCS1_SHA512,
+    /// Unknown or unsupported signature scheme.
+    Unknown(u16),
+}
+
+impl SignatureScheme {
+    /// Convert a wire format u16 value to a `SignatureScheme`.
+    pub fn from_u16(value: u16) -> Self {
+        match value {
+            0x0403 => SignatureScheme::ECDSA_SECP256R1_SHA256,
+            0x0503 => SignatureScheme::ECDSA_SECP384R1_SHA384,
+            0x0603 => SignatureScheme::ECDSA_SECP521R1_SHA512,
+            0x0807 => SignatureScheme::ED25519,
+            0x0808 => SignatureScheme::ED448,
+            0x0804 => SignatureScheme::RSA_PSS_RSAE_SHA256,
+            0x0805 => SignatureScheme::RSA_PSS_RSAE_SHA384,
+            0x0806 => SignatureScheme::RSA_PSS_RSAE_SHA512,
+            0x0809 => SignatureScheme::RSA_PSS_PSS_SHA256,
+            0x080a => SignatureScheme::RSA_PSS_PSS_SHA384,
+            0x080b => SignatureScheme::RSA_PSS_PSS_SHA512,
+            0x0401 => SignatureScheme::RSA_PKCS1_SHA256,
+            0x0501 => SignatureScheme::RSA_PKCS1_SHA384,
+            0x0601 => SignatureScheme::RSA_PKCS1_SHA512,
+            _ => SignatureScheme::Unknown(value),
+        }
+    }
+
+    /// Convert this `SignatureScheme` to its wire format u16 value.
+    pub fn as_u16(&self) -> u16 {
+        match self {
+            SignatureScheme::ECDSA_SECP256R1_SHA256 => 0x0403,
+            SignatureScheme::ECDSA_SECP384R1_SHA384 => 0x0503,
+            SignatureScheme::ECDSA_SECP521R1_SHA512 => 0x0603,
+            SignatureScheme::ED25519 => 0x0807,
+            SignatureScheme::ED448 => 0x0808,
+            SignatureScheme::RSA_PSS_RSAE_SHA256 => 0x0804,
+            SignatureScheme::RSA_PSS_RSAE_SHA384 => 0x0805,
+            SignatureScheme::RSA_PSS_RSAE_SHA512 => 0x0806,
+            SignatureScheme::RSA_PSS_PSS_SHA256 => 0x0809,
+            SignatureScheme::RSA_PSS_PSS_SHA384 => 0x080a,
+            SignatureScheme::RSA_PSS_PSS_SHA512 => 0x080b,
+            SignatureScheme::RSA_PKCS1_SHA256 => 0x0401,
+            SignatureScheme::RSA_PKCS1_SHA384 => 0x0501,
+            SignatureScheme::RSA_PKCS1_SHA512 => 0x0601,
+            SignatureScheme::Unknown(value) => *value,
+        }
+    }
+
+    /// Parse a `SignatureScheme` from wire format.
+    pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureScheme> {
+        let (input, value) = be_u16(input)?;
+        Ok((input, SignatureScheme::from_u16(value)))
+    }
+
+    /// Returns the hash algorithm associated with this signature scheme.
+    pub fn hash_algorithm(&self) -> HashAlgorithm {
+        match self {
+            SignatureScheme::ECDSA_SECP256R1_SHA256
+            | SignatureScheme::RSA_PSS_RSAE_SHA256
+            | SignatureScheme::RSA_PSS_PSS_SHA256
+            | SignatureScheme::RSA_PKCS1_SHA256 => HashAlgorithm::SHA256,
+            SignatureScheme::ECDSA_SECP384R1_SHA384
+            | SignatureScheme::RSA_PSS_RSAE_SHA384
+            | SignatureScheme::RSA_PSS_PSS_SHA384
+            | SignatureScheme::RSA_PKCS1_SHA384 => HashAlgorithm::SHA384,
+            SignatureScheme::ECDSA_SECP521R1_SHA512
+            | SignatureScheme::RSA_PSS_RSAE_SHA512
+            | SignatureScheme::RSA_PSS_PSS_SHA512
+            | SignatureScheme::RSA_PKCS1_SHA512 => HashAlgorithm::SHA512,
+            // Ed25519 and Ed448 have intrinsic hash algorithms
+            SignatureScheme::ED25519 | SignatureScheme::ED448 => HashAlgorithm::None,
+            SignatureScheme::Unknown(_) => HashAlgorithm::Unknown(0),
+        }
+    }
+}
+
+// ============================================================================
+// DTLS 1.3 Cipher Suites
+// ============================================================================
+
+/// Cipher suites for DTLS 1.3 (RFC 9147).
+///
+/// Unlike DTLS 1.2, TLS 1.3 cipher suites only specify the AEAD algorithm
+/// and hash function. Key exchange is negotiated separately via key_share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum Dtls13CipherSuite {
+    /// TLS_AES_128_GCM_SHA256.
+    AES_128_GCM_SHA256,
+    /// TLS_AES_256_GCM_SHA384.
+    AES_256_GCM_SHA384,
+    /// TLS_CHACHA20_POLY1305_SHA256.
+    CHACHA20_POLY1305_SHA256,
+    /// TLS_AES_128_CCM_SHA256.
+    AES_128_CCM_SHA256,
+    /// TLS_AES_128_CCM_8_SHA256 (shorter tag, for constrained devices).
+    AES_128_CCM_8_SHA256,
+    /// Unknown or unsupported cipher suite.
+    Unknown(u16),
+}
+
+impl Dtls13CipherSuite {
+    /// Convert a wire format u16 value to a `Dtls13CipherSuite`.
+    pub fn from_u16(value: u16) -> Self {
+        match value {
+            0x1301 => Dtls13CipherSuite::AES_128_GCM_SHA256,
+            0x1302 => Dtls13CipherSuite::AES_256_GCM_SHA384,
+            0x1303 => Dtls13CipherSuite::CHACHA20_POLY1305_SHA256,
+            0x1304 => Dtls13CipherSuite::AES_128_CCM_SHA256,
+            0x1305 => Dtls13CipherSuite::AES_128_CCM_8_SHA256,
+            _ => Dtls13CipherSuite::Unknown(value),
+        }
+    }
+
+    /// Convert this `Dtls13CipherSuite` to its wire format u16 value.
+    pub fn as_u16(&self) -> u16 {
+        match self {
+            Dtls13CipherSuite::AES_128_GCM_SHA256 => 0x1301,
+            Dtls13CipherSuite::AES_256_GCM_SHA384 => 0x1302,
+            Dtls13CipherSuite::CHACHA20_POLY1305_SHA256 => 0x1303,
+            Dtls13CipherSuite::AES_128_CCM_SHA256 => 0x1304,
+            Dtls13CipherSuite::AES_128_CCM_8_SHA256 => 0x1305,
+            Dtls13CipherSuite::Unknown(value) => *value,
+        }
+    }
+
+    /// Parse a `Dtls13CipherSuite` from wire format.
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Dtls13CipherSuite> {
+        let (input, value) = be_u16(input)?;
+        Ok((input, Dtls13CipherSuite::from_u16(value)))
+    }
+
+    /// Returns the hash algorithm used by this cipher suite.
+    pub fn hash_algorithm(&self) -> HashAlgorithm {
+        match self {
+            Dtls13CipherSuite::AES_128_GCM_SHA256
+            | Dtls13CipherSuite::CHACHA20_POLY1305_SHA256
+            | Dtls13CipherSuite::AES_128_CCM_SHA256
+            | Dtls13CipherSuite::AES_128_CCM_8_SHA256 => HashAlgorithm::SHA256,
+            Dtls13CipherSuite::AES_256_GCM_SHA384 => HashAlgorithm::SHA384,
+            Dtls13CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
+        }
+    }
+}
