@@ -322,34 +322,63 @@ pub trait SupportedDtls13CipherSuite: CryptoSafe {
 ///
 /// TLS 1.3 uses HKDF instead of the TLS 1.2 PRF for all key derivation.
 pub trait HkdfProvider: CryptoSafe {
-    /// HKDF-Extract: extract a pseudorandom key from input keying material.
-    ///
-    /// Returns the PRK (pseudorandom key) of length determined by the hash.
-    fn extract(&self, salt: &[u8], ikm: &[u8], hash: HashAlgorithm, out: &mut Buf);
-
-    /// HKDF-Expand: expand a PRK into output keying material.
-    ///
-    /// The `info` parameter is context and application-specific information.
-    fn expand(
+    /// HKDF-Extract: Extract a pseudorandom key from input keying material.
+    /// PRK = HKDF-Extract(salt, IKM)
+    fn hkdf_extract(
         &self,
-        prk: &[u8],
-        info: &[u8],
-        output_len: usize,
         hash: HashAlgorithm,
+        salt: &[u8],
+        ikm: &[u8],
         out: &mut Buf,
     ) -> Result<(), String>;
 
-    /// HKDF-Expand-Label for TLS 1.3 key schedule.
-    ///
-    /// Implements the HKDF-Expand-Label function from RFC 8446 Section 7.1.
-    fn expand_label(
+    /// HKDF-Expand: Expand a pseudorandom key to the desired length.
+    /// OKM = HKDF-Expand(PRK, info, L)
+    fn hkdf_expand(
         &self,
+        hash: HashAlgorithm,
+        prk: &[u8],
+        info: &[u8],
+        out: &mut Buf,
+        output_len: usize,
+    ) -> Result<(), String>;
+
+    /// HKDF-Expand-Label for TLS 1.3 (RFC 8446 Section 7.1).
+    /// Derives key material using the TLS 1.3 label format with "tls13 " prefix.
+    ///
+    /// HkdfLabel = struct {
+    ///     uint16 length;
+    ///     opaque label<7..255> = "tls13 " + Label;
+    ///     opaque context<0..255> = Context;
+    /// }
+    /// OKM = HKDF-Expand(Secret, HkdfLabel, Length)
+    fn hkdf_expand_label(
+        &self,
+        hash: HashAlgorithm,
         secret: &[u8],
         label: &[u8],
         context: &[u8],
-        output_len: usize,
-        hash: HashAlgorithm,
         out: &mut Buf,
+        output_len: usize,
+    ) -> Result<(), String>;
+
+    /// HKDF-Expand-Label for DTLS 1.3 (RFC 9147).
+    /// Derives key material using the DTLS 1.3 label format with "dtls13" prefix.
+    ///
+    /// HkdfLabel = struct {
+    ///     uint16 length;
+    ///     opaque label<6..255> = "dtls13" + Label;
+    ///     opaque context<0..255> = Context;
+    /// }
+    /// OKM = HKDF-Expand(Secret, HkdfLabel, Length)
+    fn hkdf_expand_label_dtls13(
+        &self,
+        hash: HashAlgorithm,
+        secret: &[u8],
+        label: &[u8],
+        context: &[u8],
+        out: &mut Buf,
+        output_len: usize,
     ) -> Result<(), String>;
 }
 
@@ -401,8 +430,8 @@ pub trait HkdfProvider: CryptoSafe {
 ///     cipher_suites: provider.cipher_suites,
 ///     prf_provider: provider.prf_provider,
 ///     // DTLS 1.3 components
-///     dtls13_cipher_suites: None,
-///     hkdf_provider: None,
+///     dtls13_cipher_suites: provider.dtls13_cipher_suites,
+///     hkdf_provider: provider.hkdf_provider,
 /// };
 /// # }
 /// # #[cfg(not(feature = "aws-lc-rs"))]
@@ -454,14 +483,12 @@ pub struct CryptoProvider {
     ///
     /// TLS 1.3 cipher suites only specify the AEAD and hash algorithms
     /// (e.g., TLS_AES_128_GCM_SHA256). Key exchange is negotiated separately.
-    /// Set to `None` if DTLS 1.3 is not supported.
-    pub dtls13_cipher_suites: Option<&'static [&'static dyn SupportedDtls13CipherSuite]>,
+    pub dtls13_cipher_suites: &'static [&'static dyn SupportedDtls13CipherSuite],
 
     /// HKDF provider for TLS 1.3 key derivation.
     ///
     /// TLS 1.3 uses HKDF instead of the TLS 1.2 PRF for all key derivation.
-    /// Set to `None` if DTLS 1.3 is not supported.
-    pub hkdf_provider: Option<&'static dyn HkdfProvider>,
+    pub hkdf_provider: &'static dyn HkdfProvider,
 }
 
 /// Static storage for the default crypto provider.

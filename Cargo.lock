@@ -403,6 +403,7 @@ dependencies = [
  "ecdsa",
  "env_logger",
  "generic-array",
+ "hkdf",
  "hmac",
  "libc",
  "log",

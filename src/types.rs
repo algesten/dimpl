@@ -273,6 +273,20 @@ impl HashAlgorithm {
         let (input, value) = be_u8(input)?;
         Ok((input, HashAlgorithm::from_u8(value)))
     }
+
+    /// Returns the output length in bytes for this hash algorithm.
+    pub fn output_len(&self) -> usize {
+        match self {
+            HashAlgorithm::None => 0,
+            HashAlgorithm::MD5 => 16,
+            HashAlgorithm::SHA1 => 20,
+            HashAlgorithm::SHA224 => 28,
+            HashAlgorithm::SHA256 => 32,
+            HashAlgorithm::SHA384 => 48,
+            HashAlgorithm::SHA512 => 64,
+            HashAlgorithm::Unknown(_) => 0,
+        }
+    }
 }
 
 // ============================================================================
