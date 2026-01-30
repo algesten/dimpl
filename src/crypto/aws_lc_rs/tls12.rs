@@ -2,7 +2,7 @@
 
 use crate::buffer::Buf;
 use crate::crypto::provider::PrfProvider;
-use crate::dtls12::message::HashAlgorithm;
+use crate::types::HashAlgorithm;
 
 use super::hmac;
 

@@ -3,13 +3,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::queue::{QueueRx, QueueTx};
 use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::{Aad, Iv, Nonce, DTLS_AEAD_OVERHEAD, DTLS_EXPLICIT_NONCE_LEN};
 use crate::dtls12::context::CryptoContext;
 use crate::dtls12::incoming::{Incoming, Record};
 use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::dtls12::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
-use crate::queue::{QueueRx, QueueTx};
 use crate::timer::ExponentialBackoff;
 use crate::window::ReplayWindow;
 use crate::{Config, Error, Output, SeededRng};

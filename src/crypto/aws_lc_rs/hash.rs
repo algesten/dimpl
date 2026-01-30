@@ -4,7 +4,7 @@ use aws_lc_rs::digest::{Context, SHA256, SHA384};
 
 use crate::buffer::Buf;
 use crate::crypto::provider::{HashContext, HashProvider};
-use crate::dtls12::message::HashAlgorithm;
+use crate::types::HashAlgorithm;
 
 /// Hash context implementation using aws-lc-rs.
 struct AwsLcHashContext {

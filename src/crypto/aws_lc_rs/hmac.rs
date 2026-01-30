@@ -4,7 +4,7 @@ use aws_lc_rs::hmac;
 
 use crate::buffer::Buf;
 use crate::crypto::provider::HmacProvider;
-use crate::dtls12::message::HashAlgorithm;
+use crate::types::HashAlgorithm;
 
 /// Compute HMAC using TLS 1.2 P_hash algorithm.
 pub(super) fn p_hash(

@@ -5,8 +5,8 @@
 
 use crate::buffer::Buf;
 use crate::crypto::provider::{CryptoProvider, SupportedCipherSuite, SupportedKxGroup};
-use crate::crypto::HashAlgorithm;
-use crate::dtls12::message::{CipherSuite, NamedGroup, SignatureAlgorithm};
+use crate::dtls12::message::CipherSuite;
+use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 use crate::Error;
 
 impl CryptoProvider {
