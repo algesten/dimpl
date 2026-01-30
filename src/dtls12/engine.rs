@@ -9,7 +9,7 @@ use crate::crypto::{Aad, Iv, Nonce, DTLS_AEAD_OVERHEAD, DTLS_EXPLICIT_NONCE_LEN}
 use crate::dtls12::context::CryptoContext;
 use crate::dtls12::incoming::{Incoming, Record};
 use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
-use crate::dtls12::message::{CipherSuite, ContentType, DTLSRecord, Handshake};
+use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
 use crate::timer::ExponentialBackoff;
 use crate::window::ReplayWindow;
 use crate::{Config, Error, Output, SeededRng};
@@ -43,7 +43,7 @@ pub struct Engine {
     queue_tx: QueueTx,
 
     /// The cipher suite in use. Set by ServerHello.
-    cipher_suite: Option<CipherSuite>,
+    cipher_suite: Option<Dtls12CipherSuite>,
 
     /// Cryptographic context for handling encryption/decryption
     pub(crate) crypto_context: CryptoContext,
@@ -144,12 +144,12 @@ impl Engine {
     }
 
     /// Get a reference to the cipher suite
-    pub fn cipher_suite(&self) -> Option<CipherSuite> {
+    pub fn cipher_suite(&self) -> Option<Dtls12CipherSuite> {
         self.cipher_suite
     }
 
     /// Is the given cipher suite allowed by configuration
-    pub fn is_cipher_suite_allowed(&self, suite: CipherSuite) -> bool {
+    pub fn is_cipher_suite_allowed(&self, suite: Dtls12CipherSuite) -> bool {
         self.crypto_context
             .provider()
             .supported_cipher_suites()
@@ -932,7 +932,7 @@ impl Engine {
         &self.transcript
     }
 
-    pub fn set_cipher_suite(&mut self, cipher_suite: CipherSuite) {
+    pub fn set_cipher_suite(&mut self, cipher_suite: Dtls12CipherSuite) {
         self.cipher_suite = Some(cipher_suite);
     }
 

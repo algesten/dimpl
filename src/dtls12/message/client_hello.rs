@@ -1,6 +1,6 @@
 use super::extensions::{ECPointFormatsExtension, SignatureAlgorithmsExtension};
 use super::extensions::{SupportedGroupsExtension, UseSrtpExtension};
-use super::{CipherSuite, CompressionMethod, ProtocolVersion};
+use super::{CompressionMethod, Dtls12CipherSuite, ProtocolVersion};
 use super::{Cookie, Extension, ExtensionType, Random, SessionId};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
@@ -18,7 +18,7 @@ pub struct ClientHello {
     pub random: Random,
     pub session_id: SessionId,
     pub cookie: Cookie,
-    pub cipher_suites: ArrayVec<CipherSuite, 2>,
+    pub cipher_suites: ArrayVec<Dtls12CipherSuite, 2>,
     pub compression_methods: ArrayVec<CompressionMethod, 2>,
     pub extensions: ArrayVec<Extension, 8>,
 }
@@ -29,7 +29,7 @@ impl ClientHello {
         random: Random,
         session_id: SessionId,
         cookie: Cookie,
-        cipher_suites: ArrayVec<CipherSuite, 2>,
+        cipher_suites: ArrayVec<Dtls12CipherSuite, 2>,
         compression_methods: ArrayVec<CompressionMethod, 2>,
     ) -> Self {
         ClientHello {
@@ -123,7 +123,8 @@ impl ClientHello {
         let (input, cookie) = Cookie::parse(input)?;
         let (input, cipher_suites_len) = be_u16(input)?;
         let (input, input_cipher) = take(cipher_suites_len)(input)?;
-        let (rest, cipher_suites) = many1(CipherSuite::parse, CipherSuite::is_known)(input_cipher)?;
+        let (rest, cipher_suites) =
+            many1(Dtls12CipherSuite::parse, Dtls12CipherSuite::is_known)(input_cipher)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
@@ -256,9 +257,9 @@ mod tests {
         0xAA, // SessionId
         0x01, // Cookie length
         0xBB, // Cookie
-        0x00, 0x04, // CipherSuites length
-        0xC0, 0x2B, // CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-        0xC0, 0x2C, // CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+        0x00, 0x04, // Dtls12CipherSuites length
+        0xC0, 0x2B, // Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+        0xC0, 0x2C, // Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
         0x01, // CompressionMethods length
         0x00, // CompressionMethod::Null
     ];
@@ -269,8 +270,8 @@ mod tests {
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
         let mut cipher_suites = ArrayVec::new();
-        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
-        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
+        cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
+        cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
         let mut compression_methods = ArrayVec::new();
         compression_methods.push(CompressionMethod::Null);
 
@@ -327,8 +328,8 @@ mod tests {
 
         assert_eq!(
             client_hello.cipher_suites.capacity(),
-            CipherSuite::all().len(),
-            "cipher_suites ArrayVec capacity must match all known CipherSuites"
+            Dtls12CipherSuite::all().len(),
+            "cipher_suites ArrayVec capacity must match all known Dtls12CipherSuites"
         );
     }
 

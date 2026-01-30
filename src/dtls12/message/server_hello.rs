@@ -1,5 +1,5 @@
 use super::extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
-use super::{CipherSuite, CompressionMethod, Extension, ExtensionType};
+use super::{CompressionMethod, Dtls12CipherSuite, Extension, ExtensionType};
 use super::{ProtocolVersion, Random, SessionId};
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
@@ -12,7 +12,7 @@ pub struct ServerHello {
     pub server_version: ProtocolVersion,
     pub random: Random,
     pub session_id: SessionId,
-    pub cipher_suite: CipherSuite,
+    pub cipher_suite: Dtls12CipherSuite,
     pub compression_method: CompressionMethod,
     pub extensions: Option<ArrayVec<Extension, 4>>,
 }
@@ -22,7 +22,7 @@ impl ServerHello {
         server_version: ProtocolVersion,
         random: Random,
         session_id: SessionId,
-        cipher_suite: CipherSuite,
+        cipher_suite: Dtls12CipherSuite,
         compression_method: CompressionMethod,
         extensions: Option<ArrayVec<Extension, 4>>,
     ) -> Self {
@@ -83,7 +83,7 @@ impl ServerHello {
         let (input, server_version) = ProtocolVersion::parse(input)?;
         let (input, random) = Random::parse(input)?;
         let (input, session_id) = SessionId::parse(input)?;
-        let (input, cipher_suite) = CipherSuite::parse(input)?;
+        let (input, cipher_suite) = Dtls12CipherSuite::parse(input)?;
         let (input, compression_method) = CompressionMethod::parse(input)?;
 
         // Parse extensions if there are any bytes left
@@ -184,7 +184,7 @@ mod test {
         0x1F, 0x20, //
         0x01, // SessionId length
         0xAA, // SessionId
-        0xC0, 0x2B, // CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+        0xC0, 0x2B, // Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
         0x00, // CompressionMethod::Null
         0x00, 0x0C, // Extensions length (12 bytes total: 2 type + 2 length + 8 data)
         0x00, 0x0A, // ExtensionType::SupportedGroups

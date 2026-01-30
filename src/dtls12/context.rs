@@ -10,7 +10,7 @@ use crate::crypto::SrtpProfile;
 use crate::crypto::{Aad, Iv, Nonce};
 use crate::dtls12::message::DigitallySigned;
 use crate::dtls12::message::{Asn1Cert, Certificate, CurveType};
-use crate::dtls12::message::{CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
+use crate::dtls12::message::{Dtls12CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
 /// DTLS 1.2 crypto context holding negotiated keys and ciphers for a session.
 pub struct CryptoContext {
@@ -235,7 +235,7 @@ impl CryptoContext {
     /// Derive keys for encryption/decryption
     pub fn derive_keys(
         &mut self,
-        cipher_suite: CipherSuite,
+        cipher_suite: Dtls12CipherSuite,
         client_random: &[u8],
         server_random: &[u8],
         key_block: &mut Buf,
@@ -517,7 +517,7 @@ impl CryptoContext {
     }
 
     /// Check if the client's private key is compatible with a given cipher suite.
-    pub fn is_cipher_suite_compatible(&self, cipher_suite: CipherSuite) -> bool {
+    pub fn is_cipher_suite_compatible(&self, cipher_suite: Dtls12CipherSuite) -> bool {
         self.private_key.is_compatible(cipher_suite)
     }
 

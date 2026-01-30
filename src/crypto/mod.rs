@@ -25,18 +25,18 @@ pub use dtls_aead::{Aad, Nonce};
 pub(crate) use dtls_aead::{Iv, DTLS_AEAD_OVERHEAD, DTLS_EXPLICIT_NONCE_LEN};
 
 // Re-export all provider traits and types (similar to rustls structure)
-// This allows users to do: use dimpl::crypto::{CryptoProvider, SupportedCipherSuite, ...};
+// This allows users to do: use dimpl::crypto::{CryptoProvider, SupportedDtls12CipherSuite, ...};
 pub use provider::{
     ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext, HashProvider,
 };
 pub use provider::{HmacProvider, KeyProvider, PrfProvider};
 pub use provider::{SecureRandom, SignatureVerifier, SigningKey};
-pub use provider::{SupportedCipherSuite, SupportedKxGroup};
+pub use provider::{SupportedDtls12CipherSuite, SupportedKxGroup};
 
 // Re-export shared types for provider trait implementations
 pub use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
-// CipherSuite is DTLS 1.2 specific (DTLS 1.3 has different cipher suites)
-pub use crate::dtls12::message::CipherSuite;
+// Dtls12CipherSuite is DTLS 1.2 specific (DTLS 1.3 has different cipher suites)
+pub use crate::dtls12::message::Dtls12CipherSuite;
 
 impl Deref for Aad {
     type Target = [u8];

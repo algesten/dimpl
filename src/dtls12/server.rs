@@ -23,7 +23,7 @@ use crate::buffer::{Buf, ToBuf};
 use crate::crypto::SrtpProfile;
 use crate::dtls12::client::LocalEvent;
 use crate::dtls12::engine::Engine;
-use crate::dtls12::message::{Body, CertificateRequest, CipherSuite, ClientCertificateType};
+use crate::dtls12::message::{Body, CertificateRequest, ClientCertificateType, Dtls12CipherSuite};
 use crate::dtls12::message::{CompressionMethod, ContentType, Cookie, CurveType};
 use crate::dtls12::message::{DistinguishedName, ExchangeKeys, ExtensionType};
 use crate::dtls12::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
@@ -314,7 +314,7 @@ impl State {
         trace!("Accepted ClientHello cookie; proceeding with handshake");
 
         // Client offered suites; we pick per client order intersecting allowed and server key compatibility
-        let mut selected: Option<CipherSuite> = None;
+        let mut selected: Option<Dtls12CipherSuite> = None;
         for s in ch.cipher_suites.iter() {
             let is_allowed = server.engine.is_cipher_suite_allowed(*s);
             let is_compatible = server

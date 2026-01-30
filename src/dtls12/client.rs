@@ -21,7 +21,7 @@ use subtle::ConstantTimeEq;
 use crate::buffer::{Buf, ToBuf};
 use crate::crypto::SrtpProfile;
 use crate::dtls12::engine::Engine;
-use crate::dtls12::message::{Body, CipherSuite, ClientHello, ClientKeyExchange};
+use crate::dtls12::message::{Body, ClientHello, ClientKeyExchange, Dtls12CipherSuite};
 use crate::dtls12::message::{CompressionMethod, ContentType, Cookie};
 use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
@@ -364,7 +364,7 @@ impl State {
 
         // Enforce cipher suite is known and allowed
         let cs = server_hello.cipher_suite;
-        if matches!(cs, CipherSuite::Unknown(_)) {
+        if matches!(cs, Dtls12CipherSuite::Unknown(_)) {
             return Err(Error::SecurityError(
                 "Server selected unknown cipher suite".to_string(),
             ));
@@ -1031,7 +1031,7 @@ fn handshake_create_client_hello(
 
     // Get cipher suites from provider that are compatible with our key
     let provider = engine.crypto_context().provider();
-    let cipher_suites: ArrayVec<CipherSuite, 2> = provider
+    let cipher_suites: ArrayVec<Dtls12CipherSuite, 2> = provider
         .supported_cipher_suites()
         .map(|cs| cs.suite())
         .filter(|suite| engine.crypto_context().is_cipher_suite_compatible(*suite))

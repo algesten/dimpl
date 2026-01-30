@@ -1,4 +1,4 @@
-use super::CipherSuite;
+use super::Dtls12CipherSuite;
 use crate::buffer::Buf;
 use nom::bytes::complete::take;
 use nom::IResult;
@@ -14,7 +14,7 @@ impl Finished {
         &buf[self.verify_data_range.clone()]
     }
 
-    pub fn parse(input: &[u8], cipher_suite: CipherSuite) -> IResult<&[u8], Finished> {
+    pub fn parse(input: &[u8], cipher_suite: Dtls12CipherSuite) -> IResult<&[u8], Finished> {
         let verify_data_length = cipher_suite.verify_data_length();
         let (rest, verify_data_slice) = take(verify_data_length)(input)?;
 
@@ -38,7 +38,7 @@ impl Finished {
 
 #[cfg(test)]
 mod test {
-    use super::CipherSuite;
+    use super::Dtls12CipherSuite;
     use super::*;
     use crate::buffer::Buf;
 
@@ -49,8 +49,11 @@ mod test {
         ];
 
         // Parse the data
-        let (rest, parsed) =
-            Finished::parse(&verify_data, CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256).unwrap();
+        let (rest, parsed) = Finished::parse(
+            &verify_data,
+            Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+        )
+        .unwrap();
         assert!(rest.is_empty());
 
         // Serialize and compare to original

@@ -13,7 +13,7 @@
 //!
 //! The provider system is organized into these main components:
 //!
-//! - **Cipher Suites** ([`SupportedCipherSuite`]): Factory for AEAD ciphers
+//! - **Cipher Suites** ([`SupportedDtls12CipherSuite`]): Factory for AEAD ciphers
 //! - **Key Exchange Groups** ([`SupportedKxGroup`]): Factory for ECDHE key exchanges
 //! - **Signature Verification** ([`SignatureVerifier`]): Verify signatures in certificates
 //! - **Key Provider** ([`KeyProvider`]): Parse and load private keys
@@ -71,7 +71,7 @@
 //! ## Example: Custom Cipher Suite
 //!
 //! ```
-//! use dimpl::crypto::{SupportedCipherSuite, Cipher, CipherSuite, HashAlgorithm};
+//! use dimpl::crypto::{SupportedDtls12CipherSuite, Cipher, Dtls12CipherSuite, HashAlgorithm};
 //! use dimpl::buffer::{Buf, TmpBuf};
 //! use dimpl::crypto::{Aad, Nonce};
 //!
@@ -94,11 +94,11 @@
 //! }
 //!
 //! #[derive(Debug)]
-//! struct MyCipherSuite;
+//! struct MyDtls12CipherSuite;
 //!
-//! impl SupportedCipherSuite for MyCipherSuite {
-//!     fn suite(&self) -> CipherSuite {
-//!         CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+//! impl SupportedDtls12CipherSuite for MyDtls12CipherSuite {
+//!     fn suite(&self) -> Dtls12CipherSuite {
+//!         Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
 //!     }
 //!
 //!     fn hash_algorithm(&self) -> HashAlgorithm {
@@ -115,8 +115,8 @@
 //!     }
 //! }
 //!
-//! static MY_CIPHER_SUITE: MyCipherSuite = MyCipherSuite;
-//! static ALL_CIPHER_SUITES: &[&dyn SupportedCipherSuite] = &[&MY_CIPHER_SUITE];
+//! static MY_CIPHER_SUITE: MyDtls12CipherSuite = MyDtls12CipherSuite;
+//! static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] = &[&MY_CIPHER_SUITE];
 //! ```
 //!
 //! # Requirements
@@ -140,7 +140,7 @@ use std::sync::OnceLock;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
-use crate::dtls12::message::CipherSuite;
+use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
 // ============================================================================
@@ -195,7 +195,7 @@ pub trait SigningKey: CryptoSafe {
     fn hash_algorithm(&self) -> HashAlgorithm;
 
     /// Check if this key is compatible with a cipher suite.
-    fn is_compatible(&self, cipher_suite: CipherSuite) -> bool;
+    fn is_compatible(&self, cipher_suite: Dtls12CipherSuite) -> bool;
 }
 
 /// Active key exchange instance (ephemeral keypair for one handshake).
@@ -215,9 +215,9 @@ pub trait ActiveKeyExchange: CryptoSafe {
 // ============================================================================
 
 /// Cipher suite support (factory for Cipher instances).
-pub trait SupportedCipherSuite: CryptoSafe {
+pub trait SupportedDtls12CipherSuite: CryptoSafe {
     /// The cipher suite this supports.
-    fn suite(&self) -> CipherSuite;
+    fn suite(&self) -> Dtls12CipherSuite;
 
     /// Hash algorithm used by this suite.
     fn hash_algorithm(&self) -> HashAlgorithm;
@@ -337,7 +337,7 @@ pub trait HmacProvider: CryptoSafe {
 #[derive(Debug, Clone)]
 pub struct CryptoProvider {
     /// Supported cipher suites (for negotiation).
-    pub cipher_suites: &'static [&'static dyn SupportedCipherSuite],
+    pub cipher_suites: &'static [&'static dyn SupportedDtls12CipherSuite],
 
     /// Supported key exchange groups (P-256, P-384).
     pub kx_groups: &'static [&'static dyn SupportedKxGroup],
