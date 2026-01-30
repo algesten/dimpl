@@ -12,7 +12,7 @@ A minimal, compliant DTLS 1.3 server/client implementation optimized for control
 |---------|-----------|
 | 1-RTT Handshake | Yes |
 | 0-RTT Early Data | No |
-| HelloRetryRequest | No |
+| HelloRetryRequest | Yes |
 | Connection ID | No |
 | PSK / Session Resumption | No |
 | Post-Handshake KeyUpdate | Yes |
@@ -21,11 +21,12 @@ A minimal, compliant DTLS 1.3 server/client implementation optimized for control
 ### Rationale
 
 - **No 0-RTT**: Eliminates epoch 1 buffering, replay protection complexity, and idempotency requirements on the application.
-- **No HelloRetryRequest**: Client must provide acceptable key_share upfront. Simplifies state machine to linear flow.
 - **No CID**: Assumes stable IP:port pairs. Removes variable-length header parsing.
 - **No PSK**: Every connection is a full (EC)DHE handshake. No session cache, no ticket management, no binder calculation.
 
 ## Handshake Flow
+
+### Full Handshake (1-RTT)
 
 ```
 Client                                 Server
@@ -51,6 +52,39 @@ ClientHello
 {} = encrypted with handshake keys
 [] = encrypted with application keys
 *  = optional (client auth)
+```
+
+### HelloRetryRequest (2-RTT)
+
+When client's key_share doesn't include a supported group:
+
+```
+Client                                 Server
+──────                                 ──────
+ClientHello
+ + key_share (P-384)       ──────►
+                                       HelloRetryRequest
+                                        + supported_versions
+                           ◄──────      + key_share (X25519)
+
+ClientHello
+ + key_share (X25519)      ──────►
+                                       ServerHello
+                                        + key_share
+                           ◄──────     {... continues as above}
+```
+
+HelloRetryRequest is a ServerHello with a special random value:
+```
+CF 21 AD 74 E5 9A 61 11 BE 1D 8C 02 1E 65 B8 91
+C2 A2 11 16 7A BB 8C 5E 07 9E 09 E2 C8 A8 33 9C
+```
+
+**Transcript handling**: The original ClientHello is replaced by a `message_hash` construct in the transcript:
+```
+Transcript = message_hash || HRR || ClientHello2 || ServerHello || ...
+
+message_hash = handshake_type(254) || length || Hash(ClientHello1)
 ```
 
 ## Record Layer
@@ -177,22 +211,24 @@ struct {
 
 ## Cipher Suites
 
-Supported (pick one):
+| Suite | AEAD | Hash | Status |
+|-------|------|------|--------|
+| TLS_AES_128_GCM_SHA256 | AES-128-GCM | SHA-256 | Mandatory |
+| TLS_AES_256_GCM_SHA384 | AES-256-GCM | SHA-384 | Optional |
+| TLS_CHACHA20_POLY1305_SHA256 | ChaCha20-Poly1305 | SHA-256 | Optional |
 
-| Suite | AEAD | Hash |
-|-------|------|------|
-| TLS_AES_128_GCM_SHA256 | AES-128-GCM | SHA-256 |
-| TLS_AES_256_GCM_SHA384 | AES-256-GCM | SHA-384 |
-| TLS_CHACHA20_POLY1305_SHA256 | ChaCha20-Poly1305 | SHA-256 |
+TLS_AES_128_GCM_SHA256 is mandatory per RFC 9147 and required for interoperability.
 
 ## Key Exchange Groups
 
-Supported (pick one or both):
+Both groups are supported for interoperability:
 
-- X25519 (recommended)
-- secp256r1 (P-256)
+| Group | Status |
+|-------|--------|
+| X25519 | Mandatory |
+| secp256r1 (P-256) | Mandatory |
 
-Client MUST include a key_share for a supported group. If not present, server sends `handshake_failure` alert (no HelloRetryRequest).
+If the client's key_share doesn't include a supported group, the server sends HelloRetryRequest specifying the preferred group.
 
 ## Signature Algorithms
 
@@ -259,49 +295,60 @@ struct {
                     │IDLE │
                     └──┬──┘
                        │ recv ClientHello
-                       │ (validate key_share, cipher, extensions)
+                       │ (validate cipher, extensions)
                        │
-            ┌──────────┴──────────┐
-            │                     │
-       [invalid]              [valid]
-            │                     │
-            ▼                     ▼
-    ┌───────────────┐      ┌─────────────┐
-    │ send alert,   │      │ NEGOTIATED  │
-    │ close         │      └──────┬──────┘
-    └───────────────┘             │ send ServerHello
-                                  │ derive handshake keys
-                                  │ send Encrypted*, Cert, CertVerify, Finished
-                                  ▼
-                           ┌─────────────┐
-                           │WAIT_FINISHED│
-                           └──────┬──────┘
-                                  │ recv Finished
-                                  │ derive application keys
-                                  ▼
-                           ┌─────────────┐
-                           │ CONNECTED   │◄────────────────┐
-                           └──────┬──────┘                 │
-                                  │                        │
-                    ┌─────────────┼─────────────┐          │
-                    │             │             │          │
-                    ▼             ▼             ▼          │
-               [app data]   [KeyUpdate]   [close_notify]   │
-                    │             │             │          │
-                    │             │             ▼          │
-                    │             │        ┌────────┐      │
-                    │             └───────►│ CLOSED │      │
-                    │                      └────────┘      │
-                    └──────────────────────────────────────┘
+         ┌─────────────┼─────────────┐
+         │             │             │
+    [invalid]    [no key_share    [valid]
+         │        match]             │
+         ▼             │             │
+ ┌───────────────┐     │             │
+ │ send alert,   │     ▼             │
+ │ close         │ ┌────────┐        │
+ └───────────────┘ │WAIT_CH2│        │
+                   └───┬────┘        │
+                       │ send HRR    │
+                       │             │
+                       ▼             │
+                   recv ClientHello2 │
+                       │             │
+                       └──────┬──────┘
+                              │
+                       ┌──────▼──────┐
+                       │ NEGOTIATED  │
+                       └──────┬──────┘
+                              │ send ServerHello
+                              │ derive handshake keys
+                              │ send Encrypted*, Cert, CertVerify, Finished
+                              ▼
+                       ┌─────────────┐
+                       │WAIT_FINISHED│
+                       └──────┬──────┘
+                              │ recv Finished
+                              │ derive application keys
+                              ▼
+                       ┌─────────────┐
+                       │ CONNECTED   │◄────────────────┐
+                       └──────┬──────┘                 │
+                              │                        │
+                ┌─────────────┼─────────────┐          │
+                │             │             │          │
+                ▼             ▼             ▼          │
+           [app data]   [KeyUpdate]   [close_notify]   │
+                │             │             │          │
+                │             │             ▼          │
+                │             │        ┌────────┐      │
+                │             └───────►│ CLOSED │      │
+                │                      └────────┘      │
+                └──────────────────────────────────────┘
 ```
 
 ## Limitations
 
-1. **No 0-RTT**: First application data requires 1-RTT
+1. **No 0-RTT**: First application data requires 1-RTT (or 2-RTT with HRR)
 2. **No session resumption**: Full handshake every connection
 3. **No NAT rebinding**: IP:port change breaks connection
-4. **No HelloRetryRequest**: Client must guess correctly
-5. **Ordered first flight**: Out-of-order ClientHello fragments may be dropped
+4. **Ordered first flight**: Out-of-order ClientHello fragments may be dropped
 
 ## References
 
