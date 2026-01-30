@@ -415,17 +415,7 @@ src/dtls13/
 └── message/
 ```
 
-### Step 4: Lift Tests from PR 38
-
-Copy test files from `dev/dtls13vibe` branch:
-- `tests/dtls13.rs` — dimpl ↔ dimpl tests
-- `tests/client-wolfssl.rs` — interop
-- `tests/server-wolfssl.rs` — interop
-- `tests/wolfssl/mod.rs` — test harness
-
-Adapt to our API as needed.
-
-### Step 5: Incremental Implementation
+### Step 4: Incremental Implementation
 
 Build incrementally with clean commits:
 
@@ -437,6 +427,16 @@ Build incrementally with clean commits:
 6. ACK handling
 7. KeyUpdate
 8. Integration + interop tests
+
+### Step 5: Lift Tests from PR 38
+
+Copy test files from `dev/dtls13vibe` branch:
+- `tests/dtls13.rs` — dimpl ↔ dimpl tests
+- `tests/client-wolfssl.rs` — interop
+- `tests/server-wolfssl.rs` — interop
+- `tests/wolfssl/mod.rs` — test harness
+
+Adapt to our API as needed.
 
 ### Step 6: Re-enable Full CI
 
