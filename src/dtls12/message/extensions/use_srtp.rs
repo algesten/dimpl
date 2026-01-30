@@ -12,20 +12,21 @@ pub type SrtpProfileVec = ArrayVec<SrtpProfileId, { SrtpProfileId::supported().l
 /// DTLS-SRTP protection profile identifiers
 /// From RFC 5764 Section 4.1.2
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(non_camel_case_types)]
 pub enum SrtpProfileId {
     #[default]
-    SrtpAes128CmSha1_80 = 0x0001,
-    SrtpAeadAes128Gcm = 0x0007,
-    SrtpAeadAes256Gcm = 0x0008,
+    SRTP_AES128_CM_SHA1_80 = 0x0001,
+    SRTP_AEAD_AES_128_GCM = 0x0007,
+    SRTP_AEAD_AES_256_GCM = 0x0008,
 }
 
 impl SrtpProfileId {
     pub fn parse(input: &[u8]) -> IResult<&[u8], SrtpProfileId> {
         let (input, value) = be_u16(input)?;
         let profile = match value {
-            0x0001 => SrtpProfileId::SrtpAes128CmSha1_80,
-            0x0007 => SrtpProfileId::SrtpAeadAes128Gcm,
-            0x0008 => SrtpProfileId::SrtpAeadAes256Gcm,
+            0x0001 => SrtpProfileId::SRTP_AES128_CM_SHA1_80,
+            0x0007 => SrtpProfileId::SRTP_AEAD_AES_128_GCM,
+            0x0008 => SrtpProfileId::SRTP_AEAD_AES_256_GCM,
             _ => {
                 return Err(nom::Err::Error(nom::error::Error::new(
                     input,
@@ -43,9 +44,9 @@ impl SrtpProfileId {
     /// All recognized SRTP profile IDs (every non-`Unknown` variant).
     pub const fn all() -> &'static [SrtpProfileId; 3] {
         &[
-            SrtpProfileId::SrtpAes128CmSha1_80,
-            SrtpProfileId::SrtpAeadAes128Gcm,
-            SrtpProfileId::SrtpAeadAes256Gcm,
+            SrtpProfileId::SRTP_AES128_CM_SHA1_80,
+            SrtpProfileId::SRTP_AEAD_AES_128_GCM,
+            SrtpProfileId::SRTP_AEAD_AES_256_GCM,
         ]
     }
 
@@ -58,9 +59,9 @@ impl SrtpProfileId {
 impl From<SrtpProfile> for SrtpProfileId {
     fn from(profile: SrtpProfile) -> Self {
         match profile {
-            SrtpProfile::Aes128CmSha1_80 => SrtpProfileId::SrtpAes128CmSha1_80,
-            SrtpProfile::AeadAes128Gcm => SrtpProfileId::SrtpAeadAes128Gcm,
-            SrtpProfile::AeadAes256Gcm => SrtpProfileId::SrtpAeadAes256Gcm,
+            SrtpProfile::AES128_CM_SHA1_80 => SrtpProfileId::SRTP_AES128_CM_SHA1_80,
+            SrtpProfile::AEAD_AES_128_GCM => SrtpProfileId::SRTP_AEAD_AES_128_GCM,
+            SrtpProfile::AEAD_AES_256_GCM => SrtpProfileId::SRTP_AEAD_AES_256_GCM,
         }
     }
 }
@@ -68,9 +69,9 @@ impl From<SrtpProfile> for SrtpProfileId {
 impl From<SrtpProfileId> for SrtpProfile {
     fn from(profile: SrtpProfileId) -> Self {
         match profile {
-            SrtpProfileId::SrtpAes128CmSha1_80 => SrtpProfile::Aes128CmSha1_80,
-            SrtpProfileId::SrtpAeadAes128Gcm => SrtpProfile::AeadAes128Gcm,
-            SrtpProfileId::SrtpAeadAes256Gcm => SrtpProfile::AeadAes256Gcm,
+            SrtpProfileId::SRTP_AES128_CM_SHA1_80 => SrtpProfile::AES128_CM_SHA1_80,
+            SrtpProfileId::SRTP_AEAD_AES_128_GCM => SrtpProfile::AEAD_AES_128_GCM,
+            SrtpProfileId::SRTP_AEAD_AES_256_GCM => SrtpProfile::AEAD_AES_256_GCM,
         }
     }
 }
@@ -91,9 +92,9 @@ impl UseSrtpExtension {
     pub fn default() -> Self {
         let mut profiles = SrtpProfileVec::new();
         // Add profiles in order of preference (most secure first)
-        profiles.push(SrtpProfileId::SrtpAeadAes256Gcm);
-        profiles.push(SrtpProfileId::SrtpAeadAes128Gcm);
-        profiles.push(SrtpProfileId::SrtpAes128CmSha1_80);
+        profiles.push(SrtpProfileId::SRTP_AEAD_AES_256_GCM);
+        profiles.push(SrtpProfileId::SRTP_AEAD_AES_128_GCM);
+        profiles.push(SrtpProfileId::SRTP_AES128_CM_SHA1_80);
 
         // MKI is typically empty as per RFC 5764
         let mki = Vec::new();
@@ -113,9 +114,9 @@ impl UseSrtpExtension {
             let (rest, value) = be_u16(profiles_rest)?;
             profiles_rest = rest;
             match value {
-                0x0001 => profiles.push(SrtpProfileId::SrtpAes128CmSha1_80),
-                0x0007 => profiles.push(SrtpProfileId::SrtpAeadAes128Gcm),
-                0x0008 => profiles.push(SrtpProfileId::SrtpAeadAes256Gcm),
+                0x0001 => profiles.push(SrtpProfileId::SRTP_AES128_CM_SHA1_80),
+                0x0007 => profiles.push(SrtpProfileId::SRTP_AEAD_AES_128_GCM),
+                0x0008 => profiles.push(SrtpProfileId::SRTP_AEAD_AES_256_GCM),
                 _ => {
                     // Unknown SRTP profile: skip
                 }
@@ -158,9 +159,9 @@ mod tests {
     #[test]
     fn test_use_srtp_extension() {
         let mut profiles = SrtpProfileVec::new();
-        profiles.push(SrtpProfileId::SrtpAeadAes256Gcm);
-        profiles.push(SrtpProfileId::SrtpAeadAes128Gcm);
-        profiles.push(SrtpProfileId::SrtpAes128CmSha1_80);
+        profiles.push(SrtpProfileId::SRTP_AEAD_AES_256_GCM);
+        profiles.push(SrtpProfileId::SRTP_AEAD_AES_128_GCM);
+        profiles.push(SrtpProfileId::SRTP_AES128_CM_SHA1_80);
 
         let mki = vec![1, 2, 3];
 
@@ -171,9 +172,9 @@ mod tests {
 
         let expected = [
             0x00, 0x06, // Profiles length (6 bytes)
-            0x00, 0x08, // SrtpAeadAes256Gcm (0x0008)
-            0x00, 0x07, // SrtpAeadAes128Gcm (0x0007)
-            0x00, 0x01, // SrtpAes128CmSha1_80 (0x0001)
+            0x00, 0x08, // SRTP_AEAD_AES_256_GCM (0x0008)
+            0x00, 0x07, // SRTP_AEAD_AES_128_GCM (0x0007)
+            0x00, 0x01, // SRTP_AES128_CM_SHA1_80 (0x0001)
             0x03, // MKI length (3 bytes)
             0x01, 0x02, 0x03, // MKI
         ];
@@ -201,9 +202,9 @@ mod tests {
         assert_eq!(
             parsed.profiles.as_slice(),
             &[
-                SrtpProfileId::SrtpAeadAes128Gcm,
-                SrtpProfileId::SrtpAeadAes256Gcm,
-                SrtpProfileId::SrtpAes128CmSha1_80
+                SrtpProfileId::SRTP_AEAD_AES_128_GCM,
+                SrtpProfileId::SRTP_AEAD_AES_256_GCM,
+                SrtpProfileId::SRTP_AES128_CM_SHA1_80
             ]
         );
         assert_eq!(parsed.mki, Vec::<u8>::new());

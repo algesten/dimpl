@@ -386,9 +386,9 @@ impl State {
             // Map client profile ids to SrtpProfile, then pick our preferred
             let mut selected_profile: Option<SrtpProfile> = None;
             for preferred in [
-                SrtpProfile::AeadAes256Gcm,
-                SrtpProfile::AeadAes128Gcm,
-                SrtpProfile::Aes128CmSha1_80,
+                SrtpProfile::AEAD_AES_256_GCM,
+                SrtpProfile::AEAD_AES_128_GCM,
+                SrtpProfile::AES128_CM_SHA1_80,
             ] {
                 if profiles.iter().any(|pid| preferred == (*pid).into()) {
                     selected_profile = Some(preferred);
@@ -944,9 +944,9 @@ fn handshake_create_server_hello(
         .ok_or_else(|| Error::UnexpectedMessage("No cipher suite".to_string()))?;
 
     let srtp_pid = negotiated_srtp_profile.map(|p| match p {
-        SrtpProfile::AeadAes256Gcm => SrtpProfileId::SrtpAeadAes256Gcm,
-        SrtpProfile::AeadAes128Gcm => SrtpProfileId::SrtpAeadAes128Gcm,
-        SrtpProfile::Aes128CmSha1_80 => SrtpProfileId::SrtpAes128CmSha1_80,
+        SrtpProfile::AEAD_AES_256_GCM => SrtpProfileId::SRTP_AEAD_AES_256_GCM,
+        SrtpProfile::AEAD_AES_128_GCM => SrtpProfileId::SRTP_AEAD_AES_128_GCM,
+        SrtpProfile::AES128_CM_SHA1_80 => SrtpProfileId::SRTP_AES128_CM_SHA1_80,
     });
 
     let sh = ServerHello::new(
