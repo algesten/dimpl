@@ -92,13 +92,18 @@ use crate::crypto::provider::CryptoProvider;
 /// Uses `OsRng` from the `rand` crate for cryptographically secure random number generation.
 pub fn default_provider() -> CryptoProvider {
     CryptoProvider {
+        // DTLS 1.2 components
         cipher_suites: cipher_suite::ALL_CIPHER_SUITES,
+        prf_provider: &tls12::PRF_PROVIDER,
+        // DTLS 1.3 components (not yet implemented)
+        dtls13_cipher_suites: None,
+        hkdf_provider: None,
+        // Shared components
         kx_groups: kx_group::ALL_KX_GROUPS,
         signature_verification: &sign::SIGNATURE_VERIFIER,
         key_provider: &sign::KEY_PROVIDER,
         secure_random: &random::SECURE_RANDOM,
         hash_provider: &hash::HASH_PROVIDER,
-        prf_provider: &tls12::PRF_PROVIDER,
         hmac_provider: &hmac::HMAC_PROVIDER,
     }
 }
