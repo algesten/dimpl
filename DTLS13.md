@@ -4,7 +4,8 @@ This document describes the minimal DTLS 1.3 profile implemented in this crate.
 
 ## Scope
 
-A minimal, compliant DTLS 1.3 server/client implementation optimized for controlled environments where both endpoints are known.
+A minimal, compliant DTLS 1.3 server/client implementation optimized for
+controlled environments where both endpoints are known.
 
 ## Profile Constraints
 
@@ -20,9 +21,11 @@ A minimal, compliant DTLS 1.3 server/client implementation optimized for control
 
 ### Rationale
 
-- **No 0-RTT**: Eliminates epoch 1 buffering, replay protection complexity, and idempotency requirements on the application.
+- **No 0-RTT**: Eliminates epoch 1 buffering, replay protection complexity,
+  and idempotency requirements on the application.
 - **No CID**: Assumes stable IP:port pairs. Removes variable-length header parsing.
-- **No PSK**: Every connection is a full (EC)DHE handshake. No session cache, no ticket management, no binder calculation.
+- **No PSK**: Every connection is a full (EC)DHE handshake. No session cache,
+  no ticket management, no binder calculation.
 
 ## Handshake Flow
 
@@ -228,7 +231,8 @@ Both groups are supported for interoperability:
 | X25519 | Mandatory |
 | secp256r1 (P-256) | Mandatory |
 
-If the client's key_share doesn't include a supported group, the server sends HelloRetryRequest specifying the preferred group.
+If the client's key_share doesn't include a supported group, the server
+sends HelloRetryRequest specifying the preferred group.
 
 ## Signature Algorithms
 
@@ -273,7 +277,8 @@ application_traffic_secret_N+1 =
 
 Epoch increments with each update.
 
-**Note**: KeyUpdate has no ACK. Implementations must retain old keys temporarily to handle packet loss/reordering.
+**Note**: KeyUpdate has no ACK. Implementations must retain old keys
+temporarily to handle packet loss/reordering.
 
 ### Alerts
 
