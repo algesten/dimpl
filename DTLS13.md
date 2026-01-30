@@ -363,6 +363,7 @@ Reduce CI matrix during development:
 - Single platform (ubuntu-latest)
 - Single feature (aws-lc-rs)
 - Disable fuzz tests
+- Disable CodeQL (slow security scanner)
 - Keep lint and snowflake
 
 ### Step 2: CLAUDE.md
@@ -443,6 +444,7 @@ Restore full CI matrix:
 - All platforms (ubuntu, macos, windows)
 - All features (aws-lc-rs, rust-crypto, rcgen)
 - Re-enable fuzz tests
+- Re-enable CodeQL (rename `.github/workflows/codeql.yml.disabled`)
 
 ### Prior Art
 
