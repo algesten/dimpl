@@ -7,7 +7,7 @@ use super::queue::{QueueRx, QueueTx};
 use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::{Aad, Iv, Nonce, DTLS_AEAD_OVERHEAD, DTLS_EXPLICIT_NONCE_LEN};
 use crate::dtls12::context::CryptoContext;
-use crate::dtls12::incoming::{Incoming, Record};
+use crate::dtls12::incoming::{Incoming, Record, RecordDecrypt};
 use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
 use crate::timer::ExponentialBackoff;
@@ -167,7 +167,8 @@ impl Engine {
     }
 
     pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        let incoming = Incoming::parse_packet(packet, self)?;
+        let cs = self.cipher_suite;
+        let incoming = Incoming::parse_packet(packet, self, cs)?;
         if let Some(incoming) = incoming {
             self.insert_incoming(incoming)?;
         }
@@ -878,11 +879,6 @@ impl Engine {
         }
     }
 
-    /// Anti-replay check and update state. Returns true if record is fresh/acceptable.
-    pub fn replay_check_and_update(&mut self, seq: Sequence) -> bool {
-        self.replay.check_and_update(seq)
-    }
-
     /// Reset server handshake state after sending HelloVerifyRequest.
     ///
     /// Per RFC 6347 §4.2.2, the HelloVerifyRequest exchange is stateless. After sending
@@ -965,10 +961,6 @@ impl Engine {
         Ok(())
     }
 
-    pub fn is_peer_encryption_enabled(&self) -> bool {
-        self.peer_encryption_enabled
-    }
-
     fn peer_iv(&self) -> Iv {
         if self.is_client {
             self.crypto_context
@@ -1028,5 +1020,28 @@ impl Engine {
         self.buffers_free.push(scratch);
 
         Ok(verify_data)
+    }
+}
+
+impl RecordDecrypt for Engine {
+    fn is_peer_encryption_enabled(&self) -> bool {
+        self.peer_encryption_enabled
+    }
+
+    fn replay_check_and_update(&mut self, seq: Sequence) -> bool {
+        self.replay.check_and_update(seq)
+    }
+
+    fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord, buf: &[u8]) -> (Aad, Nonce) {
+        Engine::decryption_aad_and_nonce(self, dtls, buf)
+    }
+
+    fn decrypt_data(
+        &mut self,
+        ciphertext: &mut TmpBuf,
+        aad: Aad,
+        nonce: Nonce,
+    ) -> Result<(), Error> {
+        Engine::decrypt_data(self, ciphertext, aad, nonce)
     }
 }
