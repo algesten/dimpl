@@ -390,14 +390,17 @@ pub trait HkdfProvider: CryptoSafe {
 ///
 /// // Or build a custom one (using defaults for demonstration)
 /// let custom_provider = CryptoProvider {
-///     cipher_suites: provider.cipher_suites,
+///     // Shared components
 ///     kx_groups: provider.kx_groups,
 ///     signature_verification: provider.signature_verification,
 ///     key_provider: provider.key_provider,
 ///     secure_random: provider.secure_random,
 ///     hash_provider: provider.hash_provider,
-///     prf_provider: provider.prf_provider,
 ///     hmac_provider: provider.hmac_provider,
+///     // DTLS 1.2 components
+///     cipher_suites: provider.cipher_suites,
+///     prf_provider: provider.prf_provider,
+///     // DTLS 1.3 components
 ///     dtls13_cipher_suites: None,
 ///     hkdf_provider: None,
 /// };
@@ -407,6 +410,29 @@ pub trait HkdfProvider: CryptoSafe {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CryptoProvider {
+    // =========================================================================
+    // Shared components (used by both DTLS 1.2 and DTLS 1.3)
+    // =========================================================================
+    /// Supported key exchange groups (P-256, P-384, X25519).
+    ///
+    /// Used for ECDHE key exchange in both DTLS versions.
+    pub kx_groups: &'static [&'static dyn SupportedKxGroup],
+
+    /// Signature verification for certificates.
+    pub signature_verification: &'static dyn SignatureVerifier,
+
+    /// Key provider for parsing private keys.
+    pub key_provider: &'static dyn KeyProvider,
+
+    /// Secure random number generator.
+    pub secure_random: &'static dyn SecureRandom,
+
+    /// Hash provider for handshake hashing.
+    pub hash_provider: &'static dyn HashProvider,
+
+    /// HMAC provider for computing HMAC signatures.
+    pub hmac_provider: &'static dyn HmacProvider,
+
     // =========================================================================
     // DTLS 1.2 specific components
     // =========================================================================
@@ -436,29 +462,6 @@ pub struct CryptoProvider {
     /// TLS 1.3 uses HKDF instead of the TLS 1.2 PRF for all key derivation.
     /// Set to `None` if DTLS 1.3 is not supported.
     pub hkdf_provider: Option<&'static dyn HkdfProvider>,
-
-    // =========================================================================
-    // Shared components (used by both DTLS 1.2 and DTLS 1.3)
-    // =========================================================================
-    /// Supported key exchange groups (P-256, P-384, X25519).
-    ///
-    /// Used for ECDHE key exchange in both DTLS versions.
-    pub kx_groups: &'static [&'static dyn SupportedKxGroup],
-
-    /// Signature verification for certificates.
-    pub signature_verification: &'static dyn SignatureVerifier,
-
-    /// Key provider for parsing private keys.
-    pub key_provider: &'static dyn KeyProvider,
-
-    /// Secure random number generator.
-    pub secure_random: &'static dyn SecureRandom,
-
-    /// Hash provider for handshake hashing.
-    pub hash_provider: &'static dyn HashProvider,
-
-    /// HMAC provider for computing HMAC signatures.
-    pub hmac_provider: &'static dyn HmacProvider,
 }
 
 /// Static storage for the default crypto provider.
