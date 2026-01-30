@@ -9,8 +9,8 @@ use der::{Decode, Encode};
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
+use super::super::{KeyProvider, SignatureVerifier, SigningKey};
 use crate::buffer::Buf;
-use crate::crypto::provider::{KeyProvider, SignatureVerifier, SigningKey};
 use crate::types::{HashAlgorithm, SignatureAlgorithm};
 
 /// ECDSA signing key implementation.

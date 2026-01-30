@@ -3,8 +3,8 @@
 use hkdf::Hkdf;
 use sha2::{Sha256, Sha384};
 
+use super::super::HkdfProvider;
 use crate::buffer::Buf;
-use crate::crypto::provider::HkdfProvider;
 use crate::types::HashAlgorithm;
 
 /// HKDF provider implementation using RustCrypto.

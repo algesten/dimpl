@@ -13,7 +13,7 @@ pub mod aws_lc_rs;
 pub mod rust_crypto;
 
 mod dtls_aead;
-pub mod provider;
+mod provider;
 mod validation;
 
 pub use keying::{KeyingMaterial, SrtpProfile};

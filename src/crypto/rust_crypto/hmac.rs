@@ -3,8 +3,8 @@
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha384};
 
+use super::super::HmacProvider;
 use crate::buffer::Buf;
-use crate::crypto::provider::HmacProvider;
 use crate::types::HashAlgorithm;
 
 /// Compute HMAC using TLS 1.2 P_hash algorithm.

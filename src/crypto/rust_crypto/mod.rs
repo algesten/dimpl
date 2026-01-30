@@ -48,7 +48,7 @@ mod random;
 mod sign;
 mod tls12;
 
-use crate::crypto::provider::CryptoProvider;
+use super::CryptoProvider;
 
 /// Get the default RustCrypto-based crypto provider.
 ///

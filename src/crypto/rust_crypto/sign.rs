@@ -10,8 +10,8 @@ use pkcs8::DecodePrivateKey;
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
+use super::super::{KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
 use crate::buffer::Buf;
-use crate::crypto::provider::{KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
 use crate::types::{HashAlgorithm, SignatureAlgorithm};
 
 /// ECDSA signing key implementation.

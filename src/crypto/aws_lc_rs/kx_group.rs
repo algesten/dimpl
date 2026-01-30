@@ -3,8 +3,8 @@
 use aws_lc_rs::agreement::{agree_ephemeral, EphemeralPrivateKey};
 use aws_lc_rs::agreement::{UnparsedPublicKey, ECDH_P256, ECDH_P384};
 
+use super::super::{ActiveKeyExchange, SupportedKxGroup};
 use crate::buffer::Buf;
-use crate::crypto::provider::{ActiveKeyExchange, SupportedKxGroup};
 use crate::types::NamedGroup;
 
 /// ECDHE key exchange implementation.

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arrayvec::ArrayVec;
 
 use crate::buffer::{Buf, TmpBuf, ToBuf};
-use crate::crypto::provider;
+use crate::crypto;
 use crate::crypto::SrtpProfile;
 use crate::crypto::{Aad, Iv, Nonce};
 use crate::dtls12::message::DigitallySigned;
@@ -18,7 +18,7 @@ pub struct CryptoContext {
     config: Arc<crate::Config>,
 
     /// Key exchange mechanism
-    key_exchange: Option<Box<dyn provider::ActiveKeyExchange>>,
+    key_exchange: Option<Box<dyn crypto::ActiveKeyExchange>>,
 
     /// Our public key from the key exchange (stored for reuse)
     key_exchange_public_key: Option<Vec<u8>>,
@@ -51,16 +51,16 @@ pub struct CryptoContext {
     pre_master_secret: Option<Buf>,
 
     /// Client cipher
-    client_cipher: Option<Box<dyn provider::Cipher>>,
+    client_cipher: Option<Box<dyn crypto::Cipher>>,
 
     /// Server cipher
-    server_cipher: Option<Box<dyn provider::Cipher>>,
+    server_cipher: Option<Box<dyn crypto::Cipher>>,
 
     /// Certificate (DER format)
     certificate: Vec<u8>,
 
     /// Parsed private key for the certificate with signature algorithm
-    private_key: Box<dyn provider::SigningKey>,
+    private_key: Box<dyn crypto::SigningKey>,
 
     /// Client random (needed for SRTP key export per RFC 5705)
     client_random: Option<ArrayVec<u8, 32>>,
@@ -114,7 +114,7 @@ impl CryptoContext {
         }
     }
 
-    pub fn provider(&self) -> &provider::CryptoProvider {
+    pub fn provider(&self) -> &crypto::CryptoProvider {
         self.config.crypto_provider()
     }
 
@@ -512,7 +512,7 @@ impl CryptoContext {
     }
 
     /// Create a hash context for the given algorithm
-    pub fn create_hash(&self, algorithm: HashAlgorithm) -> Box<dyn provider::HashContext> {
+    pub fn create_hash(&self, algorithm: HashAlgorithm) -> Box<dyn crypto::HashContext> {
         self.provider().hash_provider.create_hash(algorithm)
     }
 
