@@ -357,11 +357,19 @@ struct {
 
 ## Implementation Plan
 
-### Step 1: CLAUDE.md
+### Step 1: Slim Down CI
+
+Reduce CI matrix during development:
+- Single platform (ubuntu-latest)
+- Single feature (aws-lc-rs)
+- Disable fuzz tests
+- Keep lint and snowflake
+
+### Step 2: CLAUDE.md
 
 Create `CLAUDE.md` with code style guidance extracted from the existing codebase.
 
-### Step 2: Reorganize Repository
+### Step 3: Reorganize Repository
 
 Single commit from main reorganizing the codebase. Separate engines and crypto contexts per version.
 
@@ -406,7 +414,7 @@ src/dtls13/
 └── message/
 ```
 
-### Step 3: Lift Tests from PR 38
+### Step 4: Lift Tests from PR 38
 
 Copy test files from `dev/dtls13vibe` branch:
 - `tests/dtls13.rs` — dimpl ↔ dimpl tests
@@ -416,7 +424,7 @@ Copy test files from `dev/dtls13vibe` branch:
 
 Adapt to our API as needed.
 
-### Step 4: Incremental Implementation
+### Step 5: Incremental Implementation
 
 Build incrementally with clean commits:
 
@@ -428,6 +436,13 @@ Build incrementally with clean commits:
 6. ACK handling
 7. KeyUpdate
 8. Integration + interop tests
+
+### Step 6: Re-enable Full CI
+
+Restore full CI matrix:
+- All platforms (ubuntu, macos, windows)
+- All features (aws-lc-rs, rust-crypto, rcgen)
+- Re-enable fuzz tests
 
 ### Prior Art
 
