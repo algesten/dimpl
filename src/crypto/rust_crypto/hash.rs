@@ -2,8 +2,8 @@
 
 use sha2::{Digest, Sha256, Sha384};
 
+use super::super::{HashContext, HashProvider};
 use crate::buffer::Buf;
-use crate::crypto::provider::{HashContext, HashProvider};
 use crate::types::HashAlgorithm;
 
 /// Hash context implementation using RustCrypto.

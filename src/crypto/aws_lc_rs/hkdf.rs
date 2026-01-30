@@ -3,8 +3,8 @@
 use aws_lc_rs::hkdf::{KeyType, Prk, HKDF_SHA256, HKDF_SHA384};
 use aws_lc_rs::hmac;
 
+use super::super::HkdfProvider;
 use crate::buffer::Buf;
-use crate::crypto::provider::HkdfProvider;
 use crate::types::HashAlgorithm;
 
 /// Custom KeyType implementation for arbitrary output lengths.

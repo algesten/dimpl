@@ -1,7 +1,7 @@
 //! TLS 1.2 PRF using aws-lc-rs.
 
+use super::super::PrfProvider;
 use crate::buffer::Buf;
-use crate::crypto::provider::PrfProvider;
 use crate::types::HashAlgorithm;
 
 use super::hmac;

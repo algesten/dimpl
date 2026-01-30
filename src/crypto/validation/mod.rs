@@ -3,8 +3,8 @@
 //! This module defines the validation rules for crypto providers used with dimpl,
 //! based on the documented support in lib.rs.
 
+use super::{CryptoProvider, SupportedDtls12CipherSuite, SupportedKxGroup};
 use crate::buffer::Buf;
-use crate::crypto::provider::{CryptoProvider, SupportedDtls12CipherSuite, SupportedKxGroup};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 use crate::Error;

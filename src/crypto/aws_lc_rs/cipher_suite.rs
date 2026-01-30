@@ -3,8 +3,8 @@
 use aws_lc_rs::aead::{Aad as AwsAad, LessSafeKey, Nonce as AwsNonce};
 use aws_lc_rs::aead::{UnboundKey, AES_128_GCM, AES_256_GCM};
 
+use super::super::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuite};
 use crate::buffer::{Buf, TmpBuf};
-use crate::crypto::provider::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuite};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, HashAlgorithm};
