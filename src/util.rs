@@ -77,6 +77,61 @@ where
     }
 }
 
+/// A combinator that parses items using the provided parser but only collects
+/// items that pass a filter predicate. Requires at least one item to pass the filter.
+#[inline(always)]
+pub fn many1_filter<I, O, E, F, P, const N: usize>(
+    mut parser: F,
+    predicate: P,
+) -> impl FnMut(I) -> IResult<I, ArrayVec<O, N>, E>
+where
+    I: Clone + InputLength,
+    F: Parser<I, O, E>,
+    P: Fn(&O) -> bool,
+    E: ParseError<I>,
+{
+    move |mut i: I| {
+        let mut acc = ArrayVec::new();
+        let original_input = i.clone();
+
+        loop {
+            let len = i.input_len();
+            if len == 0 {
+                break;
+            }
+
+            match parser.parse(i.clone()) {
+                Err(Err::Error(_)) => break,
+                Err(e) => return Err(e),
+                Ok((i1, o)) => {
+                    // infinite loop check: the parser must always consume
+                    if i1.input_len() == len {
+                        return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many1)));
+                    }
+
+                    i = i1;
+                    // Only collect items that pass the filter
+                    if predicate(&o) {
+                        if acc.try_push(o).is_err() {
+                            return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many1)));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Require at least one item to pass the filter
+        if acc.is_empty() {
+            Err(Err::Error(E::from_error_kind(
+                original_input,
+                ErrorKind::Many1,
+            )))
+        } else {
+            Ok((i, acc))
+        }
+    }
+}
+
 pub fn be_u48<I, E: ParseError<I>>(input: I) -> IResult<I, u64, E>
 where
     I: Slice<RangeFrom<usize>> + InputIter<Item = u8> + InputLength,

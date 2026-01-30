@@ -212,6 +212,11 @@ impl CipherSuite {
             CipherSuite::Unknown(_) => SignatureAlgorithm::Unknown(0),
         }
     }
+
+    /// Returns true if this cipher suite is a known/supported variant.
+    pub fn is_known(&self) -> bool {
+        !matches!(self, CipherSuite::Unknown(_))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

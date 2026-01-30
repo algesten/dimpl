@@ -1032,7 +1032,7 @@ fn handshake_create_client_hello(
 
     // Get cipher suites from provider that are compatible with our key
     let provider = engine.crypto_context().provider();
-    let cipher_suites: ArrayVec<CipherSuite, 32> = provider
+    let cipher_suites: ArrayVec<CipherSuite, 2> = provider
         .supported_cipher_suites()
         .map(|cs| cs.suite())
         .filter(|suite| engine.crypto_context().is_cipher_suite_compatible(*suite))
