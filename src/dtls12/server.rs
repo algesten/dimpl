@@ -20,18 +20,19 @@ use arrayvec::ArrayVec;
 use subtle::ConstantTimeEq;
 
 use crate::buffer::{Buf, ToBuf};
-use crate::client::LocalEvent;
 use crate::crypto::SrtpProfile;
-use crate::engine::Engine;
-use crate::message::{Body, CertificateRequest, CertificateTypeVec, CipherSuite};
-use crate::message::{ClientCertificateType, CompressionMethod, ContentType, Cookie, CurveType};
-use crate::message::{DistinguishedName, ExchangeKeys, ExtensionType};
-use crate::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm, MessageType};
-use crate::message::{NamedGroup, NamedGroupVec, ProtocolVersion, Random};
-use crate::message::{ServerHello, SessionId, SignatureAlgorithm, SignatureAndHashAlgorithmVec};
-use crate::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId};
-use crate::message::{SrtpProfileVec, SupportedGroupsExtension, UseSrtpExtension};
-use crate::{Client, Config, Error, Output};
+use crate::dtls12::client::LocalEvent;
+use crate::dtls12::engine::Engine;
+use crate::dtls12::message::{Body, CertificateRequest, CertificateTypeVec, CipherSuite};
+use crate::dtls12::message::{ClientCertificateType, CompressionMethod, ContentType, Cookie, CurveType};
+use crate::dtls12::message::{DistinguishedName, ExchangeKeys, ExtensionType};
+use crate::dtls12::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm, MessageType};
+use crate::dtls12::message::{NamedGroup, NamedGroupVec, ProtocolVersion, Random};
+use crate::dtls12::message::{ServerHello, SessionId, SignatureAlgorithm, SignatureAndHashAlgorithmVec};
+use crate::dtls12::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId};
+use crate::dtls12::message::{SrtpProfileVec, SupportedGroupsExtension, UseSrtpExtension};
+use crate::dtls12::Client;
+use crate::{Config, Error, Output};
 
 /// DTLS server
 pub struct Server {
@@ -712,7 +713,7 @@ impl State {
         }
 
         // Create temp DigitallySigned for verification
-        let temp_signed = crate::message::DigitallySigned {
+        let temp_signed = crate::dtls12::message::DigitallySigned {
             algorithm: signature_algorithm,
             signature_range: 0..signature_bytes.len(),
         };

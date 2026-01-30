@@ -1,4 +1,4 @@
-use crate::message::Sequence;
+use crate::dtls12::message::Sequence;
 
 /// Sliding replay window for DTLS records (per current epoch).
 ///
@@ -57,7 +57,7 @@ impl ReplayWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Sequence;
+    use crate::dtls12::message::Sequence;
 
     fn seq(epoch: u16, n: u64) -> Sequence {
         Sequence {

@@ -3,7 +3,8 @@
 use aws_lc_rs::hmac;
 
 use crate::buffer::Buf;
-use crate::message::HashAlgorithm;
+use crate::crypto::provider::HmacProvider;
+use crate::dtls12::message::HashAlgorithm;
 
 /// Compute HMAC using TLS 1.2 P_hash algorithm.
 pub(super) fn p_hash(
@@ -48,3 +49,20 @@ pub(super) fn hmac_algorithm(hash: HashAlgorithm) -> Result<hmac::Algorithm, Str
         _ => Err(format!("Unsupported HMAC hash algorithm: {:?}", hash)),
     }
 }
+
+/// HMAC provider implementation.
+#[derive(Debug)]
+pub(super) struct AwsLcHmacProvider;
+
+impl HmacProvider for AwsLcHmacProvider {
+    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String> {
+        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, key);
+        let tag = hmac::sign(&hmac_key, data);
+        let mut result = [0u8; 32];
+        result.copy_from_slice(tag.as_ref());
+        Ok(result)
+    }
+}
+
+/// Static instance of the HMAC provider.
+pub(super) static HMAC_PROVIDER: AwsLcHmacProvider = AwsLcHmacProvider;

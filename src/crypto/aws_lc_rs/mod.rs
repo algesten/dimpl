@@ -61,6 +61,7 @@ mod cipher_suite;
 mod hash;
 mod hmac;
 mod kx_group;
+mod random;
 mod sign;
 mod tls12;
 
@@ -113,9 +114,9 @@ pub fn default_provider() -> CryptoProvider {
         kx_groups: kx_group::ALL_KX_GROUPS,
         signature_verification: &sign::SIGNATURE_VERIFIER,
         key_provider: &sign::KEY_PROVIDER,
-        secure_random: &tls12::SECURE_RANDOM,
+        secure_random: &random::SECURE_RANDOM,
         hash_provider: &hash::HASH_PROVIDER,
         prf_provider: &tls12::PRF_PROVIDER,
-        hmac_provider: &tls12::HMAC_PROVIDER,
+        hmac_provider: &hmac::HMAC_PROVIDER,
     }
 }

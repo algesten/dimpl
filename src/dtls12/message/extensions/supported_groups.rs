@@ -1,6 +1,6 @@
+use super::super::{NamedGroup, NamedGroupVec};
 use crate::buffer::Buf;
 use crate::crypto::CryptoProvider;
-use crate::message::{NamedGroup, NamedGroupVec};
 use nom::IResult;
 
 /// SupportedGroups extension as defined in RFC 8422

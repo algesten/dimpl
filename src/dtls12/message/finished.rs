@@ -1,5 +1,5 @@
+use super::CipherSuite;
 use crate::buffer::Buf;
-use crate::message::CipherSuite;
 use nom::bytes::complete::take;
 use nom::IResult;
 use std::ops::Range;
@@ -38,9 +38,9 @@ impl Finished {
 
 #[cfg(test)]
 mod test {
+    use super::CipherSuite;
     use super::*;
     use crate::buffer::Buf;
-    use crate::message::CipherSuite;
 
     #[test]
     fn roundtrip() {

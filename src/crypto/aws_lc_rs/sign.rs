@@ -11,7 +11,7 @@ use x509_cert::Certificate as X509Certificate;
 
 use crate::buffer::Buf;
 use crate::crypto::provider::{KeyProvider, SignatureVerifier, SigningKey};
-use crate::message::{CipherSuite, HashAlgorithm, SignatureAlgorithm};
+use crate::dtls12::message::{CipherSuite, HashAlgorithm, SignatureAlgorithm};
 
 /// ECDSA signing key implementation.
 struct EcdsaSigningKey {

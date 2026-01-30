@@ -52,6 +52,24 @@ mod certificate;
 pub use certificate::Certificate;
 ```
 
+## Visibility
+
+Prefer `pub` over `pub(crate)`. Only use `pub(crate)` when explicitly preventing
+items from becoming part of the public API. Internal modules that are kept private
+by their parent don't need `pub(crate)` on their items.
+
+```rust
+// Good: parent module is private, so pub here won't leak
+mod internal {
+    pub struct Helper;  // Not in public API because `internal` is private
+}
+
+// Bad: unnecessary restriction
+mod internal {
+    pub(crate) struct Helper;  // Redundant - parent already private
+}
+```
+
 ## Fields and Methods
 
 Fields are private. Expose via getter methods.

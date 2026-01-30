@@ -19,13 +19,14 @@ use arrayvec::ArrayVec;
 use subtle::ConstantTimeEq;
 
 use crate::buffer::{Buf, ToBuf};
-use crate::crypto::CipherSuite;
-use crate::engine::Engine;
-use crate::message::{Body, CipherSuiteVec, ClientHello, ClientKeyExchange};
-use crate::message::{CompressionMethod, ContentType, Cookie};
-use crate::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
-use crate::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
-use crate::{Error, KeyingMaterial, Output, Server, SrtpProfile};
+use crate::crypto::SrtpProfile;
+use crate::dtls12::engine::Engine;
+use crate::dtls12::message::{Body, CipherSuite, CipherSuiteVec, ClientHello, ClientKeyExchange};
+use crate::dtls12::message::{CompressionMethod, ContentType, Cookie};
+use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
+use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
+use crate::dtls12::Server;
+use crate::{Error, KeyingMaterial, Output};
 
 /// DTLS client
 pub struct Client {
@@ -516,7 +517,7 @@ impl State {
 
             // Extract ECDH params ranges
             let (curve_type, named_group, public_key_range) = match &server_key_exchange.params {
-                crate::message::ServerKeyExchangeParams::Ecdh(ecdh) => (
+                crate::dtls12::message::ServerKeyExchangeParams::Ecdh(ecdh) => (
                     ecdh.curve_type,
                     ecdh.named_group,
                     ecdh.public_key_range.clone(),
@@ -579,7 +580,7 @@ impl State {
         let cert_der = client.server_certificates.first().unwrap();
 
         // Create a temporary DigitallySigned for verification (we only need the algorithm)
-        let temp_signed = crate::message::DigitallySigned {
+        let temp_signed = crate::dtls12::message::DigitallySigned {
             algorithm: signature_algorithm,
             signature_range: 0..signature_bytes.len(),
         };

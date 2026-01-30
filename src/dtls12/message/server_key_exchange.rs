@@ -115,9 +115,9 @@ impl EcdhParams {
 
 #[cfg(test)]
 mod test {
+    use super::super::{HashAlgorithm, SignatureAlgorithm, SignatureAndHashAlgorithm};
     use super::*;
     use crate::buffer::Buf;
-    use crate::message::{HashAlgorithm, SignatureAlgorithm, SignatureAndHashAlgorithm};
 
     const MESSAGE_ECDH_PUBKEY: &[u8] = &[
         0x03, // curve_type
