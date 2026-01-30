@@ -360,8 +360,17 @@ pub trait HkdfProvider: CryptoSafe {
 /// Cryptographic provider for DTLS operations.
 ///
 /// This struct holds references to all cryptographic components needed
-/// for DTLS 1.2. Users can provide custom implementations of each component
+/// for DTLS. Users can provide custom implementations of each component
 /// to replace the default aws-lc-rs-based provider.
+///
+/// # Version-Specific Components
+///
+/// Some components are version-specific:
+/// - **DTLS 1.2**: Uses `cipher_suites` and `prf_provider`
+/// - **DTLS 1.3**: Uses `dtls13_cipher_suites` and `hkdf_provider`
+///
+/// Shared components like `kx_groups`, `signature_verification`, `key_provider`,
+/// `secure_random`, `hash_provider`, and `hmac_provider` are used by both versions.
 ///
 /// # Design
 ///
@@ -389,6 +398,8 @@ pub trait HkdfProvider: CryptoSafe {
 ///     hash_provider: provider.hash_provider,
 ///     prf_provider: provider.prf_provider,
 ///     hmac_provider: provider.hmac_provider,
+///     dtls13_cipher_suites: None,
+///     hkdf_provider: None,
 /// };
 /// # }
 /// # #[cfg(not(feature = "aws-lc-rs"))]
@@ -396,10 +407,42 @@ pub trait HkdfProvider: CryptoSafe {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CryptoProvider {
-    /// Supported cipher suites (for negotiation).
+    // =========================================================================
+    // DTLS 1.2 specific components
+    // =========================================================================
+    /// Supported DTLS 1.2 cipher suites (for negotiation).
+    ///
+    /// These cipher suites bundle key exchange, authentication, encryption,
+    /// and MAC algorithms together (e.g., TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256).
     pub cipher_suites: &'static [&'static dyn SupportedDtls12CipherSuite],
 
-    /// Supported key exchange groups (P-256, P-384).
+    /// PRF for TLS 1.2 key derivation.
+    ///
+    /// The Pseudo-Random Function used for key expansion in DTLS 1.2.
+    pub prf_provider: &'static dyn PrfProvider,
+
+    // =========================================================================
+    // DTLS 1.3 specific components
+    // =========================================================================
+    /// Supported DTLS 1.3 cipher suites (for negotiation).
+    ///
+    /// TLS 1.3 cipher suites only specify the AEAD and hash algorithms
+    /// (e.g., TLS_AES_128_GCM_SHA256). Key exchange is negotiated separately.
+    /// Set to `None` if DTLS 1.3 is not supported.
+    pub dtls13_cipher_suites: Option<&'static [&'static dyn SupportedDtls13CipherSuite]>,
+
+    /// HKDF provider for TLS 1.3 key derivation.
+    ///
+    /// TLS 1.3 uses HKDF instead of the TLS 1.2 PRF for all key derivation.
+    /// Set to `None` if DTLS 1.3 is not supported.
+    pub hkdf_provider: Option<&'static dyn HkdfProvider>,
+
+    // =========================================================================
+    // Shared components (used by both DTLS 1.2 and DTLS 1.3)
+    // =========================================================================
+    /// Supported key exchange groups (P-256, P-384, X25519).
+    ///
+    /// Used for ECDHE key exchange in both DTLS versions.
     pub kx_groups: &'static [&'static dyn SupportedKxGroup],
 
     /// Signature verification for certificates.
@@ -413,9 +456,6 @@ pub struct CryptoProvider {
 
     /// Hash provider for handshake hashing.
     pub hash_provider: &'static dyn HashProvider,
-
-    /// PRF for TLS 1.2 key derivation.
-    pub prf_provider: &'static dyn PrfProvider,
 
     /// HMAC provider for computing HMAC signatures.
     pub hmac_provider: &'static dyn HmacProvider,
