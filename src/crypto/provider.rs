@@ -72,7 +72,7 @@
 //!
 //! ```
 //! use dimpl::crypto::{SupportedDtls12CipherSuite, Cipher, Dtls12CipherSuite, HashAlgorithm};
-//! use dimpl::buffer::{Buf, TmpBuf};
+//! use dimpl::crypto::{Buf, TmpBuf};
 //! use dimpl::crypto::{Aad, Nonce};
 //!
 //! #[derive(Debug)]
