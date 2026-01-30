@@ -4,10 +4,10 @@ use aws_lc_rs::aead::{Aad as AwsAad, LessSafeKey, Nonce as AwsNonce};
 use aws_lc_rs::aead::{UnboundKey, AES_128_GCM, AES_256_GCM};
 
 use crate::buffer::{Buf, TmpBuf};
-use crate::crypto::provider::{Cipher, SupportedDtls12CipherSuite};
+use crate::crypto::provider::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuite};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::Dtls12CipherSuite;
-use crate::types::HashAlgorithm;
+use crate::types::{Dtls13CipherSuite, HashAlgorithm};
 
 /// AES-GCM cipher implementation using aws-lc-rs.
 struct AesGcm {
@@ -117,10 +117,82 @@ impl SupportedDtls12CipherSuite for Aes256GcmSha384 {
     }
 }
 
-/// Static instances of supported cipher suites.
+/// Static instances of supported DTLS 1.2 cipher suites.
 static AES_128_GCM_SHA256: Aes128GcmSha256 = Aes128GcmSha256;
 static AES_256_GCM_SHA384: Aes256GcmSha384 = Aes256GcmSha384;
 
-/// All supported cipher suites.
+/// All supported DTLS 1.2 cipher suites.
 pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] =
     &[&AES_128_GCM_SHA256, &AES_256_GCM_SHA384];
+
+// ============================================================================
+// DTLS 1.3 Cipher Suites
+// ============================================================================
+
+/// TLS_AES_128_GCM_SHA256 cipher suite (TLS 1.3 / DTLS 1.3).
+#[derive(Debug)]
+struct Tls13Aes128GcmSha256;
+
+impl SupportedDtls13CipherSuite for Tls13Aes128GcmSha256 {
+    fn suite(&self) -> Dtls13CipherSuite {
+        Dtls13CipherSuite::AES_128_GCM_SHA256
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA256
+    }
+
+    fn key_len(&self) -> usize {
+        16 // AES-128
+    }
+
+    fn iv_len(&self) -> usize {
+        12 // GCM IV
+    }
+
+    fn tag_len(&self) -> usize {
+        16 // GCM tag
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
+/// TLS_AES_256_GCM_SHA384 cipher suite (TLS 1.3 / DTLS 1.3).
+#[derive(Debug)]
+struct Tls13Aes256GcmSha384;
+
+impl SupportedDtls13CipherSuite for Tls13Aes256GcmSha384 {
+    fn suite(&self) -> Dtls13CipherSuite {
+        Dtls13CipherSuite::AES_256_GCM_SHA384
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA384
+    }
+
+    fn key_len(&self) -> usize {
+        32 // AES-256
+    }
+
+    fn iv_len(&self) -> usize {
+        12 // GCM IV
+    }
+
+    fn tag_len(&self) -> usize {
+        16 // GCM tag
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
+/// Static instances of supported DTLS 1.3 cipher suites.
+static TLS13_AES_128_GCM_SHA256: Tls13Aes128GcmSha256 = Tls13Aes128GcmSha256;
+static TLS13_AES_256_GCM_SHA384: Tls13Aes256GcmSha384 = Tls13Aes256GcmSha384;
+
+/// All supported DTLS 1.3 cipher suites.
+pub(super) static ALL_DTLS13_CIPHER_SUITES: &[&dyn SupportedDtls13CipherSuite] =
+    &[&TLS13_AES_128_GCM_SHA256, &TLS13_AES_256_GCM_SHA384];

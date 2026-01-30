@@ -41,6 +41,7 @@
 
 mod cipher_suite;
 mod hash;
+mod hkdf;
 mod hmac;
 mod kx_group;
 mod random;
@@ -102,8 +103,8 @@ pub fn default_provider() -> CryptoProvider {
         // DTLS 1.2 components
         cipher_suites: cipher_suite::ALL_CIPHER_SUITES,
         prf_provider: &tls12::PRF_PROVIDER,
-        // DTLS 1.3 components (not yet implemented)
-        dtls13_cipher_suites: None,
-        hkdf_provider: None,
+        // DTLS 1.3 components
+        dtls13_cipher_suites: cipher_suite::ALL_DTLS13_CIPHER_SUITES,
+        hkdf_provider: &hkdf::HKDF_PROVIDER,
     }
 }
