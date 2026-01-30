@@ -4,8 +4,8 @@
 //! based on the documented support in lib.rs.
 
 use crate::buffer::Buf;
-use crate::crypto::provider::{CryptoProvider, SupportedCipherSuite, SupportedKxGroup};
-use crate::dtls12::message::CipherSuite;
+use crate::crypto::provider::{CryptoProvider, SupportedDtls12CipherSuite, SupportedKxGroup};
+use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 use crate::Error;
 
@@ -17,12 +17,12 @@ impl CryptoProvider {
     /// - `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384`
     pub fn supported_cipher_suites(
         &self,
-    ) -> impl Iterator<Item = &'static dyn SupportedCipherSuite> {
+    ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> {
         self.cipher_suites.iter().copied().filter(|cs| {
             matches!(
                 cs.suite(),
-                CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-                    | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+                Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+                    | Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
             )
         })
     }
@@ -45,7 +45,7 @@ impl CryptoProvider {
     pub fn supported_cipher_suites_for_signature_algorithm(
         &self,
         sig_alg: SignatureAlgorithm,
-    ) -> impl Iterator<Item = &'static dyn SupportedCipherSuite> {
+    ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> {
         self.supported_cipher_suites()
             .filter(move |cs| cs.suite().signature_algorithm() == sig_alg)
     }
@@ -57,8 +57,8 @@ impl CryptoProvider {
         self.supported_cipher_suites().any(|cs| {
             matches!(
                 cs.suite(),
-                CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-                    | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+                Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+                    | Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
             )
         })
     }
@@ -384,7 +384,7 @@ mod tests {
             .collect();
 
         assert_eq!(ecdsa_suites.len(), 2);
-        assert!(ecdsa_suites.contains(&CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256));
-        assert!(ecdsa_suites.contains(&CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384));
+        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256));
+        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384));
     }
 }

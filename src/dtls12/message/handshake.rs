@@ -2,8 +2,8 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{
-    Certificate, CertificateRequest, CertificateVerify, CipherSuite, ClientHello,
-    ClientKeyExchange, Finished, HelloVerifyRequest, ServerHello, ServerKeyExchange,
+    Certificate, CertificateRequest, CertificateVerify, ClientHello, ClientKeyExchange,
+    Dtls12CipherSuite, Finished, HelloVerifyRequest, ServerHello, ServerKeyExchange,
 };
 use crate::buffer::Buf;
 use nom::bytes::complete::take;
@@ -86,7 +86,7 @@ impl Handshake {
     pub fn parse(
         input: &[u8],
         base_offset: usize,
-        c: Option<CipherSuite>,
+        c: Option<Dtls12CipherSuite>,
         as_fragment: bool,
     ) -> IResult<&[u8], Handshake> {
         let original_input = input;
@@ -138,7 +138,7 @@ impl Handshake {
     pub fn defragment<'b>(
         mut iter: impl Iterator<Item = (&'b Handshake, &'b [u8])>,
         buffer: &mut Buf,
-        cipher_suite: Option<CipherSuite>,
+        cipher_suite: Option<Dtls12CipherSuite>,
         transcript: Option<&mut Buf>,
     ) -> Result<Handshake, crate::Error> {
         buffer.clear();
@@ -386,7 +386,7 @@ impl Body {
         input: &[u8],
         base_offset: usize,
         m: MessageType,
-        c: Option<CipherSuite>,
+        c: Option<Dtls12CipherSuite>,
     ) -> IResult<&[u8], Body> {
         match m {
             MessageType::HelloRequest => Ok((input, Body::HelloRequest)),
@@ -502,7 +502,7 @@ mod tests {
     use super::*;
     use crate::buffer::Buf;
     use crate::dtls12::message::{
-        CipherSuite, CompressionMethod, Cookie, ProtocolVersion, Random, SessionId,
+        CompressionMethod, Cookie, Dtls12CipherSuite, ProtocolVersion, Random, SessionId,
     };
 
     const MESSAGE: &[u8] = &[
@@ -521,9 +521,9 @@ mod tests {
         0xAA, // SessionId
         0x01, // Cookie length
         0xBB, // Cookie
-        0x00, 0x04, // CipherSuites length
-        0xC0, 0x2B, // CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-        0xC0, 0x2C, // CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+        0x00, 0x04, // Dtls12CipherSuites length
+        0xC0, 0x2B, // Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+        0xC0, 0x2C, // Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
         0x01, // CompressionMethods length
         0x00, // CompressionMethod::Null
     ];
@@ -554,8 +554,8 @@ mod tests {
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
         let mut cipher_suites = ArrayVec::new();
-        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
-        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
+        cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
+        cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
         let mut compression_methods = ArrayVec::new();
         compression_methods.push(CompressionMethod::Null);
 
@@ -597,8 +597,8 @@ mod tests {
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
         let mut cipher_suites = ArrayVec::new();
-        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
-        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
+        cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
+        cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
         let mut compression_methods = ArrayVec::new();
         compression_methods.push(CompressionMethod::Null);
 

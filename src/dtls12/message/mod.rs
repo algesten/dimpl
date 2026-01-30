@@ -94,12 +94,12 @@ impl ProtocolVersion {
     }
 }
 
-pub type CipherSuiteVec = ArrayVec<CipherSuite, { CipherSuite::supported().len() }>;
+pub type CipherSuiteVec = ArrayVec<Dtls12CipherSuite, { Dtls12CipherSuite::supported().len() }>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 /// Supported TLS 1.2 cipher suites for DTLS.
-pub enum CipherSuite {
+pub enum Dtls12CipherSuite {
     // ECDHE with AES-GCM
     /// ECDHE with ECDSA authentication, AES-256-GCM, SHA-384
     ECDHE_ECDSA_AES256_GCM_SHA384, // 0xC02C
@@ -110,21 +110,21 @@ pub enum CipherSuite {
     Unknown(u16),
 }
 
-impl Default for CipherSuite {
+impl Default for Dtls12CipherSuite {
     fn default() -> Self {
         Self::Unknown(0)
     }
 }
 
-impl CipherSuite {
-    /// Convert the 16-bit IANA value to a `CipherSuite`.
+impl Dtls12CipherSuite {
+    /// Convert the 16-bit IANA value to a `Dtls12CipherSuite`.
     pub fn from_u16(value: u16) -> Self {
         match value {
             // ECDHE with AES-GCM
-            0xC02C => CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
-            0xC02B => CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+            0xC02C => Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
+            0xC02B => Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
 
-            _ => CipherSuite::Unknown(value),
+            _ => Dtls12CipherSuite::Unknown(value),
         }
     }
 
@@ -132,27 +132,27 @@ impl CipherSuite {
     pub fn as_u16(&self) -> u16 {
         match self {
             // ECDHE with AES-GCM
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => 0xC02C,
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 0xC02B,
+            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => 0xC02C,
+            Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 0xC02B,
 
-            CipherSuite::Unknown(value) => *value,
+            Dtls12CipherSuite::Unknown(value) => *value,
         }
     }
 
-    /// Parse a `CipherSuite` from network byte order.
-    pub fn parse(input: &[u8]) -> IResult<&[u8], CipherSuite> {
+    /// Parse a `Dtls12CipherSuite` from network byte order.
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Dtls12CipherSuite> {
         let (input, value) = be_u16(input)?;
-        Ok((input, CipherSuite::from_u16(value)))
+        Ok((input, Dtls12CipherSuite::from_u16(value)))
     }
 
     /// Length in bytes of verify_data for Finished MACs.
     pub fn verify_data_length(&self) -> usize {
         match self {
             // AES-GCM suites
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-            | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 12,
+            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+            | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 12,
 
-            CipherSuite::Unknown(_) => 12, // Default length for unknown cipher suites
+            Dtls12CipherSuite::Unknown(_) => 12, // Default length for unknown cipher suites
         }
     }
 
@@ -160,10 +160,10 @@ impl CipherSuite {
     pub fn as_key_exchange_algorithm(&self) -> KeyExchangeAlgorithm {
         match self {
             // All ECDHE ciphers
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-            | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => KeyExchangeAlgorithm::EECDH,
+            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+            | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => KeyExchangeAlgorithm::EECDH,
 
-            CipherSuite::Unknown(_) => KeyExchangeAlgorithm::Unknown,
+            Dtls12CipherSuite::Unknown(_) => KeyExchangeAlgorithm::Unknown,
         }
     }
 
@@ -171,24 +171,27 @@ impl CipherSuite {
     pub fn has_ecc(&self) -> bool {
         matches!(
             self,
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+                | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
         )
     }
 
     /// All supported cipher suites in server preference order.
-    pub const fn all() -> &'static [CipherSuite; 2] {
+    pub const fn all() -> &'static [Dtls12CipherSuite; 2] {
         &[
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
+            Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
         ]
     }
 
     /// Cipher suites compatible with a given certificate's signature algorithm.
-    pub fn compatible_with_certificate(cert_type: SignatureAlgorithm) -> &'static [CipherSuite; 2] {
+    pub fn compatible_with_certificate(
+        cert_type: SignatureAlgorithm,
+    ) -> &'static [Dtls12CipherSuite; 2] {
         match cert_type {
             SignatureAlgorithm::ECDSA => &[
-                CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
-                CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+                Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
+                Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
             ],
             _ => panic!("Need either RSA or ECDSA certificate"),
         }
@@ -205,18 +208,18 @@ impl CipherSuite {
     /// The hash algorithm used by this cipher suite.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
         match self {
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
-            CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
+            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
+            Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
+            Dtls12CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
         }
     }
 
     /// The signature algorithm associated with the suite's key exchange.
     pub fn signature_algorithm(&self) -> SignatureAlgorithm {
         match self {
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => SignatureAlgorithm::ECDSA,
-            CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => SignatureAlgorithm::ECDSA,
-            CipherSuite::Unknown(_) => SignatureAlgorithm::Unknown(0),
+            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => SignatureAlgorithm::ECDSA,
+            Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => SignatureAlgorithm::ECDSA,
+            Dtls12CipherSuite::Unknown(_) => SignatureAlgorithm::Unknown(0),
         }
     }
 

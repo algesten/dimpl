@@ -3,9 +3,9 @@ use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, Key};
 
 use crate::buffer::{Buf, TmpBuf};
-use crate::crypto::provider::{Cipher, SupportedCipherSuite};
+use crate::crypto::provider::{Cipher, SupportedDtls12CipherSuite};
 use crate::crypto::{Aad, Nonce};
-use crate::dtls12::message::CipherSuite;
+use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::HashAlgorithm;
 
 /// AES-GCM cipher implementation using RustCrypto.
@@ -120,9 +120,9 @@ impl Cipher for AesGcm {
 #[derive(Debug)]
 struct Aes128GcmSha256;
 
-impl SupportedCipherSuite for Aes128GcmSha256 {
-    fn suite(&self) -> CipherSuite {
-        CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+impl SupportedDtls12CipherSuite for Aes128GcmSha256 {
+    fn suite(&self) -> Dtls12CipherSuite {
+        Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
     }
 
     fn hash_algorithm(&self) -> HashAlgorithm {
@@ -142,9 +142,9 @@ impl SupportedCipherSuite for Aes128GcmSha256 {
 #[derive(Debug)]
 struct Aes256GcmSha384;
 
-impl SupportedCipherSuite for Aes256GcmSha384 {
-    fn suite(&self) -> CipherSuite {
-        CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+impl SupportedDtls12CipherSuite for Aes256GcmSha384 {
+    fn suite(&self) -> Dtls12CipherSuite {
+        Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
     }
 
     fn hash_algorithm(&self) -> HashAlgorithm {
@@ -165,5 +165,5 @@ static AES_128_GCM_SHA256: Aes128GcmSha256 = Aes128GcmSha256;
 static AES_256_GCM_SHA384: Aes256GcmSha384 = Aes256GcmSha384;
 
 /// All supported cipher suites.
-pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedCipherSuite] =
+pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] =
     &[&AES_128_GCM_SHA256, &AES_256_GCM_SHA384];

@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::crypto::{CipherSuite, SignatureAlgorithm};
+use dimpl::crypto::{Dtls12CipherSuite, SignatureAlgorithm};
 use dimpl::{Config, Dtls, Output};
 use ossl::{DtlsCertOptions, DtlsEvent, DtlsPKeyType, OsslDtlsCert};
 
@@ -13,7 +13,7 @@ fn all_crypto() {
     let _ = env_logger::try_init();
 
     // Loop over all supported cipher suites and ensure we can connect
-    for &suite in CipherSuite::all().iter() {
+    for &suite in Dtls12CipherSuite::all().iter() {
         eprintln!("Testing suite (dimpl client ↔️ ossl server): {:?}", suite);
 
         run_dimpl_client_vs_ossl_server_for_suite(suite);
@@ -23,7 +23,7 @@ fn all_crypto() {
     }
 }
 
-fn run_dimpl_client_vs_ossl_server_for_suite(suite: CipherSuite) {
+fn run_dimpl_client_vs_ossl_server_for_suite(suite: Dtls12CipherSuite) {
     // Generate certificates for both client and server matching the suite's signature algorithm
     let pkey_type = match suite.signature_algorithm() {
         SignatureAlgorithm::ECDSA => DtlsPKeyType::EcDsaP256,
@@ -127,7 +127,7 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: CipherSuite) {
     );
 }
 
-fn run_ossl_client_vs_dimpl_server_for_suite(suite: CipherSuite) {
+fn run_ossl_client_vs_dimpl_server_for_suite(suite: Dtls12CipherSuite) {
     // Generate certificates for both ends
     let pkey_type = match suite.signature_algorithm() {
         SignatureAlgorithm::ECDSA => DtlsPKeyType::EcDsaP256,

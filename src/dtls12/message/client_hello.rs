@@ -1,6 +1,6 @@
 use super::extensions::{ECPointFormatsExtension, SignatureAlgorithmsExtension};
 use super::extensions::{SupportedGroupsExtension, UseSrtpExtension};
-use super::{CipherSuite, CipherSuiteVec, CompressionMethod, CompressionMethodVec};
+use super::{CipherSuiteVec, CompressionMethod, CompressionMethodVec, Dtls12CipherSuite};
 use super::{Cookie, Extension, ExtensionType, ProtocolVersion, Random, SessionId};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
@@ -10,7 +10,7 @@ use nom::{Err, IResult};
 
 use crate::buffer::Buf;
 use crate::crypto::CryptoProvider;
-use crate::message::extension::ExtensionVec;
+use super::extension::ExtensionVec;
 use crate::util::many1;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -125,7 +125,7 @@ impl ClientHello {
         let (input, cipher_suites_len) = be_u16(input)?;
         let (input, input_cipher) = take(cipher_suites_len)(input)?;
         let (rest, cipher_suites) =
-            many1(CipherSuite::parse, CipherSuite::is_supported)(input_cipher)?;
+            many1(Dtls12CipherSuite::parse, Dtls12CipherSuite::is_supported)(input_cipher)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
@@ -255,9 +255,9 @@ mod tests {
         0xAA, // SessionId
         0x01, // Cookie length
         0xBB, // Cookie
-        0x00, 0x04, // CipherSuites length
-        0xC0, 0x2B, // CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-        0xC0, 0x2C, // CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+        0x00, 0x04, // Dtls12CipherSuites length
+        0xC0, 0x2B, // Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+        0xC0, 0x2C, // Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
         0x01, // CompressionMethods length
         0x00, // CompressionMethod::Null
     ];
@@ -268,8 +268,8 @@ mod tests {
         let session_id = SessionId::try_new(&[0xAA]).unwrap();
         let cookie = Cookie::try_new(&[0xBB]).unwrap();
         let mut cipher_suites = ArrayVec::new();
-        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
-        cipher_suites.push(CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
+        cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
+        cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
         let mut compression_methods = ArrayVec::new();
         compression_methods.push(CompressionMethod::Null);
 
