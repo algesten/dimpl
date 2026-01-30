@@ -1,3 +1,5 @@
-//! DTLS 1.3 protocol implementation (stub).
+//! DTLS 1.3 protocol implementation.
 //!
-//! This module will contain the DTLS 1.3 implementation. Currently a placeholder.
+//! This module contains the DTLS 1.3 handshake message types and parsing.
+
+pub mod message;

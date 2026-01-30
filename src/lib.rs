@@ -181,7 +181,10 @@ use std::time::Instant;
 
 // Shared types used by both DTLS versions
 mod types;
-pub use types::{ContentType, HashAlgorithm, NamedGroup, Sequence, SignatureAlgorithm};
+pub use types::{
+    CompressionMethod, ContentType, HashAlgorithm, NamedGroup, ProtocolVersion, Sequence,
+    SignatureAlgorithm,
+};
 
 // DTLS version-specific modules
 mod dtls12;

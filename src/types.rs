@@ -553,6 +553,27 @@ impl SignatureScheme {
         Ok((input, SignatureScheme::from_u16(value)))
     }
 
+    /// Returns true if this signature scheme is supported by this implementation.
+    pub fn is_supported(&self) -> bool {
+        matches!(
+            self,
+            SignatureScheme::ECDSA_SECP256R1_SHA256
+                | SignatureScheme::ECDSA_SECP384R1_SHA384
+                | SignatureScheme::ED25519
+                | SignatureScheme::RSA_PSS_RSAE_SHA256
+        )
+    }
+
+    /// All supported signature schemes.
+    pub fn supported() -> ArrayVec<SignatureScheme, 4> {
+        let mut schemes = ArrayVec::new();
+        schemes.push(SignatureScheme::ECDSA_SECP256R1_SHA256);
+        schemes.push(SignatureScheme::ECDSA_SECP384R1_SHA384);
+        schemes.push(SignatureScheme::ED25519);
+        schemes.push(SignatureScheme::RSA_PSS_RSAE_SHA256);
+        schemes
+    }
+
     /// Returns the hash algorithm associated with this signature scheme.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
         match self {
@@ -641,5 +662,143 @@ impl Dtls13CipherSuite {
             Dtls13CipherSuite::AES_256_GCM_SHA384 => HashAlgorithm::SHA384,
             Dtls13CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
         }
+    }
+
+    /// Returns true if this cipher suite is a known/supported variant.
+    pub fn is_known(&self) -> bool {
+        Self::all().contains(self)
+    }
+
+    /// All supported DTLS 1.3 cipher suites in preference order.
+    pub fn all() -> &'static [Dtls13CipherSuite] {
+        &[
+            Dtls13CipherSuite::AES_128_GCM_SHA256,
+            Dtls13CipherSuite::AES_256_GCM_SHA384,
+            Dtls13CipherSuite::CHACHA20_POLY1305_SHA256,
+        ]
+    }
+
+    /// Length in bytes of verify_data for Finished messages.
+    pub fn verify_data_length(&self) -> usize {
+        self.hash_algorithm().output_len()
+    }
+}
+
+// ============================================================================
+// Protocol Version
+// ============================================================================
+
+/// DTLS protocol version identifiers.
+///
+/// Used in record headers and handshake messages for both DTLS 1.2 and 1.3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolVersion {
+    /// DTLS 1.0.
+    DTLS1_0,
+    /// DTLS 1.2.
+    DTLS1_2,
+    /// DTLS 1.3.
+    DTLS1_3,
+    /// Unknown protocol version.
+    Unknown(u16),
+}
+
+impl Default for ProtocolVersion {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
+}
+
+impl ProtocolVersion {
+    /// Convert this `ProtocolVersion` to its wire format u16 value.
+    pub fn as_u16(&self) -> u16 {
+        match self {
+            ProtocolVersion::DTLS1_0 => 0xFEFF,
+            ProtocolVersion::DTLS1_2 => 0xFEFD,
+            ProtocolVersion::DTLS1_3 => 0xFEFC,
+            ProtocolVersion::Unknown(value) => *value,
+        }
+    }
+
+    /// Parse a `ProtocolVersion` from wire format.
+    pub fn parse(input: &[u8]) -> IResult<&[u8], ProtocolVersion> {
+        let (input, version) = be_u16(input)?;
+        let protocol_version = match version {
+            0xFEFF => ProtocolVersion::DTLS1_0,
+            0xFEFD => ProtocolVersion::DTLS1_2,
+            0xFEFC => ProtocolVersion::DTLS1_3,
+            _ => ProtocolVersion::Unknown(version),
+        };
+        Ok((input, protocol_version))
+    }
+
+    /// Serialize this `ProtocolVersion` to wire format.
+    pub fn serialize(&self, output: &mut crate::buffer::Buf) {
+        output.extend_from_slice(&self.as_u16().to_be_bytes());
+    }
+}
+
+// ============================================================================
+// Compression Method
+// ============================================================================
+
+/// TLS compression methods.
+///
+/// Used in ClientHello/ServerHello for both DTLS 1.2 and 1.3.
+/// TLS 1.3 only uses Null compression but includes it for compatibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionMethod {
+    /// No compression.
+    Null,
+    /// DEFLATE compression.
+    Deflate,
+    /// Unknown compression method.
+    Unknown(u8),
+}
+
+impl Default for CompressionMethod {
+    fn default() -> Self {
+        Self::Unknown(0)
+    }
+}
+
+impl CompressionMethod {
+    /// Convert a u8 value to a `CompressionMethod`.
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            0x00 => CompressionMethod::Null,
+            0x01 => CompressionMethod::Deflate,
+            _ => CompressionMethod::Unknown(value),
+        }
+    }
+
+    /// Returns true if this compression method is supported by this implementation.
+    pub fn is_supported(&self) -> bool {
+        Self::supported().contains(self)
+    }
+
+    /// All recognized compression methods (every non-`Unknown` variant).
+    pub const fn all() -> &'static [CompressionMethod; 2] {
+        &[CompressionMethod::Null, CompressionMethod::Deflate]
+    }
+
+    /// Supported compression methods.
+    pub const fn supported() -> &'static [CompressionMethod; 2] {
+        Self::all()
+    }
+
+    /// Convert this `CompressionMethod` to its u8 value.
+    pub fn as_u8(&self) -> u8 {
+        match self {
+            CompressionMethod::Null => 0x00,
+            CompressionMethod::Deflate => 0x01,
+            CompressionMethod::Unknown(value) => *value,
+        }
+    }
+
+    /// Parse a `CompressionMethod` from wire format.
+    pub fn parse(input: &[u8]) -> IResult<&[u8], CompressionMethod> {
+        let (input, value) = be_u8(input)?;
+        Ok((input, CompressionMethod::from_u8(value)))
     }
 }

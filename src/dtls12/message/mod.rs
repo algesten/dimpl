@@ -44,55 +44,15 @@ pub use record::DTLSRecord;
 
 // Re-export shared types for backwards compatibility
 pub use crate::types::{
-    ContentType, HashAlgorithm, NamedGroup, NamedGroupVec, Sequence, SignatureAlgorithm,
+    CompressionMethod, ContentType, HashAlgorithm, NamedGroup, NamedGroupVec, ProtocolVersion,
+    Sequence, SignatureAlgorithm,
 };
 pub use server_hello::ServerHello;
 pub use server_key_exchange::{ServerKeyExchange, ServerKeyExchangeParams};
 pub use wrapped::{Asn1Cert, DistinguishedName};
 
-use crate::buffer::Buf;
 use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProtocolVersion {
-    DTLS1_0,
-    DTLS1_2,
-    DTLS1_3,
-    Unknown(u16),
-}
-
-impl Default for ProtocolVersion {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
-
-impl ProtocolVersion {
-    pub fn as_u16(&self) -> u16 {
-        match self {
-            ProtocolVersion::DTLS1_0 => 0xFEFF,
-            ProtocolVersion::DTLS1_2 => 0xFEFD,
-            ProtocolVersion::DTLS1_3 => 0xFEFC,
-            ProtocolVersion::Unknown(value) => *value,
-        }
-    }
-
-    pub fn parse(input: &[u8]) -> IResult<&[u8], ProtocolVersion> {
-        let (input, version) = be_u16(input)?;
-        let protocol_version = match version {
-            0xFEFF => ProtocolVersion::DTLS1_0,
-            0xFEFD => ProtocolVersion::DTLS1_2,
-            0xFEFC => ProtocolVersion::DTLS1_3,
-            _ => ProtocolVersion::Unknown(version),
-        };
-        Ok((input, protocol_version))
-    }
-
-    pub fn serialize(&self, output: &mut Buf) {
-        output.extend_from_slice(&self.as_u16().to_be_bytes());
-    }
-}
 
 pub type CipherSuiteVec = ArrayVec<Dtls12CipherSuite, { Dtls12CipherSuite::supported().len() }>;
 
@@ -236,57 +196,6 @@ impl Dtls12CipherSuite {
 
 pub type CompressionMethodVec =
     ArrayVec<CompressionMethod, { CompressionMethod::supported().len() }>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompressionMethod {
-    Null,
-    Deflate,
-    Unknown(u8),
-}
-
-impl Default for CompressionMethod {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
-
-impl CompressionMethod {
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0x00 => CompressionMethod::Null,
-            0x01 => CompressionMethod::Deflate,
-            _ => CompressionMethod::Unknown(value),
-        }
-    }
-
-    /// Returns true if this compression method is supported by this implementation.
-    pub fn is_supported(&self) -> bool {
-        Self::supported().contains(self)
-    }
-
-    /// All recognized compression methods (every non-`Unknown` variant).
-    pub const fn all() -> &'static [CompressionMethod; 2] {
-        &[CompressionMethod::Null, CompressionMethod::Deflate]
-    }
-
-    /// Supported compression methods.
-    pub const fn supported() -> &'static [CompressionMethod; 2] {
-        Self::all()
-    }
-
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            CompressionMethod::Null => 0x00,
-            CompressionMethod::Deflate => 0x01,
-            CompressionMethod::Unknown(value) => *value,
-        }
-    }
-
-    pub fn parse(input: &[u8]) -> IResult<&[u8], CompressionMethod> {
-        let (input, value) = be_u8(input)?;
-        Ok((input, CompressionMethod::from_u8(value)))
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
