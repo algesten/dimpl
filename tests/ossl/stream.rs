@@ -208,9 +208,9 @@ where
 /// Convert SrtpProfileId to SrtpProfile
 fn srtp_profile_from_id(value: SrtpProfileId) -> Result<SrtpProfile, io::Error> {
     match value {
-        SrtpProfileId::SRTP_AES128_CM_SHA1_80 => Ok(SrtpProfile::Aes128CmSha1_80),
-        SrtpProfileId::SRTP_AEAD_AES_128_GCM => Ok(SrtpProfile::AeadAes128Gcm),
-        SrtpProfileId::SRTP_AEAD_AES_256_GCM => Ok(SrtpProfile::AeadAes256Gcm),
+        SrtpProfileId::SRTP_AES128_CM_SHA1_80 => Ok(SrtpProfile::AES128_CM_SHA1_80),
+        SrtpProfileId::SRTP_AEAD_AES_128_GCM => Ok(SrtpProfile::AEAD_AES_128_GCM),
+        SrtpProfileId::SRTP_AEAD_AES_256_GCM => Ok(SrtpProfile::AEAD_AES_256_GCM),
         x => Err(io::Error::new(
             io::ErrorKind::Other,
             format!("Unsupported SRTP profile {:x}", x.as_raw()),
