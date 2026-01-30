@@ -191,7 +191,7 @@ use dtls12::{Client, Server};
 
 mod time_tricks;
 
-pub mod buffer;
+pub(crate) mod buffer;
 mod window;
 
 mod util;

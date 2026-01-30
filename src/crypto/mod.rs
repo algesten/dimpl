@@ -24,22 +24,22 @@ pub use dtls_aead::{Aad, Nonce};
 // Re-export internal AEAD constants/types for crate-internal use
 pub(crate) use dtls_aead::{Iv, DTLS_AEAD_OVERHEAD, DTLS_EXPLICIT_NONCE_LEN};
 
+// Re-export buffer types for provider trait implementations
+pub use crate::buffer::{Buf, TmpBuf};
+
 // Re-export all provider traits and types (similar to rustls structure)
 // This allows users to do: use dimpl::crypto::{CryptoProvider, SupportedDtls12CipherSuite, ...};
 pub use provider::{
-    ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext, HashProvider,
+    ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext, HashProvider, HkdfProvider,
+    HmacProvider, KeyProvider, PrfProvider, SecureRandom, SignatureVerifier, SigningKey,
+    SupportedDtls12CipherSuite, SupportedDtls13CipherSuite, SupportedKxGroup,
 };
-pub use provider::{HmacProvider, KeyProvider, PrfProvider};
-pub use provider::{SecureRandom, SignatureVerifier, SigningKey};
-pub use provider::{SupportedDtls12CipherSuite, SupportedKxGroup};
-// DTLS 1.3 provider traits
-pub use provider::{HkdfProvider, SupportedDtls13CipherSuite};
 
 // Re-export shared types for provider trait implementations
-pub use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm, SignatureScheme};
-// Version-specific cipher suite types
 pub use crate::dtls12::message::Dtls12CipherSuite;
-pub use crate::types::Dtls13CipherSuite;
+pub use crate::types::{
+    Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm, SignatureScheme,
+};
 
 impl Deref for Aad {
     type Target = [u8];
