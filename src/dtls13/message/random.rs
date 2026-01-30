@@ -1,52 +1,36 @@
-//
-use std::time::Instant;
+//! TLS 1.3 Random (RFC 8446 Section 4.1.2).
+//!
+//! Unlike TLS 1.2, the Random field is a flat 32-byte opaque value
+//! with no `gmt_unix_time` structure.
 
 use nom::bytes::complete::take;
-use nom::number::complete::be_u32;
 use nom::IResult;
 
 use crate::buffer::Buf;
-use crate::time_tricks::InstantExt;
 use crate::SeededRng;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Random {
-    pub gmt_unix_time: u32,
-    pub random_bytes: [u8; 28],
+    pub bytes: [u8; 32],
 }
 
 impl Random {
-    pub fn new(now: Instant, rng: &mut SeededRng) -> Self {
-        let gmt_duration = now.to_unix_duration();
-        // This is valid until year 2106, at which point I will be beyond caring.
-        let gmt_unix_time = gmt_duration.as_secs() as u32;
-
-        let random_bytes: [u8; 28] = rng.random();
-
+    pub fn new(rng: &mut SeededRng) -> Self {
         Self {
-            gmt_unix_time,
-            random_bytes,
+            bytes: rng.random(),
         }
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], Random> {
-        let (input, gmt_unix_time) = be_u32(input)?;
-        let (input, input_rand) = take(28_usize)(input)?;
-        let mut random_bytes = [0u8; 28];
-        random_bytes.copy_from_slice(input_rand);
+        let (input, data) = take(32_usize)(input)?;
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(data);
 
-        Ok((
-            input,
-            Random {
-                gmt_unix_time,
-                random_bytes,
-            },
-        ))
+        Ok((input, Random { bytes }))
     }
 
     pub fn serialize(&self, output: &mut Buf) {
-        output.extend_from_slice(&self.gmt_unix_time.to_be_bytes());
-        output.extend_from_slice(&self.random_bytes);
+        output.extend_from_slice(&self.bytes);
     }
 }
 
@@ -58,19 +42,12 @@ mod tests {
     #[test]
     fn random_parse() {
         let data = [
-            0x5F, 0x37, 0xA9, 0x4B, // gmt_unix_time
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
             0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
-            0x1D, 0x1E,
+            0x1D, 0x1E, 0x1F, 0x20,
         ];
 
-        let expected = Random {
-            gmt_unix_time: 0x5F37A94B,
-            random_bytes: [
-                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
-                0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
-            ],
-        };
+        let expected = Random { bytes: data };
 
         let (_, parsed) = Random::parse(&data).unwrap();
         assert_eq!(parsed, expected);
@@ -79,22 +56,16 @@ mod tests {
     #[test]
     fn random_serialize() {
         let random = Random {
-            gmt_unix_time: 0x5F37A94B,
-            random_bytes: [
+            bytes: [
                 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
                 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
+                0x1D, 0x1E, 0x1F, 0x20,
             ],
         };
 
         let mut serialized = Buf::new();
         random.serialize(&mut serialized);
 
-        let expected = [
-            0x5F, 0x37, 0xA9, 0x4B, // gmt_unix_time
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
-            0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
-        ];
-
-        assert_eq!(&*serialized, expected);
+        assert_eq!(&*serialized, &random.bytes);
     }
 }

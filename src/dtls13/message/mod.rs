@@ -14,6 +14,7 @@ mod finished;
 mod handshake;
 mod id;
 mod random;
+mod record;
 mod server_hello;
 mod wrapped;
 
@@ -36,10 +37,12 @@ pub use finished::Finished;
 pub use handshake::{Body, Handshake, Header, MessageType};
 pub use id::{Cookie, SessionId};
 pub use random::Random;
+pub use record::Dtls13Record;
 pub use server_hello::ServerHello;
 pub use wrapped::{Asn1Cert, DistinguishedName};
 
 // Re-export shared types
 pub use crate::types::{
-    CompressionMethod, Dtls13CipherSuite, NamedGroup, ProtocolVersion, SignatureScheme,
+    CompressionMethod, ContentType, Dtls13CipherSuite, NamedGroup, ProtocolVersion, Sequence,
+    SignatureScheme,
 };

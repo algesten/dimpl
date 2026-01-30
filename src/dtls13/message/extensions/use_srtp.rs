@@ -1,11 +1,9 @@
 use crate::buffer::Buf;
 use crate::SrtpProfile;
 use arrayvec::ArrayVec;
-use nom::{
-    bytes::complete::take,
-    number::complete::{be_u16, be_u8},
-    IResult,
-};
+use nom::bytes::complete::take;
+use nom::number::complete::{be_u16, be_u8};
+use nom::IResult;
 
 /// DTLS-SRTP protection profile identifiers
 /// From RFC 5764 Section 4.1.2
