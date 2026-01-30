@@ -320,6 +320,20 @@ impl Dtls {
     }
 }
 
+impl fmt::Debug for Dtls {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (role, state) = match &self.inner {
+            Some(Inner::Client(c)) => ("Client", c.state_name()),
+            Some(Inner::Server(s)) => ("Server", s.state_name()),
+            None => ("None", ""),
+        };
+        f.debug_struct("Dtls")
+            .field("role", &role)
+            .field("state", &state)
+            .finish()
+    }
+}
+
 /// Output events produced by the DTLS engine when polled.
 pub enum Output<'a> {
     /// A DTLS record to transmit on the wire.

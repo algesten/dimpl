@@ -139,6 +139,10 @@ impl Server {
         Client::new_with_engine(self.engine)
     }
 
+    pub(crate) fn state_name(&self) -> &'static str {
+        self.state.name()
+    }
+
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         self.engine.parse_packet(packet)?;
         self.make_progress()?;
@@ -201,6 +205,25 @@ impl Server {
 }
 
 impl State {
+    fn name(&self) -> &'static str {
+        match self {
+            State::AwaitClientHello => "AwaitClientHello",
+            State::SendServerHello => "SendServerHello",
+            State::SendCertificate => "SendCertificate",
+            State::SendServerKeyExchange => "SendServerKeyExchange",
+            State::SendCertificateRequest => "SendCertificateRequest",
+            State::SendServerHelloDone => "SendServerHelloDone",
+            State::AwaitCertificate => "AwaitCertificate",
+            State::AwaitClientKeyExchange => "AwaitClientKeyExchange",
+            State::AwaitCertificateVerify => "AwaitCertificateVerify",
+            State::AwaitChangeCipherSpec => "AwaitChangeCipherSpec",
+            State::AwaitFinished => "AwaitFinished",
+            State::SendChangeCipherSpec => "SendChangeCipherSpec",
+            State::SendFinished => "SendFinished",
+            State::AwaitApplicationData => "AwaitApplicationData",
+        }
+    }
+
     fn make_progress(self, server: &mut Server) -> Result<Self, Error> {
         match self {
             State::AwaitClientHello => self.await_client_hello(server),
