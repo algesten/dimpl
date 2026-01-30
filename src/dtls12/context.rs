@@ -518,7 +518,7 @@ impl CryptoContext {
 
     /// Check if the client's private key is compatible with a given cipher suite.
     pub fn is_cipher_suite_compatible(&self, cipher_suite: Dtls12CipherSuite) -> bool {
-        self.private_key.is_compatible(cipher_suite)
+        cipher_suite.signature_algorithm() == self.private_key.algorithm()
     }
 
     /// Get the client write IV if derived.

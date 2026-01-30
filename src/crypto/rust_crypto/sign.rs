@@ -12,7 +12,6 @@ use x509_cert::Certificate as X509Certificate;
 
 use crate::buffer::Buf;
 use crate::crypto::provider::{KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
-use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{HashAlgorithm, SignatureAlgorithm};
 
 /// ECDSA signing key implementation.
@@ -81,14 +80,6 @@ impl SigningKeyTrait for EcdsaSigningKey {
             EcdsaSigningKey::P256(_) => HashAlgorithm::SHA256,
             EcdsaSigningKey::P384(_) => HashAlgorithm::SHA384,
         }
-    }
-
-    fn is_compatible(&self, cipher_suite: Dtls12CipherSuite) -> bool {
-        matches!(
-            cipher_suite,
-            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-                | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-        )
     }
 }
 
