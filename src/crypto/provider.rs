@@ -193,9 +193,6 @@ pub trait SigningKey: CryptoSafe {
 
     /// Default hash algorithm for this key.
     fn hash_algorithm(&self) -> HashAlgorithm;
-
-    /// Check if this key is compatible with a cipher suite.
-    fn is_compatible(&self, cipher_suite: Dtls12CipherSuite) -> bool;
 }
 
 /// Active key exchange instance (ephemeral keypair for one handshake).
