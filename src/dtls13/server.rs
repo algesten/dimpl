@@ -42,9 +42,10 @@ use crate::dtls13::Client;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::{
     Body, CompressionMethod, ContentType, Dtls13CipherSuite, Extension, ExtensionType,
-    KeyShareClientHello, KeyShareHelloRetryRequest, MessageType, NamedGroup, ProtocolVersion,
-    Random, ServerHello, SessionId, SignatureAlgorithmsExtension, SupportedGroupsExtension,
-    SupportedVersionsClientHello, SupportedVersionsServerHello, UseSrtpExtension,
+    KeyShareClientHello, KeyShareHelloRetryRequest, KeyUpdateRequest, MessageType, NamedGroup,
+    ProtocolVersion, Random, ServerHello, SessionId, SignatureAlgorithmsExtension,
+    SupportedGroupsExtension, SupportedVersionsClientHello, SupportedVersionsServerHello,
+    UseSrtpExtension,
 };
 use crate::{Config, DtlsCertificate, Error, KeyingMaterial, Output};
 
@@ -112,6 +113,9 @@ pub struct Server {
 
     /// Cookie secret for HMAC-based DoS protection.
     cookie_secret: [u8; 32],
+
+    /// Whether we need to respond with our own KeyUpdate.
+    pending_key_update_response: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +163,7 @@ impl Server {
             client_auth_requested: false,
             hello_retry: false,
             cookie_secret,
+            pending_key_update_response: false,
         }
     }
 
@@ -199,6 +204,25 @@ impl Server {
         Ok(())
     }
 
+    /// Initiate a KeyUpdate to rotate application traffic keys.
+    ///
+    /// Requests the peer to also update its keys.
+    pub fn initiate_key_update(&mut self) -> Result<(), Error> {
+        if self.state != State::AwaitApplicationData {
+            return Err(Error::UnexpectedMessage(
+                "Cannot initiate KeyUpdate: not in application data state".to_string(),
+            ));
+        }
+        if self.engine.is_key_update_in_flight() {
+            return Err(Error::UnexpectedMessage(
+                "Cannot initiate KeyUpdate: one is already in flight".to_string(),
+            ));
+        }
+        self.engine
+            .create_key_update(KeyUpdateRequest::UpdateRequested)?;
+        Ok(())
+    }
+
     /// Send application data when the server is connected.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         if self.state != State::AwaitApplicationData {
@@ -206,8 +230,9 @@ impl Server {
             return Ok(());
         }
 
+        let epoch = self.engine.app_send_epoch();
         self.engine
-            .create_ciphertext_record(ContentType::ApplicationData, 3, false, |body| {
+            .create_ciphertext_record(ContentType::ApplicationData, epoch, false, |body| {
                 body.extend_from_slice(data);
             })?;
 
@@ -914,7 +939,9 @@ impl State {
     }
 
     fn await_application_data(self, server: &mut Server) -> Result<Self, Error> {
+        // Send queued application data
         if !server.queued_data.is_empty() {
+            let epoch = server.engine.app_send_epoch();
             debug!(
                 "Sending queued application data: {}",
                 server.queued_data.len()
@@ -922,12 +949,50 @@ impl State {
             for data in server.queued_data.drain(..) {
                 server.engine.create_ciphertext_record(
                     ContentType::ApplicationData,
-                    3,
+                    epoch,
                     false,
                     |body| {
                         body.extend_from_slice(&data);
                     },
                 )?;
+            }
+        }
+
+        // Send pending KeyUpdate response before processing new KeyUpdates
+        if server.pending_key_update_response {
+            server
+                .engine
+                .create_key_update(KeyUpdateRequest::UpdateNotRequested)?;
+            server.pending_key_update_response = false;
+        }
+
+        // Check for incoming KeyUpdate
+        if server
+            .engine
+            .has_complete_handshake(MessageType::KeyUpdate)
+        {
+            let maybe = server.engine.next_handshake_no_transcript(
+                MessageType::KeyUpdate,
+                &mut server.defragment_buffer,
+            )?;
+
+            if let Some(handshake) = maybe {
+                let Body::KeyUpdate(request) = handshake.body else {
+                    unreachable!()
+                };
+
+                // Install new recv keys
+                server.engine.update_recv_keys()?;
+
+                // ACK the KeyUpdate record
+                server.engine.send_ack()?;
+
+                // If peer requested us to update, schedule our own KeyUpdate
+                if request == KeyUpdateRequest::UpdateRequested {
+                    server.pending_key_update_response = true;
+                }
+
+                debug!("Received KeyUpdate (request={:?})", request);
             }
         }
 

@@ -34,7 +34,7 @@ pub use extensions::supported_versions::{
 };
 pub use extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
 pub use finished::Finished;
-pub use handshake::{Body, Handshake, Header, MessageType};
+pub use handshake::{Body, Handshake, Header, KeyUpdateRequest, MessageType};
 pub use id::{Cookie, SessionId};
 pub use random::Random;
 pub use record::Dtls13Record;

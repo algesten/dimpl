@@ -12,7 +12,8 @@ use crate::crypto::{
 };
 use crate::dtls13::incoming::{Incoming, Record, RecordDecrypt};
 use crate::dtls13::message::{
-    Body, ContentType, Dtls13CipherSuite, Dtls13Record, Handshake, Header, MessageType, Sequence,
+    Body, ContentType, Dtls13CipherSuite, Dtls13Record, Handshake, Header, KeyUpdateRequest,
+    MessageType, Sequence,
 };
 use crate::timer::ExponentialBackoff;
 use crate::types::HashAlgorithm;
@@ -62,6 +63,15 @@ pub struct Engine {
 
     /// Application send keys (only latest epoch; replaced on KeyUpdate)
     app_send_keys: Option<EpochKeys>,
+
+    /// Previous application send keys, retained for KeyUpdate retransmission.
+    prev_app_send_keys: Option<EpochKeys>,
+
+    /// Epoch of the previous send keys.
+    prev_app_send_epoch: u16,
+
+    /// Next sequence number on the previous send epoch (for retransmissions).
+    prev_app_send_seq: u64,
 
     /// Application receive keys. Multiple epochs may coexist due to KeyUpdate.
     app_recv_keys: ArrayVec<RecvEpochEntry, 4>,
@@ -171,6 +181,9 @@ impl Engine {
             hs_send_seq: 0,
             app_send_seq: 0,
             app_send_keys: None,
+            prev_app_send_keys: None,
+            prev_app_send_epoch: 0,
+            prev_app_send_seq: 0,
             app_recv_keys: ArrayVec::new(),
             peer_encryption_enabled: false,
             certificate_der: certificate.certificate,
@@ -204,6 +217,14 @@ impl Engine {
 
     pub fn set_cipher_suite(&mut self, cipher_suite: Dtls13CipherSuite) {
         self.cipher_suite = Some(cipher_suite);
+    }
+
+    pub fn app_send_epoch(&self) -> u16 {
+        self.app_send_epoch
+    }
+
+    pub fn is_key_update_in_flight(&self) -> bool {
+        self.prev_app_send_keys.is_some()
     }
 
     pub fn is_cipher_suite_allowed(&self, suite: Dtls13CipherSuite) -> bool {
@@ -286,8 +307,12 @@ impl Engine {
             return Ok(());
         }
 
-        // Reject new handshakes after initial handshake is complete
-        if self.release_app_data && handshake.header.message_seq >= self.peer_handshake_seq_no {
+        // Reject new handshakes after initial handshake is complete,
+        // but allow KeyUpdate (a post-handshake message).
+        if self.release_app_data
+            && handshake.header.message_seq >= self.peer_handshake_seq_no
+            && handshake.header.msg_type != MessageType::KeyUpdate
+        {
             return Err(Error::RenegotiationAttempt);
         }
 
@@ -619,6 +644,37 @@ impl Engine {
         Ok(Some(handshake))
     }
 
+    /// Like `next_handshake` but does NOT update the transcript hash.
+    /// Used for post-handshake messages like KeyUpdate.
+    pub fn next_handshake_no_transcript(
+        &mut self,
+        wanted: MessageType,
+        defragment_buffer: &mut Buf,
+    ) -> Result<Option<Handshake>, Error> {
+        if !self.has_complete_handshake(wanted) {
+            return Ok(None);
+        }
+
+        let iter = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .skip_while(|r| r.is_handled())
+            .flat_map(|r| r.handshakes().iter().map(move |h| (h, r.buffer())))
+            .skip_while(|(h, _)| h.is_handled());
+
+        let handshake = Handshake::defragment(
+            iter,
+            defragment_buffer,
+            self.cipher_suite,
+            None, // no transcript update
+        )?;
+
+        self.peer_handshake_seq_no = handshake.header.message_seq + 1;
+
+        Ok(Some(handshake))
+    }
+
     pub(crate) fn next_record(&mut self, ctype: ContentType) -> Option<&Record> {
         let record = self
             .queue_rx
@@ -725,6 +781,8 @@ impl Engine {
         // Determine sequence number for this record
         let seq = if epoch == 2 {
             self.hs_send_seq
+        } else if self.prev_app_send_keys.is_some() && epoch == self.prev_app_send_epoch {
+            self.prev_app_send_seq
         } else {
             self.app_send_seq
         };
@@ -751,6 +809,8 @@ impl Engine {
         // Get the send keys for this epoch
         let keys = if epoch == 2 {
             self.hs_send_keys.as_mut()
+        } else if self.prev_app_send_keys.is_some() && epoch == self.prev_app_send_epoch {
+            self.prev_app_send_keys.as_mut()
         } else {
             self.app_send_keys.as_mut()
         };
@@ -835,6 +895,8 @@ impl Engine {
         // Increment send sequence
         if epoch == 2 {
             self.hs_send_seq += 1;
+        } else if self.prev_app_send_keys.is_some() && epoch == self.prev_app_send_epoch {
+            self.prev_app_send_seq += 1;
         } else {
             self.app_send_seq += 1;
         }
@@ -985,7 +1047,11 @@ impl Engine {
         }
 
         let entries = mem::take(&mut self.received_record_numbers);
-        let epoch = if self.app_send_keys.is_some() { 3 } else { 2 };
+        let epoch = if self.app_send_keys.is_some() {
+            self.app_send_epoch
+        } else {
+            2
+        };
 
         self.create_ciphertext_record(ContentType::Ack, epoch, false, |fragment| {
             // record_numbers_length: 2 bytes, value = entries.len() * 16
@@ -1034,6 +1100,18 @@ impl Engine {
                     entry.acked = true;
                 }
             }
+        }
+
+        // If all saved records are acked and we have prev send keys (KeyUpdate in flight),
+        // clear them and stop the flight timer.
+        if self.prev_app_send_keys.is_some()
+            && !self.flight_saved_records.is_empty()
+            && self.flight_saved_records.iter().all(|e| e.acked)
+        {
+            debug!("KeyUpdate ACKed; clearing previous send keys");
+            self.prev_app_send_keys = None;
+            self.flight_clear_resends();
+            self.flight_timeout = Timeout::Disabled;
         }
     }
 
@@ -1263,6 +1341,116 @@ impl Engine {
 
         self.app_send_epoch = 3;
         self.app_send_seq = 0;
+
+        Ok(())
+    }
+
+    /// Derive the next application traffic secret from the current one.
+    /// Per RFC 8446 Section 7.2: application_traffic_secret_N+1 =
+    ///   HKDF-Expand-Label(application_traffic_secret_N, "traffic upd", "", Hash.length)
+    fn derive_next_traffic_secret(&self, current: &Buf) -> Result<Buf, Error> {
+        let hash = self.hash_algorithm();
+        let hash_len = hash.output_len();
+        let hkdf = self.hkdf();
+
+        let mut next = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(hash, current, b"traffic upd", &[], &mut next, hash_len)
+            .map_err(|e| {
+                Error::CryptoError(format!("Failed to derive next traffic secret: {}", e))
+            })?;
+
+        Ok(next)
+    }
+
+    /// Rotate send keys: move current app send keys → prev, derive new ones.
+    fn update_send_keys(&mut self) -> Result<(), Error> {
+        let current_keys = self.app_send_keys.take().ok_or_else(|| {
+            Error::CryptoError("No current app send keys for KeyUpdate".to_string())
+        })?;
+
+        let next_secret = self.derive_next_traffic_secret(&current_keys.traffic_secret)?;
+        let new_keys = self.derive_epoch_keys(&next_secret)?;
+
+        // Save old keys for retransmission
+        self.prev_app_send_keys = Some(current_keys);
+        self.prev_app_send_epoch = self.app_send_epoch;
+        self.prev_app_send_seq = self.app_send_seq;
+
+        // Install new keys
+        self.app_send_keys = Some(new_keys);
+        self.app_send_epoch += 1;
+        self.app_send_seq = 0;
+
+        debug!("Send keys updated to epoch {}", self.app_send_epoch);
+
+        Ok(())
+    }
+
+    /// Install new receive keys from the current recv epoch's traffic secret.
+    /// Derives the next secret, creates keys, and adds a new RecvEpochEntry.
+    /// Returns the new epoch number.
+    pub fn update_recv_keys(&mut self) -> Result<u16, Error> {
+        // Find the latest recv epoch entry
+        let latest = self.app_recv_keys.last().ok_or_else(|| {
+            Error::CryptoError("No current app recv keys for KeyUpdate".to_string())
+        })?;
+
+        let next_secret = self.derive_next_traffic_secret(&latest.keys.traffic_secret)?;
+        let new_epoch = latest.epoch + 1;
+        let new_keys = self.derive_epoch_keys(&next_secret)?;
+
+        // Evict oldest if full
+        if self.app_recv_keys.is_full() {
+            self.app_recv_keys.remove(0);
+        }
+
+        self.app_recv_keys.push(RecvEpochEntry {
+            epoch: new_epoch,
+            keys: new_keys,
+            expected_recv_seq: 0,
+        });
+
+        debug!("Recv keys updated to epoch {}", new_epoch);
+
+        Ok(new_epoch)
+    }
+
+    /// Create and send a KeyUpdate handshake message.
+    ///
+    /// Arms the flight timer for retransmission. The KeyUpdate is sent on
+    /// the current app epoch, then send keys are rotated (old keys saved
+    /// in `prev_app_send_*` for retransmission).
+    pub fn create_key_update(&mut self, request: KeyUpdateRequest) -> Result<(), Error> {
+        // Set up retransmission
+        self.flight_backoff.reset(&mut self.rng);
+        self.flight_clear_resends();
+        self.flight_timeout = Timeout::Unarmed;
+
+        let msg_seq = self.next_handshake_seq_no;
+        self.next_handshake_seq_no += 1;
+
+        let epoch = self.app_send_epoch;
+
+        // Build the handshake message manually (12-byte DTLS header + 1-byte body)
+        self.create_ciphertext_record(ContentType::Handshake, epoch, true, |fragment| {
+            // DTLS handshake header (12 bytes):
+            // msg_type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3)
+            fragment.push(MessageType::KeyUpdate.as_u8());
+            fragment.extend_from_slice(&1u32.to_be_bytes()[1..]); // length = 1
+            fragment.extend_from_slice(&msg_seq.to_be_bytes()); // message_seq
+            fragment.extend_from_slice(&0u32.to_be_bytes()[1..]); // fragment_offset = 0
+            fragment.extend_from_slice(&1u32.to_be_bytes()[1..]); // fragment_length = 1
+            // Body: 1 byte
+            fragment.push(request.as_u8());
+        })?;
+
+        // Now rotate send keys (saves old keys for retransmission)
+        self.update_send_keys()?;
+
+        debug!(
+            "KeyUpdate sent (request={:?}) on epoch {}, new send epoch {}",
+            request, epoch, self.app_send_epoch
+        );
 
         Ok(())
     }
@@ -1645,11 +1833,16 @@ impl RecordDecrypt for Engine {
             return 2;
         }
 
-        // Check application recv epochs
+        // Check application recv epochs - return the newest (last) match
+        // when multiple epochs share the same 2-bit value (e.g. epoch 3 and 7).
+        let mut best = None;
         for entry in &self.app_recv_keys {
             if (entry.epoch & 0x03) == epoch_bits {
-                return entry.epoch;
+                best = Some(entry.epoch);
             }
+        }
+        if let Some(epoch) = best {
+            return epoch;
         }
 
         // Default to the epoch bits value

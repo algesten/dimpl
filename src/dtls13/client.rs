@@ -32,8 +32,8 @@ use crate::dtls13::Server;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::{
     Body, ClientHello, CompressionMethod, ContentType, Cookie, Dtls13CipherSuite, Extension,
-    ExtensionType, KeyShareHelloRetryRequest, KeyShareServerHello, MessageType, NamedGroup,
-    ProtocolVersion, Random, SessionId, SignatureAlgorithmsExtension, SignatureScheme,
+    ExtensionType, KeyShareHelloRetryRequest, KeyShareServerHello, KeyUpdateRequest, MessageType,
+    NamedGroup, ProtocolVersion, Random, SessionId, SignatureAlgorithmsExtension, SignatureScheme,
     SupportedGroupsExtension, SupportedVersionsClientHello, SupportedVersionsServerHello,
     UseSrtpExtension,
 };
@@ -83,6 +83,9 @@ pub struct Client {
     /// Data that is sent before we are connected.
     queued_data: Vec<Buf>,
 
+    /// Whether we need to respond with our own KeyUpdate
+    pending_key_update_response: bool,
+
     /// Active key exchange state (ECDHE)
     active_key_exchange: Option<Box<dyn ActiveKeyExchange>>,
 
@@ -131,6 +134,7 @@ impl Client {
             last_now: None,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
+            pending_key_update_response: false,
             active_key_exchange: None,
             hello_retry: false,
             hrr_selected_group: None,
@@ -178,6 +182,25 @@ impl Client {
         Ok(())
     }
 
+    /// Initiate a KeyUpdate to rotate application traffic keys.
+    ///
+    /// Requests the peer to also update its keys.
+    pub fn initiate_key_update(&mut self) -> Result<(), Error> {
+        if self.state != State::AwaitApplicationData {
+            return Err(Error::UnexpectedMessage(
+                "Cannot initiate KeyUpdate: not in application data state".to_string(),
+            ));
+        }
+        if self.engine.is_key_update_in_flight() {
+            return Err(Error::UnexpectedMessage(
+                "Cannot initiate KeyUpdate: one is already in flight".to_string(),
+            ));
+        }
+        self.engine
+            .create_key_update(KeyUpdateRequest::UpdateRequested)?;
+        Ok(())
+    }
+
     /// Send application data when the client is connected.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         if self.state != State::AwaitApplicationData {
@@ -185,8 +208,9 @@ impl Client {
             return Ok(());
         }
 
+        let epoch = self.engine.app_send_epoch();
         self.engine
-            .create_ciphertext_record(ContentType::ApplicationData, 3, false, |body| {
+            .create_ciphertext_record(ContentType::ApplicationData, epoch, false, |body| {
                 body.extend_from_slice(data);
             })?;
 
@@ -938,7 +962,9 @@ impl State {
     }
 
     fn await_application_data(self, client: &mut Client) -> Result<Self, Error> {
+        // Send queued application data
         if !client.queued_data.is_empty() {
+            let epoch = client.engine.app_send_epoch();
             debug!(
                 "Sending queued application data: {}",
                 client.queued_data.len()
@@ -946,12 +972,50 @@ impl State {
             for data in client.queued_data.drain(..) {
                 client.engine.create_ciphertext_record(
                     ContentType::ApplicationData,
-                    3,
+                    epoch,
                     false,
                     |body| {
                         body.extend_from_slice(&data);
                     },
                 )?;
+            }
+        }
+
+        // Send pending KeyUpdate response before processing new KeyUpdates
+        if client.pending_key_update_response {
+            client
+                .engine
+                .create_key_update(KeyUpdateRequest::UpdateNotRequested)?;
+            client.pending_key_update_response = false;
+        }
+
+        // Check for incoming KeyUpdate
+        if client
+            .engine
+            .has_complete_handshake(MessageType::KeyUpdate)
+        {
+            let maybe = client.engine.next_handshake_no_transcript(
+                MessageType::KeyUpdate,
+                &mut client.defragment_buffer,
+            )?;
+
+            if let Some(handshake) = maybe {
+                let Body::KeyUpdate(request) = handshake.body else {
+                    unreachable!()
+                };
+
+                // Install new recv keys
+                client.engine.update_recv_keys()?;
+
+                // ACK the KeyUpdate record
+                client.engine.send_ack()?;
+
+                // If peer requested us to update, schedule our own KeyUpdate
+                if request == KeyUpdateRequest::UpdateRequested {
+                    client.pending_key_update_response = true;
+                }
+
+                debug!("Received KeyUpdate (request={:?})", request);
             }
         }
 

@@ -337,9 +337,34 @@ pub enum Body {
     CertificateRequest(Range<usize>),
     CertificateVerify(CertificateVerify),
     Finished(Finished),
-    KeyUpdate(Range<usize>),
+    KeyUpdate(KeyUpdateRequest),
     Unknown(u8),
     Fragment(Range<usize>),
+}
+
+/// RFC 8446 Section 4.6.3 KeyUpdate request type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyUpdateRequest {
+    /// Peer does not need to respond with its own KeyUpdate.
+    UpdateNotRequested = 0,
+    /// Peer MUST respond with its own KeyUpdate (update_not_requested).
+    UpdateRequested = 1,
+}
+
+impl KeyUpdateRequest {
+    /// Parse from a single byte.
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(KeyUpdateRequest::UpdateNotRequested),
+            1 => Some(KeyUpdateRequest::UpdateRequested),
+            _ => None,
+        }
+    }
+
+    /// Serialize to a single byte.
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
 }
 
 impl Default for Body {
@@ -387,8 +412,10 @@ impl Body {
                 Ok((input, Body::Finished(finished)))
             }
             MessageType::KeyUpdate => {
-                let range = base_offset..(base_offset + input.len());
-                Ok((&[], Body::KeyUpdate(range)))
+                let (input, byte) = be_u8(input)?;
+                let request = KeyUpdateRequest::from_u8(byte)
+                    .ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
+                Ok((input, Body::KeyUpdate(request)))
             }
             MessageType::Unknown(value) => Ok((input, Body::Unknown(value))),
         }
@@ -417,8 +444,8 @@ impl Body {
             Body::Finished(finished) => {
                 finished.serialize(source_buf, output);
             }
-            Body::KeyUpdate(range) => {
-                output.extend_from_slice(&source_buf[range.clone()]);
+            Body::KeyUpdate(request) => {
+                output.push(request.as_u8());
             }
             Body::Unknown(value) => {
                 output.push(*value);
