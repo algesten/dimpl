@@ -34,18 +34,34 @@ use subtle::ConstantTimeEq;
 use crate::buffer::Buf;
 use crate::buffer::ToBuf;
 use crate::crypto::{ActiveKeyExchange, SrtpProfile};
-use crate::dtls13::client::{
-    handshake_create_certificate, handshake_create_certificate_verify,
-    signature_scheme_to_components, LocalEvent,
-};
+use crate::dtls13::client::handshake_create_certificate;
+use crate::dtls13::client::handshake_create_certificate_verify;
+use crate::dtls13::client::signature_scheme_to_components;
+use crate::dtls13::client::LocalEvent;
 use crate::dtls13::engine::Engine;
-use crate::dtls13::message::{
-    Body, CompressionMethod, ContentType, DistinguishedName, Dtls13CipherSuite, Extension,
-    ExtensionType, KeyShareClientHello, KeyShareEntry, KeyShareHelloRetryRequest,
-    KeyShareServerHello, KeyUpdateRequest, MessageType, NamedGroup, ProtocolVersion, Random,
-    ServerHello, SessionId, SignatureAlgorithmsExtension, SupportedGroupsExtension,
-    SupportedVersionsClientHello, SupportedVersionsServerHello, UseSrtpExtension,
-};
+use crate::dtls13::message::Body;
+use crate::dtls13::message::CompressionMethod;
+use crate::dtls13::message::ContentType;
+use crate::dtls13::message::DistinguishedName;
+use crate::dtls13::message::Dtls13CipherSuite;
+use crate::dtls13::message::Extension;
+use crate::dtls13::message::ExtensionType;
+use crate::dtls13::message::KeyShareClientHello;
+use crate::dtls13::message::KeyShareEntry;
+use crate::dtls13::message::KeyShareHelloRetryRequest;
+use crate::dtls13::message::KeyShareServerHello;
+use crate::dtls13::message::KeyUpdateRequest;
+use crate::dtls13::message::MessageType;
+use crate::dtls13::message::NamedGroup;
+use crate::dtls13::message::ProtocolVersion;
+use crate::dtls13::message::Random;
+use crate::dtls13::message::ServerHello;
+use crate::dtls13::message::SessionId;
+use crate::dtls13::message::SignatureAlgorithmsExtension;
+use crate::dtls13::message::SupportedGroupsExtension;
+use crate::dtls13::message::SupportedVersionsClientHello;
+use crate::dtls13::message::SupportedVersionsServerHello;
+use crate::dtls13::message::UseSrtpExtension;
 use crate::dtls13::Client;
 use crate::{Config, DtlsCertificate, Error, Output};
 
@@ -536,10 +552,8 @@ impl State {
         server.client_session_id = Some(client_hello.legacy_session_id);
 
         // Store selected group and public key range for ServerHello
-        server.active_key_exchange = None; // already completed
-                                           // Save server pub key range into extension_data for SendServerHello
-                                           // We store the range as (selected_group, pub_key_start..pub_key_end)
-                                           // by keeping the values as fields accessible through extension_data
+        // already completed
+        server.active_key_exchange = None;
 
         // Save selected cipher suite and key data for SendServerHello
         server.engine.set_cipher_suite(selected_cipher_suite);
@@ -826,7 +840,8 @@ impl State {
         // Compute transcript hash BEFORE CertificateVerify was added.
         // next_handshake already added CertificateVerify to transcript.
         // We need to back out the CertificateVerify bytes.
-        let cv_transcript_len = 1 + 3 + (2 + 2 + signature.len()); // msg_type(1) + length(3) + scheme(2) + sig_len(2) + sig
+        // msg_type(1) + length(3) + scheme(2) + sig_len(2) + sig
+        let cv_transcript_len = 1 + 3 + (2 + 2 + signature.len());
         let transcript_before_cv_len = server.engine.transcript.len() - cv_transcript_len;
         let transcript_before_cv = &server.engine.transcript[..transcript_before_cv_len];
 
