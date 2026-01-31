@@ -18,10 +18,11 @@
 //!
 //! The default provider is used automatically when no custom provider is specified:
 //!
-//! ```rust,ignore
+//! ```
 //! use std::sync::Arc;
-//! use dimpl::{Config, Dtls};
+//! use dimpl::{Config, Dtls, certificate};
 //!
+//! let cert = certificate::generate_self_signed_certificate().unwrap();
 //! // Implicitly uses aws-lc-rs default provider
 //! let config = Arc::new(Config::default());
 //! let dtls = Dtls::new(config, cert);
@@ -29,11 +30,12 @@
 //!
 //! Or explicitly:
 //!
-//! ```rust,ignore
+//! ```
 //! use std::sync::Arc;
-//! use dimpl::{Config, Dtls};
+//! use dimpl::{Config, Dtls, certificate};
 //! use dimpl::crypto::aws_lc_rs;
 //!
+//! let cert = certificate::generate_self_signed_certificate().unwrap();
 //! let config = Arc::new(
 //!     Config::builder()
 //!         .with_crypto_provider(aws_lc_rs::default_provider())

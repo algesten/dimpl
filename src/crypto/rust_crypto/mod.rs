@@ -18,11 +18,12 @@
 //! The rust-crypto provider is used automatically as a fallback when aws-lc-rs is not available
 //! or when explicitly specified:
 //!
-//! ```rust,ignore
+//! ```
 //! use std::sync::Arc;
-//! use dimpl::{Config, Dtls};
+//! use dimpl::{Config, Dtls, certificate};
 //! use dimpl::crypto::rust_crypto;
 //!
+//! let cert = certificate::generate_self_signed_certificate().unwrap();
 //! let config = Arc::new(
 //!     Config::builder()
 //!         .with_crypto_provider(rust_crypto::default_provider())

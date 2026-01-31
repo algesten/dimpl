@@ -26,11 +26,12 @@
 //!
 //! To use a custom crypto provider, create one and pass it to the [`Config`](crate::Config):
 //!
-//! ```rust,ignore
+//! ```
 //! use std::sync::Arc;
-//! use dimpl::{Config, Dtls};
+//! use dimpl::{Config, Dtls, certificate};
 //! use dimpl::crypto::aws_lc_rs;
 //!
+//! let cert = certificate::generate_self_signed_certificate().unwrap();
 //! // Use the default aws-lc-rs provider (implicit)
 //! let config = Arc::new(Config::default());
 //!
@@ -63,8 +64,28 @@
 //!
 //! ## Example: Custom Cipher Suite
 //!
-//! ```rust,ignore
+//! ```
 //! use dimpl::crypto::{SupportedCipherSuite, Cipher, CipherSuite, HashAlgorithm};
+//! use dimpl::buffer::{Buf, TmpBuf};
+//! use dimpl::crypto::{Aad, Nonce};
+//!
+//! #[derive(Debug)]
+//! struct MyCipher;
+//!
+//! impl MyCipher {
+//!     fn new(_key: &[u8]) -> Result<Self, String> {
+//!         Ok(Self)
+//!     }
+//! }
+//!
+//! impl Cipher for MyCipher {
+//!     fn encrypt(&mut self, _: &mut Buf, _: Aad, _: Nonce) -> Result<(), String> {
+//!         Ok(())
+//!     }
+//!     fn decrypt(&mut self, _: &mut TmpBuf, _: Aad, _: Nonce) -> Result<(), String> {
+//!         Ok(())
+//!     }
+//! }
 //!
 //! #[derive(Debug)]
 //! struct MyCipherSuite;
@@ -283,22 +304,22 @@ pub trait HmacProvider: CryptoSafe {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```
 /// use dimpl::crypto::{CryptoProvider, aws_lc_rs};
 ///
 /// // Use the default provider
 /// let provider = aws_lc_rs::default_provider();
 ///
-/// // Or build a custom one
+/// // Or build a custom one (using defaults for demonstration)
 /// let custom_provider = CryptoProvider {
-///     cipher_suites: my_cipher_suites::ALL,
-///     kx_groups: my_kx_groups::ALL,
-///     signature_verification: &my_verifier::VERIFIER,
-///     key_provider: &my_keys::KEY_PROVIDER,
-///     secure_random: &my_rng::RNG,
-///     hash_provider: &my_hash::HASH_PROVIDER,
-///     prf_provider: &my_prf::PRF_PROVIDER,
-///     hmac_provider: &my_hmac::HMAC_PROVIDER,
+///     cipher_suites: provider.cipher_suites,
+///     kx_groups: provider.kx_groups,
+///     signature_verification: provider.signature_verification,
+///     key_provider: provider.key_provider,
+///     secure_random: provider.secure_random,
+///     hash_provider: provider.hash_provider,
+///     prf_provider: provider.prf_provider,
+///     hmac_provider: provider.hmac_provider,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -347,13 +368,11 @@ impl CryptoProvider {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```no_run
     /// use dimpl::crypto::{CryptoProvider, aws_lc_rs};
     ///
-    /// // Install a custom default provider
-    /// CryptoProvider::install_default(my_custom_provider());
-    ///
-    /// // Now Config::default() will use the installed provider
+    /// // Install a default provider (can only be called once per process)
+    /// CryptoProvider::install_default(aws_lc_rs::default_provider());
     /// ```
     pub fn install_default(provider: CryptoProvider) {
         DEFAULT
@@ -371,7 +390,7 @@ impl CryptoProvider {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
     /// use dimpl::crypto::CryptoProvider;
     ///
     /// if let Some(provider) = CryptoProvider::get_default() {
