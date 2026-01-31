@@ -29,6 +29,17 @@ impl Incoming {
     pub fn into_records(self) -> impl Iterator<Item = Record> {
         self.records.records.into_iter()
     }
+
+    /// Create an Incoming from pre-filtered records.
+    /// Returns None if records is empty (same invariant as parse_packet).
+    pub fn from_records(records: ArrayVec<Record, 16>) -> Option<Self> {
+        if records.is_empty() {
+            return None;
+        }
+        Some(Incoming {
+            records: Box::new(Records { records }),
+        })
+    }
 }
 
 impl Incoming {
@@ -62,7 +73,7 @@ impl Incoming {
 /// A number of records parsed from a single UDP packet.
 #[derive(Debug)]
 pub struct Records {
-    pub records: ArrayVec<Record, 8>,
+    pub records: ArrayVec<Record, 16>,
 }
 
 impl Records {
@@ -76,6 +87,12 @@ impl Records {
         // Find record boundaries and copy each record ONCE from the packet
         while !packet.is_empty() {
             let record_end = if Dtls13Record::is_ciphertext_header(packet[0]) {
+                // CID bit set means we can't determine record boundaries (unsupported).
+                // Discard the rest of the datagram.
+                if packet[0] & 0x10 != 0 {
+                    break;
+                }
+
                 // Unified header: variable length
                 if packet.len() < 2 {
                     return Err(Error::ParseIncomplete);
@@ -243,7 +260,14 @@ impl Record {
             let mut buffer = TmpBuf::new(ciphertext);
 
             // This decrypts in place.
-            decrypt.decrypt_record(&header_buf[..header_end], full_sequence, &mut buffer)?;
+            // RFC 9147 §4.5.2: failed-to-decrypt ciphertext records MUST be silently discarded.
+            match decrypt.decrypt_record(&header_buf[..header_end], full_sequence, &mut buffer) {
+                Ok(()) => {}
+                Err(e) => {
+                    trace!("Discarding ciphertext record: decryption failed: {}", e);
+                    return Ok(None);
+                }
+            }
 
             buffer.len()
         };
