@@ -392,6 +392,23 @@ impl Dtls {
         }
     }
 
+    /// Initiate a KeyUpdate to rotate application traffic keys.
+    ///
+    /// Only supported for DTLS 1.3 connections that have completed the handshake.
+    /// The peer will be requested to also rotate its keys.
+    pub fn initiate_key_update(&mut self) -> Result<(), Error> {
+        match self.inner.as_mut().unwrap() {
+            Inner::Client13(client) => client.initiate_key_update(),
+            Inner::Server13(server) => server.initiate_key_update(),
+            Inner::Client12(_) | Inner::Server12(_) => Err(Error::UnexpectedMessage(
+                "KeyUpdate is only supported in DTLS 1.3".to_string(),
+            )),
+            Inner::ServerPending { .. } => Err(Error::UnexpectedMessage(
+                "Cannot initiate KeyUpdate: handshake not started".to_string(),
+            )),
+        }
+    }
+
     /// Send application data over the established DTLS session.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
