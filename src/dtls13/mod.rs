@@ -4,3 +4,9 @@
 
 pub mod incoming;
 pub mod message;
+
+mod client;
+mod engine;
+mod queue;
+
+pub use client::Client;
