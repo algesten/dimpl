@@ -366,6 +366,8 @@ pub enum ContentType {
     Handshake,
     /// Application data.
     ApplicationData,
+    /// ACK (DTLS 1.3 only, RFC 9147 Section 7).
+    Ack,
     /// Unknown content type.
     Unknown(u8),
 }
@@ -384,6 +386,7 @@ impl ContentType {
             21 => ContentType::Alert,
             22 => ContentType::Handshake,
             23 => ContentType::ApplicationData,
+            26 => ContentType::Ack,
             _ => ContentType::Unknown(value),
         }
     }
@@ -395,6 +398,7 @@ impl ContentType {
             ContentType::Alert => 21,
             ContentType::Handshake => 22,
             ContentType::ApplicationData => 23,
+            ContentType::Ack => 26,
             ContentType::Unknown(value) => *value,
         }
     }

@@ -2,6 +2,7 @@
 
 use aws_lc_rs::aead::{Aad as AwsAad, LessSafeKey, Nonce as AwsNonce};
 use aws_lc_rs::aead::{UnboundKey, AES_128_GCM, AES_256_GCM};
+use aws_lc_rs::cipher::{self as aws_cipher, EncryptingKey, UnboundCipherKey, AES_128, AES_256};
 
 use super::super::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuite};
 use crate::buffer::{Buf, TmpBuf};
@@ -157,6 +158,10 @@ impl SupportedDtls13CipherSuite for Tls13Aes128GcmSha256 {
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
         Ok(Box::new(AesGcm::new(key)?))
     }
+
+    fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16] {
+        aes_ecb_encrypt(&AES_128, sn_key, sample)
+    }
 }
 
 /// TLS_AES_256_GCM_SHA384 cipher suite (TLS 1.3 / DTLS 1.3).
@@ -187,6 +192,10 @@ impl SupportedDtls13CipherSuite for Tls13Aes256GcmSha384 {
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
         Ok(Box::new(AesGcm::new(key)?))
     }
+
+    fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16] {
+        aes_ecb_encrypt(&AES_256, sn_key, sample)
+    }
 }
 
 /// Static instances of supported DTLS 1.3 cipher suites.
@@ -196,3 +205,19 @@ static TLS13_AES_256_GCM_SHA384: Tls13Aes256GcmSha384 = Tls13Aes256GcmSha384;
 /// All supported DTLS 1.3 cipher suites.
 pub(super) static ALL_DTLS13_CIPHER_SUITES: &[&dyn SupportedDtls13CipherSuite] =
     &[&TLS13_AES_128_GCM_SHA256, &TLS13_AES_256_GCM_SHA384];
+
+/// AES-ECB single block encryption for record number protection.
+fn aes_ecb_encrypt(
+    algorithm: &'static aws_cipher::Algorithm,
+    key: &[u8],
+    input: &[u8; 16],
+) -> [u8; 16] {
+    // unwrap: key length is validated by caller (matches algorithm)
+    let unbound = UnboundCipherKey::new(algorithm, key).unwrap();
+    // unwrap: ECB key construction cannot fail for valid AES keys
+    let ecb_key = EncryptingKey::ecb(unbound).unwrap();
+    let mut block = *input;
+    // unwrap: 16-byte input is exactly one AES block
+    ecb_key.encrypt(&mut block).unwrap();
+    block
+}

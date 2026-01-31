@@ -1,5 +1,7 @@
 //! Cipher suite implementations using RustCrypto.
 use aes_gcm::aead::{AeadInPlace, KeyInit};
+use aes_gcm::aes::cipher::{BlockEncrypt, KeyInit as BlockKeyInit};
+use aes_gcm::aes::{Aes128, Aes256};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, Key};
 
 use super::super::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuite};
@@ -200,6 +202,14 @@ impl SupportedDtls13CipherSuite for Tls13Aes128GcmSha256 {
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
         Ok(Box::new(AesGcm::new(key)?))
     }
+
+    fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16] {
+        // unwrap: sn_key length matches AES-128 key size
+        let cipher = Aes128::new_from_slice(sn_key).unwrap();
+        let mut block = aes_gcm::aes::Block::clone_from_slice(sample);
+        cipher.encrypt_block(&mut block);
+        block.into()
+    }
 }
 
 /// TLS_AES_256_GCM_SHA384 cipher suite (TLS 1.3 / DTLS 1.3).
@@ -229,6 +239,14 @@ impl SupportedDtls13CipherSuite for Tls13Aes256GcmSha384 {
 
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
         Ok(Box::new(AesGcm::new(key)?))
+    }
+
+    fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16] {
+        // unwrap: sn_key length matches AES-256 key size
+        let cipher = Aes256::new_from_slice(sn_key).unwrap();
+        let mut block = aes_gcm::aes::Block::clone_from_slice(sample);
+        cipher.encrypt_block(&mut block);
+        block.into()
     }
 }
 

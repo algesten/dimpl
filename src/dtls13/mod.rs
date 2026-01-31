@@ -33,5 +33,7 @@ pub mod message;
 mod client;
 mod engine;
 mod queue;
+mod server;
 
 pub use client::Client;
+pub use server::Server;

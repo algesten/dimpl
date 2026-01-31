@@ -204,6 +204,7 @@ impl ExtensionType {
             ExtensionType::SignatureAlgorithms,
             ExtensionType::KeyShare,
             ExtensionType::UseSrtp,
+            ExtensionType::Cookie,
         ]
     }
 }
