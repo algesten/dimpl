@@ -10,7 +10,7 @@ use nom::{Err, IResult};
 
 use crate::buffer::Buf;
 use crate::crypto::CryptoProvider;
-use crate::util::many1;
+use crate::util::{many1, many1_filter};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ClientHello {
@@ -18,7 +18,7 @@ pub struct ClientHello {
     pub random: Random,
     pub session_id: SessionId,
     pub cookie: Cookie,
-    pub cipher_suites: ArrayVec<CipherSuite, 32>,
+    pub cipher_suites: ArrayVec<CipherSuite, 2>,
     pub compression_methods: ArrayVec<CompressionMethod, 4>,
     pub extensions: ArrayVec<Extension, 16>,
 }
@@ -29,7 +29,7 @@ impl ClientHello {
         random: Random,
         session_id: SessionId,
         cookie: Cookie,
-        cipher_suites: ArrayVec<CipherSuite, 32>,
+        cipher_suites: ArrayVec<CipherSuite, 2>,
         compression_methods: ArrayVec<CompressionMethod, 4>,
     ) -> Self {
         ClientHello {
@@ -123,7 +123,8 @@ impl ClientHello {
         let (input, cookie) = Cookie::parse(input)?;
         let (input, cipher_suites_len) = be_u16(input)?;
         let (input, input_cipher) = take(cipher_suites_len)(input)?;
-        let (rest, cipher_suites) = many1(CipherSuite::parse)(input_cipher)?;
+        let (rest, cipher_suites) =
+            many1_filter(CipherSuite::parse, CipherSuite::is_known)(input_cipher)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
@@ -307,5 +308,25 @@ mod tests {
 
         let result = ClientHello::parse(&message, 0);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn cipher_suites_too_small() {
+        // Build an empty ClientHello so we get the correct ArrayVec capacity
+        let client_hello = ClientHello {
+            client_version: ProtocolVersion::DTLS1_2,
+            random: Random::parse(&MESSAGE[2..34]).unwrap().1,
+            session_id: SessionId::empty(),
+            cookie: Cookie::empty(),
+            cipher_suites: ArrayVec::new(),
+            compression_methods: ArrayVec::new(),
+            extensions: ArrayVec::new(),
+        };
+
+        assert_eq!(
+            client_hello.cipher_suites.capacity(),
+            CipherSuite::all().len(),
+            "cipher_suites ArrayVec capacity is insufficient to hold all available CipherSuites"
+        );
     }
 }

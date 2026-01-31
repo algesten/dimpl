@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Fix ClientHello Parser Failing when too many Cipher Suites #46
+
 # 0.2.4
 
   * Drop dupe handshakes to not block newer messages #44
