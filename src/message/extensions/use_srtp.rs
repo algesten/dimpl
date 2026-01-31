@@ -37,6 +37,15 @@ impl SrtpProfileId {
     pub fn as_u16(&self) -> u16 {
         *self as u16
     }
+
+    /// All supported SRTP profile IDs.
+    pub fn all() -> &'static [SrtpProfileId] {
+        &[
+            SrtpProfileId::SrtpAes128CmSha1_80,
+            SrtpProfileId::SrtpAeadAes128Gcm,
+            SrtpProfileId::SrtpAeadAes256Gcm,
+        ]
+    }
 }
 
 impl From<SrtpProfile> for SrtpProfileId {
@@ -62,12 +71,12 @@ impl From<SrtpProfileId> for SrtpProfile {
 /// UseSrtp extension as defined in RFC 5764
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UseSrtpExtension {
-    pub profiles: ArrayVec<SrtpProfileId, 32>,
+    pub profiles: ArrayVec<SrtpProfileId, 3>,
     pub mki: Vec<u8>, // MKI value (usually empty)
 }
 
 impl UseSrtpExtension {
-    pub fn new(profiles: ArrayVec<SrtpProfileId, 32>, mki: Vec<u8>) -> Self {
+    pub fn new(profiles: ArrayVec<SrtpProfileId, 3>, mki: Vec<u8>) -> Self {
         UseSrtpExtension { profiles, mki }
     }
 
@@ -90,7 +99,7 @@ impl UseSrtpExtension {
         let (input, profiles_data) = take(profiles_length)(input)?;
 
         // Parse the profiles (ignore unknown profile IDs instead of failing)
-        let mut profiles = ArrayVec::new();
+        let mut profiles: ArrayVec<SrtpProfileId, 3> = ArrayVec::new();
         let mut profiles_rest = profiles_data;
 
         while profiles_rest.len() >= 2 {
@@ -191,5 +200,15 @@ mod tests {
             ]
         );
         assert_eq!(parsed.mki, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn capacity_matches_profile_count() {
+        let ext = UseSrtpExtension::default();
+        assert_eq!(
+            ext.profiles.capacity(),
+            SrtpProfileId::all().len(),
+            "UseSrtpExtension capacity must match all profile IDs"
+        );
     }
 }

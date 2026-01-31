@@ -241,6 +241,17 @@ impl CompressionMethod {
         }
     }
 
+    /// Returns true if this compression method is a known/supported variant.
+    pub fn is_known(&self) -> bool {
+        !matches!(self, CompressionMethod::Unknown(_))
+    }
+
+    /// All known compression methods.
+    #[cfg(test)]
+    pub fn all() -> &'static [CompressionMethod] {
+        &[CompressionMethod::Null, CompressionMethod::Deflate]
+    }
+
     pub fn as_u8(&self) -> u8 {
         match self {
             CompressionMethod::Null => 0x00,
@@ -296,6 +307,18 @@ impl ClientCertificateType {
             64 => ClientCertificateType::ECDSA_SIGN,
             _ => ClientCertificateType::Unknown(value),
         }
+    }
+
+    /// Returns true if this certificate type is supported by this implementation.
+    /// Currently only ECDSA_SIGN is supported.
+    pub fn is_supported(&self) -> bool {
+        matches!(self, ClientCertificateType::ECDSA_SIGN)
+    }
+
+    /// All supported client certificate types.
+    #[cfg(test)]
+    pub fn all_supported() -> &'static [ClientCertificateType] {
+        &[ClientCertificateType::ECDSA_SIGN]
     }
 
     pub fn as_u8(&self) -> u8 {
@@ -462,7 +485,7 @@ impl SignatureAndHashAlgorithm {
         Ok((input, SignatureAndHashAlgorithm::from_u16(value)))
     }
 
-    pub fn supported() -> ArrayVec<SignatureAndHashAlgorithm, 8> {
+    pub fn supported() -> ArrayVec<SignatureAndHashAlgorithm, 4> {
         let mut algos = ArrayVec::new();
         algos.push(SignatureAndHashAlgorithm::new(
             HashAlgorithm::SHA256,
@@ -481,5 +504,15 @@ impl SignatureAndHashAlgorithm {
             SignatureAlgorithm::RSA,
         ));
         algos
+    }
+
+    /// Returns true if this signature+hash combination is supported.
+    pub fn is_supported(&self) -> bool {
+        let dominated_hash = matches!(self.hash, HashAlgorithm::SHA256 | HashAlgorithm::SHA384);
+        let supported_sig = matches!(
+            self.signature,
+            SignatureAlgorithm::ECDSA | SignatureAlgorithm::RSA
+        );
+        dominated_hash && supported_sig
     }
 }

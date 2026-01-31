@@ -14,7 +14,7 @@ pub struct ServerHello {
     pub session_id: SessionId,
     pub cipher_suite: CipherSuite,
     pub compression_method: CompressionMethod,
-    pub extensions: Option<ArrayVec<Extension, 32>>,
+    pub extensions: Option<ArrayVec<Extension, 4>>,
 }
 
 impl ServerHello {
@@ -24,7 +24,7 @@ impl ServerHello {
         session_id: SessionId,
         cipher_suite: CipherSuite,
         compression_method: CompressionMethod,
-        extensions: Option<ArrayVec<Extension, 32>>,
+        extensions: Option<ArrayVec<Extension, 4>>,
     ) -> Self {
         ServerHello {
             server_version,
@@ -45,7 +45,7 @@ impl ServerHello {
         // Clear the buffer and collect extension byte ranges
         buf.clear();
 
-        let mut ranges: ArrayVec<(ExtensionType, usize, usize), 8> = ArrayVec::new();
+        let mut ranges: ArrayVec<(ExtensionType, usize, usize), 4> = ArrayVec::new();
 
         // UseSRTP (if negotiated)
         if let Some(pid) = srtp_profile {
@@ -66,7 +66,7 @@ impl ServerHello {
         buf.push(0); // renegotiated_connection length = 0
         ranges.push((ExtensionType::RenegotiationInfo, start, buf.len()));
 
-        let mut extensions: ArrayVec<Extension, 32> = ArrayVec::new();
+        let mut extensions: ArrayVec<Extension, 4> = ArrayVec::new();
         for (t, s, e) in ranges {
             extensions.push(Extension {
                 extension_type: t,
@@ -108,17 +108,20 @@ impl ServerHello {
                     input_ext.as_ptr() as usize - original_input.as_ptr() as usize;
                 let ext_base_offset = base_offset + consumed_to_ext_data;
 
-                // Parse extensions manually to pass base_offset
-                let mut extensions_vec = ArrayVec::new();
+                // Parse extensions manually to pass base_offset, filtering unknown types
+                let mut extensions_vec: ArrayVec<Extension, 4> = ArrayVec::new();
                 let mut current_input = input_ext;
                 let mut current_offset = ext_base_offset;
-                while !current_input.is_empty() && extensions_vec.len() < 32 {
+                while !current_input.is_empty() {
                     let before_len = current_input.len();
-                    let (rest, ext) = Extension::parse(current_input, current_offset)?;
-                    let parsed_len = before_len - rest.len();
+                    let (new_rest, ext) = Extension::parse(current_input, current_offset)?;
+                    let parsed_len = before_len - new_rest.len();
                     current_offset += parsed_len;
-                    extensions_vec.push(ext);
-                    current_input = rest;
+                    // Only keep known extension types
+                    if ext.extension_type.is_known() {
+                        extensions_vec.push(ext);
+                    }
+                    current_input = new_rest;
                 }
                 (rest, Some(extensions_vec))
             } else {

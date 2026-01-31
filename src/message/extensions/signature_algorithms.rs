@@ -6,32 +6,30 @@ use nom::IResult;
 /// SignatureAlgorithms extension as defined in RFC 5246
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureAlgorithmsExtension {
-    pub supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 32>,
+    pub supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 4>,
 }
 
 impl SignatureAlgorithmsExtension {
     /// Create a default SignatureAlgorithmsExtension with standard algorithms
     pub fn default() -> Self {
-        // Convert from the smaller-capacity helper to our larger-capacity storage
-        let src = SignatureAndHashAlgorithm::supported();
-        let mut dst: ArrayVec<SignatureAndHashAlgorithm, 32> = ArrayVec::new();
-        for alg in src.iter() {
-            dst.push(*alg);
-        }
         SignatureAlgorithmsExtension {
-            supported_signature_algorithms: dst,
+            supported_signature_algorithms: SignatureAndHashAlgorithm::supported(),
         }
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAlgorithmsExtension> {
         let (input, list_len) = nom::number::complete::be_u16(input)?;
-        let mut algorithms = ArrayVec::new();
+        let mut algorithms: ArrayVec<SignatureAndHashAlgorithm, 4> = ArrayVec::new();
         let mut remaining = list_len as usize;
         let mut current_input = input;
 
+        // Parse algorithms, filtering to only keep supported ones
         while remaining > 0 {
             let (rest, alg) = SignatureAndHashAlgorithm::parse(current_input)?;
-            algorithms.push(alg);
+            // Only keep supported signature+hash combinations
+            if alg.is_supported() {
+                algorithms.push(alg);
+            }
             current_input = rest;
             remaining -= 2; // Each algorithm pair is 2 bytes
         }
@@ -66,7 +64,7 @@ mod tests {
 
     #[test]
     fn test_signature_algorithms_extension() {
-        let mut algorithms: ArrayVec<SignatureAndHashAlgorithm, 32> = ArrayVec::new();
+        let mut algorithms: ArrayVec<SignatureAndHashAlgorithm, 4> = ArrayVec::new();
         algorithms.push(SignatureAndHashAlgorithm::new(
             HashAlgorithm::SHA256,
             SignatureAlgorithm::ECDSA,
@@ -94,5 +92,15 @@ mod tests {
         let (_, parsed) = SignatureAlgorithmsExtension::parse(&serialized).unwrap();
 
         assert_eq!(parsed.supported_signature_algorithms, algorithms);
+    }
+
+    #[test]
+    fn capacity_matches_supported() {
+        let ext = SignatureAlgorithmsExtension::default();
+        assert_eq!(
+            ext.supported_signature_algorithms.capacity(),
+            SignatureAndHashAlgorithm::supported().len(),
+            "SignatureAlgorithmsExtension capacity must match supported algorithms count"
+        );
     }
 }

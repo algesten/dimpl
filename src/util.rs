@@ -4,22 +4,30 @@ use arrayvec::ArrayVec;
 use nom::error::{make_error, ErrorKind, ParseError};
 use nom::{Err, IResult, InputIter, InputLength, Parser, Slice};
 
+/// A combinator that parses items using the provided parser but only collects
+/// items that pass a filter predicate. Allows zero matches.
 #[inline(always)]
-pub fn many0<I, O, E, F, const N: usize>(mut f: F) -> impl FnMut(I) -> IResult<I, ArrayVec<O, N>, E>
+pub fn many0<I, O, E, F, P, const N: usize>(
+    mut parser: F,
+    predicate: P,
+) -> impl FnMut(I) -> IResult<I, ArrayVec<O, N>, E>
 where
     I: Clone + InputLength,
     F: Parser<I, O, E>,
+    P: Fn(&O) -> bool,
     E: ParseError<I>,
 {
     move |mut i: I| {
         let mut acc = ArrayVec::new();
+
         loop {
             let len = i.input_len();
             if len == 0 {
-                return Ok((i, acc));
+                break;
             }
-            match f.parse(i.clone()) {
-                Err(Err::Error(_)) => return Ok((i, acc)),
+
+            match parser.parse(i.clone()) {
+                Err(Err::Error(_)) => break,
                 Err(e) => return Err(e),
                 Ok((i1, o)) => {
                     // infinite loop check: the parser must always consume
@@ -28,59 +36,22 @@ where
                     }
 
                     i = i1;
-                    if acc.try_push(o).is_err() {
+                    // Only collect items that pass the filter
+                    if predicate(&o) && acc.try_push(o).is_err() {
                         return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many0)));
                     }
                 }
             }
         }
-    }
-}
 
-#[inline(always)]
-pub fn many1<I, O, E, F, const N: usize>(mut f: F) -> impl FnMut(I) -> IResult<I, ArrayVec<O, N>, E>
-where
-    I: Clone + InputLength,
-    F: Parser<I, O, E>,
-    E: ParseError<I>,
-{
-    move |mut i: I| match f.parse(i.clone()) {
-        Err(Err::Error(err)) => Err(Err::Error(E::append(i, ErrorKind::Many1, err))),
-        Err(e) => Err(e),
-        Ok((i1, o)) => {
-            let mut acc = ArrayVec::new();
-            // Handle case where ArrayVec has insufficient capacity
-            if acc.try_push(o).is_err() {
-                return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many1)));
-            }
-            i = i1;
-
-            loop {
-                let len = i.input_len();
-                match f.parse(i.clone()) {
-                    Err(Err::Error(_)) => return Ok((i, acc)),
-                    Err(e) => return Err(e),
-                    Ok((i1, o)) => {
-                        // infinite loop check: the parser must always consume
-                        if i1.input_len() == len {
-                            return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many1)));
-                        }
-
-                        i = i1;
-                        if acc.try_push(o).is_err() {
-                            return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many1)));
-                        }
-                    }
-                }
-            }
-        }
+        Ok((i, acc))
     }
 }
 
 /// A combinator that parses items using the provided parser but only collects
 /// items that pass a filter predicate. Requires at least one item to pass the filter.
 #[inline(always)]
-pub fn many1_filter<I, O, E, F, P, const N: usize>(
+pub fn many1<I, O, E, F, P, const N: usize>(
     mut parser: F,
     predicate: P,
 ) -> impl FnMut(I) -> IResult<I, ArrayVec<O, N>, E>

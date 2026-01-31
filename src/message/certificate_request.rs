@@ -9,15 +9,15 @@ use nom::{bytes::complete::take, IResult};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct CertificateRequest {
-    pub certificate_types: ArrayVec<ClientCertificateType, 8>,
-    pub supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 32>,
+    pub certificate_types: ArrayVec<ClientCertificateType, 1>,
+    pub supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 4>,
     pub certificate_authorities: ArrayVec<DistinguishedName, 32>,
 }
 
 impl CertificateRequest {
     pub fn new(
-        certificate_types: ArrayVec<ClientCertificateType, 8>,
-        supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 32>,
+        certificate_types: ArrayVec<ClientCertificateType, 1>,
+        supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 4>,
         certificate_authorities: ArrayVec<DistinguishedName, 32>,
     ) -> Self {
         CertificateRequest {
@@ -31,15 +31,20 @@ impl CertificateRequest {
         let original_input = input;
         let (input, cert_types_len) = be_u8(input)?;
         let (input, input_type) = take(cert_types_len)(input)?;
-        let (rest, certificate_types) = many1(ClientCertificateType::parse)(input_type)?;
+        let (rest, certificate_types) = many1(
+            ClientCertificateType::parse,
+            ClientCertificateType::is_supported,
+        )(input_type)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
 
         let (input, sig_algs_len) = be_u16(input)?;
         let (input, input_sigs) = take(sig_algs_len)(input)?;
-        let (rest, supported_signature_algorithms) =
-            many0(SignatureAndHashAlgorithm::parse)(input_sigs)?;
+        let (rest, supported_signature_algorithms) = many0(
+            SignatureAndHashAlgorithm::parse,
+            SignatureAndHashAlgorithm::is_supported,
+        )(input_sigs)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
@@ -110,11 +115,15 @@ mod test {
     use super::*;
     use crate::buffer::Buf;
 
+    // Test message with supported values:
+    // - Certificate type: 0x40 (ECDSA_SIGN)
+    // - Signature algorithms: SHA256/ECDSA (0x04, 0x03), SHA256/RSA (0x04, 0x01)
     const MESSAGE: &[u8] = &[
-        0x02, // Certificate types length
-        0x01, 0x02, // Certificate types
-        0x00, 0x04, // Signature algorithms length
-        0x04, 0x01, 0x05, 0x02, // Signature algorithms
+        0x01, // Certificate types length (1 byte)
+        0x40, // Certificate type: ECDSA_SIGN
+        0x00, 0x04, // Signature algorithms length (4 bytes = 2 algorithms)
+        0x04, 0x03, // SHA256/ECDSA
+        0x04, 0x01, // SHA256/RSA
         0x00, 0x0C, // Certificate authorities length
         0x00, 0x04, // Distinguished name 1 length
         0x01, 0x02, 0x03, 0x04, // Distinguished name 1 data
@@ -132,5 +141,59 @@ mod test {
         let mut serialized = Buf::new();
         parsed.serialize(MESSAGE, &mut serialized);
         assert_eq!(&*serialized, MESSAGE);
+    }
+
+    #[test]
+    fn filters_unsupported_types() {
+        // Message with unsupported certificate types and signature algorithms
+        let message_with_unsupported: &[u8] = &[
+            0x03, // Certificate types length (3 bytes)
+            0x01, // RSA_SIGN (unsupported, filtered)
+            0x40, // ECDSA_SIGN (supported)
+            0x02, // DSS_SIGN (unsupported, filtered)
+            0x00, 0x06, // Signature algorithms length (6 bytes = 3 algorithms)
+            0x05, 0x02, // SHA384/DSA (unsupported)
+            0x04, 0x03, // SHA256/ECDSA (supported)
+            0x01, 0x01, // MD5/RSA (unsupported)
+            0x00, 0x00, // Certificate authorities length (0)
+        ];
+
+        let (rest, parsed) = CertificateRequest::parse(message_with_unsupported, 0).unwrap();
+        assert!(rest.is_empty());
+
+        // Only supported types should remain
+        assert_eq!(parsed.certificate_types.len(), 1);
+        assert_eq!(
+            parsed.certificate_types[0],
+            ClientCertificateType::ECDSA_SIGN
+        );
+
+        assert_eq!(parsed.supported_signature_algorithms.len(), 1);
+        assert_eq!(
+            parsed.supported_signature_algorithms[0],
+            SignatureAndHashAlgorithm::new(
+                super::super::HashAlgorithm::SHA256,
+                super::super::SignatureAlgorithm::ECDSA
+            )
+        );
+    }
+
+    #[test]
+    fn capacity_matches_supported() {
+        let req = CertificateRequest {
+            certificate_types: ArrayVec::new(),
+            supported_signature_algorithms: ArrayVec::new(),
+            certificate_authorities: ArrayVec::new(),
+        };
+        assert_eq!(
+            req.certificate_types.capacity(),
+            ClientCertificateType::all_supported().len(),
+            "certificate_types capacity must match supported types count"
+        );
+        assert_eq!(
+            req.supported_signature_algorithms.capacity(),
+            SignatureAndHashAlgorithm::supported().len(),
+            "supported_signature_algorithms capacity must match supported count"
+        );
     }
 }

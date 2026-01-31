@@ -1036,7 +1036,7 @@ fn handshake_create_client_hello(
         .supported_cipher_suites()
         .map(|cs| cs.suite())
         .filter(|suite| engine.crypto_context().is_cipher_suite_compatible(*suite))
-        .take(32)
+        .take(2)
         .collect();
 
     debug!(

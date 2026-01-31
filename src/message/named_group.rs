@@ -138,6 +138,27 @@ impl NamedGroup {
         let (input, value) = be_u16(input)?;
         Ok((input, NamedGroup::from_u16(value)))
     }
+
+    /// Returns true if this named group is supported by this implementation.
+    pub fn is_supported(&self) -> bool {
+        matches!(
+            self,
+            NamedGroup::Secp256r1
+                | NamedGroup::Secp384r1
+                | NamedGroup::X25519
+                | NamedGroup::Secp521r1
+        )
+    }
+
+    /// All supported named groups.
+    pub fn all_supported() -> &'static [NamedGroup] {
+        &[
+            NamedGroup::X25519,
+            NamedGroup::Secp256r1,
+            NamedGroup::Secp384r1,
+            NamedGroup::Secp521r1,
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
