@@ -1,5 +1,5 @@
 use super::{CompressionMethod, Dtls13CipherSuite, ProtocolVersion};
-use super::{Cookie, Extension, ExtensionType, Random, SessionId};
+use super::{Cookie, Extension, Random, SessionId};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
@@ -155,6 +155,7 @@ impl ClientHello {
 mod tests {
     use super::*;
     use crate::buffer::Buf;
+    use crate::dtls13::message::ExtensionType;
 
     const MESSAGE: &[u8] = &[
         0xFE, 0xFD, // ProtocolVersion::DTLS1_2 (legacy)

@@ -40,14 +40,14 @@ use crate::dtls13::client::{
 };
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::{
-    Body, CompressionMethod, ContentType, Dtls13CipherSuite, Extension, ExtensionType,
-    KeyShareClientHello, KeyShareHelloRetryRequest, KeyUpdateRequest, MessageType, NamedGroup,
-    ProtocolVersion, Random, ServerHello, SessionId, SignatureAlgorithmsExtension,
-    SupportedGroupsExtension, SupportedVersionsClientHello, SupportedVersionsServerHello,
-    UseSrtpExtension,
+    Body, CompressionMethod, ContentType, DistinguishedName, Dtls13CipherSuite, Extension,
+    ExtensionType, KeyShareClientHello, KeyShareEntry, KeyShareHelloRetryRequest,
+    KeyShareServerHello, KeyUpdateRequest, MessageType, NamedGroup, ProtocolVersion, Random,
+    ServerHello, SessionId, SignatureAlgorithmsExtension, SupportedGroupsExtension,
+    SupportedVersionsClientHello, SupportedVersionsServerHello, UseSrtpExtension,
 };
 use crate::dtls13::Client;
-use crate::{Config, DtlsCertificate, Error, KeyingMaterial, Output};
+use crate::{Config, DtlsCertificate, Error, Output};
 
 /// Magic random value indicating HelloRetryRequest (RFC 8446 Section 4.1.3).
 const HRR_RANDOM: [u8; 32] = [
@@ -517,7 +517,7 @@ impl State {
 
         // Complete ECDHE with client's public key
         let peer_pub_key = &server.defragment_buffer[peer_key_range];
-        let mut shared_secret = Buf::new();
+        let mut shared_secret = server.engine.pop_buffer();
         key_exchange
             .complete(peer_pub_key, &mut shared_secret)
             .map_err(|e| Error::CryptoError(format!("ECDHE completion failed: {}", e)))?;
@@ -618,15 +618,17 @@ impl State {
             })?;
 
         // Derive handshake secrets
-        let shared_secret = server.shared_secret.as_ref().ok_or_else(|| {
+        let shared_secret = server.shared_secret.take().ok_or_else(|| {
             Error::CryptoError("No shared secret for handshake key derivation".to_string())
         })?;
 
-        let (c_hs_traffic, s_hs_traffic) = server.engine.derive_handshake_secrets(shared_secret)?;
+        let (c_hs_traffic, s_hs_traffic) =
+            server.engine.derive_handshake_secrets(&shared_secret)?;
 
         // Save handshake secret for later application key derivation
-        let handshake_secret = server.engine.derive_handshake_secret(shared_secret)?;
+        let handshake_secret = server.engine.derive_handshake_secret(&shared_secret)?;
         server.handshake_secret = Some(handshake_secret);
+        server.engine.push_buffer(shared_secret);
 
         // Save traffic secrets
         let mut s_hs_copy = Buf::new();
@@ -1121,10 +1123,13 @@ fn handshake_create_server_hello(
 
     // 2. key_share extension (server's public key)
     let ks_start = ext_buf.len();
-    let pub_key_bytes = &extension_data[pub_key_range];
-    ext_buf.extend_from_slice(&selected_group.as_u16().to_be_bytes());
-    ext_buf.extend_from_slice(&(pub_key_bytes.len() as u16).to_be_bytes());
-    ext_buf.extend_from_slice(pub_key_bytes);
+    let ks = KeyShareServerHello {
+        entry: KeyShareEntry {
+            group: selected_group,
+            key_exchange_range: pub_key_range,
+        },
+    };
+    ks.serialize(extension_data, &mut ext_buf);
     let ks_end = ext_buf.len();
     extensions.push(Extension {
         extension_type: ExtensionType::KeyShare,
@@ -1188,10 +1193,10 @@ fn handshake_create_certificate_request(body: &mut Buf) -> Result<(), Error> {
     body.push(0); // empty context
 
     // extensions<2..2^16-1>
-    // We include signature_algorithms extension
     let mut ext_buf = Buf::new();
     let mut extensions: ArrayVec<Extension, 5> = ArrayVec::new();
 
+    // signature_algorithms extension (required)
     let sa_start = ext_buf.len();
     let sa = SignatureAlgorithmsExtension::default();
     sa.serialize(&mut ext_buf);
@@ -1199,6 +1204,16 @@ fn handshake_create_certificate_request(body: &mut Buf) -> Result<(), Error> {
     extensions.push(Extension {
         extension_type: ExtensionType::SignatureAlgorithms,
         extension_data_range: sa_start..sa_end,
+    });
+
+    // certificate_authorities extension (empty list)
+    let ca_start = ext_buf.len();
+    let cas: ArrayVec<DistinguishedName, 32> = ArrayVec::new();
+    serialize_certificate_authorities(&cas, &[], &mut ext_buf);
+    let ca_end = ext_buf.len();
+    extensions.push(Extension {
+        extension_type: ExtensionType::CertificateAuthorities,
+        extension_data_range: ca_start..ca_end,
     });
 
     // Calculate total extensions length
@@ -1215,4 +1230,21 @@ fn handshake_create_certificate_request(body: &mut Buf) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+/// Serialize a list of DistinguishedNames for the certificate_authorities extension.
+///
+/// Format: DistinguishedName<3..2^16-1> (outer length + entries)
+fn serialize_certificate_authorities(
+    cas: &ArrayVec<DistinguishedName, 32>,
+    buf: &[u8],
+    output: &mut Buf,
+) {
+    let total_len: usize = cas.iter().map(|dn| 2 + dn.as_slice(buf).len()).sum();
+    output.extend_from_slice(&(total_len as u16).to_be_bytes());
+    for dn in cas {
+        let data = dn.as_slice(buf);
+        output.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        output.extend_from_slice(data);
+    }
 }

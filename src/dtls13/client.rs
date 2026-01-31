@@ -30,8 +30,9 @@ use crate::buffer::ToBuf;
 use crate::crypto::{ActiveKeyExchange, SrtpProfile};
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::{
-    Body, ClientHello, CompressionMethod, ContentType, Cookie, Dtls13CipherSuite, Extension,
-    ExtensionType, KeyShareHelloRetryRequest, KeyShareServerHello, KeyUpdateRequest, MessageType,
+    Asn1Cert, Body, Certificate, CertificateEntry, ClientHello, CompressionMethod, ContentType,
+    Cookie, DistinguishedName, Dtls13CipherSuite, Extension, ExtensionType, KeyShareClientHello,
+    KeyShareEntry, KeyShareHelloRetryRequest, KeyShareServerHello, KeyUpdateRequest, MessageType,
     NamedGroup, ProtocolVersion, Random, SessionId, SignatureAlgorithmsExtension, SignatureScheme,
     SupportedGroupsExtension, SupportedVersionsClientHello, SupportedVersionsServerHello,
     UseSrtpExtension,
@@ -95,9 +96,6 @@ pub struct Client {
     /// Group selected by HRR for retry
     hrr_selected_group: Option<NamedGroup>,
 
-    /// Saved shared secret for deriving application secrets later
-    shared_secret: Option<Buf>,
-
     /// Saved handshake secret for deriving application secrets
     handshake_secret: Option<Buf>,
 
@@ -138,7 +136,6 @@ impl Client {
             active_key_exchange: None,
             hello_retry: false,
             hrr_selected_group: None,
-            shared_secret: None,
             handshake_secret: None,
             client_hs_traffic_secret: None,
             server_hs_traffic_secret: None,
@@ -433,6 +430,7 @@ impl State {
 
             // Replace transcript with message_hash per RFC 8446 Section 4.4.1
             client.engine.replace_transcript_with_message_hash();
+            client.engine.reset_for_hello_retry();
             client.hello_retry = true;
 
             // Drop the old key exchange
@@ -540,7 +538,7 @@ impl State {
         }
 
         let peer_pub_key = &client.extension_data[ke_range];
-        let mut shared_secret = Buf::new();
+        let mut shared_secret = client.engine.pop_buffer();
         key_exchange
             .complete(peer_pub_key, &mut shared_secret)
             .map_err(|e| Error::CryptoError(format!("ECDHE completion failed: {}", e)))?;
@@ -552,7 +550,7 @@ impl State {
         // Save handshake secret for later application key derivation
         let handshake_secret = client.engine.derive_handshake_secret(&shared_secret)?;
         client.handshake_secret = Some(handshake_secret);
-        client.shared_secret = Some(shared_secret);
+        client.engine.push_buffer(shared_secret);
 
         // Save traffic secrets for Finished verification and client flight
         let mut s_hs_copy = Buf::new();
@@ -625,18 +623,16 @@ impl State {
             return Ok(self);
         };
 
-        // Parse certificate_request_context from CertificateRequest body
+        // Parse CertificateRequest body
         let Body::CertificateRequest(ref range) = handshake.body else {
             unreachable!()
         };
-        let cr_data = &client.defragment_buffer[range.clone()];
-        if !cr_data.is_empty() {
-            let context_len = cr_data[0] as usize;
-            if context_len > 0 && cr_data.len() > context_len {
-                let mut ctx = Buf::new();
-                ctx.extend_from_slice(&cr_data[1..1 + context_len]);
-                client.cert_request_context = Some(ctx);
-            }
+        let cr_range = range.clone();
+        drop(maybe);
+        let cr_data = &client.defragment_buffer[cr_range.clone()];
+        let context = parse_certificate_request(cr_data, cr_range.start)?;
+        if let Some(ctx) = context {
+            client.cert_request_context = Some(ctx);
         }
 
         // CertificateRequest received - we'll send client Certificate + CertificateVerify
@@ -1088,13 +1084,13 @@ fn handshake_create_client_hello(
 
     // 3. key_share extension
     let ks_start = ext_buf.len();
-    let pub_key_bytes = &extension_data[pub_key_range];
-    // Write key_share_client_hello inline
-    let entry_len = 2 + 2 + pub_key_bytes.len(); // group(2) + ke_len(2) + ke_data
-    ext_buf.extend_from_slice(&(entry_len as u16).to_be_bytes()); // client_shares length
-    ext_buf.extend_from_slice(&kx_group.as_u16().to_be_bytes());
-    ext_buf.extend_from_slice(&(pub_key_bytes.len() as u16).to_be_bytes());
-    ext_buf.extend_from_slice(pub_key_bytes);
+    let mut entries = ArrayVec::new();
+    entries.push(KeyShareEntry {
+        group: kx_group,
+        key_exchange_range: pub_key_range,
+    });
+    let ks = KeyShareClientHello { entries };
+    ks.serialize(extension_data, &mut ext_buf);
     let ks_end = ext_buf.len();
     extensions.push(Extension {
         extension_type: ExtensionType::KeyShare,
@@ -1133,15 +1129,15 @@ fn handshake_create_client_hello(
         });
     }
 
-    let client_hello = ClientHello {
+    let mut client_hello = ClientHello::new(
         legacy_version,
         random,
         legacy_session_id,
         legacy_cookie,
         cipher_suites,
-        legacy_compression_methods: compression_methods,
-        extensions,
-    };
+        compression_methods,
+    );
+    client_hello.extensions = extensions;
 
     client_hello.serialize(&ext_buf, body);
     Ok(())
@@ -1152,27 +1148,28 @@ pub(crate) fn handshake_create_certificate(
     engine: &mut Engine,
     context: &[u8],
 ) -> Result<(), Error> {
-    // TLS 1.3 Certificate message format:
-    // certificate_request_context<0..255>
-    body.push(context.len() as u8);
-    body.extend_from_slice(context);
+    // Build a source buffer: context bytes then cert DER
+    let mut src = Buf::new();
+    let context_start = src.len();
+    src.extend_from_slice(context);
+    let context_end = src.len();
 
-    let cert_der = engine.certificate_der();
-    let cert_len = cert_der.len();
+    let cert_start = src.len();
+    src.extend_from_slice(engine.certificate_der());
+    let cert_end = src.len();
 
-    // certificate_list<0..2^24-1>
-    // Each entry: cert_data<1..2^24-1> + extensions<0..2^16-1>
-    let entry_len = 3 + cert_len + 2; // cert_len_field(3) + cert + ext_len(2)
-    let total_len = entry_len;
-    body.extend_from_slice(&(total_len as u32).to_be_bytes()[1..]); // 3-byte length
+    let mut certificate_list = ArrayVec::new();
+    certificate_list.push(CertificateEntry {
+        cert: Asn1Cert(cert_start..cert_end),
+        extensions_range: 0..0,
+    });
 
-    // cert_data
-    body.extend_from_slice(&(cert_len as u32).to_be_bytes()[1..]); // 3-byte length
-    body.extend_from_slice(cert_der);
+    let certificate = Certificate {
+        context_range: context_start..context_end,
+        certificate_list,
+    };
 
-    // extensions (empty)
-    body.extend_from_slice(&0u16.to_be_bytes());
-
+    certificate.serialize(&src, body);
     Ok(())
 }
 
@@ -1274,6 +1271,82 @@ pub(crate) fn signature_scheme_to_components(
             scheme
         ))),
     }
+}
+
+/// Parse a TLS 1.3 CertificateRequest message (RFC 8446 Section 4.3.2).
+///
+/// Extracts the certificate_request_context and parses extensions including
+/// certificate_authorities. Returns the context if non-empty.
+fn parse_certificate_request(cr_data: &[u8], base_offset: usize) -> Result<Option<Buf>, Error> {
+    if cr_data.is_empty() {
+        return Ok(None);
+    }
+
+    // certificate_request_context<0..255>
+    let context_len = cr_data[0] as usize;
+    let mut pos = 1;
+    let mut context = None;
+    if context_len > 0 {
+        if cr_data.len() < 1 + context_len {
+            return Err(Error::UnexpectedMessage(
+                "CertificateRequest context truncated".into(),
+            ));
+        }
+        let mut ctx = Buf::new();
+        ctx.extend_from_slice(&cr_data[pos..pos + context_len]);
+        context = Some(ctx);
+        pos += context_len;
+    }
+
+    // extensions<2..2^16-1>
+    if cr_data.len() < pos + 2 {
+        return Ok(context);
+    }
+    let ext_len = u16::from_be_bytes([cr_data[pos], cr_data[pos + 1]]) as usize;
+    pos += 2;
+
+    let ext_end = pos + ext_len;
+    if cr_data.len() < ext_end {
+        return Err(Error::UnexpectedMessage(
+            "CertificateRequest extensions truncated".into(),
+        ));
+    }
+
+    // Parse individual extensions
+    while pos + 4 <= ext_end {
+        let ext_type = u16::from_be_bytes([cr_data[pos], cr_data[pos + 1]]);
+        let ext_data_len = u16::from_be_bytes([cr_data[pos + 2], cr_data[pos + 3]]) as usize;
+        pos += 4;
+
+        if pos + ext_data_len > ext_end {
+            break;
+        }
+
+        if ext_type == ExtensionType::CertificateAuthorities.as_u16() {
+            // Parse certificate_authorities: DistinguishedName<3..2^16-1>
+            let ca_data = &cr_data[pos..pos + ext_data_len];
+            if ca_data.len() >= 2 {
+                let list_len = u16::from_be_bytes([ca_data[0], ca_data[1]]) as usize;
+                let list_data = &ca_data[2..];
+                if list_data.len() >= list_len {
+                    let ca_base = base_offset + pos + 2;
+                    let mut rest = &list_data[..list_len];
+                    while !rest.is_empty() {
+                        let offset =
+                            ca_base + (rest.as_ptr() as usize - list_data.as_ptr() as usize);
+                        match DistinguishedName::parse(rest, offset) {
+                            Ok((r, _dn)) => rest = r,
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        }
+
+        pos += ext_data_len;
+    }
+
+    Ok(context)
 }
 
 // =========================================================================

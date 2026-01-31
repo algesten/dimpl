@@ -25,7 +25,7 @@ pub use digitally_signed::DigitallySigned;
 pub use encrypted_extensions::EncryptedExtensions;
 pub use extension::{Extension, ExtensionType};
 pub use extensions::key_share::{
-    KeyShareClientHello, KeyShareHelloRetryRequest, KeyShareServerHello,
+    KeyShareClientHello, KeyShareEntry, KeyShareHelloRetryRequest, KeyShareServerHello,
 };
 pub use extensions::signature_algorithms::SignatureAlgorithmsExtension;
 pub use extensions::supported_groups::SupportedGroupsExtension;
