@@ -111,10 +111,8 @@ where
 
                     i = i1;
                     // Only collect items that pass the filter
-                    if predicate(&o) {
-                        if acc.try_push(o).is_err() {
-                            return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many1)));
-                        }
+                    if predicate(&o) && acc.try_push(o).is_err() {
+                        return Err(Err::Error(E::from_error_kind(i, ErrorKind::Many1)));
                     }
                 }
             }
