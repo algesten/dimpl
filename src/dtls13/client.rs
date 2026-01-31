@@ -28,6 +28,7 @@ use subtle::ConstantTimeEq;
 use crate::buffer::Buf;
 use crate::buffer::ToBuf;
 use crate::crypto::{ActiveKeyExchange, SrtpProfile};
+use crate::dtls13::Server;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::{
     Body, ClientHello, CompressionMethod, ContentType, Cookie, Dtls13CipherSuite, Extension,
@@ -138,6 +139,10 @@ impl Client {
             client_hs_traffic_secret: None,
             server_hs_traffic_secret: None,
         }
+    }
+
+    pub fn into_server(self) -> Server {
+        Server::new_with_engine(self.engine)
     }
 
     pub(crate) fn state_name(&self) -> &'static str {

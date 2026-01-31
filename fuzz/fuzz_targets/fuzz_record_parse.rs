@@ -33,7 +33,7 @@ fuzz_target!(|data: &[u8]| {
 
     let config = Arc::new(Config::default());
     let now = Instant::now();
-    let mut dtls = Dtls::new(Arc::clone(&config), cert, now);
+    let mut dtls = Dtls::new_12(Arc::clone(&config), cert, now);
 
     // Test the input as-is (even small inputs exercise error paths)
     let _ = dtls.handle_packet(data);

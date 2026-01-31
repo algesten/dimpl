@@ -25,7 +25,7 @@ fuzz_target!(|data: &[u8]| {
     // Test as server (default mode)
     // Servers can receive packets immediately
     {
-        let mut dtls = Dtls::new(Arc::clone(&config), cert.clone(), now);
+        let mut dtls = Dtls::new_12(Arc::clone(&config), cert.clone(), now);
         // Ignore errors - we're looking for panics, not handling errors
         let _ = dtls.handle_packet(data);
     }
@@ -33,7 +33,7 @@ fuzz_target!(|data: &[u8]| {
     // Test as client
     // Clients need handle_timeout called first to initialize
     {
-        let mut dtls = Dtls::new(Arc::clone(&config), cert, now);
+        let mut dtls = Dtls::new_12(Arc::clone(&config), cert, now);
         dtls.set_active(true); // Switch to client mode
 
         // Initialize the client by calling handle_timeout to set up the random and other state

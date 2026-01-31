@@ -38,6 +38,7 @@ use crate::dtls13::client::{
     handshake_create_certificate, handshake_create_certificate_verify,
     signature_scheme_to_components, LocalEvent,
 };
+use crate::dtls13::Client;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::{
     Body, CompressionMethod, ContentType, Dtls13CipherSuite, Extension, ExtensionType,
@@ -159,6 +160,10 @@ impl Server {
             hello_retry: false,
             cookie_secret,
         }
+    }
+
+    pub fn into_client(self) -> Client {
+        Client::new_with_engine(self.engine)
     }
 
     pub(crate) fn state_name(&self) -> &'static str {

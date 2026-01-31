@@ -46,7 +46,7 @@ fn run_client_server_with_mtu(mtu: usize) -> (usize, usize) {
 
     let now = Instant::now();
 
-    let mut client = Dtls::new(
+    let mut client = Dtls::new_12(
         config,
         dimpl::DtlsCertificate {
             certificate: client_x509_der,

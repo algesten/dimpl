@@ -39,7 +39,7 @@ fn server_ossl() {
 
     let now = Instant::now();
 
-    let mut server = Dtls::new(
+    let mut server = Dtls::new_12(
         config,
         dimpl::DtlsCertificate {
             certificate: server_x509_der,

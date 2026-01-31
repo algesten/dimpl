@@ -28,7 +28,7 @@
 //! let cert = certificate::generate_self_signed_certificate().unwrap();
 //! // Implicitly uses aws-lc-rs default provider
 //! let config = Arc::new(Config::default());
-//! let dtls = Dtls::new(config, cert, Instant::now());
+//! let dtls = Dtls::new_12(config, cert, Instant::now());
 //! # }
 //! # #[cfg(not(feature = "rcgen"))]
 //! # fn main() {}
@@ -51,7 +51,7 @@
 //!         .build()
 //!         .unwrap()
 //! );
-//! let dtls = Dtls::new(config, cert, Instant::now());
+//! let dtls = Dtls::new_12(config, cert, Instant::now());
 //! # }
 //! # #[cfg(not(feature = "rcgen"))]
 //! # fn main() {}

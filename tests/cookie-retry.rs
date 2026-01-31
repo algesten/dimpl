@@ -69,10 +69,10 @@ fn cookie_retry_proceeds_to_server_hello() {
 
     let config = Arc::new(Config::builder().build().expect("Failed to build config"));
 
-    let mut client = Dtls::new(config.clone(), client_cert.clone(), now);
+    let mut client = Dtls::new_12(config.clone(), client_cert.clone(), now);
     client.set_active(true);
 
-    let mut server = Dtls::new(config.clone(), server_cert.clone(), now);
+    let mut server = Dtls::new_12(config.clone(), server_cert.clone(), now);
     server.set_active(false);
 
     // FLIGHT 1: Client sends ClientHello (no cookie)
@@ -188,9 +188,9 @@ fn parallel_handshakes_with_cookies() {
     // Create 5 parallel client-server pairs
     let mut pairs: Vec<(Dtls, Dtls)> = (0..5)
         .map(|_| {
-            let mut client = Dtls::new(config.clone(), client_cert.clone(), now);
+            let mut client = Dtls::new_12(config.clone(), client_cert.clone(), now);
             client.set_active(true);
-            let mut server = Dtls::new(config.clone(), server_cert.clone(), now);
+            let mut server = Dtls::new_12(config.clone(), server_cert.clone(), now);
             server.set_active(false);
             (client, server)
         })
@@ -267,10 +267,10 @@ fn retransmit_no_cookie_after_cookie_sent() {
 
     let config = Arc::new(Config::builder().build().expect("Failed to build config"));
 
-    let mut client = Dtls::new(config.clone(), client_cert.clone(), now);
+    let mut client = Dtls::new_12(config.clone(), client_cert.clone(), now);
     client.set_active(true);
 
-    let mut server = Dtls::new(config.clone(), server_cert.clone(), now);
+    let mut server = Dtls::new_12(config.clone(), server_cert.clone(), now);
     server.set_active(false);
 
     // Flight 1: ClientHello (no cookie)
@@ -360,10 +360,10 @@ fn retransmit_no_cookie_before_cookie_received() {
 
     let config = Arc::new(Config::builder().build().expect("Failed to build config"));
 
-    let mut client = Dtls::new(config.clone(), client_cert.clone(), now);
+    let mut client = Dtls::new_12(config.clone(), client_cert.clone(), now);
     client.set_active(true);
 
-    let mut server = Dtls::new(config.clone(), server_cert.clone(), now);
+    let mut server = Dtls::new_12(config.clone(), server_cert.clone(), now);
     server.set_active(false);
 
     // Flight 1: ClientHello (no cookie)
