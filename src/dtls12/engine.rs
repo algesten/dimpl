@@ -671,7 +671,7 @@ impl Engine {
             // DTLS 1.2 AEAD (AES-GCM): AAD uses the plaintext length (DTLSCompressed.length).
             // See RFC 5246/5288 and RFC 6347. The record fragment on the wire will be:
             // 8-byte explicit nonce || ciphertext(plaintext) || 16-byte GCM tag.
-            let aad = Aad::new(content_type, sequence, length);
+            let aad = Aad::new_dtls12(content_type, sequence, length);
 
             // Encrypt the fragment in-place
             self.encrypt_data(&mut fragment, aad, nonce)?;
@@ -978,7 +978,7 @@ impl Engine {
         // 8-byte explicit nonce || ciphertext || 16-byte GCM tag. Recover plaintext length from
         // the record header's fragment length field.
         let plaintext_len = dtls.length.saturating_sub(DTLS_AEAD_OVERHEAD as u16);
-        let aad = Aad::new(dtls.content_type, dtls.sequence, plaintext_len);
+        let aad = Aad::new_dtls12(dtls.content_type, dtls.sequence, plaintext_len);
         let iv = self.peer_iv();
         let nonce = Nonce::new(iv, dtls.nonce(buf));
         (aad, nonce)
