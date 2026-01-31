@@ -10,7 +10,7 @@ use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::{
     Aad, Cipher, HkdfProvider, Nonce, SigningKey, SupportedDtls13CipherSuite, SupportedKxGroup,
 };
-use crate::dtls13::incoming::{Incoming, Record, RecordDecrypt};
+use crate::dtls13::incoming::{Incoming, RecordDecrypt};
 use crate::dtls13::message::{
     Body, ContentType, Dtls13CipherSuite, Dtls13Record, Handshake, Header, KeyUpdateRequest,
     MessageType, Sequence,
@@ -675,22 +675,6 @@ impl Engine {
         Ok(Some(handshake))
     }
 
-    pub(crate) fn next_record(&mut self, ctype: ContentType) -> Option<&Record> {
-        let record = self
-            .queue_rx
-            .iter()
-            .flat_map(|i| i.records().iter())
-            .find(|r| !r.is_handled())?;
-
-        if record.record().content_type != ctype {
-            return None;
-        }
-
-        record.set_handled();
-
-        Some(record)
-    }
-
     /// Create a DTLSPlaintext record (epoch 0, unencrypted).
     pub fn create_plaintext_record<F>(
         &mut self,
@@ -1031,11 +1015,6 @@ impl Engine {
     /// Release application data from the incoming queue
     pub fn release_application_data(&mut self) {
         self.release_app_data = true;
-    }
-
-    /// Record that a handshake record was received, for ACK generation.
-    pub fn record_received(&mut self, epoch: u16, seq: u64) {
-        self.received_record_numbers.push((epoch as u64, seq));
     }
 
     /// Send an ACK record listing received handshake record numbers.
@@ -1614,10 +1593,6 @@ impl Engine {
         let mut out = Buf::new();
         ctx.clone_and_finalize(&mut out);
         out
-    }
-
-    pub fn transcript(&self) -> &[u8] {
-        &self.transcript
     }
 
     /// Replace transcript with message_hash for HelloRetryRequest.
