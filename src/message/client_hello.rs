@@ -10,7 +10,7 @@ use nom::{Err, IResult};
 
 use crate::buffer::Buf;
 use crate::crypto::CryptoProvider;
-use crate::util::{many1, many1_filter};
+use crate::util::many1;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ClientHello {
@@ -19,8 +19,8 @@ pub struct ClientHello {
     pub session_id: SessionId,
     pub cookie: Cookie,
     pub cipher_suites: ArrayVec<CipherSuite, 2>,
-    pub compression_methods: ArrayVec<CompressionMethod, 4>,
-    pub extensions: ArrayVec<Extension, 16>,
+    pub compression_methods: ArrayVec<CompressionMethod, 2>,
+    pub extensions: ArrayVec<Extension, 8>,
 }
 
 impl ClientHello {
@@ -30,7 +30,7 @@ impl ClientHello {
         session_id: SessionId,
         cookie: Cookie,
         cipher_suites: ArrayVec<CipherSuite, 2>,
-        compression_methods: ArrayVec<CompressionMethod, 4>,
+        compression_methods: ArrayVec<CompressionMethod, 2>,
     ) -> Self {
         ClientHello {
             client_version,
@@ -123,14 +123,14 @@ impl ClientHello {
         let (input, cookie) = Cookie::parse(input)?;
         let (input, cipher_suites_len) = be_u16(input)?;
         let (input, input_cipher) = take(cipher_suites_len)(input)?;
-        let (rest, cipher_suites) =
-            many1_filter(CipherSuite::parse, CipherSuite::is_known)(input_cipher)?;
+        let (rest, cipher_suites) = many1(CipherSuite::parse, CipherSuite::is_known)(input_cipher)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
         let (input, compression_methods_len) = be_u8(input)?;
         let (input, input_compression) = take(compression_methods_len)(input)?;
-        let (rest, compression_methods) = many1(CompressionMethod::parse)(input_compression)?;
+        let (rest, compression_methods) =
+            many1(CompressionMethod::parse, CompressionMethod::is_known)(input_compression)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
@@ -156,11 +156,11 @@ impl ClientHello {
         ))
     }
 
-    /// Parse extensions from the input
+    /// Parse extensions from the input, filtering to only known extension types
     fn parse_extensions(
         input: &[u8],
         base_offset: usize,
-    ) -> IResult<&[u8], ArrayVec<Extension, 16>> {
+    ) -> IResult<&[u8], ArrayVec<Extension, 8>> {
         let mut extensions = ArrayVec::new();
 
         // Early return if input is empty
@@ -185,16 +185,19 @@ impl ClientHello {
         let consumed = extensions_data.as_ptr() as usize - original_input.as_ptr() as usize;
         let data_base_offset = base_offset + consumed;
 
-        // Parse individual extensions
+        // Parse individual extensions, filtering to only known types
         let mut extensions_rest = extensions_data;
         let mut current_offset = data_base_offset;
-        while !extensions_rest.is_empty() && extensions.len() < 16 {
+        while !extensions_rest.is_empty() {
             let before_len = extensions_rest.len();
             let (rest, extension) = Extension::parse(extensions_rest, current_offset)?;
             let parsed_len = before_len - rest.len();
             current_offset += parsed_len;
 
-            extensions.push(extension);
+            // Only keep known extension types
+            if extension.extension_type.is_known() {
+                extensions.push(extension);
+            }
             extensions_rest = rest;
         }
 
@@ -311,8 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn cipher_suites_too_small() {
-        // Build an empty ClientHello so we get the correct ArrayVec capacity
+    fn cipher_suites_capacity_matches_known() {
         let client_hello = ClientHello {
             client_version: ProtocolVersion::DTLS1_2,
             random: Random::parse(&MESSAGE[2..34]).unwrap().1,
@@ -326,7 +328,45 @@ mod tests {
         assert_eq!(
             client_hello.cipher_suites.capacity(),
             CipherSuite::all().len(),
-            "cipher_suites ArrayVec capacity is insufficient to hold all available CipherSuites"
+            "cipher_suites ArrayVec capacity must match all known CipherSuites"
+        );
+    }
+
+    #[test]
+    fn compression_methods_capacity_matches_known() {
+        let client_hello = ClientHello {
+            client_version: ProtocolVersion::DTLS1_2,
+            random: Random::parse(&MESSAGE[2..34]).unwrap().1,
+            session_id: SessionId::empty(),
+            cookie: Cookie::empty(),
+            cipher_suites: ArrayVec::new(),
+            compression_methods: ArrayVec::new(),
+            extensions: ArrayVec::new(),
+        };
+
+        assert_eq!(
+            client_hello.compression_methods.capacity(),
+            CompressionMethod::all().len(),
+            "compression_methods ArrayVec capacity must match all known CompressionMethods"
+        );
+    }
+
+    #[test]
+    fn extensions_capacity_matches_known() {
+        let client_hello = ClientHello {
+            client_version: ProtocolVersion::DTLS1_2,
+            random: Random::parse(&MESSAGE[2..34]).unwrap().1,
+            session_id: SessionId::empty(),
+            cookie: Cookie::empty(),
+            cipher_suites: ArrayVec::new(),
+            compression_methods: ArrayVec::new(),
+            extensions: ArrayVec::new(),
+        };
+
+        assert_eq!(
+            client_hello.extensions.capacity(),
+            ExtensionType::all_known().len(),
+            "extensions ArrayVec capacity must match all known ExtensionTypes"
         );
     }
 }

@@ -7,7 +7,7 @@ use nom::IResult;
 /// SupportedGroups extension as defined in RFC 8422
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupportedGroupsExtension {
-    pub groups: ArrayVec<NamedGroup, 16>,
+    pub groups: ArrayVec<NamedGroup, 4>,
 }
 
 impl SupportedGroupsExtension {
@@ -22,16 +22,16 @@ impl SupportedGroupsExtension {
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], SupportedGroupsExtension> {
         let (mut input, list_len) = nom::number::complete::be_u16(input)?;
-        let mut groups = ArrayVec::new();
+        let mut groups: ArrayVec<NamedGroup, 4> = ArrayVec::new();
         let mut remaining = list_len as usize;
 
-        // Parse groups; only include known groups (ignore Unknown variants)
+        // Parse groups; only include supported groups (skip Unknown and unsupported)
         while remaining >= 2 {
             let (rest, group) = NamedGroup::parse(input)?;
             input = rest;
             remaining -= 2;
-            // Only add known groups (skip Unknown variants)
-            if !matches!(group, NamedGroup::Unknown(_)) {
+            // Only add supported groups
+            if group.is_supported() {
                 groups.push(group);
             }
         }
@@ -91,7 +91,7 @@ mod tests {
             SupportedGroupsExtension::parse(&bytes).expect("parse SupportedGroups");
         assert!(rest.is_empty());
 
-        // Expect only the known groups in order as they appear
+        // Expect only the supported groups in order as they appear
         assert_eq!(
             parsed.groups.as_slice(),
             &[
@@ -99,6 +99,18 @@ mod tests {
                 NamedGroup::Secp256r1,
                 NamedGroup::Secp384r1
             ]
+        );
+    }
+
+    #[test]
+    fn capacity_matches_supported() {
+        let ext = SupportedGroupsExtension {
+            groups: ArrayVec::new(),
+        };
+        assert_eq!(
+            ext.groups.capacity(),
+            NamedGroup::all_supported().len(),
+            "SupportedGroupsExtension capacity must match all supported NamedGroups"
         );
     }
 }

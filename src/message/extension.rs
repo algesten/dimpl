@@ -190,6 +190,26 @@ impl ExtensionType {
         let (input, value) = be_u16(input)?;
         Ok((input, ExtensionType::from_u16(value)))
     }
+
+    /// Returns true if this extension type is a known/supported variant.
+    pub fn is_known(&self) -> bool {
+        !matches!(self, ExtensionType::Unknown(_))
+    }
+
+    /// All known extension types that this implementation handles.
+    #[cfg(test)]
+    pub fn all_known() -> &'static [ExtensionType] {
+        &[
+            ExtensionType::SupportedGroups,
+            ExtensionType::EcPointFormats,
+            ExtensionType::SignatureAlgorithms,
+            ExtensionType::UseSrtp,
+            ExtensionType::EncryptThenMac,
+            ExtensionType::ExtendedMasterSecret,
+            ExtensionType::RenegotiationInfo,
+            ExtensionType::SessionTicket,
+        ]
+    }
 }
 
 #[cfg(test)]
