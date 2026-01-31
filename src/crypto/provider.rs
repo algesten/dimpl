@@ -316,6 +316,12 @@ pub trait SupportedDtls13CipherSuite: CryptoSafe {
 
     /// Create a cipher instance with the given key.
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String>;
+
+    /// Encrypt a single AES block for record number encryption (RFC 9147 Section 4.2.3).
+    ///
+    /// Computes `mask = AES-ECB(sn_key, sample)` where `sample` is the first 16 bytes
+    /// of the ciphertext. The mask is XORed over the sequence number bytes in the header.
+    fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16];
 }
 
 /// HKDF provider for TLS 1.3 key derivation (RFC 5869).

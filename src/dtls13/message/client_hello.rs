@@ -17,7 +17,7 @@ pub struct ClientHello {
     pub legacy_cookie: Cookie,
     pub cipher_suites: ArrayVec<Dtls13CipherSuite, 3>,
     pub legacy_compression_methods: ArrayVec<CompressionMethod, 2>,
-    pub extensions: ArrayVec<Extension, 5>,
+    pub extensions: ArrayVec<Extension, 8>,
 }
 
 impl ClientHello {
@@ -83,7 +83,7 @@ impl ClientHello {
     fn parse_extensions(
         input: &[u8],
         base_offset: usize,
-    ) -> IResult<&[u8], ArrayVec<Extension, 5>> {
+    ) -> IResult<&[u8], ArrayVec<Extension, 8>> {
         let mut extensions = ArrayVec::new();
 
         if input.is_empty() {
@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn extensions_capacity_matches_known() {
+    fn extensions_capacity_fits_known() {
         let client_hello = ClientHello {
             legacy_version: ProtocolVersion::DTLS1_2,
             random: Random::parse(&MESSAGE[2..34]).unwrap().1,
@@ -252,10 +252,9 @@ mod tests {
             extensions: ArrayVec::new(),
         };
 
-        assert_eq!(
-            client_hello.extensions.capacity(),
-            ExtensionType::all().len(),
-            "extensions ArrayVec capacity must match all known ExtensionTypes"
+        assert!(
+            client_hello.extensions.capacity() >= ExtensionType::all().len(),
+            "extensions ArrayVec capacity must fit all known ExtensionTypes"
         );
     }
 }

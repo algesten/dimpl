@@ -67,6 +67,12 @@ pub struct Client {
     /// Whether the server requested client authentication
     client_auth_requested: bool,
 
+    /// Saved certificate_request_context from server's CertificateRequest
+    cert_request_context: Option<Buf>,
+
+    /// Cookie received from HRR, to echo in the retry ClientHello
+    saved_cookie: Option<Buf>,
+
     /// The last now we seen
     last_now: Option<Instant>,
 
@@ -119,6 +125,8 @@ impl Client {
             server_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
             client_auth_requested: false,
+            cert_request_context: None,
+            saved_cookie: None,
             last_now: None,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
@@ -285,6 +293,16 @@ impl State {
 
         client.active_key_exchange = Some(key_exchange);
 
+        // Store cookie data in extension_data if we have one from HRR
+        let cookie_range = if let Some(ref cookie) = client.saved_cookie {
+            let cookie_start = client.extension_data.len();
+            client.extension_data.extend_from_slice(cookie);
+            let cookie_end = client.extension_data.len();
+            Some(cookie_start..cookie_end)
+        } else {
+            None
+        };
+
         client
             .engine
             .create_handshake(MessageType::ClientHello, |body, engine| {
@@ -294,6 +312,7 @@ impl State {
                     random,
                     group,
                     pub_key_start..pub_key_end,
+                    cookie_range.clone(),
                     &client.extension_data,
                 )
             })?;
@@ -316,18 +335,67 @@ impl State {
 
         // Check for HelloRetryRequest (magic random)
         if server_hello.is_hello_retry_request() {
+            if client.hello_retry {
+                return Err(Error::UnexpectedMessage(
+                    "Second HelloRetryRequest".to_string(),
+                ));
+            }
+
             debug!("Received HelloRetryRequest");
 
-            // Extract selected group from key_share extension
+            // Extract selected group and cookie from HRR extensions
             if let Some(ref extensions) = server_hello.extensions {
                 for ext in extensions {
-                    if ext.extension_type == ExtensionType::KeyShare {
+                    match ext.extension_type {
+                        ExtensionType::KeyShare => {
+                            let ext_data = ext.extension_data(&client.defragment_buffer);
+                            if let Ok((_, hrr_ks)) = KeyShareHelloRetryRequest::parse(ext_data) {
+                                client.hrr_selected_group = Some(hrr_ks.selected_group);
+                            }
+                        }
+                        ExtensionType::Cookie => {
+                            let ext_data = ext.extension_data(&client.defragment_buffer);
+                            // Cookie extension format: cookie<1..2^16-1> (u16 length prefix)
+                            if ext_data.len() >= 2 {
+                                let cookie_len =
+                                    u16::from_be_bytes([ext_data[0], ext_data[1]]) as usize;
+                                if ext_data.len() >= 2 + cookie_len {
+                                    let mut cookie = Buf::new();
+                                    cookie.extend_from_slice(&ext_data[..2 + cookie_len]);
+                                    client.saved_cookie = Some(cookie);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Validate HRR cipher suite
+            if !client
+                .engine
+                .is_cipher_suite_allowed(server_hello.cipher_suite)
+            {
+                return Err(Error::SecurityError(
+                    "HRR selected disallowed cipher suite".into(),
+                ));
+            }
+            client.engine.set_cipher_suite(server_hello.cipher_suite);
+
+            // Validate HRR supported_versions
+            let mut hrr_version_ok = false;
+            if let Some(ref extensions) = server_hello.extensions {
+                for ext in extensions {
+                    if ext.extension_type == ExtensionType::SupportedVersions {
                         let ext_data = ext.extension_data(&client.defragment_buffer);
-                        if let Ok((_, hrr_ks)) = KeyShareHelloRetryRequest::parse(ext_data) {
-                            client.hrr_selected_group = Some(hrr_ks.selected_group);
+                        if let Ok((_, sv)) = SupportedVersionsServerHello::parse(ext_data) {
+                            hrr_version_ok = sv.selected_version == ProtocolVersion::DTLS1_3;
                         }
                     }
                 }
+            }
+            if !hrr_version_ok {
+                return Err(Error::SecurityError("HRR did not select DTLS 1.3".into()));
             }
 
             // Replace transcript with message_hash per RFC 8446 Section 4.4.1
@@ -338,6 +406,20 @@ impl State {
             client.active_key_exchange = None;
 
             return Ok(Self::SendClientHello);
+        }
+
+        // Validate legacy_version (must be DTLS 1.2)
+        if server_hello.legacy_version != ProtocolVersion::DTLS1_2 {
+            return Err(Error::SecurityError(
+                "ServerHello legacy_version must be DTLS 1.2".into(),
+            ));
+        }
+
+        // Validate legacy_compression_method (must be null)
+        if server_hello.legacy_compression_method != CompressionMethod::Null {
+            return Err(Error::SecurityError(
+                "ServerHello compression must be null".into(),
+            ));
         }
 
         debug!(
@@ -506,9 +588,23 @@ impl State {
             &mut client.defragment_buffer,
         )?;
 
-        let Some(_handshake) = maybe else {
+        let Some(ref handshake) = maybe else {
             return Ok(self);
         };
+
+        // Parse certificate_request_context from CertificateRequest body
+        let Body::CertificateRequest(ref range) = handshake.body else {
+            unreachable!()
+        };
+        let cr_data = &client.defragment_buffer[range.clone()];
+        if !cr_data.is_empty() {
+            let context_len = cr_data[0] as usize;
+            if context_len > 0 && cr_data.len() > context_len {
+                let mut ctx = Buf::new();
+                ctx.extend_from_slice(&cr_data[1..1 + context_len]);
+                client.cert_request_context = Some(ctx);
+            }
+        }
 
         // CertificateRequest received - we'll send client Certificate + CertificateVerify
         debug!("Received CertificateRequest; enabling client authentication path");
@@ -529,6 +625,12 @@ impl State {
         let Body::Certificate(ref certificate) = handshake.body else {
             unreachable!()
         };
+
+        if !certificate.context_range.is_empty() {
+            return Err(Error::SecurityError(
+                "Server certificate context must be empty".into(),
+            ));
+        }
 
         if certificate.certificate_list.is_empty() {
             return Err(Error::UnexpectedMessage(
@@ -646,7 +748,7 @@ impl State {
             Error::CertificateError("No server certificate for verification".to_string())
         })?;
 
-        let (hash_alg, sig_alg) = signature_scheme_to_components(scheme);
+        let (hash_alg, sig_alg) = signature_scheme_to_components(scheme)?;
 
         client.engine.verify_signature(
             cert_der,
@@ -734,13 +836,37 @@ impl State {
     fn send_certificate(self, client: &mut Client) -> Result<Self, Error> {
         debug!("Sending Certificate");
 
-        client
-            .engine
-            .create_handshake(MessageType::Certificate, |body, engine| {
-                handshake_create_certificate(body, engine)
-            })?;
+        let has_cert = !client.engine.certificate_der().is_empty();
 
-        Ok(Self::SendCertificateVerify)
+        if has_cert {
+            let context = client.cert_request_context.as_deref().unwrap_or(&[]);
+            let context = context.to_vec(); // clone so we don't borrow client
+
+            client
+                .engine
+                .create_handshake(MessageType::Certificate, |body, engine| {
+                    handshake_create_certificate(body, engine, &context)
+                })?;
+
+            Ok(Self::SendCertificateVerify)
+        } else {
+            // No client certificate: send empty Certificate and skip CertificateVerify
+            let context = client.cert_request_context.as_deref().unwrap_or(&[]);
+            let context = context.to_vec();
+
+            client
+                .engine
+                .create_handshake(MessageType::Certificate, |body, _engine| {
+                    // certificate_request_context
+                    body.push(context.len() as u8);
+                    body.extend_from_slice(&context);
+                    // empty certificate_list (3-byte zero length)
+                    body.extend_from_slice(&[0, 0, 0]);
+                    Ok(())
+                })?;
+
+            Ok(Self::SendFinished)
+        }
     }
 
     fn send_certificate_verify(self, client: &mut Client) -> Result<Self, Error> {
@@ -749,7 +875,11 @@ impl State {
         client
             .engine
             .create_handshake(MessageType::CertificateVerify, |body, engine| {
-                handshake_create_certificate_verify(body, engine)
+                handshake_create_certificate_verify(
+                    body,
+                    engine,
+                    b"TLS 1.3, client CertificateVerify\0",
+                )
             })?;
 
         Ok(Self::SendFinished)
@@ -834,6 +964,7 @@ fn handshake_create_client_hello(
     random: Random,
     kx_group: NamedGroup,
     pub_key_range: std::ops::Range<usize>,
+    cookie_range: Option<std::ops::Range<usize>>,
     extension_data: &Buf,
 ) -> Result<(), Error> {
     let legacy_version = ProtocolVersion::DTLS1_2;
@@ -859,7 +990,7 @@ fn handshake_create_client_hello(
     compression_methods.push(CompressionMethod::Null);
 
     // Build extensions
-    let mut extensions: ArrayVec<Extension, 5> = ArrayVec::new();
+    let mut extensions: ArrayVec<Extension, 8> = ArrayVec::new();
     let mut ext_buf = Buf::new();
 
     // 1. supported_versions extension (DTLS 1.3)
@@ -920,6 +1051,18 @@ fn handshake_create_client_hello(
         extension_data_range: srtp_start..srtp_end,
     });
 
+    // 6. cookie extension (echo from HRR if present)
+    if let Some(cookie_range) = cookie_range {
+        let cookie_start = ext_buf.len();
+        // Cookie data already includes the u16 length prefix from the HRR
+        ext_buf.extend_from_slice(&extension_data[cookie_range]);
+        let cookie_end = ext_buf.len();
+        extensions.push(Extension {
+            extension_type: ExtensionType::Cookie,
+            extension_data_range: cookie_start..cookie_end,
+        });
+    }
+
     let client_hello = ClientHello {
         legacy_version,
         random,
@@ -934,10 +1077,15 @@ fn handshake_create_client_hello(
     Ok(())
 }
 
-fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
+pub(crate) fn handshake_create_certificate(
+    body: &mut Buf,
+    engine: &mut Engine,
+    context: &[u8],
+) -> Result<(), Error> {
     // TLS 1.3 Certificate message format:
     // certificate_request_context<0..255>
-    body.push(0); // empty context
+    body.push(context.len() as u8);
+    body.extend_from_slice(context);
 
     let cert_der = engine.certificate_der();
     let cert_len = cert_der.len();
@@ -958,11 +1106,15 @@ fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(
     Ok(())
 }
 
-fn handshake_create_certificate_verify(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
-    // Build signed content: 0x20*64 || "TLS 1.3, client CertificateVerify\0" || transcript_hash
+pub(crate) fn handshake_create_certificate_verify(
+    body: &mut Buf,
+    engine: &mut Engine,
+    context_string: &[u8],
+) -> Result<(), Error> {
+    // Build signed content: 0x20*64 || context_string || transcript_hash
     let mut signed_content = Buf::new();
     signed_content.extend_from_slice(&[0x20u8; 64]);
-    signed_content.extend_from_slice(b"TLS 1.3, client CertificateVerify\0");
+    signed_content.extend_from_slice(context_string);
 
     let mut transcript_hash = Buf::new();
     engine.transcript_hash(&mut transcript_hash);
@@ -1007,34 +1159,50 @@ fn handshake_create_certificate_verify(body: &mut Buf, engine: &mut Engine) -> R
 
 /// Map a TLS 1.3 SignatureScheme to the (HashAlgorithm, SignatureAlgorithm) pair
 /// needed by the SignatureVerifier trait.
-fn signature_scheme_to_components(
+pub(crate) fn signature_scheme_to_components(
     scheme: SignatureScheme,
-) -> (
-    crate::types::HashAlgorithm,
-    crate::types::SignatureAlgorithm,
-) {
+) -> Result<
+    (
+        crate::types::HashAlgorithm,
+        crate::types::SignatureAlgorithm,
+    ),
+    crate::Error,
+> {
     use crate::types::{HashAlgorithm, SignatureAlgorithm};
     match scheme {
         SignatureScheme::ECDSA_SECP256R1_SHA256 => {
-            (HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA)
+            Ok((HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA))
         }
         SignatureScheme::ECDSA_SECP384R1_SHA384 => {
-            (HashAlgorithm::SHA384, SignatureAlgorithm::ECDSA)
+            Ok((HashAlgorithm::SHA384, SignatureAlgorithm::ECDSA))
         }
         SignatureScheme::ECDSA_SECP521R1_SHA512 => {
-            (HashAlgorithm::SHA512, SignatureAlgorithm::ECDSA)
+            Ok((HashAlgorithm::SHA512, SignatureAlgorithm::ECDSA))
         }
-        SignatureScheme::ED25519 => (HashAlgorithm::SHA512, SignatureAlgorithm::ECDSA),
-        SignatureScheme::RSA_PSS_RSAE_SHA256 => (HashAlgorithm::SHA256, SignatureAlgorithm::RSA),
-        SignatureScheme::RSA_PSS_RSAE_SHA384 => (HashAlgorithm::SHA384, SignatureAlgorithm::RSA),
-        SignatureScheme::RSA_PSS_RSAE_SHA512 => (HashAlgorithm::SHA512, SignatureAlgorithm::RSA),
-        SignatureScheme::RSA_PSS_PSS_SHA256 => (HashAlgorithm::SHA256, SignatureAlgorithm::RSA),
-        SignatureScheme::RSA_PSS_PSS_SHA384 => (HashAlgorithm::SHA384, SignatureAlgorithm::RSA),
-        SignatureScheme::RSA_PSS_PSS_SHA512 => (HashAlgorithm::SHA512, SignatureAlgorithm::RSA),
-        SignatureScheme::RSA_PKCS1_SHA256 => (HashAlgorithm::SHA256, SignatureAlgorithm::RSA),
-        SignatureScheme::RSA_PKCS1_SHA384 => (HashAlgorithm::SHA384, SignatureAlgorithm::RSA),
-        SignatureScheme::RSA_PKCS1_SHA512 => (HashAlgorithm::SHA512, SignatureAlgorithm::RSA),
-        _ => (HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA),
+        SignatureScheme::ED25519 => Err(Error::SecurityError(
+            "ED25519 not yet supported by crypto provider".into(),
+        )),
+        SignatureScheme::RSA_PSS_RSAE_SHA256 => {
+            Ok((HashAlgorithm::SHA256, SignatureAlgorithm::RSA))
+        }
+        SignatureScheme::RSA_PSS_RSAE_SHA384 => {
+            Ok((HashAlgorithm::SHA384, SignatureAlgorithm::RSA))
+        }
+        SignatureScheme::RSA_PSS_RSAE_SHA512 => {
+            Ok((HashAlgorithm::SHA512, SignatureAlgorithm::RSA))
+        }
+        SignatureScheme::RSA_PSS_PSS_SHA256 => Ok((HashAlgorithm::SHA256, SignatureAlgorithm::RSA)),
+        SignatureScheme::RSA_PSS_PSS_SHA384 => Ok((HashAlgorithm::SHA384, SignatureAlgorithm::RSA)),
+        SignatureScheme::RSA_PSS_PSS_SHA512 => Ok((HashAlgorithm::SHA512, SignatureAlgorithm::RSA)),
+        SignatureScheme::RSA_PKCS1_SHA256
+        | SignatureScheme::RSA_PKCS1_SHA384
+        | SignatureScheme::RSA_PKCS1_SHA512 => Err(Error::SecurityError(
+            "RSA PKCS1v1.5 not allowed in TLS 1.3".into(),
+        )),
+        _ => Err(Error::SecurityError(format!(
+            "Unsupported signature scheme: {:?}",
+            scheme
+        ))),
     }
 }
 

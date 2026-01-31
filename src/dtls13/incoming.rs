@@ -169,13 +169,42 @@ impl Record {
         // ONLY COPY: UDP packet slice -> pooled buffer
         let mut buffer = Buf::new();
         buffer.extend_from_slice(record_slice);
+
+        let is_ciphertext = Dtls13Record::is_ciphertext_header(buffer[0]);
+
+        // Decrypt record number in-place before parsing (RFC 9147 Section 4.2.3)
+        if is_ciphertext && decrypt.is_peer_encryption_enabled() {
+            let flags = buffer[0];
+            let s_flag = flags & 0b0000_1000 != 0;
+            let l_flag = flags & 0b0000_0100 != 0;
+            let seq_len: usize = if s_flag { 2 } else { 1 };
+            let len_len: usize = if l_flag { 2 } else { 0 };
+            let header_len = 1 + seq_len + len_len;
+
+            if buffer.len() >= header_len + 16 {
+                // unwrap: bounds checked above
+                let ciphertext_sample: [u8; 16] =
+                    buffer[header_len..header_len + 16].try_into().unwrap();
+
+                // Resolve epoch from 2-bit field (doesn't depend on seq bytes)
+                let epoch_bits = flags & 0x03;
+                let full_epoch = decrypt.resolve_epoch(epoch_bits);
+
+                // Decrypt sequence bytes in place
+                decrypt.decrypt_sequence_number(
+                    full_epoch,
+                    &mut buffer[1..1 + seq_len],
+                    &ciphertext_sample,
+                );
+            }
+        }
+
         let parsed = ParsedRecord::parse(&buffer, cs)?;
         let parsed = Box::new(parsed);
         let record = Record { buffer, parsed };
 
         // Plaintext records (epoch 0) are not encrypted
-        let is_plaintext = !Dtls13Record::is_ciphertext_header(record_slice[0]);
-        if is_plaintext || !decrypt.is_peer_encryption_enabled() {
+        if !is_ciphertext || !decrypt.is_peer_encryption_enabled() {
             return Ok(Some(record));
         }
 
@@ -183,7 +212,7 @@ impl Record {
         let epoch_bits = record.record().sequence.epoch as u8;
         let full_epoch = decrypt.resolve_epoch(epoch_bits);
 
-        // Resolve the full sequence number from the partial value
+        // Resolve the full sequence number from the (now decrypted) partial value
         let seq_bits = record.record().sequence.sequence_number;
         let s_flag = record_slice[0] & 0b0000_1000 != 0;
         let full_seq = decrypt.resolve_sequence(full_epoch, seq_bits, s_flag);
@@ -337,6 +366,20 @@ pub trait RecordDecrypt {
         seq: Sequence,
         ciphertext: &mut TmpBuf,
     ) -> Result<(), Error>;
+
+    /// Decrypt the sequence number bytes in a unified header (RFC 9147 Section 4.2.3).
+    ///
+    /// `epoch` is the resolved full epoch, `seq_bytes` are the encrypted sequence
+    /// bytes from the header (1 or 2 bytes), and `ciphertext_sample` is the first
+    /// 16 bytes of the ciphertext following the header.
+    ///
+    /// Returns the decrypted sequence bytes in-place.
+    fn decrypt_sequence_number(
+        &self,
+        epoch: u16,
+        seq_bytes: &mut [u8],
+        ciphertext_sample: &[u8; 16],
+    );
 }
 
 fn parse_handshakes(

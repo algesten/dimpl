@@ -21,9 +21,6 @@ use crate::{Config, Error, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
-/// GCM authentication tag length.
-const GCM_TAG_LEN: usize = 16;
-
 pub struct Engine {
     config: Arc<Config>,
 
@@ -51,8 +48,14 @@ pub struct Engine {
     /// Handshake receive keys (epoch 2)
     hs_recv_keys: Option<EpochKeys>,
 
+    /// Expected next receive sequence number for epoch 2 (handshake)
+    hs_expected_recv_seq: u64,
+
     /// Application send epoch (3 initially, increments on KeyUpdate)
     app_send_epoch: u16,
+
+    /// Sequence number for handshake epoch (epoch 2) sending
+    hs_send_seq: u64,
 
     /// Sequence number within current send epoch
     app_send_seq: u64,
@@ -88,6 +91,10 @@ pub struct Engine {
     /// Anti-replay window state
     replay: ReplayWindow,
 
+    /// Record numbers of received handshake records, for ACK generation.
+    /// Each entry is (epoch, sequence_number).
+    received_record_numbers: Vec<(u64, u64)>,
+
     /// The records that have been sent in the current flight.
     flight_saved_records: Vec<Entry>,
 
@@ -102,17 +109,22 @@ pub struct Engine {
 
     /// Whether we are ready to release application data from poll_output.
     release_app_data: bool,
+
+    /// Exporter master secret for TLS 1.3 exporters (RFC 8446 Section 7.5).
+    exporter_master_secret: Option<Buf>,
 }
 
 struct EpochKeys {
     cipher: Box<dyn Cipher>,
     iv: [u8; 12],
     traffic_secret: Buf,
+    sn_key: Buf,
 }
 
 struct RecvEpochEntry {
     epoch: u16,
     keys: EpochKeys,
+    expected_recv_seq: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,7 +138,9 @@ enum Timeout {
 struct Entry {
     content_type: ContentType,
     epoch: u16,
+    send_seq: u64,
     fragment: Buf,
+    acked: bool,
 }
 
 impl Engine {
@@ -152,7 +166,9 @@ impl Engine {
             cipher_suite: None,
             hs_send_keys: None,
             hs_recv_keys: None,
+            hs_expected_recv_seq: 0,
             app_send_epoch: 3,
+            hs_send_seq: 0,
             app_send_seq: 0,
             app_send_keys: None,
             app_recv_keys: ArrayVec::new(),
@@ -164,11 +180,13 @@ impl Engine {
             next_handshake_seq_no: 0,
             transcript: Buf::new(),
             replay: ReplayWindow::new(),
+            received_record_numbers: Vec::new(),
             flight_saved_records: Vec::new(),
             flight_backoff,
             flight_timeout: Timeout::Unarmed,
             connect_timeout: Timeout::Unarmed,
             release_app_data: false,
+            exporter_master_secret: None,
         }
     }
 
@@ -224,6 +242,14 @@ impl Engine {
             return Err(Error::ReceiveQueueFull);
         }
 
+        // Handle ACK records immediately (don't queue them)
+        let first = incoming.first();
+        if first.record().content_type == ContentType::Ack {
+            let fragment = first.record().fragment(first.buffer());
+            self.process_ack(fragment);
+            return Ok(());
+        }
+
         if incoming.first().first_handshake().is_some() {
             self.insert_incoming_handshake(incoming)
         } else {
@@ -277,6 +303,14 @@ impl Engine {
 
         match search_result {
             Err(index) => {
+                // Track received record numbers for ACK generation
+                for record in incoming.records().iter() {
+                    let seq = record.record().sequence;
+                    if seq.epoch >= 2 {
+                        self.received_record_numbers
+                            .push((seq.epoch as u64, seq.sequence_number));
+                    }
+                }
                 self.queue_rx.insert(index, incoming);
             }
             Ok(_) => {
@@ -479,6 +513,11 @@ impl Engine {
         let records = mem::take(&mut self.flight_saved_records);
 
         for entry in &records {
+            // Selective retransmission: skip records that have been ACKed
+            if entry.acked {
+                continue;
+            }
+
             if entry.epoch == 0 {
                 self.create_plaintext_record(entry.content_type, false, |fragment| {
                     fragment.extend_from_slice(&entry.fragment);
@@ -609,13 +648,17 @@ impl Engine {
         let mut fragment = self.buffers_free.pop();
         f(&mut fragment);
 
+        let current_seq = self.sequence_epoch_0.sequence_number;
+
         if save_fragment {
             let mut clone = self.buffers_free.pop();
             clone.extend_from_slice(&fragment);
             self.flight_saved_records.push(Entry {
                 content_type,
                 epoch: 0,
+                send_seq: current_seq,
                 fragment: clone,
+                acked: false,
             });
         }
 
@@ -679,13 +722,22 @@ impl Engine {
         let mut fragment = self.buffers_free.pop();
         f(&mut fragment);
 
+        // Determine sequence number for this record
+        let seq = if epoch == 2 {
+            self.hs_send_seq
+        } else {
+            self.app_send_seq
+        };
+
         if save_fragment {
             let mut clone = self.buffers_free.pop();
             clone.extend_from_slice(&fragment);
             self.flight_saved_records.push(Entry {
                 content_type,
                 epoch,
+                send_seq: seq,
                 fragment: clone,
+                acked: false,
             });
         }
 
@@ -693,16 +745,8 @@ impl Engine {
         // (no zero padding for now)
         fragment.push(content_type.as_u8());
 
-        // Determine sequence number for this record
-        let seq = if epoch == 2 {
-            // Handshake epoch uses a counter embedded in hs_send_keys usage
-            // We use the sequence_epoch_0 field repurposed for epoch 2 send seq.
-            // Actually, for DTLS 1.3 each epoch has its own sequence counter.
-            // We'll track it via the send sequence embedded in the call.
-            self.app_send_seq
-        } else {
-            self.app_send_seq
-        };
+        let suite = self.suite_provider();
+        let tag_len = suite.tag_len();
 
         // Get the send keys for this epoch
         let keys = if epoch == 2 {
@@ -729,7 +773,7 @@ impl Engine {
             | 0b0000_0100 // L=1
             | epoch_bits;
 
-        let ciphertext_len = fragment.len() + GCM_TAG_LEN;
+        let ciphertext_len = fragment.len() + tag_len;
 
         let mut header_buf = [0u8; 5];
         header_buf[0] = flags;
@@ -738,10 +782,26 @@ impl Engine {
 
         let aad = Aad::new_dtls13(&header_buf);
 
+        // Save sn_key before losing mutable borrow of keys
+        let mut sn_key = [0u8; 32];
+        let sn_key_len = keys.sn_key.len();
+        sn_key[..sn_key_len].copy_from_slice(&keys.sn_key);
+
         // Encrypt in place (appends tag)
         keys.cipher
             .encrypt(&mut fragment, aad, nonce)
             .map_err(|e| Error::CryptoError(format!("Encryption failed: {}", e)))?;
+
+        // Record number encryption (RFC 9147 Section 4.2.3):
+        // mask = AES-ECB(sn_key, ciphertext_sample)
+        // XOR mask[0..2] over the sequence number bytes in the header
+        let sn_mask = if fragment.len() >= 16 {
+            // unwrap: we checked length >= 16
+            let ciphertext_sample: [u8; 16] = fragment[..16].try_into().unwrap();
+            suite.encrypt_sn(&sn_key[..sn_key_len], &ciphertext_sample)
+        } else {
+            [0u8; 16] // degenerate case: no masking if ciphertext too short
+        };
 
         // Unified header: flags(1) + seq(2) + length(2) = 5 bytes
         let record_wire_len = 5 + fragment.len();
@@ -773,15 +833,27 @@ impl Engine {
         };
 
         // Increment send sequence
-        self.app_send_seq += 1;
+        if epoch == 2 {
+            self.hs_send_seq += 1;
+        } else {
+            self.app_send_seq += 1;
+        }
 
         if can_append {
             let last = self.queue_tx.back_mut().unwrap();
+            let header_start = last.len();
             record.serialize(&fragment, last);
+            // Apply record number encryption: XOR mask over seq bytes
+            // Seq bytes are at offset header_start+1..header_start+3
+            last[header_start + 1] ^= sn_mask[0];
+            last[header_start + 2] ^= sn_mask[1];
         } else {
             let mut buffer = self.buffers_free.pop();
             buffer.clear();
             record.serialize(&fragment, &mut buffer);
+            // Apply record number encryption: XOR mask over seq bytes
+            buffer[1] ^= sn_mask[0];
+            buffer[2] ^= sn_mask[1];
             self.queue_tx.push_back(buffer);
         }
 
@@ -821,7 +893,12 @@ impl Engine {
         let mut offset: usize = 0;
 
         let handshake_header_len = 12usize;
-        let aead_overhead = if epoch >= 2 { GCM_TAG_LEN + 1 } else { 0 }; // +1 for inner content type
+        let tag_len = if epoch >= 2 {
+            self.suite_provider().tag_len()
+        } else {
+            0
+        };
+        let aead_overhead = if epoch >= 2 { tag_len + 1 } else { 0 }; // +1 for inner content type
 
         while offset < total_len || (total_len == 0 && offset == 0) {
             let already_used_in_current = self.queue_tx.back().map(|b| b.len()).unwrap_or(0);
@@ -892,6 +969,72 @@ impl Engine {
     /// Release application data from the incoming queue
     pub fn release_application_data(&mut self) {
         self.release_app_data = true;
+    }
+
+    /// Record that a handshake record was received, for ACK generation.
+    pub fn record_received(&mut self, epoch: u16, seq: u64) {
+        self.received_record_numbers.push((epoch as u64, seq));
+    }
+
+    /// Send an ACK record listing received handshake record numbers.
+    ///
+    /// ACK format: record_numbers_length(2) + N * (epoch(8) + sequence(8))
+    pub fn send_ack(&mut self) -> Result<(), Error> {
+        if self.received_record_numbers.is_empty() {
+            return Ok(());
+        }
+
+        let entries = mem::take(&mut self.received_record_numbers);
+        let epoch = if self.app_send_keys.is_some() { 3 } else { 2 };
+
+        self.create_ciphertext_record(ContentType::Ack, epoch, false, |fragment| {
+            // record_numbers_length: 2 bytes, value = entries.len() * 16
+            let len = (entries.len() * 16) as u16;
+            fragment.extend_from_slice(&len.to_be_bytes());
+            for &(ep, seq) in &entries {
+                fragment.extend_from_slice(&ep.to_be_bytes());
+                fragment.extend_from_slice(&seq.to_be_bytes());
+            }
+        })?;
+
+        Ok(())
+    }
+
+    /// Process an incoming ACK record, marking acknowledged flight entries.
+    fn process_ack(&mut self, ack_data: &[u8]) {
+        if ack_data.len() < 2 {
+            return;
+        }
+
+        let record_numbers_len = u16::from_be_bytes([ack_data[0], ack_data[1]]) as usize;
+        let entries_data = &ack_data[2..];
+
+        if entries_data.len() < record_numbers_len {
+            return;
+        }
+
+        let num_entries = record_numbers_len / 16;
+        for i in 0..num_entries {
+            let offset = i * 16;
+            if offset + 16 > entries_data.len() {
+                break;
+            }
+            let ack_epoch = u64::from_be_bytes(
+                // unwrap: bounds checked above
+                entries_data[offset..offset + 8].try_into().unwrap(),
+            );
+            let ack_seq = u64::from_be_bytes(
+                // unwrap: bounds checked above
+                entries_data[offset + 8..offset + 16].try_into().unwrap(),
+            );
+
+            // Mark matching flight entries as acknowledged
+            for entry in &mut self.flight_saved_records {
+                if entry.epoch as u64 == ack_epoch && entry.send_seq == ack_seq {
+                    entry.acked = true;
+                }
+            }
+        }
     }
 
     /// Pop a buffer from the buffer pool for temporary use
@@ -1014,7 +1157,7 @@ impl Engine {
         self.hs_recv_keys = Some(self.derive_epoch_keys(recv_secret)?);
 
         // Reset send sequence for epoch 2
-        self.app_send_seq = 0;
+        self.hs_send_seq = 0;
 
         Ok(())
     }
@@ -1053,6 +1196,20 @@ impl Engine {
         let mut transcript_hash = Buf::new();
         self.transcript_hash(&mut transcript_hash);
 
+        // exporter_master_secret = Derive-Secret(master_secret, "exp master", transcript_hash)
+        let mut exp_master = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            &master_secret,
+            b"exp master",
+            &transcript_hash,
+            &mut exp_master,
+            hash_len,
+        )
+        .map_err(|e| {
+            Error::CryptoError(format!("Failed to derive exporter master secret: {}", e))
+        })?;
+
         // client_application_traffic_secret_0
         let mut c_ap_traffic = Buf::new();
         hkdf.hkdf_expand_label_dtls13(
@@ -1077,6 +1234,9 @@ impl Engine {
         )
         .map_err(|e| Error::CryptoError(format!("Failed to derive s_ap_traffic: {}", e)))?;
 
+        // Store exporter master secret (deferred to avoid borrow conflict with hkdf)
+        self.exporter_master_secret = Some(exp_master);
+
         Ok((c_ap_traffic, s_ap_traffic))
     }
 
@@ -1098,6 +1258,7 @@ impl Engine {
         self.app_recv_keys.push(RecvEpochEntry {
             epoch: 3,
             keys: recv_keys,
+            expected_recv_seq: 0,
         });
 
         self.app_send_epoch = 3;
@@ -1112,11 +1273,18 @@ impl Engine {
         client_traffic_secret: &Buf,
     ) -> Result<(), Error> {
         self.hs_send_keys = Some(self.derive_epoch_keys(client_traffic_secret)?);
-        self.app_send_seq = 0;
+        self.hs_send_seq = 0;
         Ok(())
     }
 
-    /// Derive epoch keys (cipher + IV) from a traffic secret.
+    /// Reset handshake state for a new ClientHello after HelloRetryRequest.
+    pub fn reset_for_hello_retry(&mut self) {
+        self.peer_handshake_seq_no = 0;
+        self.next_handshake_seq_no = 0;
+        self.hs_send_seq = 0;
+    }
+
+    /// Derive epoch keys (cipher + IV + sn_key) from a traffic secret.
     fn derive_epoch_keys(&self, traffic_secret: &Buf) -> Result<EpochKeys, Error> {
         let hash = self.hash_algorithm();
         let suite = self.suite_provider();
@@ -1139,6 +1307,18 @@ impl Engine {
         )
         .map_err(|e| Error::CryptoError(format!("Failed to derive iv: {}", e)))?;
 
+        // sn_key = HKDF-Expand-Label(secret, "sn", "", key_length)
+        let mut sn_key = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            traffic_secret,
+            b"sn",
+            &[],
+            &mut sn_key,
+            suite.key_len(),
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive sn_key: {}", e)))?;
+
         let cipher = suite
             .create_cipher(&key)
             .map_err(|e| Error::CryptoError(format!("Failed to create cipher: {}", e)))?;
@@ -1153,6 +1333,7 @@ impl Engine {
             cipher,
             iv,
             traffic_secret: secret,
+            sn_key,
         })
     }
 
@@ -1352,25 +1533,37 @@ impl Engine {
         profile: crate::crypto::SrtpProfile,
     ) -> Result<(ArrayVec<u8, 88>, crate::crypto::SrtpProfile), Error> {
         let hash = self.hash_algorithm();
+        let hash_len = hash.output_len();
         let hkdf = self.hkdf();
 
-        // For DTLS-SRTP with TLS 1.3, use exporter (RFC 8446 Section 7.5)
-        // exporter_master_secret would need to be derived but for now
-        // use a simplified approach matching the DTLS-SRTP spec.
+        let exp_master = self.exporter_master_secret.as_ref().ok_or_else(|| {
+            Error::CryptoError("Exporter master secret not yet derived".to_string())
+        })?;
 
         let total_len = profile.keying_material_len();
 
-        // Derive exporter using transcript hash
-        let mut transcript_hash = Buf::new();
-        self.transcript_hash(&mut transcript_hash);
+        // RFC 8446 Section 7.5:
+        // 1. derived_secret = Derive-Secret(exporter_master_secret, label, "")
+        let empty_hash = self.transcript_hash_of(b"");
+        let mut derived = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            exp_master,
+            b"EXTRACTOR-dtls_srtp",
+            &empty_hash,
+            &mut derived,
+            hash_len,
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive SRTP exporter secret: {}", e)))?;
 
-        // Use HKDF-Expand-Label with "EXTRACTOR-dtls_srtp" label
+        // 2. result = HKDF-Expand-Label(derived_secret, "exporter", Hash(context), length)
+        let context_hash = self.transcript_hash_of(b"");
         let mut keying_material_buf = Buf::new();
         hkdf.hkdf_expand_label_dtls13(
             hash,
-            &transcript_hash,
-            b"EXTRACTOR-dtls_srtp",
-            &[],
+            &derived,
+            b"exporter",
+            &context_hash,
             &mut keying_material_buf,
             total_len,
         )
@@ -1407,6 +1600,31 @@ fn epoch_for_message(msg_type: MessageType) -> u16 {
     }
 }
 
+/// Reconstruct a full sequence number from a partial value (RFC 9147 Section 4.2.2).
+///
+/// Uses a sliding window centered on the expected sequence to find the full
+/// 48-bit sequence that is closest to `expected`.
+fn reconstruct_sequence(partial: u64, expected: u64, bits: u32) -> u64 {
+    let mask = (1u64 << bits) - 1;
+    let window = 1u64 << bits;
+    let half = window / 2;
+
+    let received_partial = partial & mask;
+    let expected_partial = expected & mask;
+
+    let diff = (received_partial as i64) - (expected_partial as i64);
+    let diff = if diff > half as i64 {
+        diff - window as i64
+    } else if diff < -(half as i64) {
+        diff + window as i64
+    } else {
+        diff
+    };
+
+    // Clamp to 0 to avoid underflow for very early sequence numbers
+    (expected as i64 + diff).max(0) as u64
+}
+
 // =========================================================================
 // RecordDecrypt Implementation
 // =========================================================================
@@ -1438,22 +1656,44 @@ impl RecordDecrypt for Engine {
         epoch_bits
     }
 
-    fn resolve_sequence(&self, _epoch: u16, seq_bits: u64, s_flag: bool) -> u64 {
-        // For now, during the handshake, the sequence numbers are small enough
-        // that the partial value is the full value.
-        // Full reconstruction would require tracking the expected sequence range
-        // per epoch and finding the closest match.
-        if s_flag {
-            // 16-bit sequence
-            seq_bits & 0xFFFF
+    fn resolve_sequence(&self, epoch: u16, seq_bits: u64, s_flag: bool) -> u64 {
+        let expected = if epoch == 2 {
+            self.hs_expected_recv_seq
         } else {
-            // 8-bit sequence
-            seq_bits & 0xFF
-        }
+            self.app_recv_keys
+                .iter()
+                .find(|e| e.epoch == epoch)
+                .map(|e| e.expected_recv_seq)
+                .unwrap_or(0)
+        };
+
+        let bits: u32 = if s_flag { 16 } else { 8 };
+        reconstruct_sequence(seq_bits, expected, bits)
     }
 
     fn replay_check_and_update(&mut self, seq: Sequence) -> bool {
-        self.replay.check_and_update(seq)
+        if !self.replay.check_and_update(seq) {
+            return false;
+        }
+
+        // Advance expected receive sequence for this epoch
+        let next = seq.sequence_number + 1;
+        if seq.epoch == 2 {
+            if next > self.hs_expected_recv_seq {
+                self.hs_expected_recv_seq = next;
+            }
+        } else {
+            for entry in &mut self.app_recv_keys {
+                if entry.epoch == seq.epoch {
+                    if next > entry.expected_recv_seq {
+                        entry.expected_recv_seq = next;
+                    }
+                    break;
+                }
+            }
+        }
+
+        true
     }
 
     fn decrypt_record(
@@ -1491,5 +1731,31 @@ impl RecordDecrypt for Engine {
             .map_err(|e| Error::CryptoError(format!("Decryption failed: {}", e)))?;
 
         Ok(())
+    }
+
+    fn decrypt_sequence_number(
+        &self,
+        epoch: u16,
+        seq_bytes: &mut [u8],
+        ciphertext_sample: &[u8; 16],
+    ) {
+        // Find the sn_key for this epoch
+        let sn_key = if epoch == 2 {
+            self.hs_recv_keys.as_ref().map(|k| &k.sn_key)
+        } else {
+            self.app_recv_keys
+                .iter()
+                .find(|e| e.epoch == epoch)
+                .map(|e| &e.keys.sn_key)
+        };
+
+        let Some(sn_key) = sn_key else {
+            return; // No keys yet, leave seq bytes as-is
+        };
+
+        let mask = self.suite_provider().encrypt_sn(sn_key, ciphertext_sample);
+        for (i, byte) in seq_bytes.iter_mut().enumerate() {
+            *byte ^= mask[i];
+        }
     }
 }
