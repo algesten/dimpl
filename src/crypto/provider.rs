@@ -54,7 +54,7 @@
 //! //         .unwrap()
 //! // );
 //!
-//! let dtls = Dtls::new(config, cert, Instant::now());
+//! let dtls = Dtls::new_12(config, cert, Instant::now());
 //! # }
 //! # #[cfg(not(all(feature = "aws-lc-rs", feature = "rcgen")))]
 //! # fn main() {}

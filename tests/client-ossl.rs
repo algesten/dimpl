@@ -41,7 +41,7 @@ fn client_ossl() {
 
     let now = Instant::now();
 
-    let mut client = Dtls::new(
+    let mut client = Dtls::new_12(
         config,
         dimpl::DtlsCertificate {
             certificate: client_x509_der,

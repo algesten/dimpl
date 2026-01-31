@@ -60,7 +60,7 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: Dtls12CipherSuite) {
 
     let now = Instant::now();
 
-    let mut client = Dtls::new(
+    let mut client = Dtls::new_12(
         config,
         dimpl::DtlsCertificate {
             certificate: client_x509_der,
@@ -162,7 +162,7 @@ fn run_ossl_client_vs_dimpl_server_for_suite(suite: Dtls12CipherSuite) {
 
     let now = Instant::now();
 
-    let mut server = Dtls::new(
+    let mut server = Dtls::new_12(
         config,
         dimpl::DtlsCertificate {
             certificate: server_x509_der,

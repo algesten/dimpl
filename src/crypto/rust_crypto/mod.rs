@@ -33,7 +33,7 @@
 //!         .build()
 //!         .unwrap()
 //! );
-//! let dtls = Dtls::new(config, cert, Instant::now());
+//! let dtls = Dtls::new_12(config, cert, Instant::now());
 //! # }
 //! # #[cfg(not(feature = "rcgen"))]
 //! # fn main() {}
