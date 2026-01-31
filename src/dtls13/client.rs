@@ -371,6 +371,10 @@ impl State {
     }
 
     fn await_server_hello(self, client: &mut Client) -> Result<Self, Error> {
+        // Save transcript length so we can roll back if a stale HRR
+        // retransmission arrives after we already processed one.
+        let transcript_len_before = client.engine.transcript.len();
+
         let maybe = client
             .engine
             .next_handshake(MessageType::ServerHello, &mut client.defragment_buffer)?;
@@ -386,9 +390,13 @@ impl State {
         // Check for HelloRetryRequest (magic random)
         if server_hello.is_hello_retry_request() {
             if client.hello_retry {
-                return Err(Error::UnexpectedMessage(
-                    "Second HelloRetryRequest".to_string(),
-                ));
+                // Stale retransmission of the HRR we already processed.
+                // Roll back the transcript and silently discard. The CH2
+                // flight will be retransmitted by the normal flight timeout
+                // mechanism if the server hasn't responded.
+                debug!("Discarding stale HRR retransmission");
+                client.engine.transcript.resize(transcript_len_before, 0);
+                return Ok(self);
             }
 
             debug!("Received HelloRetryRequest");
@@ -588,6 +596,7 @@ impl State {
         // Enable peer encryption for server's epoch 2 messages
         client.engine.enable_peer_encryption()?;
 
+        client.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitEncryptedExtensions)
     }
 
@@ -621,6 +630,7 @@ impl State {
             }
         }
 
+        client.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitCertificateRequest)
     }
 
@@ -659,6 +669,7 @@ impl State {
         debug!("Received CertificateRequest; enabling client authentication path");
         client.client_auth_requested = true;
 
+        client.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitCertificate)
     }
 
@@ -713,6 +724,7 @@ impl State {
             client.local_events.push_back(LocalEvent::PeerCert);
         }
 
+        client.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitCertificateVerify)
     }
 
@@ -809,6 +821,7 @@ impl State {
 
         trace!("Server CertificateVerify verified: {:?}", scheme);
 
+        client.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitFinished)
     }
 
@@ -853,6 +866,8 @@ impl State {
 
         drop(maybe);
 
+        client.engine.advance_peer_handshake_seq();
+
         // Derive application secrets from handshake secret + transcript through server Finished
         let handshake_secret = client.handshake_secret.as_ref().ok_or_else(|| {
             Error::CryptoError("No handshake secret for application key derivation".to_string())
@@ -866,14 +881,9 @@ impl State {
             .engine
             .install_application_keys(&c_ap_traffic, &s_ap_traffic)?;
 
-        // Install send handshake keys for client's epoch 2 flight
-        let client_hs_secret = client
-            .client_hs_traffic_secret
-            .as_ref()
-            .ok_or_else(|| Error::CryptoError("No client handshake traffic secret".to_string()))?;
-        client
-            .engine
-            .install_send_handshake_keys(client_hs_secret)?;
+        // Note: send handshake keys were already installed by install_handshake_keys()
+        // after ServerHello. Do NOT reinstall them here — that would reset hs_send_seq
+        // to 0, colliding with ACK records already sent on epoch 2.
 
         if client.client_auth_requested {
             Ok(Self::SendCertificate)
@@ -884,6 +894,10 @@ impl State {
 
     fn send_certificate(self, client: &mut Client) -> Result<Self, Error> {
         debug!("Sending Certificate");
+
+        // Start a new flight for the client's Certificate/CertificateVerify/Finished.
+        // This clears the old ClientHello flight from flight_saved_records.
+        client.engine.flight_begin(5);
 
         let has_cert = !client.engine.certificate_der().is_empty();
 
@@ -952,8 +966,9 @@ impl State {
                 Ok(())
             })?;
 
-        // Stop flight timers - handshake complete
-        client.engine.flight_stop_resend_timers();
+        // Don't stop flight timers here - the server needs to receive our Finished.
+        // Timers will stop when we receive an ACK from the server confirming it
+        // received our epoch-2 flight.
 
         // Emit Connected event
         client.local_events.push_back(LocalEvent::Connected);
@@ -1032,6 +1047,7 @@ impl State {
                     client.pending_key_update_response = true;
                 }
 
+                client.engine.advance_peer_handshake_seq();
                 debug!("Received KeyUpdate (request={:?})", request);
             }
         }

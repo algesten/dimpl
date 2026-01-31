@@ -70,3 +70,8 @@ openssl = { version = "0.10.70", features = ["vendored"] }
 libc = "0.2"
 env_logger = "0.11.8"
 x509-parser = "0.16"
+bytes = "1"
+
+# wolfssl doesn't build on Windows
+[target.'cfg(not(windows))'.dev-dependencies]
+wolfssl = "3.0.0"

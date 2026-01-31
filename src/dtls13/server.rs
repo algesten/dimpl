@@ -309,6 +309,10 @@ impl State {
     }
 
     fn await_client_hello(self, server: &mut Server) -> Result<Self, Error> {
+        // Save transcript length so we can roll back if a stale ClientHello
+        // arrives after HelloRetryRequest (no cookie → must discard).
+        let transcript_len_before = server.engine.transcript.len();
+
         let maybe = server
             .engine
             .next_handshake(MessageType::ClientHello, &mut server.defragment_buffer)?;
@@ -437,9 +441,13 @@ impl State {
         } else {
             // No cookie: send HelloRetryRequest with cookie
             if server.hello_retry {
-                return Err(Error::SecurityError(
-                    "Client did not include cookie after HelloRetryRequest".to_string(),
-                ));
+                // Stale retransmission of the pre-HRR ClientHello. Roll back the
+                // transcript that next_handshake just appended and silently
+                // discard. The HRR flight will be retransmitted by the normal
+                // flight timeout mechanism if the client hasn't responded.
+                debug!("Discarding stale ClientHello retransmission after HRR");
+                server.engine.transcript.resize(transcript_len_before, 0);
+                return Ok(Self::AwaitClientHello);
             }
 
             debug!("No cookie in ClientHello; sending HelloRetryRequest");
@@ -454,6 +462,7 @@ impl State {
             )?;
 
             server.engine.replace_transcript_with_message_hash();
+            server.engine.reset_for_hello_retry();
             server.hello_retry = true;
 
             return Ok(Self::AwaitClientHello);
@@ -501,6 +510,7 @@ impl State {
                 )?;
 
                 server.engine.replace_transcript_with_message_hash();
+                server.engine.reset_for_hello_retry();
                 server.hello_retry = true;
 
                 return Ok(Self::AwaitClientHello);
@@ -575,6 +585,8 @@ impl State {
             .extend_from_slice(&(pub_key_end as u32).to_be_bytes());
 
         drop(handshake);
+
+        server.engine.advance_peer_handshake_seq();
 
         debug!(
             "ClientHello processed: cipher_suite={:?}, group={:?}",
@@ -777,6 +789,9 @@ impl State {
         if certificate.certificate_list.is_empty() {
             debug!("Client sent empty certificate list");
             drop(maybe);
+            server.engine.advance_peer_handshake_seq();
+            // Client's Certificate means our flight was received; stop retransmitting
+            server.engine.flight_stop_resend_timers();
             // Empty cert list is acceptable - proceed without client auth verification
             return Ok(Self::AwaitFinished);
         }
@@ -811,6 +826,10 @@ impl State {
             server.local_events.push_back(LocalEvent::PeerCert);
         }
 
+        // Client's Certificate means our flight was received; stop retransmitting
+        server.engine.flight_stop_resend_timers();
+
+        server.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitCertificateVerify)
     }
 
@@ -886,6 +905,7 @@ impl State {
 
         trace!("Client CertificateVerify verified: {:?}", scheme);
 
+        server.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitFinished)
     }
 
@@ -929,6 +949,11 @@ impl State {
         trace!("Client Finished verified successfully");
 
         drop(maybe);
+
+        server.engine.advance_peer_handshake_seq();
+
+        // ACK the client's epoch-2 flight so it stops retransmitting
+        server.engine.send_ack()?;
 
         // Stop flight timers - handshake complete
         server.engine.flight_stop_resend_timers();
@@ -1010,6 +1035,7 @@ impl State {
                     server.pending_key_update_response = true;
                 }
 
+                server.engine.advance_peer_handshake_seq();
                 debug!("Received KeyUpdate (request={:?})", request);
             }
         }

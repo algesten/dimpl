@@ -114,6 +114,14 @@ pub struct Engine {
     /// Each entry is (epoch, sequence_number).
     received_record_numbers: Vec<(u64, u64)>,
 
+    /// Deadline for sending a handshake ACK (epoch 2).
+    /// Set when we detect gaps or partial flights during handshake.
+    handshake_ack_deadline: Option<Instant>,
+
+    /// When true, the next record must start a fresh datagram instead of
+    /// appending to the current last buffer in queue_tx.
+    datagram_sealed: bool,
+
     /// The records that have been sent in the current flight.
     flight_saved_records: Vec<Entry>,
 
@@ -203,6 +211,8 @@ impl Engine {
             transcript: Buf::new(),
             replay: ReplayWindow::new(),
             received_record_numbers: Vec::new(),
+            handshake_ack_deadline: None,
+            datagram_sealed: false,
             flight_saved_records: Vec::new(),
             flight_backoff,
             flight_timeout: Timeout::Unarmed,
@@ -272,13 +282,23 @@ impl Engine {
             return Err(Error::ReceiveQueueFull);
         }
 
-        // Handle ACK records immediately (don't queue them)
-        let first = incoming.first();
-        if first.record().content_type == ContentType::Ack {
-            let fragment = first.record().fragment(first.buffer());
-            self.process_ack(fragment);
-            return Ok(());
+        // Handle ACK records immediately; collect non-ACK records for queuing.
+        // A single UDP datagram can contain ACK + other records (e.g., AppData),
+        // so we must not discard records that follow an ACK.
+        let mut non_ack_records = ArrayVec::new();
+        for record in incoming.into_records() {
+            if record.record().content_type == ContentType::Ack {
+                let fragment = record.record().fragment(record.buffer());
+                self.process_ack(fragment);
+            } else {
+                non_ack_records.try_push(record).ok();
+            }
         }
+
+        let incoming = match Incoming::from_records(non_ack_records) {
+            Some(incoming) => incoming,
+            None => return Ok(()),
+        };
 
         if incoming.first().first_handshake().is_some() {
             self.insert_incoming_handshake(incoming)
@@ -347,8 +367,37 @@ impl Engine {
                 }
                 self.queue_rx.insert(index, incoming);
             }
-            Ok(_) => {
-                // Exact duplicate handshake fragment
+            Ok(index) => {
+                // Duplicate message_seq + fragment_offset. Replace if either:
+                // (a) the existing entry was already consumed (handled), so a
+                //     fresh retransmission (e.g., CH2 after HRR) can be processed.
+                // (b) the existing entry looks corrupted: its total `length`
+                //     differs from `fragment_length` while the new entry's match,
+                //     indicating the retransmission corrected a bit-flip.
+                let existing = &self.queue_rx[index];
+                let should_replace = existing.first().is_handled() || {
+                    let existing_corrupt = existing
+                        .first()
+                        .first_handshake()
+                        .map(|h| h.header.length != h.header.fragment_length)
+                        .unwrap_or(false);
+                    let incoming_ok = incoming
+                        .first()
+                        .first_handshake()
+                        .map(|h| h.header.length == h.header.fragment_length)
+                        .unwrap_or(false);
+                    existing_corrupt && incoming_ok
+                };
+                if should_replace {
+                    for record in incoming.records().iter() {
+                        let seq = record.record().sequence;
+                        if seq.epoch >= 2 {
+                            self.received_record_numbers
+                                .push((seq.epoch as u64, seq.sequence_number));
+                        }
+                    }
+                    self.queue_rx[index] = incoming;
+                }
             }
         }
 
@@ -366,8 +415,9 @@ impl Engine {
         match search_result {
             Err(index) => self.queue_rx.insert(index, incoming),
             Ok(_) => {
-                // Duplicate - for encrypted records the replay window already filters these
-                assert!(seq_current.epoch == 0);
+                // Duplicate - silently drop. For encrypted records (epoch >= 2) the replay
+                // window filters most duplicates, but undecrypted ciphertext records can
+                // reach here before enable_peer_encryption is called.
             }
         }
 
@@ -417,6 +467,10 @@ impl Engine {
             }
         }
 
+        // During handshake, schedule/flush ACKs to help peer with selective retransmission
+        self.maybe_schedule_handshake_ack(now);
+        self.maybe_flush_handshake_ack(now)?;
+
         Ok(())
     }
 
@@ -427,6 +481,8 @@ impl Engine {
             Ok(p) => return Output::ApplicationData(p),
             Err(b) => b,
         };
+
+        self.maybe_schedule_handshake_ack(now);
 
         if let Ok(p) = self.poll_packet_tx(buf) {
             return Output::Packet(p);
@@ -503,13 +559,22 @@ impl Engine {
         Ok(&buf[..len])
     }
 
+    /// Prevent subsequent records from being appended to the current last
+    /// datagram in queue_tx. The next record will start a fresh datagram.
+    fn seal_current_datagram(&mut self) {
+        self.datagram_sealed = true;
+    }
+
     fn poll_timeout(&self, now: Instant) -> Instant {
-        if self.connect_timeout == Timeout::Disabled && self.flight_timeout == Timeout::Disabled {
+        if self.connect_timeout == Timeout::Disabled
+            && self.flight_timeout == Timeout::Disabled
+            && self.handshake_ack_deadline.is_none()
+        {
             const DISTANT_FUTURE: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
             return now + DISTANT_FUTURE;
         }
 
-        match (self.connect_timeout, self.flight_timeout) {
+        let mut timeout = match (self.connect_timeout, self.flight_timeout) {
             (Timeout::Armed(c), Timeout::Armed(f)) => {
                 if c < f {
                     c
@@ -519,8 +584,16 @@ impl Engine {
             }
             (Timeout::Armed(c), _) => c,
             (_, Timeout::Armed(f)) => f,
-            _ => unreachable!(),
+            _ => now + Duration::from_secs(10 * 365 * 24 * 60 * 60),
+        };
+
+        if let Some(deadline) = self.handshake_ack_deadline {
+            if deadline < timeout {
+                timeout = deadline;
+            }
         }
+
+        timeout
     }
 
     pub fn flight_begin(&mut self, flight_no: u8) {
@@ -542,9 +615,15 @@ impl Engine {
         }
     }
 
-    fn flight_resend(&mut self, reason: &str) -> Result<(), Error> {
+    pub fn flight_resend(&mut self, reason: &str) -> Result<(), Error> {
         debug!("Resending flight due to {}", reason);
         let records = mem::take(&mut self.flight_saved_records);
+
+        // Mark the current last datagram as "sealed" so resent records
+        // go into fresh datagrams. Without this, can_append would pack
+        // resent records into the same datagram as the original flight,
+        // which causes duplicate handshake fragments at the receiver.
+        self.seal_current_datagram();
 
         for entry in &records {
             // Selective retransmission: skip records that have been ACKed
@@ -648,8 +727,6 @@ impl Engine {
             Some(&mut self.transcript),
         )?;
 
-        self.peer_handshake_seq_no = handshake.header.message_seq + 1;
-
         Ok(Some(handshake))
     }
 
@@ -679,9 +756,16 @@ impl Engine {
             None, // no transcript update
         )?;
 
-        self.peer_handshake_seq_no = handshake.header.message_seq + 1;
-
         Ok(Some(handshake))
+    }
+
+    /// Advance the expected peer handshake sequence number.
+    ///
+    /// Must be called by the caller of `next_handshake` / `next_handshake_no_transcript`
+    /// AFTER all validation of the handshake body succeeds. This prevents stale
+    /// retransmissions from advancing the counter before validation can reject them.
+    pub fn advance_peer_handshake_seq(&mut self) {
+        self.peer_handshake_seq_no += 1;
     }
 
     /// Create a DTLSPlaintext record (epoch 0, unencrypted).
@@ -713,11 +797,12 @@ impl Engine {
 
         let record_wire_len = Dtls13Record::PLAINTEXT_HEADER_LEN + fragment.len();
 
-        let can_append = self
-            .queue_tx
-            .back()
-            .map(|b| b.len() + record_wire_len <= self.config.mtu())
-            .unwrap_or(false);
+        let can_append = !self.datagram_sealed
+            && self
+                .queue_tx
+                .back()
+                .map(|b| b.len() + record_wire_len <= self.config.mtu())
+                .unwrap_or(false);
 
         if !can_append && self.queue_tx.len() >= self.config.max_queue_tx() {
             warn!(
@@ -743,6 +828,7 @@ impl Engine {
             let last = self.queue_tx.back_mut().unwrap();
             record.serialize(&fragment, last);
         } else {
+            self.datagram_sealed = false;
             let mut buffer = self.buffers_free.pop();
             buffer.clear();
             record.serialize(&fragment, &mut buffer);
@@ -859,11 +945,12 @@ impl Engine {
         // Unified header: flags(1) + seq(2) + length(2) = 5 bytes
         let record_wire_len = 5 + fragment.len();
 
-        let can_append = self
-            .queue_tx
-            .back()
-            .map(|b| b.len() + record_wire_len <= self.config.mtu())
-            .unwrap_or(false);
+        let can_append = !self.datagram_sealed
+            && self
+                .queue_tx
+                .back()
+                .map(|b| b.len() + record_wire_len <= self.config.mtu())
+                .unwrap_or(false);
 
         if !can_append && self.queue_tx.len() >= self.config.max_queue_tx() {
             warn!(
@@ -903,6 +990,7 @@ impl Engine {
             last[header_start + 1] ^= sn_mask[0];
             last[header_start + 2] ^= sn_mask[1];
         } else {
+            self.datagram_sealed = false;
             let mut buffer = self.buffers_free.pop();
             buffer.clear();
             record.serialize(&fragment, &mut buffer);
@@ -1090,6 +1178,20 @@ impl Engine {
             }
         }
 
+        // If all epoch-2 records in the flight are ACKed, stop retransmitting.
+        // This happens when the peer ACKs our handshake flight.
+        let has_epoch2 = self.flight_saved_records.iter().any(|e| e.epoch == 2);
+        let all_epoch2_acked = self
+            .flight_saved_records
+            .iter()
+            .filter(|e| e.epoch == 2)
+            .all(|e| e.acked);
+        if has_epoch2 && all_epoch2_acked {
+            debug!("Handshake flight ACKed; stopping retransmission");
+            self.flight_timeout = Timeout::Disabled;
+            self.flight_clear_resends();
+        }
+
         // If all saved records are acked and we have prev send keys (KeyUpdate in flight),
         // clear them and stop the flight timer.
         if self.prev_app_send_keys.is_some()
@@ -1101,6 +1203,184 @@ impl Engine {
             self.flight_clear_resends();
             self.flight_timeout = Timeout::Disabled;
         }
+    }
+
+    // =========================================================================
+    // Handshake ACK Scheduling (RFC 9147 Section 7)
+    // =========================================================================
+
+    /// Whether we're in the DTLS 1.3 handshake phase where ACK scheduling applies.
+    ///
+    /// True when handshake send keys are installed but application keys are not yet.
+    /// This corresponds to the client receiving the server's encrypted flight.
+    fn handshake_in_progress(&self) -> bool {
+        self.hs_send_keys.is_some() && self.app_send_keys.is_none() && !self.release_app_data
+    }
+
+    /// Check if the incoming handshake queue needs help (missing fragments/messages).
+    fn handshake_ack_help_needed(&self) -> bool {
+        let mut skip_handled = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .skip_while(|r| r.is_handled())
+            .take(MAX_DEFRAGMENT_PACKETS)
+            .flat_map(|r| r.handshakes().iter())
+            .skip_while(|h| h.is_handled())
+            .peekable();
+
+        let Some(first) = skip_handled.peek() else {
+            return false;
+        };
+
+        // If we're not seeing the expected message_seq, we're missing earlier fragments.
+        if first.header.message_seq != self.peer_handshake_seq_no {
+            return true;
+        }
+
+        // Check if the current message is complete
+        let wanted_seq = first.header.message_seq;
+        let wanted_length = first.header.length;
+        let mut last_fragment_end = 0;
+
+        for h in skip_handled {
+            if wanted_seq != h.header.message_seq {
+                continue;
+            }
+            if h.header.fragment_offset != last_fragment_end {
+                return true;
+            }
+            last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
+            if last_fragment_end == wanted_length {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Check if there's a gap in the incoming handshake data that requires
+    /// an immediate ACK to help the peer retransmit.
+    fn has_gap_in_incoming_handshake(&self) -> bool {
+        let mut skip_handled = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .skip_while(|r| r.is_handled())
+            .take(MAX_DEFRAGMENT_PACKETS)
+            .flat_map(|r| r.handshakes().iter())
+            .skip_while(|h| h.is_handled())
+            .peekable();
+
+        let Some(first) = skip_handled.peek() else {
+            return false;
+        };
+
+        // Gap: not seeing the expected message_seq
+        if first.header.message_seq != self.peer_handshake_seq_no {
+            return true;
+        }
+
+        // Check for fragment gaps within the expected message
+        let wanted_seq = first.header.message_seq;
+        let wanted_length = first.header.length;
+        let mut last_fragment_end = 0;
+
+        for h in skip_handled {
+            if wanted_seq != h.header.message_seq {
+                continue;
+            }
+            if h.header.fragment_offset != last_fragment_end {
+                return true;
+            }
+            last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
+            if last_fragment_end == wanted_length {
+                return false;
+            }
+        }
+
+        false
+    }
+
+    /// Schedule a handshake ACK if we detect gaps or partial flights.
+    fn maybe_schedule_handshake_ack(&mut self, now: Instant) {
+        if !self.handshake_in_progress() {
+            self.handshake_ack_deadline = None;
+            return;
+        }
+
+        if self.handshake_ack_deadline.is_some() {
+            return;
+        }
+
+        if !self.handshake_ack_help_needed() {
+            return;
+        }
+
+        // If we detect a gap (missing fragments/messages), send ACK immediately.
+        // Otherwise, use RTO/4 delay to allow piggybacking on the next flight.
+        let delay = if self.has_gap_in_incoming_handshake() {
+            Duration::from_millis(0)
+        } else {
+            let rto = self.flight_backoff.rto();
+            if rto > Duration::from_millis(0) {
+                rto / 4
+            } else {
+                Duration::from_millis(0)
+            }
+        };
+
+        self.handshake_ack_deadline = Some(now + delay);
+    }
+
+    /// Flush a scheduled handshake ACK if the deadline has passed.
+    fn maybe_flush_handshake_ack(&mut self, now: Instant) -> Result<(), Error> {
+        let Some(deadline) = self.handshake_ack_deadline else {
+            return Ok(());
+        };
+
+        if now < deadline {
+            return Ok(());
+        }
+
+        // Collect record numbers for epoch-2 handshake records we have received.
+        let record_numbers: Vec<(u64, u64)> = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .filter(|r| r.record().sequence.epoch == 2)
+            .filter(|r| r.record().content_type == ContentType::Handshake)
+            .map(|r| {
+                let seq = r.record().sequence;
+                (seq.epoch as u64, seq.sequence_number)
+            })
+            .collect();
+
+        self.handshake_ack_deadline = None;
+
+        if record_numbers.is_empty() {
+            return Ok(());
+        }
+
+        self.send_handshake_ack_epoch2(&record_numbers)
+    }
+
+    /// Send a handshake ACK on epoch 2 listing received epoch-2 record numbers.
+    fn send_handshake_ack_epoch2(&mut self, record_numbers: &[(u64, u64)]) -> Result<(), Error> {
+        if !self.handshake_in_progress() {
+            return Ok(());
+        }
+
+        self.create_ciphertext_record(ContentType::Ack, 2, false, |fragment| {
+            let len = (record_numbers.len() * 16) as u16;
+            fragment.extend_from_slice(&len.to_be_bytes());
+            for &(epoch, seq) in record_numbers {
+                fragment.extend_from_slice(&epoch.to_be_bytes());
+                fragment.extend_from_slice(&seq.to_be_bytes());
+            }
+        })?;
+
+        Ok(())
     }
 
     /// Pop a buffer from the buffer pool for temporary use
@@ -1444,20 +1724,15 @@ impl Engine {
     }
 
     /// Install send handshake keys for client flight (after receiving server Finished).
-    pub fn install_send_handshake_keys(
-        &mut self,
-        client_traffic_secret: &Buf,
-    ) -> Result<(), Error> {
-        self.hs_send_keys = Some(self.derive_epoch_keys(client_traffic_secret)?);
-        self.hs_send_seq = 0;
-        Ok(())
-    }
-
     /// Reset handshake state for a new ClientHello after HelloRetryRequest.
     pub fn reset_for_hello_retry(&mut self) {
         self.peer_handshake_seq_no = 0;
         self.next_handshake_seq_no = 0;
         self.hs_send_seq = 0;
+        self.handshake_ack_deadline = None;
+        // Drain handled items so stale retransmissions with the same
+        // message_seq can be accepted after the sequence number reset.
+        self.queue_rx.retain(|item| !item.first().is_handled());
     }
 
     /// Derive epoch keys (cipher + IV + sn_key) from a traffic secret.
