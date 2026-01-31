@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.2.5
+
   * Fix ClientHello Parser Failing when too many Cipher Suites #46
 
 # 0.2.4
