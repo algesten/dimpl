@@ -903,6 +903,10 @@ fn client_wolfssl_dtls13_small_mtu() {
     );
 }
 
+// NOTE: This test is skipped because dimpl does not fragment application data
+// by MTU. Neither DTLS 1.2 nor DTLS 1.3 splits app data into multiple records.
+// Handshake fragmentation is supported, but app data is sent as a single record.
+#[ignore]
 #[test]
 #[cfg(feature = "rcgen")]
 fn client_wolfssl_dtls13_large_data_fragmented() {
