@@ -679,7 +679,8 @@ impl State {
 
     fn await_certificate_verify(self, server: &mut Server) -> Result<Self, Error> {
         // Get handshake data BEFORE processing CertificateVerify message
-        // According to TLS spec, signature is over all handshake messages up to but not including CertificateVerify
+        // According to TLS spec, signature is over all handshake messages
+        // up to but not including CertificateVerify
         let data = server.engine.transcript().to_buf();
 
         let maybe = server.engine.next_handshake(

@@ -63,11 +63,7 @@ pub fn deliver_packets(packets: &[Vec<u8>], dest: &mut Dtls) {
 
 /// Create a default config.
 pub fn default_config() -> Arc<Config> {
-    Arc::new(
-        Config::builder()
-            .build()
-            .expect("Failed to build config"),
-    )
+    Arc::new(Config::builder().build().expect("Failed to build config"))
 }
 
 /// Create a config with the server cookie exchange disabled.

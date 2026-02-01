@@ -1,11 +1,9 @@
 use crate::buffer::Buf;
 use crate::SrtpProfile;
 use arrayvec::ArrayVec;
-use nom::{
-    bytes::complete::take,
-    number::complete::{be_u16, be_u8},
-    IResult,
-};
+use nom::bytes::complete::take;
+use nom::number::complete::{be_u16, be_u8};
+use nom::IResult;
 
 pub type SrtpProfileVec = ArrayVec<SrtpProfileId, { SrtpProfileId::supported().len() }>;
 

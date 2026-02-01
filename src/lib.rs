@@ -148,7 +148,7 @@ extern crate log;
 
 use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 // Shared types used by both DTLS versions
 mod types;
@@ -164,8 +164,7 @@ mod dtls13;
 use dtls12::{Client as Client12, Server as Server12};
 use dtls13::{Client as Client13, Server as Server13};
 
-use buffer::Buf;
-use detect::HybridClientHello;
+use detect::{ClientPending, ServerPending};
 
 mod detect;
 mod time_tricks;
@@ -229,26 +228,8 @@ enum Inner {
     Server12(Server12),
     Client13(Client13),
     Server13(Server13),
-    ServerPending {
-        config: Arc<Config>,
-        certificate: DtlsCertificate,
-        last_now: Option<Instant>,
-    },
-    ClientPending {
-        hybrid: HybridClientHello,
-        config: Arc<Config>,
-        certificate: DtlsCertificate,
-        /// Pre-built wire packet (record header + handshake fragment).
-        wire_packet: Buf,
-        /// Whether the wire_packet hasn't been polled yet.
-        needs_send: bool,
-        /// Last time handle_timeout was called.
-        last_now: Option<Instant>,
-        /// When to retransmit the wire_packet.
-        retransmit_at: Option<Instant>,
-        /// How many retransmits have occurred.
-        retransmit_count: usize,
-    },
+    ServerPending(ServerPending),
+    ClientPending(ClientPending),
 }
 
 impl Dtls {
@@ -291,11 +272,7 @@ impl Dtls {
     /// and 1.3 servers and forks into the correct handshake once the
     /// server responds.
     pub fn new_auto(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
-        let inner = Inner::ServerPending {
-            config,
-            certificate,
-            last_now: None,
-        };
+        let inner = Inner::ServerPending(ServerPending::new(config, certificate));
         Dtls { inner: Some(inner) }
     }
 
@@ -303,7 +280,7 @@ impl Dtls {
     pub fn is_active(&self) -> bool {
         matches!(
             self.inner,
-            Some(Inner::Client12(_) | Inner::Client13(_) | Inner::ClientPending { .. })
+            Some(Inner::Client12(_) | Inner::Client13(_) | Inner::ClientPending(_))
         )
     }
 
@@ -326,7 +303,7 @@ impl Dtls {
                     Inner::Client13(c) => {
                         self.inner = Some(Inner::Server13(c.into_server()));
                     }
-                    Inner::ClientPending { .. } => {
+                    Inner::ClientPending(_) => {
                         panic!("cannot switch auto-sense client back to server: version unknown");
                     }
                     _ => unreachable!(),
@@ -341,25 +318,12 @@ impl Dtls {
                     Inner::Server13(s) => {
                         self.inner = Some(Inner::Client13(s.into_client()));
                     }
-                    Inner::ServerPending {
-                        config,
-                        certificate,
-                        ..
-                    } => {
-                        // unwrap: HybridClientHello::new only fails on missing kx groups
-                        let hybrid = HybridClientHello::new(&config)
+                    Inner::ServerPending(sp) => {
+                        let (config, certificate, _) = sp.into_parts();
+                        // unwrap: ClientPending::new only fails on missing kx groups
+                        let cp = ClientPending::new(config, certificate)
                             .expect("failed to build hybrid ClientHello");
-                        let wire_packet = hybrid.wire_packet();
-                        self.inner = Some(Inner::ClientPending {
-                            hybrid,
-                            config,
-                            certificate,
-                            wire_packet,
-                            needs_send: true,
-                            last_now: None,
-                            retransmit_at: None,
-                            retransmit_count: 0,
-                        });
+                        self.inner = Some(Inner::ClientPending(cp));
                     }
                     _ => unreachable!(),
                 }
@@ -371,16 +335,12 @@ impl Dtls {
     /// Process an incoming DTLS datagram.
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         // Auto-sense server: resolve version on first ClientHello
-        if matches!(self.inner, Some(Inner::ServerPending { .. })) {
+        if matches!(self.inner, Some(Inner::ServerPending(_))) {
             let inner = self.inner.take().unwrap();
-            let Inner::ServerPending {
-                config,
-                certificate,
-                last_now,
-            } = inner
-            else {
+            let Inner::ServerPending(sp) = inner else {
                 unreachable!()
             };
+            let (config, certificate, last_now) = sp.into_parts();
 
             // unwrap: handle_timeout must be called before handle_packet
             let now = last_now.expect("need handle_timeout before handle_packet");
@@ -402,20 +362,15 @@ impl Dtls {
         }
 
         // Auto-sense client: resolve version on first server response
-        if matches!(self.inner, Some(Inner::ClientPending { .. })) {
+        if matches!(self.inner, Some(Inner::ClientPending(_))) {
             let version = detect::server_hello_version(packet);
+            let inner = self.inner.take().unwrap();
+            let Inner::ClientPending(cp) = inner else {
+                unreachable!()
+            };
+            let (hybrid, config, certificate) = cp.into_parts();
             match version {
                 detect::DetectedVersion::Dtls12 => {
-                    let inner = self.inner.take().unwrap();
-                    let Inner::ClientPending {
-                        hybrid,
-                        config,
-                        certificate,
-                        ..
-                    } = inner
-                    else {
-                        unreachable!()
-                    };
                     let mut client12 = Client12::new_from_hybrid(
                         hybrid.random,
                         &hybrid.handshake_fragment,
@@ -429,18 +384,7 @@ impl Dtls {
                     return Ok(());
                 }
                 detect::DetectedVersion::Dtls13 | detect::DetectedVersion::Unknown => {
-                    let inner = self.inner.take().unwrap();
-                    let Inner::ClientPending {
-                        hybrid,
-                        config,
-                        certificate,
-                        ..
-                    } = inner
-                    else {
-                        unreachable!()
-                    };
-                    let mut client13 =
-                        Client13::new_from_hybrid(hybrid, config, certificate);
+                    let mut client13 = Client13::new_from_hybrid(hybrid, config, certificate);
                     client13.handle_packet(packet)?;
                     self.inner = Some(Inner::Client13(client13));
                     return Ok(());
@@ -453,7 +397,7 @@ impl Dtls {
             Inner::Server12(server) => server.handle_packet(packet),
             Inner::Client13(client) => client.handle_packet(packet),
             Inner::Server13(server) => server.handle_packet(packet),
-            Inner::ServerPending { .. } | Inner::ClientPending { .. } => unreachable!(),
+            Inner::ServerPending(_) | Inner::ClientPending(_) => unreachable!(),
         }
     }
 
@@ -464,29 +408,8 @@ impl Dtls {
             Inner::Server12(server) => server.poll_output(buf),
             Inner::Client13(client) => client.poll_output(buf),
             Inner::Server13(server) => server.poll_output(buf),
-            Inner::ServerPending { last_now, .. } => {
-                // unwrap: handle_timeout must be called before poll_output
-                let now = last_now.expect("need handle_timeout before poll_output");
-                Output::Timeout(now + Duration::from_secs(86400))
-            }
-            Inner::ClientPending {
-                wire_packet,
-                needs_send,
-                last_now,
-                retransmit_at,
-                ..
-            } => {
-                if *needs_send {
-                    *needs_send = false;
-                    let len = wire_packet.len();
-                    buf[..len].copy_from_slice(wire_packet);
-                    return Output::Packet(&buf[..len]);
-                }
-                // unwrap: handle_timeout must be called before poll_output
-                let now = last_now.expect("need handle_timeout before poll_output");
-                let next = retransmit_at.unwrap_or(now + Duration::from_secs(1));
-                Output::Timeout(next)
-            }
+            Inner::ServerPending(sp) => sp.poll_output(buf),
+            Inner::ClientPending(cp) => cp.poll_output(buf),
         }
     }
 
@@ -497,39 +420,11 @@ impl Dtls {
             Inner::Server12(server) => server.handle_timeout(now),
             Inner::Client13(client) => client.handle_timeout(now),
             Inner::Server13(server) => server.handle_timeout(now),
-            Inner::ServerPending { last_now, .. } => {
-                *last_now = Some(now);
+            Inner::ServerPending(sp) => {
+                sp.handle_timeout(now);
                 Ok(())
             }
-            Inner::ClientPending {
-                last_now,
-                retransmit_at,
-                retransmit_count,
-                needs_send,
-                config,
-                ..
-            } => {
-                *last_now = Some(now);
-                // Arm initial retransmit timer on first call
-                if retransmit_at.is_none() {
-                    *retransmit_at = Some(now + Duration::from_secs(1));
-                    return Ok(());
-                }
-                if let Some(deadline) = *retransmit_at {
-                    if now >= deadline {
-                        if *retransmit_count >= config.flight_retries() {
-                            return Err(Error::Timeout("hybrid ClientHello"));
-                        }
-                        *retransmit_count += 1;
-                        *needs_send = true;
-                        // Exponential backoff: 2s, 4s, 8s, ...
-                        let shift = (*retransmit_count).min(5) as u32;
-                        let rto = Duration::from_secs(1u64 << shift);
-                        *retransmit_at = Some(now + rto);
-                    }
-                }
-                Ok(())
-            }
+            Inner::ClientPending(cp) => cp.handle_timeout(now),
         }
     }
 
@@ -540,10 +435,10 @@ impl Dtls {
             Inner::Server12(server) => server.send_application_data(data),
             Inner::Client13(client) => client.send_application_data(data),
             Inner::Server13(server) => server.send_application_data(data),
-            Inner::ServerPending { .. } => Err(Error::UnexpectedMessage(
+            Inner::ServerPending(_) => Err(Error::UnexpectedMessage(
                 "cannot send application data: handshake not started".to_string(),
             )),
-            Inner::ClientPending { .. } => Err(Error::UnexpectedMessage(
+            Inner::ClientPending(_) => Err(Error::UnexpectedMessage(
                 "cannot send application data: handshake not complete".to_string(),
             )),
         }
@@ -557,8 +452,8 @@ impl fmt::Debug for Dtls {
             Some(Inner::Server12(s)) => ("Server12", s.state_name()),
             Some(Inner::Client13(c)) => ("Client13", c.state_name()),
             Some(Inner::Server13(s)) => ("Server13", s.state_name()),
-            Some(Inner::ServerPending { .. }) => ("ServerPending", ""),
-            Some(Inner::ClientPending { .. }) => ("ClientPending", ""),
+            Some(Inner::ServerPending(_)) => ("ServerPending", ""),
+            Some(Inner::ClientPending(_)) => ("ClientPending", ""),
             None => ("None", ""),
         };
         f.debug_struct("Dtls")
@@ -655,7 +550,7 @@ mod test {
         assert!(!dtls.is_active());
         dtls.set_active(true);
         assert!(dtls.is_active());
-        assert!(matches!(dtls.inner, Some(Inner::ClientPending { .. })));
+        assert!(matches!(dtls.inner, Some(Inner::ClientPending(_))));
     }
 
     #[test]
