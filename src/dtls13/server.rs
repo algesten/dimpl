@@ -405,8 +405,9 @@ impl State {
             .copied()
             .ok_or_else(|| Error::SecurityError("No common cipher suite found".to_string()))?;
 
-        // Save the client random for cookie computation
+        // Save the client random and session_id early so HRR can use them
         let client_random = client_hello.random;
+        server.client_session_id = Some(client_hello.legacy_session_id);
 
         // Cookie-based DoS protection (disabled for interop testing)
         let need_cookie = false;
@@ -570,8 +571,6 @@ impl State {
             }
         }
 
-        // Store client session_id
-        server.client_session_id = Some(client_hello.legacy_session_id);
 
         // Store selected group and public key range for ServerHello
         // already completed
