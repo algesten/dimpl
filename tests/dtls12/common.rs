@@ -61,7 +61,7 @@ pub fn parse_handshake_types(datagram: &[u8]) -> Vec<u8> {
         let len = u16::from_be_bytes([datagram[i + 11], datagram[i + 12]]) as usize;
 
         // Only parse handshake records (content_type=22)
-        if ctype == 22 && i + 13 + 1 <= datagram.len() {
+        if ctype == 22 && i + 14 <= datagram.len() {
             // Handshake message type is first byte of payload
             let hs_type = datagram[i + 13];
             out.push(hs_type);

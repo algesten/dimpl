@@ -642,7 +642,7 @@ mod tests {
 
         // Serialize and compare to MESSAGE
         // Save header info and drop handshake to release buffer borrow
-        let header = defragmented_handshake.header.clone();
+        let header = defragmented_handshake.header;
         drop(defragmented_handshake);
 
         serialized.push(header.msg_type.as_u8());

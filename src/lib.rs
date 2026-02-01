@@ -255,8 +255,8 @@ impl Dtls {
     /// During the handshake, the peer's leaf certificate is surfaced via
     /// [`Output::PeerCert`]. It is up to the application to validate that
     /// certificate according to its security policy.
-    pub fn new_13(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
-        let inner = Inner::Server13(Server13::new(config, certificate));
+    pub fn new_13(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
+        let inner = Inner::Server13(Server13::new(config, certificate, now));
         Dtls { inner: Some(inner) }
     }
 
@@ -271,8 +271,8 @@ impl Dtls {
     /// instance sends a hybrid ClientHello compatible with both DTLS 1.2
     /// and 1.3 servers and forks into the correct handshake once the
     /// server responds.
-    pub fn new_auto(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
-        let inner = Inner::ServerPending(ServerPending::new(config, certificate));
+    pub fn new_auto(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
+        let inner = Inner::ServerPending(ServerPending::new(config, certificate, now));
         Dtls { inner: Some(inner) }
     }
 
@@ -319,9 +319,9 @@ impl Dtls {
                         self.inner = Some(Inner::Client13(s.into_client()));
                     }
                     Inner::ServerPending(sp) => {
-                        let (config, certificate, _) = sp.into_parts();
+                        let (config, certificate, now) = sp.into_parts();
                         // unwrap: ClientPending::new only fails on missing kx groups
-                        let cp = ClientPending::new(config, certificate)
+                        let cp = ClientPending::new(config, certificate, now)
                             .expect("failed to build hybrid ClientHello");
                         self.inner = Some(Inner::ClientPending(cp));
                     }
@@ -340,17 +340,14 @@ impl Dtls {
             let Inner::ServerPending(sp) = inner else {
                 unreachable!()
             };
-            let (config, certificate, last_now) = sp.into_parts();
-
-            // unwrap: handle_timeout must be called before handle_packet
-            let now = last_now.expect("need handle_timeout before handle_packet");
+            let (config, certificate, now) = sp.into_parts();
 
             let is_13 = matches!(
                 detect::client_hello_version(packet),
                 detect::DetectedVersion::Dtls13
             );
             let resolved = if is_13 {
-                let mut server = Server13::new(config, certificate);
+                let mut server = Server13::new(config, certificate, now);
                 server.handle_timeout(now)?;
                 Inner::Server13(server)
             } else {
@@ -368,7 +365,7 @@ impl Dtls {
             let Inner::ClientPending(cp) = inner else {
                 unreachable!()
             };
-            let (hybrid, config, certificate) = cp.into_parts();
+            let (hybrid, config, certificate, now) = cp.into_parts();
             match version {
                 detect::DetectedVersion::Dtls12 => {
                     let mut client12 = Client12::new_from_hybrid(
@@ -376,6 +373,7 @@ impl Dtls {
                         &hybrid.handshake_fragment,
                         config,
                         certificate,
+                        now,
                     );
                     // Feed the HVR to Client12 — it enters
                     // AwaitHelloVerifyRequest and processes the cookie.
@@ -384,7 +382,7 @@ impl Dtls {
                     return Ok(());
                 }
                 detect::DetectedVersion::Dtls13 | detect::DetectedVersion::Unknown => {
-                    let mut client13 = Client13::new_from_hybrid(hybrid, config, certificate);
+                    let mut client13 = Client13::new_from_hybrid(hybrid, config, certificate, now);
                     client13.handle_packet(packet)?;
                     self.inner = Some(Inner::Client13(client13));
                     return Ok(());
@@ -517,13 +515,13 @@ mod test {
     fn new_instance_13() -> Dtls {
         let cert = generate_self_signed_certificate().expect("Failed to generate cert");
         let config = Arc::new(Config::default());
-        Dtls::new_13(config, cert)
+        Dtls::new_13(config, cert, Instant::now())
     }
 
     fn new_instance_auto() -> Dtls {
         let cert = generate_self_signed_certificate().expect("Failed to generate cert");
         let config = Arc::new(Config::default());
-        Dtls::new_auto(config, cert)
+        Dtls::new_auto(config, cert, Instant::now())
     }
 
     #[test]

@@ -98,7 +98,7 @@ pub struct Server {
     defragment_buffer: Buf,
 
     /// The last now we seen.
-    last_now: Option<Instant>,
+    last_now: Instant,
 
     /// Local events.
     local_events: VecDeque<LocalEvent>,
@@ -151,12 +151,12 @@ enum State {
 
 impl Server {
     /// Create a new DTLS 1.3 server.
-    pub fn new(config: Arc<Config>, certificate: DtlsCertificate) -> Server {
+    pub fn new(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Server {
         let engine = Engine::new(config, certificate);
-        Self::new_with_engine(engine)
+        Self::new_with_engine(engine, now)
     }
 
-    pub(crate) fn new_with_engine(mut engine: Engine) -> Server {
+    pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Server {
         let cookie_secret = engine.rng.random::<[u8; 32]>();
 
         Server {
@@ -168,7 +168,7 @@ impl Server {
             negotiated_srtp_profile: None,
             client_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
-            last_now: None,
+            last_now: now,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
             active_key_exchange: None,
@@ -184,7 +184,7 @@ impl Server {
     }
 
     pub fn into_client(self) -> Client {
-        Client::new_with_engine(self.engine)
+        Client::new_with_engine(self.engine, self.last_now)
     }
 
     pub(crate) fn state_name(&self) -> &'static str {
@@ -198,20 +198,16 @@ impl Server {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
-        let last_now = self
-            .last_now
-            .expect("need handle_timeout before poll_output");
-
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.client_certificates);
         }
 
-        self.engine.poll_output(buf, last_now)
+        self.engine.poll_output(buf, self.last_now)
     }
 
     /// Handle a timeout event.
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
-        self.last_now = Some(now);
+        self.last_now = now;
         if self.random.is_none() {
             self.random = Some(Random::new(&mut self.engine.rng));
         }

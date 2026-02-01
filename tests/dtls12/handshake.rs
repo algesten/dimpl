@@ -407,13 +407,13 @@ fn dtls12_basic_handshake() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -459,13 +459,13 @@ fn dtls12_handshake_with_keying_material() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_km: Option<(Vec<u8>, SrtpProfile)> = None;
     let mut server_km: Option<(Vec<u8>, SrtpProfile)> = None;
@@ -527,13 +527,13 @@ fn dtls12_peer_certificate_exchange() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_peer_cert: Option<Vec<u8>> = None;
     let mut server_peer_cert: Option<Vec<u8>> = None;
@@ -604,13 +604,13 @@ fn dtls12_handshake_client_certificate_auth() {
             .expect("Failed to build config"),
     );
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut server_connected = false;
     let mut server_peer_cert: Option<Vec<u8>> = None;
@@ -686,13 +686,13 @@ fn dtls12_handshake_secp384r1_key_exchange() {
             .expect("Failed to build config with P-384 only"),
     );
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -745,13 +745,13 @@ fn dtls12_handshake_timeout_expires() {
             .expect("Failed to build config"),
     );
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_timed_out = false;
     let mut server_timed_out = false;
 

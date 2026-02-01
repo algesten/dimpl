@@ -123,6 +123,7 @@ impl Client {
         handshake_fragment: &[u8],
         config: std::sync::Arc<crate::Config>,
         certificate: crate::DtlsCertificate,
+        now: Instant,
     ) -> Client {
         let mut engine = Engine::new(config, certificate);
         engine.set_client(true);
@@ -149,7 +150,7 @@ impl Client {
             defragment_buffer: Buf::new(),
             certificate_verify: false,
             captured_session_hash: None,
-            last_now: None,
+            last_now: now,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
         }

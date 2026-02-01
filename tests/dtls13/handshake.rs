@@ -19,13 +19,13 @@ fn dtls13_basic_handshake() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Run handshake
     let mut client_connected = false;
@@ -71,13 +71,13 @@ fn dtls13_handshake_with_keying_material() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_km: Option<(Vec<u8>, SrtpProfile)> = None;
     let mut server_km: Option<(Vec<u8>, SrtpProfile)> = None;
@@ -143,13 +143,13 @@ fn dtls13_peer_certificate_exchange() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_peer_cert: Option<Vec<u8>> = None;
     let mut server_peer_cert: Option<Vec<u8>> = None;
@@ -212,13 +212,13 @@ fn dtls13_srtp_keying_material_correct_size() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_km: Option<(Vec<u8>, SrtpProfile)> = None;
 
@@ -275,13 +275,13 @@ fn dtls13_hello_retry_request_flow() {
     // Server config that will trigger HRR (by requiring cookie)
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -368,13 +368,13 @@ fn dtls13_handshake_aes_256_gcm() {
             .expect("build config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -460,13 +460,13 @@ fn dtls13_handshake_chacha20_poly1305() {
             .expect("build config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -549,13 +549,13 @@ fn dtls13_handshake_secp256r1_key_exchange() {
             .expect("build server config"),
     );
 
-    let mut client = Dtls::new_13(client_config, client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(client_config, client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(server_config, server_cert);
+    let mut server = Dtls::new_13(server_config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -614,13 +614,13 @@ fn dtls13_handshake_client_certificate_auth() {
             .expect("build config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
     let mut server_peer_cert: Option<Vec<u8>> = None;
@@ -692,13 +692,14 @@ fn dtls13_handshake_timeout_expires() {
             .expect("build config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut _server = Dtls::new_13(config, server_cert);
+    let mut _server = Dtls::new_13(config, server_cert, now);
     _server.set_active(false);
 
-    let mut now = Instant::now();
     let mut timed_out = false;
 
     // Never deliver any packets between client and server.
@@ -804,13 +805,13 @@ fn dtls13_hrr_with_p256_then_x25519() {
             .expect("build server config"),
     );
 
-    let mut client = Dtls::new_13(client_config, client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(client_config, client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(server_config, server_cert);
+    let mut server = Dtls::new_13(server_config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
     let mut saw_hrr = false;
@@ -940,13 +941,13 @@ fn dtls13_hrr_handshake_completes_after_packet_loss() {
             .expect("build server config"),
     );
 
-    let mut client = Dtls::new_13(client_config, client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(client_config, client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(server_config, server_cert);
+    let mut server = Dtls::new_13(server_config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 

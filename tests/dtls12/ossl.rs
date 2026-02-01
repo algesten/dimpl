@@ -106,7 +106,7 @@ fn dtls12_ossl_client_handshake() {
                         .expect("Failed to send client data");
                 }
                 Output::ApplicationData(data) => {
-                    client_received_data.extend_from_slice(&data);
+                    client_received_data.extend_from_slice(data);
                     println!(
                         "Client received {} bytes of application data: {:02x?}",
                         data.len(),
@@ -199,7 +199,7 @@ fn dtls12_ossl_client_handshake() {
 
     // Verify keying material has the right length
     assert!(
-        client_km.len() > 0,
+        !client_km.is_empty(),
         "Client keying material should not be empty"
     );
     assert_eq!(
@@ -335,7 +335,7 @@ fn dtls12_ossl_server_handshake() {
                     client_keying_material = Some((km, profile));
                 }
                 DtlsEvent::Data(data) => {
-                    client_received_data.extend_from_slice(&data);
+                    client_received_data.extend_from_slice(data);
                 }
             }
         }
@@ -382,7 +382,7 @@ fn dtls12_ossl_server_handshake() {
         "Both sides should negotiate same SRTP profile"
     );
     assert!(
-        server_km.len() > 0,
+        !server_km.is_empty(),
         "Server keying material should not be empty"
     );
     assert_eq!(
@@ -429,18 +429,19 @@ fn dtls12_ossl_client_retransmit_on_timeout() {
         .private_key_to_der()
         .expect("Failed to get client private key DER");
 
+    let mut now = Instant::now();
     let mut client = Dtls::new_12(
         config,
         dimpl::DtlsCertificate {
             certificate: client_x509_der,
             private_key: client_pkey_der,
         },
+        now,
     );
     client.set_active(true);
 
     let mut server_events = VecDeque::new();
     let mut out_buf = vec![0u8; 2048];
-    let mut now = Instant::now();
 
     // Trigger the initial client flight
     client.handle_timeout(now).unwrap();
@@ -473,12 +474,9 @@ fn dtls12_ossl_client_retransmit_on_timeout() {
     // Poll to get the timeout value (no packets expected here)
     let flight_timeout;
     loop {
-        match client.poll_output(&mut out_buf) {
-            Output::Timeout(t) => {
-                flight_timeout = t;
-                break;
-            }
-            _ => {}
+        if let Output::Timeout(t) = client.poll_output(&mut out_buf) {
+            flight_timeout = t;
+            break;
         }
     }
 
@@ -515,11 +513,8 @@ fn dtls12_ossl_client_retransmit_on_timeout() {
     for _ in 0..20 {
         // Process server events
         while let Some(event) = server_events.pop_front() {
-            match event {
-                DtlsEvent::Connected => {
-                    server_connected = true;
-                }
-                _ => {}
+            if let DtlsEvent::Connected = event {
+                server_connected = true;
             }
         }
 
@@ -598,6 +593,7 @@ fn dtls12_ossl_client_handles_duplicates() {
             certificate: client_x509_der,
             private_key: client_pkey_der,
         },
+        Instant::now(),
     );
     client.set_active(true);
 
@@ -634,7 +630,7 @@ fn dtls12_ossl_client_handles_duplicates() {
                         .expect("Failed to send client data");
                 }
                 Output::ApplicationData(data) => {
-                    client_received_data.extend_from_slice(&data);
+                    client_received_data.extend_from_slice(data);
                 }
                 Output::Timeout(_) => break,
                 _ => {}
@@ -755,6 +751,7 @@ fn dtls12_ossl_server_bidirectional_data() {
             certificate: server_x509_der,
             private_key: server_pkey_der,
         },
+        Instant::now(),
     );
     server.set_active(false);
 
@@ -836,7 +833,7 @@ fn dtls12_ossl_server_bidirectional_data() {
                     }
                 }
                 DtlsEvent::Data(data) => {
-                    client_received_data.extend_from_slice(&data);
+                    client_received_data.extend_from_slice(data);
                     // After receiving from server, send a reply
                     if !client_reply_sent && client_received_data.len() >= server_test_data.len() {
                         client

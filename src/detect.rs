@@ -258,31 +258,27 @@ impl HybridClientHello {
 pub(crate) struct ServerPending {
     config: Arc<Config>,
     certificate: DtlsCertificate,
-    last_now: Option<Instant>,
+    last_now: Instant,
 }
 
 impl ServerPending {
-    pub fn new(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
+    pub fn new(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
         ServerPending {
             config,
             certificate,
-            last_now: None,
+            last_now: now,
         }
     }
 
     pub fn handle_timeout(&mut self, now: Instant) {
-        self.last_now = Some(now);
+        self.last_now = now;
     }
 
     pub fn poll_output<'a>(&self, _buf: &'a mut [u8]) -> Output<'a> {
-        // unwrap: handle_timeout must be called before poll_output
-        let now = self
-            .last_now
-            .expect("need handle_timeout before poll_output");
-        Output::Timeout(now + Duration::from_secs(86400))
+        Output::Timeout(self.last_now + Duration::from_secs(86400))
     }
 
-    pub fn into_parts(self) -> (Arc<Config>, DtlsCertificate, Option<Instant>) {
+    pub fn into_parts(self) -> (Arc<Config>, DtlsCertificate, Instant) {
         (self.config, self.certificate, self.last_now)
     }
 }
@@ -298,7 +294,7 @@ pub(crate) struct ClientPending {
     /// Whether the wire_packet hasn't been polled yet.
     needs_send: bool,
     /// Last time handle_timeout was called.
-    last_now: Option<Instant>,
+    last_now: Instant,
     /// When to retransmit the wire_packet.
     retransmit_at: Option<Instant>,
     /// How many retransmits have occurred.
@@ -306,7 +302,11 @@ pub(crate) struct ClientPending {
 }
 
 impl ClientPending {
-    pub fn new(config: Arc<Config>, certificate: DtlsCertificate) -> Result<Self, Error> {
+    pub fn new(
+        config: Arc<Config>,
+        certificate: DtlsCertificate,
+        now: Instant,
+    ) -> Result<Self, Error> {
         let hybrid = HybridClientHello::new(&config)?;
         let wire_packet = hybrid.wire_packet();
         Ok(ClientPending {
@@ -315,14 +315,14 @@ impl ClientPending {
             certificate,
             wire_packet,
             needs_send: true,
-            last_now: None,
+            last_now: now,
             retransmit_at: None,
             retransmit_count: 0,
         })
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
-        self.last_now = Some(now);
+        self.last_now = now;
         // Arm initial retransmit timer on first call
         if self.retransmit_at.is_none() {
             self.retransmit_at = Some(now + Duration::from_secs(1));
@@ -351,16 +351,14 @@ impl ClientPending {
             buf[..len].copy_from_slice(&self.wire_packet);
             return Output::Packet(&buf[..len]);
         }
-        // unwrap: handle_timeout must be called before poll_output
-        let now = self
-            .last_now
-            .expect("need handle_timeout before poll_output");
-        let next = self.retransmit_at.unwrap_or(now + Duration::from_secs(1));
+        let next = self
+            .retransmit_at
+            .unwrap_or(self.last_now + Duration::from_secs(1));
         Output::Timeout(next)
     }
 
-    pub fn into_parts(self) -> (HybridClientHello, Arc<Config>, DtlsCertificate) {
-        (self.hybrid, self.config, self.certificate)
+    pub fn into_parts(self) -> (HybridClientHello, Arc<Config>, DtlsCertificate, Instant) {
+        (self.hybrid, self.config, self.certificate, self.last_now)
     }
 }
 

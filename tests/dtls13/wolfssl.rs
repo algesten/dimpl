@@ -97,7 +97,7 @@ fn dtls13_wolfssl_client_handshake() {
     let config = dtls13_config();
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -167,7 +167,7 @@ fn dtls13_wolfssl_client_data_exchange() {
     let config = dtls13_config();
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -246,7 +246,7 @@ fn dtls13_wolfssl_client_bidirectional_data() {
     let config = dtls13_config();
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -343,7 +343,7 @@ fn dtls13_wolfssl_client_multiple_messages() {
     let config = dtls13_config();
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -426,7 +426,7 @@ fn dtls13_wolfssl_client_many_small_messages() {
     let config = dtls13_config();
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -507,7 +507,7 @@ fn dtls13_wolfssl_client_retransmit_on_timeout() {
     let config = dtls13_config();
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -591,7 +591,7 @@ fn dtls13_wolfssl_client_handshake_after_packet_loss() {
     let config = dtls13_config();
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -674,7 +674,7 @@ fn dtls13_wolfssl_client_handles_duplicates() {
     let config = dtls13_config();
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -745,7 +745,7 @@ fn dtls13_wolfssl_client_handles_out_of_order() {
     let config = dtls13_config();
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -832,7 +832,7 @@ fn dtls13_wolfssl_client_small_mtu() {
     let config = dtls13_config_with_mtu(600);
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -915,7 +915,7 @@ fn dtls13_wolfssl_client_large_data_fragmented() {
     let config = dtls13_config_with_mtu(300);
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -1004,7 +1004,7 @@ fn dtls13_wolfssl_client_recovers_from_corruption() {
     let config = dtls13_config();
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -1086,7 +1086,7 @@ fn dtls13_wolfssl_client_handshake_with_early_packet_loss() {
     );
 
     let now = Instant::now();
-    let mut dimpl_client = Dtls::new_13(config, client_cert);
+    let mut dimpl_client = Dtls::new_13(config, client_cert, now);
     dimpl_client.set_active(true);
 
     let mut now = Instant::now();
@@ -1176,7 +1176,7 @@ fn dtls13_wolfssl_server_handshake() {
 
     let config = dtls13_config();
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
@@ -1245,7 +1245,7 @@ fn dtls13_wolfssl_server_data_exchange() {
 
     let config = dtls13_config();
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
@@ -1319,7 +1319,7 @@ fn dtls13_wolfssl_server_bidirectional_data() {
 
     let config = dtls13_config();
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
@@ -1445,7 +1445,7 @@ fn dtls13_wolfssl_server_multiple_messages() {
 
     let config = dtls13_config();
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
@@ -1524,7 +1524,7 @@ fn dtls13_wolfssl_server_handshake_after_packet_loss() {
 
     let config = dtls13_config();
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
@@ -1615,7 +1615,7 @@ fn dtls13_wolfssl_server_handshake_with_early_packet_loss() {
             .expect("Failed to build DTLS 1.3 config"),
     );
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
@@ -1702,7 +1702,7 @@ fn dtls13_wolfssl_server_handles_duplicates() {
 
     let config = dtls13_config();
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
@@ -1805,7 +1805,7 @@ fn dtls13_wolfssl_server_many_small_messages() {
 
     let config = dtls13_config();
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
@@ -1883,7 +1883,7 @@ fn dtls13_wolfssl_server_bidirectional_data() {
 
     let config = dtls13_config();
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
@@ -2013,7 +2013,7 @@ fn dtls13_wolfssl_server_small_mtu() {
     // Use 600 MTU - large enough for handshake but smaller than default
     let config = dtls13_config_with_mtu(600);
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
@@ -2100,7 +2100,7 @@ fn dtls13_wolfssl_server_recovers_from_corruption() {
             .expect("Failed to build DTLS 1.3 config"),
     );
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
@@ -2179,7 +2179,7 @@ fn dtls13_wolfssl_server_handles_out_of_order() {
 
     let config = dtls13_config();
     let now = Instant::now();
-    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    let mut dimpl_server = Dtls::new_13(config, server_cert, now);
     dimpl_server.set_active(false);
 
     let mut now = Instant::now();
