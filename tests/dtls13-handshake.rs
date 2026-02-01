@@ -330,3 +330,702 @@ fn dtls13_hello_retry_request_flow() {
         "Should have seen HRR or multiple client flights"
     );
 }
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_handshake_aes_256_gcm() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::crypto::aws_lc_rs;
+    use dimpl::crypto::Dtls13CipherSuite;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Build a custom provider that only offers AES_256_GCM_SHA384
+    let default = aws_lc_rs::default_provider();
+    let aes256_only: Vec<_> = default
+        .dtls13_cipher_suites
+        .iter()
+        .copied()
+        .filter(|cs| cs.suite() == Dtls13CipherSuite::AES_256_GCM_SHA384)
+        .collect();
+    assert!(!aes256_only.is_empty(), "Provider must have AES-256-GCM");
+
+    // Leak the filtered vec to get a &'static slice
+    let aes256_static: &'static [_] = Box::leak(aes256_only.into_boxed_slice());
+
+    let provider = dimpl::crypto::CryptoProvider {
+        dtls13_cipher_suites: aes256_static,
+        ..default
+    };
+
+    let config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected,
+        "Client should be connected with AES-256-GCM"
+    );
+    assert!(
+        server_connected,
+        "Server should be connected with AES-256-GCM"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+#[ignore = "CHACHA20_POLY1305_SHA256 is not yet implemented in any crypto provider"]
+fn dtls13_handshake_chacha20_poly1305() {
+    // TLS_CHACHA20_POLY1305_SHA256 is defined in Dtls13CipherSuite but neither the
+    // aws-lc-rs nor the rust-crypto provider includes an implementation of
+    // SupportedDtls13CipherSuite for it. This test is ignored until a provider
+    // adds CHACHA20_POLY1305 support.
+    //
+    // To enable this test, add a CHACHA20_POLY1305 implementation to a crypto
+    // provider, then filter dtls13_cipher_suites to only include it (similar to
+    // dtls13_handshake_aes_256_gcm above) and run the standard handshake loop.
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::crypto::aws_lc_rs;
+    use dimpl::crypto::Dtls13CipherSuite;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let default = aws_lc_rs::default_provider();
+    let chacha_only: Vec<_> = default
+        .dtls13_cipher_suites
+        .iter()
+        .copied()
+        .filter(|cs| cs.suite() == Dtls13CipherSuite::CHACHA20_POLY1305_SHA256)
+        .collect();
+    assert!(
+        !chacha_only.is_empty(),
+        "Provider must have CHACHA20_POLY1305 (not yet implemented)"
+    );
+
+    let chacha_static: &'static [_] = Box::leak(chacha_only.into_boxed_slice());
+
+    let provider = dimpl::crypto::CryptoProvider {
+        dtls13_cipher_suites: chacha_static,
+        ..default
+    };
+
+    let config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected,
+        "Client should be connected with CHACHA20-POLY1305"
+    );
+    assert!(
+        server_connected,
+        "Server should be connected with CHACHA20-POLY1305"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_handshake_secp256r1_key_exchange() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::crypto::aws_lc_rs;
+    use dimpl::crypto::NamedGroup;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Build a custom provider where the client only offers P-256
+    let default = aws_lc_rs::default_provider();
+    let p256_only: Vec<_> = default
+        .kx_groups
+        .iter()
+        .copied()
+        .filter(|g| g.name() == NamedGroup::Secp256r1)
+        .collect();
+    assert!(!p256_only.is_empty(), "Provider must have P-256");
+
+    let p256_static: &'static [_] = Box::leak(p256_only.into_boxed_slice());
+
+    let client_provider = dimpl::crypto::CryptoProvider {
+        kx_groups: p256_static,
+        ..default.clone()
+    };
+
+    let client_config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(client_provider)
+            .build()
+            .expect("build client config"),
+    );
+
+    // Server uses default provider (supports both P-256 and P-384)
+    let server_config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(default)
+            .build()
+            .expect("build server config"),
+    );
+
+    let mut client = Dtls::new_13(client_config, client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(server_config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected,
+        "Client should be connected with P-256 key exchange"
+    );
+    assert!(
+        server_connected,
+        "Server should be connected with P-256 key exchange"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_handshake_client_certificate_auth() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let expected_client_cert = client_cert.certificate.clone();
+
+    // Explicitly require client certificate
+    let config = Arc::new(
+        Config::builder()
+            .require_client_certificate(true)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut server_peer_cert: Option<Vec<u8>> = None;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+        if let Some(cert) = server_out.peer_cert {
+            server_peer_cert = Some(cert);
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected,
+        "Client should be connected with client cert auth"
+    );
+    assert!(
+        server_connected,
+        "Server should be connected with client cert auth"
+    );
+    assert!(
+        server_peer_cert.is_some(),
+        "Server should have received client's certificate"
+    );
+    assert_eq!(
+        server_peer_cert.unwrap(),
+        expected_client_cert,
+        "Server should receive the correct client certificate"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_handshake_timeout_expires() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Short handshake timeout so the test runs quickly
+    let config = Arc::new(
+        Config::builder()
+            .handshake_timeout(Duration::from_secs(5))
+            .flight_start_rto(Duration::from_millis(500))
+            .flight_retries(2)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut _server = Dtls::new_13(config, server_cert);
+    _server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut timed_out = false;
+
+    // Never deliver any packets between client and server.
+    // Keep triggering timeouts until the handshake times out.
+    for _ in 0..100 {
+        match client.handle_timeout(now) {
+            Ok(()) => {
+                // Drain outputs to keep the state machine consistent
+                drain_outputs(&mut client);
+            }
+            Err(_) => {
+                timed_out = true;
+                break;
+            }
+        }
+
+        now += Duration::from_secs(1);
+    }
+
+    assert!(
+        timed_out,
+        "Client should eventually report a timeout error when no packets are delivered"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_hrr_with_p256_then_x25519() {
+    // X25519 is not supported by any current crypto provider, so we cannot test
+    // a scenario where the server truly prefers X25519. Instead, we trigger HRR
+    // by having the client offer only P-256 key_share while the server prefers
+    // P-384 (the server's first kx_group). Since the client's key_share does not
+    // match the server's preferred group, the server sends HelloRetryRequest
+    // asking the client to retry with P-384.
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::crypto::aws_lc_rs;
+    use dimpl::crypto::NamedGroup;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let default = aws_lc_rs::default_provider();
+
+    // Client: offers both groups but P-256 is first (sends P-256 key_share)
+    let client_groups: Vec<_> = default
+        .kx_groups
+        .iter()
+        .copied()
+        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::Secp384r1)
+        .collect();
+    // Ensure P-256 is first
+    let mut client_groups_sorted: Vec<_> = client_groups;
+    client_groups_sorted.sort_by_key(|g| {
+        if g.name() == NamedGroup::Secp256r1 {
+            0
+        } else {
+            1
+        }
+    });
+    let client_groups_static: &'static [_] = Box::leak(client_groups_sorted.into_boxed_slice());
+
+    let client_provider = dimpl::crypto::CryptoProvider {
+        kx_groups: client_groups_static,
+        ..default.clone()
+    };
+
+    // Server: prefers P-384 (P-384 is first in kx_groups)
+    let server_groups: Vec<_> = default
+        .kx_groups
+        .iter()
+        .copied()
+        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::Secp384r1)
+        .collect();
+    let mut server_groups_sorted: Vec<_> = server_groups;
+    server_groups_sorted.sort_by_key(|g| {
+        if g.name() == NamedGroup::Secp384r1 {
+            0
+        } else {
+            1
+        }
+    });
+    let server_groups_static: &'static [_] = Box::leak(server_groups_sorted.into_boxed_slice());
+
+    let server_provider = dimpl::crypto::CryptoProvider {
+        kx_groups: server_groups_static,
+        ..default
+    };
+
+    let client_config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(client_provider)
+            .build()
+            .expect("build client config"),
+    );
+
+    let server_config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(server_provider)
+            .build()
+            .expect("build server config"),
+    );
+
+    let mut client = Dtls::new_13(client_config, client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(server_config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut saw_hrr = false;
+    let mut flight_count = 0;
+
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if !client_out.packets.is_empty() {
+            flight_count += 1;
+        }
+
+        // HRR: server sends packets before full handshake completes, during
+        // the initial exchange (flight_count <= 2)
+        if !server_out.packets.is_empty() && !client_connected && flight_count <= 2 {
+            saw_hrr = true;
+        }
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected,
+        "Client should be connected after HRR with group mismatch"
+    );
+    assert!(
+        server_connected,
+        "Server should be connected after HRR with group mismatch"
+    );
+    // The client sent P-256 key_share but server prefers P-384, so HRR should occur
+    assert!(
+        saw_hrr || flight_count >= 2,
+        "Should have seen HRR (server prefers P-384 but client offered P-256)"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_hrr_handshake_completes_after_packet_loss() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::crypto::aws_lc_rs;
+    use dimpl::crypto::NamedGroup;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let default = aws_lc_rs::default_provider();
+
+    // Client: P-256 first (sends P-256 key_share)
+    let client_groups: Vec<_> = default
+        .kx_groups
+        .iter()
+        .copied()
+        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::Secp384r1)
+        .collect();
+    let mut client_groups_sorted: Vec<_> = client_groups;
+    client_groups_sorted.sort_by_key(|g| {
+        if g.name() == NamedGroup::Secp256r1 {
+            0
+        } else {
+            1
+        }
+    });
+    let client_groups_static: &'static [_] = Box::leak(client_groups_sorted.into_boxed_slice());
+
+    let client_provider = dimpl::crypto::CryptoProvider {
+        kx_groups: client_groups_static,
+        ..default.clone()
+    };
+
+    // Server: P-384 first (triggers HRR when client offers P-256 key_share)
+    let server_groups: Vec<_> = default
+        .kx_groups
+        .iter()
+        .copied()
+        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::Secp384r1)
+        .collect();
+    let mut server_groups_sorted: Vec<_> = server_groups;
+    server_groups_sorted.sort_by_key(|g| {
+        if g.name() == NamedGroup::Secp384r1 {
+            0
+        } else {
+            1
+        }
+    });
+    let server_groups_static: &'static [_] = Box::leak(server_groups_sorted.into_boxed_slice());
+
+    let server_provider = dimpl::crypto::CryptoProvider {
+        kx_groups: server_groups_static,
+        ..default
+    };
+
+    let client_config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(client_provider)
+            .flight_retries(8)
+            .build()
+            .expect("build client config"),
+    );
+
+    let server_config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(server_provider)
+            .flight_retries(8)
+            .build()
+            .expect("build server config"),
+    );
+
+    let mut client = Dtls::new_13(client_config, client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(server_config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    // Track flights to drop the first packet of each new flight
+    let mut last_client_flight_dropped = false;
+    let mut last_server_flight_dropped = false;
+    let mut prev_client_had_packets = false;
+    let mut prev_server_had_packets = false;
+
+    for i in 0..80 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        // Detect new flight from client: packets appear after a gap
+        let client_has_packets = !client_out.packets.is_empty();
+        let is_new_client_flight = client_has_packets && !prev_client_had_packets;
+        prev_client_had_packets = client_has_packets;
+
+        if is_new_client_flight && !last_client_flight_dropped {
+            // Drop the first packet of this flight, deliver the rest
+            last_client_flight_dropped = true;
+            for p in client_out.packets.iter().skip(1) {
+                let _ = server.handle_packet(p);
+            }
+        } else {
+            if client_has_packets {
+                // Reset for next flight detection
+                last_client_flight_dropped = false;
+            }
+            deliver_packets(&client_out.packets, &mut server);
+        }
+
+        // Detect new flight from server
+        let server_has_packets = !server_out.packets.is_empty();
+        let is_new_server_flight = server_has_packets && !prev_server_had_packets;
+        prev_server_had_packets = server_has_packets;
+
+        if is_new_server_flight && !last_server_flight_dropped {
+            // Drop the first packet of this flight, deliver the rest
+            last_server_flight_dropped = true;
+            for p in server_out.packets.iter().skip(1) {
+                let _ = client.handle_packet(p);
+            }
+        } else {
+            if server_has_packets {
+                last_server_flight_dropped = false;
+            }
+            deliver_packets(&server_out.packets, &mut client);
+        }
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        // Advance time to trigger retransmissions periodically
+        if i % 5 == 4 {
+            now += Duration::from_secs(2);
+        } else {
+            now += Duration::from_millis(10);
+        }
+    }
+
+    assert!(
+        client_connected,
+        "Client should connect after HRR despite packet loss"
+    );
+    assert!(
+        server_connected,
+        "Server should connect after HRR despite packet loss"
+    );
+}

@@ -253,3 +253,391 @@ fn dtls12_duplicate_triggers_server_resend_of_final_flight() {
     // Epochs must match and sequence numbers must increase on resend.
     assert_epochs_and_seq_increased(&f6_init_hdrs, &f6_resend_hdrs);
 }
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_handshake_completes_after_packet_loss() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls12_config();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut drop_next_client_packet = true; // Drop first ClientHello
+
+    for i in 0..60 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        // Simulate packet loss: drop first client packet batch
+        if !client_out.packets.is_empty() && drop_next_client_packet {
+            drop_next_client_packet = false;
+            // Don't deliver client packets this round
+        } else {
+            deliver_packets(&client_out.packets, &mut server);
+        }
+
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        // Advance time to trigger retransmissions periodically
+        if i % 5 == 4 {
+            now += Duration::from_secs(2);
+        } else {
+            now += Duration::from_millis(10);
+        }
+    }
+
+    assert!(
+        client_connected,
+        "Client should connect despite initial packet loss"
+    );
+    assert!(
+        server_connected,
+        "Server should connect despite initial packet loss"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_handshake_completes_with_early_packet_loss() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Use a config with more retries to handle packet loss
+    let config = Arc::new(
+        Config::builder()
+            .flight_retries(8)
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    // Drop first 2 client packets and first 2 server packets to test retransmission
+    let mut client_packets_to_drop = 2;
+    let mut server_packets_to_drop = 2;
+
+    for i in 0..60 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        // Deliver client packets, dropping first N
+        for packet in &client_out.packets {
+            if client_packets_to_drop > 0 {
+                client_packets_to_drop -= 1;
+            } else {
+                let _ = server.handle_packet(packet);
+            }
+        }
+
+        // Deliver server packets, dropping first N
+        for packet in &server_out.packets {
+            if server_packets_to_drop > 0 {
+                server_packets_to_drop -= 1;
+            } else {
+                let _ = client.handle_packet(packet);
+            }
+        }
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        // Trigger retransmissions periodically
+        if i % 5 == 4 {
+            now += Duration::from_secs(2);
+        } else {
+            now += Duration::from_millis(10);
+        }
+    }
+
+    assert!(
+        client_connected,
+        "Client should connect despite early packet loss"
+    );
+    assert!(
+        server_connected,
+        "Server should connect despite early packet loss"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_survives_random_packet_loss_pattern() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = Arc::new(
+        Config::builder()
+            .flight_retries(8)
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut total_dropped = 0;
+    let mut total_delivered = 0;
+
+    // Deterministic pattern: drop every 3rd packet across both directions
+    let mut global_packet_index = 0usize;
+
+    for i in 0..100 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        for packet in &client_out.packets {
+            if global_packet_index % 3 == 2 {
+                total_dropped += 1;
+            } else {
+                let _ = server.handle_packet(packet);
+                total_delivered += 1;
+            }
+            global_packet_index += 1;
+        }
+
+        for packet in &server_out.packets {
+            if global_packet_index % 3 == 2 {
+                total_dropped += 1;
+            } else {
+                let _ = client.handle_packet(packet);
+                total_delivered += 1;
+            }
+            global_packet_index += 1;
+        }
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        // Trigger retransmissions periodically
+        if i % 5 == 4 {
+            now += Duration::from_secs(2);
+        } else {
+            now += Duration::from_millis(10);
+        }
+    }
+
+    assert!(
+        client_connected,
+        "Client should connect despite every-3rd-packet loss"
+    );
+    assert!(
+        server_connected,
+        "Server should connect despite every-3rd-packet loss"
+    );
+    assert!(
+        total_dropped > 0,
+        "Test should have dropped at least one packet"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_retransmit_exponential_backoff() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+
+    // Use a known start RTO and enough retries to observe backoff
+    let config = Arc::new(
+        Config::builder()
+            .flight_start_rto(Duration::from_secs(1))
+            .flight_retries(4)
+            .handshake_timeout(Duration::from_secs(120))
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut client = Dtls::new_12(config, client_cert);
+    client.set_active(true);
+
+    // No server -- we never deliver packets.
+    // Start the handshake.
+    let mut now = Instant::now();
+    client.handle_timeout(now).expect("client timeout start");
+    client.handle_timeout(now).expect("client arm flight 1");
+    let _ = collect_packets(&mut client);
+
+    // Record successive timeout values returned by poll_output.
+    // Each handle_timeout that fires the flight timer should produce a new,
+    // larger timeout.
+    let mut timeouts: Vec<Instant> = Vec::new();
+
+    // Collect the first timeout
+    let mut buf = vec![0u8; 2048];
+    loop {
+        match client.poll_output(&mut buf) {
+            Output::Timeout(t) => {
+                timeouts.push(t);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    // Fire successive timeouts, never delivering packets
+    for _ in 0..3 {
+        // Advance past the reported timeout
+        now = *timeouts.last().expect("should have a timeout") + Duration::from_millis(1);
+        client.handle_timeout(now).expect("client handle_timeout");
+        let _ = collect_packets(&mut client);
+
+        // Collect the next timeout
+        loop {
+            match client.poll_output(&mut buf) {
+                Output::Timeout(t) => {
+                    timeouts.push(t);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Verify we collected multiple timeout values
+    assert!(
+        timeouts.len() >= 4,
+        "Should have at least 4 timeout values, got {}",
+        timeouts.len()
+    );
+
+    // Verify each successive interval is strictly larger (exponential backoff).
+    // Interval[i] = timeout[i+1] - timeout[i] should be increasing.
+    let mut intervals: Vec<Duration> = Vec::new();
+    for pair in timeouts.windows(2) {
+        let interval = pair[1].duration_since(pair[0]);
+        intervals.push(interval);
+    }
+
+    for pair in intervals.windows(2) {
+        assert!(
+            pair[1] > pair[0],
+            "Backoff intervals should increase: {:?} should be > {:?}",
+            pair[1],
+            pair[0]
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_handshake_timeout_aborts() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+
+    // Configure a very short handshake timeout so we hit it quickly
+    let config = Arc::new(
+        Config::builder()
+            .handshake_timeout(Duration::from_secs(5))
+            .flight_start_rto(Duration::from_secs(1))
+            .flight_retries(10) // Many retries, but the handshake timeout will fire first
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut client = Dtls::new_12(config, client_cert);
+    client.set_active(true);
+
+    let mut now = Instant::now();
+
+    // Start the handshake
+    client.handle_timeout(now).expect("client timeout start");
+    client.handle_timeout(now).expect("client arm flight 1");
+    let _ = collect_packets(&mut client);
+
+    // Keep triggering timeouts without ever delivering packets.
+    // The handshake_timeout (5s) should eventually cause handle_timeout to return an error.
+    let mut got_timeout_error = false;
+    for _ in 0..100 {
+        now += Duration::from_secs(1);
+        match client.handle_timeout(now) {
+            Ok(()) => {
+                // Drain any packets to keep the state machine consistent
+                let _ = collect_packets(&mut client);
+            }
+            Err(e) => {
+                let msg = format!("{}", e);
+                assert!(
+                    msg.contains("timeout"),
+                    "Expected timeout error, got: {}",
+                    msg
+                );
+                got_timeout_error = true;
+                break;
+            }
+        }
+    }
+
+    assert!(
+        got_timeout_error,
+        "Client should report a timeout error when handshake_timeout is exceeded"
+    );
+}

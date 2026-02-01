@@ -542,3 +542,346 @@ fn dtls13_selective_retransmit_only_missing_records() {
         original_flight_size, retransmit_flight_size
     );
 }
+
+/// Test that retransmission timeouts increase exponentially.
+/// Start a handshake but never deliver packets to the server.
+/// Record each timeout value and verify they increase monotonically.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_retransmit_exponential_backoff() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Use enough retries to observe several backoff steps
+    let config = Arc::new(
+        Config::builder()
+            .flight_retries(6)
+            .handshake_timeout(Duration::from_secs(300))
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let _server = Dtls::new_13(config, server_cert);
+
+    let mut now = Instant::now();
+
+    // Kick off the handshake
+    client.handle_timeout(now).expect("client start");
+    client.handle_timeout(now).expect("client arm");
+
+    // Collect initial packets (ClientHello) without delivering them
+    let _initial_packets = collect_packets(&mut client);
+
+    // Record successive timeout values by triggering retransmissions
+    let mut timeouts: Vec<Duration> = Vec::new();
+
+    for _ in 0..6 {
+        // Drain to get the current timeout instant
+        let out = drain_outputs(&mut client);
+        let timeout_instant = out.timeout.expect("Should have a timeout scheduled");
+
+        let wait = timeout_instant.duration_since(now);
+        timeouts.push(wait);
+
+        // Advance past the timeout to trigger retransmission
+        now = timeout_instant;
+        client.handle_timeout(now).expect("client timeout");
+
+        // Consume retransmitted packets without delivering
+        let _retransmit = collect_packets(&mut client);
+    }
+
+    // Verify we collected multiple timeout values
+    assert!(
+        timeouts.len() >= 4,
+        "Should have at least 4 timeout values, got {}",
+        timeouts.len()
+    );
+
+    // Verify each timeout is larger than the previous (exponential backoff)
+    for i in 1..timeouts.len() {
+        assert!(
+            timeouts[i] > timeouts[i - 1],
+            "Timeout {} ({:?}) should be larger than timeout {} ({:?})",
+            i,
+            timeouts[i],
+            i - 1,
+            timeouts[i - 1]
+        );
+    }
+
+    // Verify rough doubling: each timeout should be at least 1.5x the previous
+    // (accounting for jitter of +/- 0.25s)
+    for i in 1..timeouts.len() {
+        let ratio = timeouts[i].as_secs_f64() / timeouts[i - 1].as_secs_f64();
+        assert!(
+            ratio > 1.4,
+            "Timeout ratio {}/{} = {:.2} should be > 1.4 (exponential backoff)",
+            i,
+            i - 1,
+            ratio
+        );
+    }
+
+    eprintln!(
+        "SUCCESS: Exponential backoff verified. Timeouts: {:?}",
+        timeouts
+    );
+}
+
+/// Test that when the server's ACK is lost, the client falls back to its
+/// retransmission timer and the handshake still completes.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_ack_loss_falls_back_to_timer() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = Arc::new(
+        Config::builder()
+            .flight_retries(8)
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut client_final_flight_seen = false;
+    let mut ack_dropped = false;
+
+    for round in 0..100 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+
+        // Always deliver client packets to server
+        deliver_packets(&client_out.packets, &mut server);
+
+        // Track the handshake phases:
+        // Once the client has sent packets after receiving the server's flight,
+        // the next server response is likely an ACK — drop it once.
+        if client_final_flight_seen && !ack_dropped && !server_out.packets.is_empty() {
+            // Drop this server response (the ACK)
+            ack_dropped = true;
+            eprintln!("Round {}: Dropped server ACK", round);
+        } else {
+            deliver_packets(&server_out.packets, &mut client);
+        }
+
+        // Detect client's final flight (client sends after having received server's flight)
+        if !client_final_flight_seen && !client_out.packets.is_empty() && round > 2 {
+            client_final_flight_seen = true;
+        }
+
+        if client_connected && server_connected {
+            eprintln!(
+                "Round {}: Both connected (ack_dropped={})",
+                round, ack_dropped
+            );
+            break;
+        }
+
+        // Advance time: use larger steps periodically to trigger retransmissions
+        if round % 5 == 4 {
+            now += Duration::from_secs(2);
+        } else {
+            now += Duration::from_millis(10);
+        }
+    }
+
+    assert!(client_connected, "Client should connect despite ACK loss");
+    assert!(server_connected, "Server should connect despite ACK loss");
+    assert!(ack_dropped, "Test should have dropped an ACK packet");
+}
+
+/// Test retransmission during a HelloRetryRequest flow.
+/// The default DTLS 1.3 config triggers HRR (via cookie). Drop packets during
+/// the HRR exchange and verify the handshake still completes via retransmission.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_retransmit_during_hrr_flow() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = Arc::new(
+        Config::builder()
+            .flight_retries(8)
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut client_flight_count = 0;
+    let mut dropped_server_hrr = false;
+
+    for round in 0..100 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+
+        if !client_out.packets.is_empty() {
+            client_flight_count += 1;
+        }
+
+        // Deliver client packets to server
+        deliver_packets(&client_out.packets, &mut server);
+
+        // Drop the first server response (the HRR) to force retransmission
+        if !dropped_server_hrr && !server_out.packets.is_empty() && client_flight_count <= 1 {
+            dropped_server_hrr = true;
+            eprintln!("Round {}: Dropped server HRR response", round);
+            // Don't deliver — force client to retransmit and server to re-send HRR
+        } else {
+            deliver_packets(&server_out.packets, &mut client);
+        }
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        // Advance time: larger steps periodically to trigger retransmissions
+        if round % 5 == 4 {
+            now += Duration::from_secs(2);
+        } else {
+            now += Duration::from_millis(10);
+        }
+    }
+
+    assert!(
+        client_connected,
+        "Client should connect despite HRR packet loss"
+    );
+    assert!(
+        server_connected,
+        "Server should connect despite HRR packet loss"
+    );
+    assert!(
+        dropped_server_hrr,
+        "Test should have dropped the HRR response"
+    );
+}
+
+/// Test that a short handshake timeout causes the client to abort.
+/// Configure a 5-second handshake timeout, never deliver any packets,
+/// and verify the client eventually returns a timeout error.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_handshake_timeout_aborts() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = Arc::new(
+        Config::builder()
+            .handshake_timeout(Duration::from_secs(5))
+            .flight_retries(10) // plenty of retries so we hit connect timeout, not flight exhaustion
+            .flight_start_rto(Duration::from_millis(200))
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let _server = Dtls::new_13(config, server_cert);
+
+    let mut now = Instant::now();
+    let start = now;
+
+    // Kick off the handshake
+    client.handle_timeout(now).expect("client start");
+    client.handle_timeout(now).expect("client arm");
+    let _ = collect_packets(&mut client);
+
+    let mut got_timeout_error = false;
+
+    for _ in 0..200 {
+        // Drain to find the next timeout
+        let out = drain_outputs(&mut client);
+        let Some(timeout_instant) = out.timeout else {
+            break;
+        };
+
+        // Advance to the timeout
+        now = timeout_instant;
+
+        match client.handle_timeout(now) {
+            Ok(()) => {
+                // Consume retransmitted packets without delivering
+                let _ = collect_packets(&mut client);
+            }
+            Err(e) => {
+                let msg = format!("{}", e);
+                assert!(
+                    msg.contains("timeout"),
+                    "Expected timeout error, got: {}",
+                    msg
+                );
+                got_timeout_error = true;
+                break;
+            }
+        }
+    }
+
+    assert!(
+        got_timeout_error,
+        "Client should have aborted with a timeout error"
+    );
+
+    let elapsed = now.duration_since(start);
+    assert!(
+        elapsed <= Duration::from_secs(10),
+        "Timeout should have fired within a reasonable time, took {:?}",
+        elapsed
+    );
+
+    eprintln!(
+        "SUCCESS: Handshake aborted after {:?} with timeout error",
+        elapsed
+    );
+}

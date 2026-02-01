@@ -1862,3 +1862,377 @@ fn dtls13_wolfssl_server_many_small_messages() {
         "Should receive application data"
     );
 }
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_wolfssl_server_bidirectional_data() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let client_dimpl_cert = generate_self_signed_certificate().expect("gen client cert");
+
+    let wolf_client_cert = WolfDtlsCert::new(
+        client_dimpl_cert.certificate.clone(),
+        client_dimpl_cert.private_key.clone(),
+    );
+
+    let mut wolf_client = wolf_client_cert
+        .new_dtls13_impl(false)
+        .expect("Failed to create WolfSSL client");
+
+    wolf_client.initiate().expect("initiate wolf client");
+
+    let config = dtls13_config();
+    let now = Instant::now();
+    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    dimpl_server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut wolf_events = VecDeque::new();
+
+    // Complete handshake
+    for _ in 0..50 {
+        dimpl_server.handle_timeout(now).expect("server timeout");
+        while let Some(packet) = wolf_client.poll_datagram() {
+            let _ = dimpl_server.handle_packet(&packet);
+        }
+        dimpl_server.handle_timeout(now).expect("server timeout");
+        let server_out = drain_dimpl_outputs(&mut dimpl_server);
+        for packet in &server_out.packets {
+            wolf_client
+                .handle_receive(packet, &mut wolf_events)
+                .unwrap();
+        }
+        if server_out.connected && wolf_client.is_connected() {
+            wolf_events.clear();
+            break;
+        }
+        wolf_events.clear();
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        wolf_client.is_connected(),
+        "WolfSSL client should be connected"
+    );
+
+    // Send data in both directions. WolfSSL client has a quirk (error -441
+    // "Application data is available for reading") that can cause handle_receive
+    // to fail, so we tolerate errors and use drain_pending_data to flush state.
+    let server_data = b"Hello from dimpl server!";
+    let client_data = b"Hello from WolfSSL client!";
+
+    dimpl_server
+        .send_application_data(server_data)
+        .expect("server send");
+    wolf_client.write(client_data).expect("client write");
+
+    let mut client_received: Vec<u8> = Vec::new();
+    let mut server_received: Vec<u8> = Vec::new();
+
+    for _ in 0..50 {
+        // WolfSSL client -> dimpl server
+        while let Some(packet) = wolf_client.poll_datagram() {
+            let _ = dimpl_server.handle_packet(&packet);
+        }
+
+        dimpl_server.handle_timeout(now).expect("server timeout");
+        let server_out = drain_dimpl_outputs(&mut dimpl_server);
+        for data in server_out.app_data {
+            server_received.extend_from_slice(&data);
+        }
+
+        // dimpl server -> WolfSSL client
+        // Drain pending data first to avoid -441 error
+        wolf_client.drain_pending_data(&mut wolf_events);
+        for packet in &server_out.packets {
+            let _ = wolf_client.handle_receive(packet, &mut wolf_events);
+        }
+        wolf_client.drain_pending_data(&mut wolf_events);
+
+        while let Some(event) = wolf_events.pop_front() {
+            if let DtlsEvent::Data(data) = event {
+                client_received.extend_from_slice(&data);
+            }
+        }
+
+        if !client_received.is_empty() && !server_received.is_empty() {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert_eq!(
+        server_received, client_data,
+        "dimpl server should receive data from WolfSSL client"
+    );
+    assert_eq!(
+        client_received, server_data,
+        "WolfSSL client should receive data from dimpl server"
+    );
+}
+
+// NOTE: HRR (HelloRetryRequest) test is skipped because dimpl only supports P-256 and
+// P-384 key exchange groups, and WolfSSL DTLS 1.3 accepts both of these groups. There is
+// no way to configure the dimpl client to offer a key share that WolfSSL would reject
+// (triggering HRR for a different group) while still being able to complete the handshake.
+// The CryptoProvider's kx_groups list determines which group is offered first, but both
+// groups are acceptable to WolfSSL. HRR is tested separately in the dimpl-only tests.
+#[test]
+#[ignore]
+#[cfg(feature = "rcgen")]
+fn dtls13_wolfssl_client_hrr_flow() {
+    // Cannot trigger HRR with the current WolfSSL + dimpl configuration.
+    // dimpl offers P-256 or P-384, and WolfSSL accepts both without requesting
+    // a HelloRetryRequest. To trigger HRR, dimpl would need to offer a group
+    // that WolfSSL doesn't accept (e.g. X25519 only), but dimpl currently does
+    // not support X25519.
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_wolfssl_server_small_mtu() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let client_dimpl_cert = generate_self_signed_certificate().expect("gen client cert");
+
+    let wolf_client_cert = WolfDtlsCert::new(
+        client_dimpl_cert.certificate.clone(),
+        client_dimpl_cert.private_key.clone(),
+    );
+
+    let mut wolf_client = wolf_client_cert
+        .new_dtls13_impl(false)
+        .expect("Failed to create WolfSSL client");
+
+    wolf_client.initiate().expect("initiate wolf client");
+
+    // Use 600 MTU - large enough for handshake but smaller than default
+    let config = dtls13_config_with_mtu(600);
+    let now = Instant::now();
+    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    dimpl_server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut wolf_events = VecDeque::new();
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut max_server_packet_size = 0usize;
+
+    for _ in 0..50 {
+        dimpl_server.handle_timeout(now).expect("server timeout");
+
+        while let Some(packet) = wolf_client.poll_datagram() {
+            let _ = dimpl_server.handle_packet(&packet);
+        }
+
+        dimpl_server.handle_timeout(now).expect("server timeout");
+
+        let server_out = drain_dimpl_outputs(&mut dimpl_server);
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        for p in &server_out.packets {
+            if p.len() > max_server_packet_size {
+                max_server_packet_size = p.len();
+            }
+        }
+
+        for packet in &server_out.packets {
+            wolf_client
+                .handle_receive(packet, &mut wolf_events)
+                .expect("wolf client handle receive");
+        }
+
+        while let Some(event) = wolf_events.pop_front() {
+            if matches!(event, DtlsEvent::Connected) {
+                client_connected = true;
+            }
+        }
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(server_connected, "Server should connect with small MTU");
+    assert!(client_connected, "Client should connect with small MTU");
+    // Only check that dimpl server respects MTU (WolfSSL may not)
+    assert!(
+        max_server_packet_size <= 600,
+        "Server packets should respect MTU: max was {}",
+        max_server_packet_size
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_wolfssl_server_recovers_from_corruption() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let client_dimpl_cert = generate_self_signed_certificate().expect("gen client cert");
+
+    let wolf_client_cert = WolfDtlsCert::new(
+        client_dimpl_cert.certificate.clone(),
+        client_dimpl_cert.private_key.clone(),
+    );
+
+    let mut wolf_client = wolf_client_cert
+        .new_dtls13_impl(false)
+        .expect("Failed to create WolfSSL client");
+
+    wolf_client.initiate().expect("initiate wolf client");
+
+    let config = Arc::new(
+        Config::builder()
+            .flight_retries(8)
+            .build()
+            .expect("Failed to build DTLS 1.3 config"),
+    );
+    let now = Instant::now();
+    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    dimpl_server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut wolf_events = VecDeque::new();
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut corrupted_once = false;
+
+    for i in 0..60 {
+        let _ = dimpl_server.handle_timeout(now);
+
+        while let Some(packet) = wolf_client.poll_datagram() {
+            let _ = dimpl_server.handle_packet(&packet);
+        }
+
+        let _ = dimpl_server.handle_timeout(now);
+
+        let server_out = drain_dimpl_outputs(&mut dimpl_server);
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        // Corrupt one packet from dimpl server before delivering to WolfSSL client
+        for mut p in server_out.packets {
+            if !corrupted_once && p.len() > 20 {
+                p[15] ^= 0xFF;
+                p[16] ^= 0xFF;
+                corrupted_once = true;
+            }
+            let _ = wolf_client.handle_receive(&p, &mut wolf_events);
+        }
+
+        while let Some(event) = wolf_events.pop_front() {
+            if matches!(event, DtlsEvent::Connected) {
+                client_connected = true;
+            }
+        }
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        // Trigger retransmissions periodically
+        if i % 5 == 4 {
+            now += Duration::from_secs(2);
+        } else {
+            now += Duration::from_millis(50);
+        }
+    }
+
+    assert!(server_connected, "Server should connect despite corruption");
+    assert!(client_connected, "Client should connect despite corruption");
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_wolfssl_server_handles_out_of_order() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let client_dimpl_cert = generate_self_signed_certificate().expect("gen client cert");
+
+    let wolf_client_cert = WolfDtlsCert::new(
+        client_dimpl_cert.certificate.clone(),
+        client_dimpl_cert.private_key.clone(),
+    );
+
+    let mut wolf_client = wolf_client_cert
+        .new_dtls13_impl(false)
+        .expect("Failed to create WolfSSL client");
+
+    wolf_client.initiate().expect("initiate wolf client");
+
+    let config = dtls13_config();
+    let now = Instant::now();
+    let mut dimpl_server = Dtls::new_13(config, server_cert);
+    dimpl_server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut wolf_events = VecDeque::new();
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..50 {
+        dimpl_server.handle_timeout(now).expect("server timeout");
+
+        while let Some(packet) = wolf_client.poll_datagram() {
+            let _ = dimpl_server.handle_packet(&packet);
+        }
+
+        dimpl_server.handle_timeout(now).expect("server timeout");
+
+        let server_out = drain_dimpl_outputs(&mut dimpl_server);
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        // Reverse order of dimpl server's packets before delivering to WolfSSL client
+        let mut packets = server_out.packets;
+        packets.reverse();
+        for packet in &packets {
+            wolf_client
+                .handle_receive(packet, &mut wolf_events)
+                .expect("wolf client handle receive");
+        }
+
+        while let Some(event) = wolf_events.pop_front() {
+            if matches!(event, DtlsEvent::Connected) {
+                client_connected = true;
+            }
+        }
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        server_connected,
+        "Server should connect despite out-of-order delivery"
+    );
+    assert!(
+        client_connected,
+        "Client should connect despite out-of-order delivery"
+    );
+}

@@ -370,3 +370,354 @@ fn dtls13_handles_interleaved_old_and_new_packets() {
 
     eprintln!("SUCCESS: Handshake completed with interleaved old/new packets");
 }
+
+/// After handshake, send 100 app data messages from client to server, delivering
+/// each one. Then replay the very first packet. The replayed packet should be
+/// silently dropped because it falls outside the 64-packet replay window.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_replay_window_rejects_old_record() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls13_config();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    // Complete handshake
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(client_connected, "Client should connect");
+    assert!(server_connected, "Server should connect");
+
+    // Send 100 app data messages from client to server, delivering each one.
+    // Capture the very first packet for replay later.
+    let mut first_packet: Option<Vec<u8>> = None;
+
+    for i in 0..100 {
+        let msg = format!("Message {}", i);
+        client
+            .send_application_data(msg.as_bytes())
+            .expect("client send");
+
+        let client_out = drain_outputs(&mut client);
+        deliver_packets(&client_out.packets, &mut server);
+
+        if i == 0 {
+            // unwrap: first message always produces at least one packet
+            first_packet = Some(client_out.packets[0].clone());
+        }
+
+        let server_out = drain_outputs(&mut server);
+        assert!(
+            !server_out.app_data.is_empty(),
+            "Server should receive message {}",
+            i
+        );
+
+        now += Duration::from_millis(1);
+    }
+
+    // Now replay the very first packet — it is well outside the 64-packet window
+    let replayed = first_packet.expect("should have captured first packet");
+    let _ = server.handle_packet(&replayed);
+
+    let server_out = drain_outputs(&mut server);
+    assert!(
+        server_out.app_data.is_empty(),
+        "Replayed old packet should be silently dropped"
+    );
+}
+
+/// After handshake, send one app data message and deliver the packet. Then
+/// deliver the exact same packet again. Only one copy of the data should be
+/// received by the server — the duplicate is rejected by the replay window.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_replay_window_rejects_duplicate_app_data() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls13_config();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    // Complete handshake
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(client_connected, "Client should connect");
+    assert!(server_connected, "Server should connect");
+
+    // Send one app data message
+    client
+        .send_application_data(b"Hello once")
+        .expect("client send");
+
+    let client_out = drain_outputs(&mut client);
+    let packets = client_out.packets.clone();
+
+    // Deliver the packet — server should receive the data
+    deliver_packets(&packets, &mut server);
+    let server_out = drain_outputs(&mut server);
+    assert_eq!(
+        server_out.app_data.len(),
+        1,
+        "Server should receive exactly one message"
+    );
+    assert_eq!(&server_out.app_data[0][..], b"Hello once");
+
+    // Deliver the exact same packet again — duplicate should be rejected
+    deliver_packets(&packets, &mut server);
+    let server_out = drain_outputs(&mut server);
+    assert!(
+        server_out.app_data.is_empty(),
+        "Duplicate packet should be silently dropped"
+    );
+}
+
+/// After handshake, send several app data messages. Deliver them out of order
+/// (e.g., deliver message 3 before message 2, but both within the 64-packet
+/// window). Both should be accepted and the data received.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_replay_window_accepts_within_range() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls13_config();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    // Complete handshake
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(client_connected, "Client should connect");
+    assert!(server_connected, "Server should connect");
+
+    // Send 5 app data messages, collecting all packets without delivering
+    let mut all_packets: Vec<Vec<u8>> = Vec::new();
+    let messages = vec![
+        b"Message 1".to_vec(),
+        b"Message 2".to_vec(),
+        b"Message 3".to_vec(),
+        b"Message 4".to_vec(),
+        b"Message 5".to_vec(),
+    ];
+
+    for msg in &messages {
+        client.send_application_data(msg).expect("client send");
+        let client_out = drain_outputs(&mut client);
+        all_packets.extend(client_out.packets);
+    }
+
+    // Deliver out of order: swap packets so that later ones arrive first.
+    // Reverse the packet order — all are within the 64-packet window.
+    let mut reordered = all_packets.clone();
+    reordered.reverse();
+
+    let mut server_received: Vec<Vec<u8>> = Vec::new();
+    deliver_packets(&reordered, &mut server);
+    let server_out = drain_outputs(&mut server);
+    server_received.extend(server_out.app_data);
+
+    assert_eq!(
+        server_received.len(),
+        messages.len(),
+        "All out-of-order messages within window should be accepted"
+    );
+
+    // Verify all expected message contents were received (order may differ)
+    let mut received_sorted: Vec<Vec<u8>> = server_received.clone();
+    received_sorted.sort();
+    let mut expected_sorted = messages.clone();
+    expected_sorted.sort();
+    assert_eq!(
+        received_sorted, expected_sorted,
+        "All message contents should be received"
+    );
+}
+
+/// After handshake, send 10 app data messages from client. Collect all packets.
+/// Deliver them in reverse order. All 10 messages should be received by the
+/// server since they are all within the 64-packet replay window.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_reorder_app_data_after_handshake() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls13_config();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    // Complete handshake
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(client_connected, "Client should connect");
+    assert!(server_connected, "Server should connect");
+
+    // Send 10 app data messages, collecting all packets without delivering
+    let mut all_packets: Vec<Vec<u8>> = Vec::new();
+    let message_count = 10;
+
+    for i in 0..message_count {
+        let msg = format!("Reverse message {}", i);
+        client
+            .send_application_data(msg.as_bytes())
+            .expect("client send");
+        let client_out = drain_outputs(&mut client);
+        all_packets.extend(client_out.packets);
+    }
+
+    // Deliver all packets in reverse order
+    let mut reversed = all_packets.clone();
+    reversed.reverse();
+
+    deliver_packets(&reversed, &mut server);
+    let server_out = drain_outputs(&mut server);
+
+    assert_eq!(
+        server_out.app_data.len(),
+        message_count,
+        "All {} messages should be received when delivered in reverse order",
+        message_count
+    );
+
+    // Verify all expected message contents were received (order may differ)
+    let mut received_sorted: Vec<String> = server_out
+        .app_data
+        .iter()
+        .map(|d| String::from_utf8_lossy(d).to_string())
+        .collect();
+    received_sorted.sort();
+
+    let mut expected_sorted: Vec<String> = (0..message_count)
+        .map(|i| format!("Reverse message {}", i))
+        .collect();
+    expected_sorted.sort();
+
+    assert_eq!(
+        received_sorted, expected_sorted,
+        "All message contents should be received"
+    );
+}
