@@ -9,7 +9,9 @@ use crate::crypto::aws_lc_rs;
 #[cfg(feature = "rust-crypto")]
 use crate::crypto::rust_crypto;
 
-/// DTLS configuration
+/// DTLS configuration shared by all connections.
+///
+/// Build with [`Config::builder()`] or use [`Config::default()`].
 #[derive(Clone)]
 pub struct Config {
     mtu: usize,
@@ -123,7 +125,7 @@ impl Config {
     }
 }
 
-/// Builder for DTLS configuration.
+/// Builder for [`Config`]. See each setter for defaults.
 pub struct ConfigBuilder {
     mtu: usize,
     max_queue_rx: usize,
