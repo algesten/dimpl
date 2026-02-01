@@ -139,6 +139,15 @@ pub struct Engine {
 
     /// Exporter master secret for TLS 1.3 exporters (RFC 8446 Section 7.5).
     exporter_master_secret: Option<Buf>,
+
+    /// Number of AEAD encryptions on the current application send keys.
+    app_send_record_count: u64,
+
+    /// Maximum AEAD encryptions before triggering KeyUpdate (from config).
+    aead_encryption_limit: u64,
+
+    /// Set when app_send_record_count reaches aead_encryption_limit.
+    needs_key_update: bool,
 }
 
 struct EpochKeys {
@@ -183,6 +192,8 @@ impl Engine {
             .load_private_key(&certificate.private_key)
             .expect("Failed to load private key");
 
+        let aead_encryption_limit = config.aead_encryption_limit();
+
         Self {
             config,
             rng,
@@ -219,6 +230,9 @@ impl Engine {
             connect_timeout: Timeout::Unarmed,
             release_app_data: false,
             exporter_master_secret: None,
+            app_send_record_count: 0,
+            aead_encryption_limit,
+            needs_key_update: false,
         }
     }
 
@@ -244,6 +258,17 @@ impl Engine {
 
     pub fn is_key_update_in_flight(&self) -> bool {
         self.prev_app_send_keys.is_some()
+    }
+
+    /// Returns true if the AEAD encryption limit has been reached and a
+    /// KeyUpdate should be initiated. Clears the flag after returning true.
+    pub fn needs_key_update(&mut self) -> bool {
+        if self.needs_key_update {
+            self.needs_key_update = false;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn is_cipher_suite_allowed(&self, suite: Dtls13CipherSuite) -> bool {
@@ -979,6 +1004,14 @@ impl Engine {
             self.prev_app_send_seq += 1;
         } else {
             self.app_send_seq += 1;
+
+            // Track AEAD encryptions on current application keys
+            if epoch >= 3 {
+                self.app_send_record_count += 1;
+                if self.app_send_record_count >= self.aead_encryption_limit {
+                    self.needs_key_update = true;
+                }
+            }
         }
 
         if can_append {
@@ -1648,6 +1681,8 @@ impl Engine {
         self.app_send_keys = Some(new_keys);
         self.app_send_epoch += 1;
         self.app_send_seq = 0;
+        self.app_send_record_count = 0;
+        self.needs_key_update = false;
 
         debug!("Send keys updated to epoch {}", self.app_send_epoch);
 

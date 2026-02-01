@@ -997,6 +997,11 @@ impl State {
     }
 
     fn await_application_data(self, client: &mut Client) -> Result<Self, Error> {
+        // Auto-trigger KeyUpdate when AEAD encryption limit is reached
+        if client.engine.needs_key_update() && !client.engine.is_key_update_in_flight() {
+            client.initiate_key_update()?;
+        }
+
         // Send queued application data
         if !client.queued_data.is_empty() {
             let epoch = client.engine.app_send_epoch();
