@@ -892,7 +892,7 @@ fn dtls13_wolfssl_client_small_mtu() {
 // NOTE: This test is skipped because dimpl does not fragment application data
 // by MTU. Neither DTLS 1.2 nor DTLS 1.3 splits app data into multiple records.
 // Handshake fragmentation is supported, but app data is sent as a single record.
-#[ignore]
+#[ignore = "dimpl does not fragment application data by MTU"]
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_large_data_fragmented() {
@@ -1979,7 +1979,7 @@ fn dtls13_wolfssl_server_bidirectional_data() {
 // The CryptoProvider's kx_groups list determines which group is offered first, but both
 // groups are acceptable to WolfSSL. HRR is tested separately in the dimpl-only tests.
 #[test]
-#[ignore]
+#[ignore = "cannot trigger HRR: WolfSSL accepts all groups dimpl offers"]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_hrr_flow() {
     // Cannot trigger HRR with the current WolfSSL + dimpl configuration.
