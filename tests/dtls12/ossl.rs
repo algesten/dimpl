@@ -312,7 +312,7 @@ fn dtls12_ossl_server_handshake() {
                         .expect("Server failed to send app data");
                 }
                 Output::ApplicationData(data) => {
-                    server_received_data.extend_from_slice(&data);
+                    server_received_data.extend_from_slice(data);
                 }
                 Output::Timeout(_) => break,
             }
@@ -335,7 +335,7 @@ fn dtls12_ossl_server_handshake() {
                     client_keying_material = Some((km, profile));
                 }
                 DtlsEvent::Data(data) => {
-                    client_received_data.extend_from_slice(data);
+                    client_received_data.extend_from_slice(&data);
                 }
             }
         }
@@ -805,7 +805,7 @@ fn dtls12_ossl_server_bidirectional_data() {
                     }
                 }
                 Output::ApplicationData(data) => {
-                    server_received_data.extend_from_slice(&data);
+                    server_received_data.extend_from_slice(data);
                     // After receiving from client, send a reply
                     if !server_reply_sent && server_received_data.len() >= client_test_data.len() {
                         server
@@ -833,7 +833,7 @@ fn dtls12_ossl_server_bidirectional_data() {
                     }
                 }
                 DtlsEvent::Data(data) => {
-                    client_received_data.extend_from_slice(data);
+                    client_received_data.extend_from_slice(&data);
                     // After receiving from server, send a reply
                     if !client_reply_sent && client_received_data.len() >= server_test_data.len() {
                         client
