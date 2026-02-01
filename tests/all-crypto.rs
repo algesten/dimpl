@@ -58,12 +58,15 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: CipherSuite) {
         .private_key_to_der()
         .expect("client key der");
 
+    let now = Instant::now();
+
     let mut client = Dtls::new(
         config,
         dimpl::DtlsCertificate {
             certificate: client_x509_der,
             private_key: client_pkey_der,
         },
+        now,
     );
     client.set_active(true);
 
@@ -157,12 +160,15 @@ fn run_ossl_client_vs_dimpl_server_for_suite(suite: CipherSuite) {
         .private_key_to_der()
         .expect("server key der");
 
+    let now = Instant::now();
+
     let mut server = Dtls::new(
         config,
         dimpl::DtlsCertificate {
             certificate: server_x509_der,
             private_key: server_pkey_der,
         },
+        now,
     );
     server.set_active(false);
 

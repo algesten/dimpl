@@ -113,7 +113,7 @@
 //! fn mk_dtls_client() -> Dtls {
 //!     let cert = certificate::generate_self_signed_certificate().unwrap();
 //!     let cfg = Arc::new(Config::default());
-//!     let mut dtls = Dtls::new(cfg, cert);
+//!     let mut dtls = Dtls::new(cfg, cert, Instant::now());
 //!     dtls.set_active(true); // client role
 //!     dtls
 //! }
@@ -250,12 +250,14 @@ impl Dtls {
     /// Create a new DTLS instance.
     ///
     /// The instance is initialized with the provided `config` and `certificate`.
+    /// The `now` parameter seeds the internal time tracking for timeouts and
+    /// retransmissions.
     ///
     /// During the handshake, the peer's leaf certificate is surfaced via
     /// [`Output::PeerCert`]. It is up to the application to validate that
     /// certificate according to its security policy.
-    pub fn new(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
-        let inner = Inner::Server(Server::new(config, certificate));
+    pub fn new(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
+        let inner = Inner::Server(Server::new(config, certificate, now));
         Dtls { inner: Some(inner) }
     }
 
@@ -382,7 +384,7 @@ mod test {
         // Initialize client
         let config = Arc::new(Config::default());
 
-        Dtls::new(config, client_cert)
+        Dtls::new(config, client_cert, Instant::now())
     }
 
     #[test]

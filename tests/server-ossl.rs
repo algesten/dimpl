@@ -37,12 +37,15 @@ fn server_ossl() {
         .private_key_to_der()
         .expect("Failed to get server private key DER");
 
+    let now = Instant::now();
+
     let mut server = Dtls::new(
         config,
         dimpl::DtlsCertificate {
             certificate: server_x509_der,
             private_key: server_pkey_der,
         },
+        now,
     );
     server.set_active(false);
 

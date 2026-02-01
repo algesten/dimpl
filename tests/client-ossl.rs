@@ -39,12 +39,15 @@ fn client_ossl() {
         .private_key_to_der()
         .expect("Failed to get client private key DER");
 
+    let now = Instant::now();
+
     let mut client = Dtls::new(
         config,
         dimpl::DtlsCertificate {
             certificate: client_x509_der,
             private_key: client_pkey_der,
         },
+        now,
     );
     client.set_active(true);
 

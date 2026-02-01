@@ -16,6 +16,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use std::sync::Arc;
+use std::time::Instant;
 
 use dimpl::{certificate, Config, Dtls};
 
@@ -31,7 +32,8 @@ fuzz_target!(|data: &[u8]| {
     };
 
     let config = Arc::new(Config::default());
-    let mut dtls = Dtls::new(Arc::clone(&config), cert);
+    let now = Instant::now();
+    let mut dtls = Dtls::new(Arc::clone(&config), cert, now);
 
     // Test the input as-is (even small inputs exercise error paths)
     let _ = dtls.handle_packet(data);

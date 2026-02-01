@@ -75,7 +75,7 @@ pub struct Server {
     captured_session_hash: Option<Buf>,
 
     /// The last now we seen
-    last_now: Option<Instant>,
+    last_now: Instant,
 
     /// Events we are to emit from this Server.
     local_events: VecDeque<LocalEvent>,
@@ -105,12 +105,12 @@ enum State {
 
 impl Server {
     /// Create a new DTLS server
-    pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate) -> Server {
+    pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate, now: Instant) -> Server {
         let engine = Engine::new(config, certificate);
-        Self::new_with_engine(engine)
+        Self::new_with_engine(engine, now)
     }
 
-    pub(crate) fn new_with_engine(mut engine: Engine) -> Server {
+    pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Server {
         engine.set_client(false);
 
         let cookie_secret: [u8; 32] = engine.rng.random();
@@ -129,14 +129,14 @@ impl Server {
             client_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
             captured_session_hash: None,
-            last_now: None,
+            last_now: now,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
         }
     }
 
     pub fn into_client(self) -> Client {
-        Client::new_with_engine(self.engine)
+        Client::new_with_engine(self.engine, self.last_now)
     }
 
     pub(crate) fn state_name(&self) -> &'static str {
@@ -150,9 +150,7 @@ impl Server {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
-        let last_now = self
-            .last_now
-            .expect("need handle_timeout before poll_output");
+        let last_now = self.last_now;
 
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.client_certificates);
@@ -162,7 +160,7 @@ impl Server {
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
-        self.last_now = Some(now);
+        self.last_now = now;
         if self.random.is_none() {
             self.random = Some(Random::new(now, &mut self.engine.rng));
         }

@@ -22,6 +22,7 @@
 //! # #[cfg(feature = "rcgen")]
 //! # fn main() {
 //! use std::sync::Arc;
+//! use std::time::Instant;
 //! use dimpl::{Config, Dtls, certificate};
 //! use dimpl::crypto::rust_crypto;
 //!
@@ -32,7 +33,7 @@
 //!         .build()
 //!         .unwrap()
 //! );
-//! let dtls = Dtls::new(config, cert);
+//! let dtls = Dtls::new(config, cert, Instant::now());
 //! # }
 //! # #[cfg(not(feature = "rcgen"))]
 //! # fn main() {}
