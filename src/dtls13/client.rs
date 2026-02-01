@@ -199,23 +199,9 @@ impl Client {
         Ok(())
     }
 
-    /// Initiate a KeyUpdate to rotate application traffic keys.
-    ///
-    /// Requests the peer to also update its keys.
-    pub fn initiate_key_update(&mut self) -> Result<(), Error> {
-        if self.state != State::AwaitApplicationData {
-            return Err(Error::UnexpectedMessage(
-                "Cannot initiate KeyUpdate: not in application data state".to_string(),
-            ));
-        }
-        if self.engine.is_key_update_in_flight() {
-            return Err(Error::UnexpectedMessage(
-                "Cannot initiate KeyUpdate: one is already in flight".to_string(),
-            ));
-        }
+    fn initiate_key_update(&mut self) -> Result<(), Error> {
         self.engine
-            .create_key_update(KeyUpdateRequest::UpdateRequested)?;
-        Ok(())
+            .create_key_update(KeyUpdateRequest::UpdateRequested)
     }
 
     /// Send application data when the client is connected.

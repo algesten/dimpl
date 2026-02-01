@@ -143,10 +143,13 @@ pub struct Engine {
     /// Number of AEAD encryptions on the current application send keys.
     app_send_record_count: u64,
 
-    /// Maximum AEAD encryptions before triggering KeyUpdate (from config).
-    aead_encryption_limit: u64,
+    /// Jittered threshold for the current key epoch. When `app_send_record_count`
+    /// reaches this value, a KeyUpdate is triggered. Randomized to
+    /// `[3/4 * configured_limit, configured_limit]` to prevent both sides from
+    /// initiating KeyUpdate simultaneously when using the same config.
+    aead_encryption_threshold: u64,
 
-    /// Set when app_send_record_count reaches aead_encryption_limit.
+    /// Set when app_send_record_count reaches aead_encryption_threshold.
     needs_key_update: bool,
 }
 
@@ -192,7 +195,8 @@ impl Engine {
             .load_private_key(&certificate.private_key)
             .expect("Failed to load private key");
 
-        let aead_encryption_limit = config.aead_encryption_limit();
+        let aead_encryption_threshold =
+            jittered_aead_threshold(config.aead_encryption_limit(), &mut rng);
 
         Self {
             config,
@@ -231,7 +235,7 @@ impl Engine {
             release_app_data: false,
             exporter_master_secret: None,
             app_send_record_count: 0,
-            aead_encryption_limit,
+            aead_encryption_threshold,
             needs_key_update: false,
         }
     }
@@ -1008,7 +1012,7 @@ impl Engine {
             // Track AEAD encryptions on current application keys
             if epoch >= 3 {
                 self.app_send_record_count += 1;
-                if self.app_send_record_count >= self.aead_encryption_limit {
+                if self.app_send_record_count >= self.aead_encryption_threshold {
                     self.needs_key_update = true;
                 }
             }
@@ -1682,6 +1686,8 @@ impl Engine {
         self.app_send_epoch += 1;
         self.app_send_seq = 0;
         self.app_send_record_count = 0;
+        self.aead_encryption_threshold =
+            jittered_aead_threshold(self.config.aead_encryption_limit(), &mut self.rng);
         self.needs_key_update = false;
 
         debug!("Send keys updated to epoch {}", self.app_send_epoch);
@@ -2070,6 +2076,19 @@ impl Engine {
 // =========================================================================
 // Helper Functions
 // =========================================================================
+
+/// Pick a random AEAD encryption threshold in `[3/4 * limit, limit]`.
+///
+/// Jittering prevents both sides from triggering KeyUpdate simultaneously
+/// when they share the same configured limit.
+fn jittered_aead_threshold(limit: u64, rng: &mut SeededRng) -> u64 {
+    let quarter = limit / 4;
+    if quarter == 0 {
+        return limit;
+    }
+    let offset: u64 = rng.random::<u64>() % (quarter + 1);
+    limit - quarter + offset
+}
 
 /// Determine the epoch for a handshake message type.
 ///
