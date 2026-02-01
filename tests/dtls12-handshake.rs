@@ -1,62 +1,16 @@
-//! Test for DTLS HelloVerifyRequest cookie retry handling.
-//!
-//! This test verifies that after a HelloVerifyRequest, the server correctly
-//! processes the ClientHello with cookie (which has message_seq=1 per RFC 6347 §4.2.2)
-//! instead of treating it as a duplicate and resending HelloVerifyRequest.
-//!
-//! Per RFC 6347 §4.2.2, the message flow is:
-//!   ClientHello (seq=0)  ------>
-//!                    <------  HelloVerifyRequest (seq=0)
-//!   ClientHello (seq=1)  ------>  (with cookie)
-//!                    <------  ServerHello (seq=1)
+//! DTLS 1.2 handshake tests (cookie retry, parallel handshakes).
+
+mod dtls12_common;
 
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{Config, Dtls, Output};
-
-/// Parse handshake message types from a datagram (content_type=22)
-fn parse_handshake_types(datagram: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    while i + 13 <= datagram.len() {
-        let ctype = datagram[i];
-        let len = u16::from_be_bytes([datagram[i + 11], datagram[i + 12]]) as usize;
-
-        // Only parse handshake records (content_type=22)
-        if ctype == 22 && i + 13 + 1 <= datagram.len() {
-            // Handshake message type is first byte of payload
-            let hs_type = datagram[i + 13];
-            out.push(hs_type);
-        }
-        i += 13 + len;
-    }
-    out
-}
-
-fn collect_flight_packets(endpoint: &mut Dtls) -> Vec<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut buf = vec![0u8; 2048];
-    loop {
-        match endpoint.poll_output(&mut buf) {
-            Output::Packet(p) => out.push(p.to_vec()),
-            Output::Timeout(_) => break,
-            _ => {}
-        }
-    }
-    out
-}
-
-/// Handshake message types (RFC 5246 / 6347)
-const CLIENT_HELLO: u8 = 1;
-const SERVER_HELLO: u8 = 2;
-const HELLO_VERIFY_REQUEST: u8 = 3;
-const CERTIFICATE: u8 = 11;
-const SERVER_HELLO_DONE: u8 = 14;
+use dimpl::{Config, Dtls};
+use dtls12_common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]
-fn cookie_retry_proceeds_to_server_hello() {
+fn dtls12_cookie_retry_proceeds_to_server_hello() {
     //! Verify that after HelloVerifyRequest, the ClientHello with cookie
     //! is properly processed and the server sends ServerHello (not another HVR).
 
@@ -78,7 +32,7 @@ fn cookie_retry_proceeds_to_server_hello() {
     // FLIGHT 1: Client sends ClientHello (no cookie)
     client.handle_timeout(now).expect("client timeout start");
     client.handle_timeout(now).expect("client arm flight 1");
-    let f1 = collect_flight_packets(&mut client);
+    let f1 = collect_packets(&mut client);
     assert!(!f1.is_empty(), "client should emit ClientHello");
 
     // Verify it's a ClientHello
@@ -96,7 +50,7 @@ fn cookie_retry_proceeds_to_server_hello() {
 
     // FLIGHT 2: Server sends HelloVerifyRequest
     server.handle_timeout(now).expect("server arm flight 2");
-    let f2 = collect_flight_packets(&mut server);
+    let f2 = collect_packets(&mut server);
     assert!(!f2.is_empty(), "server should emit HelloVerifyRequest");
 
     // Verify it's a HelloVerifyRequest
@@ -114,7 +68,7 @@ fn cookie_retry_proceeds_to_server_hello() {
 
     // FLIGHT 3: Client sends ClientHello WITH cookie (message_seq=1 per RFC 6347)
     client.handle_timeout(now).expect("client arm flight 3");
-    let f3 = collect_flight_packets(&mut client);
+    let f3 = collect_packets(&mut client);
     assert!(!f3.is_empty(), "client should emit ClientHello with cookie");
 
     let f3_hs_types: Vec<u8> = f3.iter().flat_map(|p| parse_handshake_types(p)).collect();
@@ -131,7 +85,7 @@ fn cookie_retry_proceeds_to_server_hello() {
 
     // FLIGHT 4: Server should send ServerHello, Certificate, etc. - NOT HelloVerifyRequest
     server.handle_timeout(now).expect("server arm flight 4");
-    let f4 = collect_flight_packets(&mut server);
+    let f4 = collect_packets(&mut server);
     assert!(
         !f4.is_empty(),
         "server should emit flight 4 after ClientHello with cookie"
@@ -172,7 +126,7 @@ fn cookie_retry_proceeds_to_server_hello() {
 
 #[test]
 #[cfg(feature = "rcgen")]
-fn parallel_handshakes_with_cookies() {
+fn dtls12_parallel_handshakes_with_cookies() {
     //! Test multiple parallel DTLS handshakes to ensure cookie handling
     //! works correctly under concurrent load (the original bug scenario).
 
@@ -201,28 +155,28 @@ fn parallel_handshakes_with_cookies() {
         // Flight 1: ClientHello
         client.handle_timeout(now).expect("client timeout");
         client.handle_timeout(now).expect("client arm f1");
-        let f1 = collect_flight_packets(client);
+        let f1 = collect_packets(client);
         for p in &f1 {
             server.handle_packet(p).expect("server recv f1");
         }
 
         // Flight 2: HelloVerifyRequest
         server.handle_timeout(now).expect("server arm f2");
-        let f2 = collect_flight_packets(server);
+        let f2 = collect_packets(server);
         for p in &f2 {
             client.handle_packet(p).expect("client recv f2");
         }
 
         // Flight 3: ClientHello with cookie
         client.handle_timeout(now).expect("client arm f3");
-        let f3 = collect_flight_packets(client);
+        let f3 = collect_packets(client);
         for p in &f3 {
             server.handle_packet(p).expect("server recv f3");
         }
 
         // Flight 4: Should be ServerHello, not HelloVerifyRequest
         server.handle_timeout(now).expect("server arm f4");
-        let f4 = collect_flight_packets(server);
+        let f4 = collect_packets(server);
         let f4_hs_types: Vec<u8> = f4.iter().flat_map(|p| parse_handshake_types(p)).collect();
 
         assert!(
@@ -246,17 +200,13 @@ fn parallel_handshakes_with_cookies() {
 
 #[test]
 #[cfg(feature = "rcgen")]
-fn retransmit_no_cookie_after_cookie_sent() {
+fn dtls12_retransmit_no_cookie_after_cookie_sent() {
     //! Simulates the real Firefox bug scenario:
     //! 1. Client sends ClientHello (no cookie)
     //! 2. Server sends HelloVerifyRequest
     //! 3. Client sends ClientHello (with cookie)
     //! 4. Client's timer fires and it ALSO retransmits the original no-cookie ClientHello
     //! 5. Server should NOT get confused by this out-of-order retransmit
-    //!
-    //! The server should process the cookie version and proceed, ignoring the
-    //! retransmitted no-cookie version (or at most resending HelloVerifyRequest
-    //! without breaking the handshake progress).
 
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -276,7 +226,7 @@ fn retransmit_no_cookie_after_cookie_sent() {
     // Flight 1: ClientHello (no cookie)
     client.handle_timeout(now).expect("client timeout");
     client.handle_timeout(now).expect("client arm f1");
-    let f1 = collect_flight_packets(&mut client);
+    let f1 = collect_packets(&mut client);
     assert!(!f1.is_empty());
 
     // Save a copy of the original no-cookie ClientHello for later retransmit
@@ -289,7 +239,7 @@ fn retransmit_no_cookie_after_cookie_sent() {
 
     // Flight 2: HelloVerifyRequest
     server.handle_timeout(now).expect("server arm f2");
-    let f2 = collect_flight_packets(&mut server);
+    let f2 = collect_packets(&mut server);
     assert!(!f2.is_empty());
 
     // Deliver to client
@@ -299,7 +249,7 @@ fn retransmit_no_cookie_after_cookie_sent() {
 
     // Flight 3: ClientHello WITH cookie
     client.handle_timeout(now).expect("client arm f3");
-    let f3 = collect_flight_packets(&mut client);
+    let f3 = collect_packets(&mut client);
     assert!(!f3.is_empty());
 
     // Deliver the cookie version to server
@@ -318,7 +268,7 @@ fn retransmit_no_cookie_after_cookie_sent() {
 
     // Server should still send ServerHello flight, not another HelloVerifyRequest
     server.handle_timeout(now).expect("server arm f4");
-    let f4 = collect_flight_packets(&mut server);
+    let f4 = collect_packets(&mut server);
     assert!(!f4.is_empty(), "server should emit flight 4");
 
     let f4_hs_types: Vec<u8> = f4.iter().flat_map(|p| parse_handshake_types(p)).collect();
@@ -336,7 +286,7 @@ fn retransmit_no_cookie_after_cookie_sent() {
 
 #[test]
 #[cfg(feature = "rcgen")]
-fn retransmit_no_cookie_before_cookie_received() {
+fn dtls12_retransmit_no_cookie_before_cookie_received() {
     //! Tests the specific bug scenario from webrtc deployments:
     //!
     //! 1. Client sends ClientHello (seq=0, no cookie)
@@ -346,10 +296,6 @@ fn retransmit_no_cookie_before_cookie_received() {
     //!    be inserted into queue_rx, otherwise it blocks the new ClientHello
     //! 5. Client sends ClientHello (seq=1, with cookie)
     //! 6. Server should process it and send ServerHello
-    //!
-    //! The bug was: old duplicate ClientHello (seq=0) was inserted into queue_rx,
-    //! causing has_complete_handshake(ClientHello, expected_seq=1) to return false
-    //! because it found seq=0 first in the queue.
 
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -369,7 +315,7 @@ fn retransmit_no_cookie_before_cookie_received() {
     // Flight 1: ClientHello (no cookie)
     client.handle_timeout(now).expect("client timeout");
     client.handle_timeout(now).expect("client arm f1");
-    let f1 = collect_flight_packets(&mut client);
+    let f1 = collect_packets(&mut client);
     assert!(!f1.is_empty());
 
     // Save a copy of the original no-cookie ClientHello for retransmit simulation
@@ -382,7 +328,7 @@ fn retransmit_no_cookie_before_cookie_received() {
 
     // Flight 2: HelloVerifyRequest
     server.handle_timeout(now).expect("server arm f2");
-    let f2 = collect_flight_packets(&mut server);
+    let f2 = collect_packets(&mut server);
     assert!(!f2.is_empty());
 
     // Simulate: HVR is "lost" - don't deliver to client yet
@@ -398,7 +344,7 @@ fn retransmit_no_cookie_before_cookie_received() {
 
     // Server should resend HelloVerifyRequest (this is correct behavior)
     // The bug was that the old ClientHello got inserted into queue_rx
-    let f2_resend = collect_flight_packets(&mut server);
+    let f2_resend = collect_packets(&mut server);
     let f2_resend_types: Vec<u8> = f2_resend
         .iter()
         .flat_map(|p| parse_handshake_types(p))
@@ -416,7 +362,7 @@ fn retransmit_no_cookie_before_cookie_received() {
 
     // Flight 3: ClientHello WITH cookie (seq=1)
     client.handle_timeout(now).expect("client arm f3");
-    let f3 = collect_flight_packets(&mut client);
+    let f3 = collect_packets(&mut client);
     assert!(!f3.is_empty());
 
     // Deliver to server - THIS IS WHERE THE BUG MANIFESTED
@@ -427,7 +373,7 @@ fn retransmit_no_cookie_before_cookie_received() {
 
     // Server should now send ServerHello flight
     server.handle_timeout(now).expect("server arm f4");
-    let f4 = collect_flight_packets(&mut server);
+    let f4 = collect_packets(&mut server);
     assert!(!f4.is_empty(), "server should emit flight 4");
 
     let f4_hs_types: Vec<u8> = f4.iter().flat_map(|p| parse_handshake_types(p)).collect();
