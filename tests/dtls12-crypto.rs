@@ -1,3 +1,5 @@
+//! DTLS 1.2 cipher suite tests (all supported suites).
+
 mod ossl;
 
 use std::collections::VecDeque;
@@ -9,7 +11,7 @@ use dimpl::{Config, Dtls, Output};
 use ossl::{DtlsCertOptions, DtlsEvent, DtlsPKeyType, OsslDtlsCert};
 
 #[test]
-fn all_crypto() {
+fn dtls12_all_cipher_suites() {
     let _ = env_logger::try_init();
 
     // Loop over all supported cipher suites and ensure we can connect

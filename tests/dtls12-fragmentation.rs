@@ -1,3 +1,5 @@
+//! DTLS 1.2 fragmentation test (MTU-based).
+
 mod ossl;
 
 use std::collections::VecDeque;
@@ -169,7 +171,7 @@ fn run_client_server_with_mtu(mtu: usize) -> (usize, usize) {
 }
 
 #[test]
-fn client_fragments() {
+fn dtls12_fragmentation_increases_packet_count() {
     // Larger MTU should pack more and send fewer packets
     let (large_c2s, large_s2c) = run_client_server_with_mtu(1400);
     // Smaller MTU forces more fragmentation
