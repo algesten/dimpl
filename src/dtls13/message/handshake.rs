@@ -199,54 +199,6 @@ impl Handshake {
         Ok(handshake)
     }
 
-    #[cfg(test)]
-    fn do_clone(&self) -> Handshake {
-        Handshake {
-            header: Header {
-                msg_type: self.header.msg_type,
-                length: self.header.length,
-                message_seq: self.header.message_seq,
-                fragment_offset: self.header.fragment_offset,
-                fragment_length: self.header.fragment_length,
-            },
-            body: Body::Unknown(0), // Placeholder
-            handled: AtomicBool::new(false),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn fragment<'b>(
-        &self,
-        max: usize,
-        buffer: &'b mut Buf,
-    ) -> impl Iterator<Item = Handshake> + 'b {
-        // Must be called with an empty buffer.
-        assert!(buffer.is_empty());
-
-        // Note: For fragmentize, self is already serialized data in Body::Fragment
-        // which doesn't need source_buf, so we pass an empty slice
-        self.body.serialize(&[], buffer);
-
-        // If this is wrong, the serialize has not produced the same output as we parsed.
-        assert_eq!(buffer.len(), self.header.length as usize);
-
-        let to_clone = self.do_clone();
-
-        buffer.chunks(max).enumerate().map(move |(i, chunk)| {
-            let fragment_length = chunk.len() as u32;
-            let offset = i * max;
-            let fragment_range = offset..(offset + chunk.len());
-
-            let mut fragment = to_clone.do_clone();
-            fragment.header.fragment_offset = offset as u32;
-            fragment.header.fragment_length = fragment_length;
-            fragment.header.message_seq = to_clone.header.message_seq + i as u16;
-            fragment.body = Body::Fragment(fragment_range);
-
-            fragment
-        })
-    }
-
     // These are (unencrypted) handshakes that, when detected as
     // duplicates, trigger a resend of the entire flight.
     pub fn dupe_triggers_resend(&self) -> Option<u16> {
