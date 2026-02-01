@@ -563,18 +563,14 @@ impl SignatureScheme {
             self,
             SignatureScheme::ECDSA_SECP256R1_SHA256
                 | SignatureScheme::ECDSA_SECP384R1_SHA384
-                | SignatureScheme::ED25519
-                | SignatureScheme::RSA_PSS_RSAE_SHA256
         )
     }
 
     /// All supported signature schemes.
-    pub fn supported() -> ArrayVec<SignatureScheme, 4> {
+    pub fn supported() -> ArrayVec<SignatureScheme, 2> {
         let mut schemes = ArrayVec::new();
         schemes.push(SignatureScheme::ECDSA_SECP256R1_SHA256);
         schemes.push(SignatureScheme::ECDSA_SECP384R1_SHA384);
-        schemes.push(SignatureScheme::ED25519);
-        schemes.push(SignatureScheme::RSA_PSS_RSAE_SHA256);
         schemes
     }
 

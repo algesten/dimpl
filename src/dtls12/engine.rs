@@ -1029,7 +1029,9 @@ impl RecordDecrypt for Engine {
     }
 
     fn replay_check_and_update(&mut self, seq: Sequence) -> bool {
-        self.replay.check_and_update(seq)
+        // Only epoch 1 (encrypted) records reach here; epoch 0 records are
+        // returned early by the DTLS 1.2 incoming parser.
+        self.replay.check_and_update(seq.sequence_number)
     }
 
     fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord, buf: &[u8]) -> (Aad, Nonce) {

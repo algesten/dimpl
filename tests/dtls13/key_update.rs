@@ -302,11 +302,11 @@ fn dtls13_key_update_old_epoch_packet_still_decrypted() {
 
     // Now deliver the delayed packet that was captured before the KeyUpdate.
     // The server has completed one or more KeyUpdates by now. The old epoch
-    // keys (epoch 3) are retained in the app_recv_keys array (up to 4 entries),
-    // but the replay window has advanced past epoch 3, so the old-epoch packet
-    // will be silently dropped (correct DTLS 1.3 anti-replay behavior).
+    // keys (epoch 3) are retained in the app_recv_keys array (up to 4 entries).
+    // Each epoch has its own replay window, so the old-epoch packet is accepted
+    // and decrypted (the per-epoch window for epoch 3 hasn't seen this seqno).
     //
-    // We verify the connection is still healthy after delivering the stale
+    // We verify the connection is still healthy after delivering the late
     // packet by sending additional data.
     deliver_packets(&delayed_packets, &mut server);
     now += Duration::from_millis(10);

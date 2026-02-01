@@ -8,7 +8,7 @@ use nom::IResult;
 /// Uses `SignatureScheme` (u16) instead of the TLS 1.2 `SignatureAndHashAlgorithm`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureAlgorithmsExtension {
-    pub supported_signature_algorithms: ArrayVec<SignatureScheme, 4>,
+    pub supported_signature_algorithms: ArrayVec<SignatureScheme, 2>,
 }
 
 impl SignatureAlgorithmsExtension {
@@ -21,7 +21,7 @@ impl SignatureAlgorithmsExtension {
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAlgorithmsExtension> {
         let (input, list_len) = nom::number::complete::be_u16(input)?;
-        let mut algorithms: ArrayVec<SignatureScheme, 4> = ArrayVec::new();
+        let mut algorithms: ArrayVec<SignatureScheme, 2> = ArrayVec::new();
         let mut remaining = list_len as usize;
         let mut current_input = input;
 
@@ -59,9 +59,9 @@ mod tests {
 
     #[test]
     fn test_signature_algorithms_extension() {
-        let mut algorithms: ArrayVec<SignatureScheme, 4> = ArrayVec::new();
+        let mut algorithms: ArrayVec<SignatureScheme, 2> = ArrayVec::new();
         algorithms.push(SignatureScheme::ECDSA_SECP256R1_SHA256);
-        algorithms.push(SignatureScheme::RSA_PSS_RSAE_SHA256);
+        algorithms.push(SignatureScheme::ECDSA_SECP384R1_SHA384);
 
         let ext = SignatureAlgorithmsExtension {
             supported_signature_algorithms: algorithms.clone(),
@@ -73,7 +73,7 @@ mod tests {
         let expected = [
             0x00, 0x04, // Length (4 bytes)
             0x04, 0x03, // ECDSA_SECP256R1_SHA256
-            0x08, 0x04, // RSA_PSS_RSAE_SHA256
+            0x05, 0x03, // ECDSA_SECP384R1_SHA384
         ];
 
         assert_eq!(&*serialized, expected);

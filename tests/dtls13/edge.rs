@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::Dtls;
+use dimpl::{Config, Dtls};
 
 use crate::common::*;
 
@@ -685,4 +685,336 @@ fn dtls13_alert_bad_certificate() {
     // When a certificate verifier callback is added to Config, this test should
     // be updated to install a verifier that rejects the peer's self-signed cert
     // and assert the handshake fails with an appropriate error.
+}
+
+/// Regression test for bug #1: advertised signature schemes must all be functional.
+///
+/// Previously, Ed25519 (0x0807) and RSA_PSS_RSAE_SHA256 (0x0804) were advertised
+/// in the ClientHello signature_algorithms extension but could not be verified,
+/// causing handshake failures when a peer selected them.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_only_functional_signature_schemes_advertised() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+
+    let config = dtls13_config();
+
+    let mut client = Dtls::new_13(config, client_cert);
+    client.set_active(true);
+
+    // Trigger the first ClientHello
+    let now = Instant::now();
+    client.handle_timeout(now).expect("client timeout");
+    let out = drain_outputs(&mut client);
+    assert!(!out.packets.is_empty(), "Client should send ClientHello");
+
+    // The first packet is a plaintext record containing the ClientHello.
+    // DTLSPlaintext header: content_type(1) + version(2) + epoch(2) + seq(6) + length(2) = 13 bytes.
+    // Handshake header: msg_type(1) + length(3) + message_seq(2) + frag_offset(3) + frag_length(3) = 12 bytes.
+    // ClientHello body: version(2) + random(32) + session_id_len(1) + session_id + cookie_len(1) + cookie
+    //                   + cipher_suites_len(2) + cipher_suites + comp_methods_len(1) + comp_methods
+    //                   + extensions_len(2) + extensions...
+    let ch_packet = &out.packets[0];
+
+    // Find signature_algorithms extension (type 0x000D) in the packet.
+    // Scan for the 2-byte extension type.
+    let sig_alg_type: [u8; 2] = [0x00, 0x0D];
+    let pos = ch_packet
+        .windows(2)
+        .position(|w| w == sig_alg_type)
+        .expect("signature_algorithms extension should be present in ClientHello");
+
+    // Extension format: type(2) + ext_len(2) + list_len(2) + schemes(2 each)
+    let ext_len_offset = pos + 2;
+    let list_len_offset = ext_len_offset + 2;
+    let list_len =
+        u16::from_be_bytes([ch_packet[list_len_offset], ch_packet[list_len_offset + 1]]) as usize;
+    let schemes_start = list_len_offset + 2;
+
+    // Extract all advertised scheme codes
+    let mut advertised: Vec<u16> = Vec::new();
+    let mut i = schemes_start;
+    while i < schemes_start + list_len {
+        let scheme = u16::from_be_bytes([ch_packet[i], ch_packet[i + 1]]);
+        advertised.push(scheme);
+        i += 2;
+    }
+
+    // Only ECDSA P-256 (0x0403) and P-384 (0x0503) should be advertised.
+    let non_functional: Vec<u16> = advertised
+        .iter()
+        .copied()
+        .filter(|s| *s != 0x0403 && *s != 0x0503)
+        .collect();
+
+    assert!(
+        non_functional.is_empty(),
+        "Non-functional signature schemes advertised: {:04X?}. \
+         Only ECDSA_SECP256R1_SHA256 (0x0403) and ECDSA_SECP384R1_SHA384 (0x0503) \
+         should be advertised.",
+        non_functional,
+    );
+
+    assert_eq!(
+        advertised,
+        vec![0x0403, 0x0503],
+        "Expected exactly ECDSA P-256 and P-384"
+    );
+}
+
+/// Regression test for bug #2: a bad record in a multi-record datagram must not
+/// kill subsequent valid records.
+///
+/// Previously, certain per-record errors (parse failure, content type recovery)
+/// would propagate as Err and abort parsing of the entire datagram, causing valid
+/// records after the bad one to be lost.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_bad_record_does_not_kill_datagram() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls13_config();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    // Complete handshake
+    let mut client_connected = false;
+    let mut server_connected = false;
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+        now += Duration::from_millis(10);
+    }
+
+    assert!(client_connected, "Client should be connected");
+    assert!(server_connected, "Server should be connected");
+
+    // Send application data from server and capture the ciphertext packet.
+    server
+        .send_application_data(b"hello")
+        .expect("send app data");
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+    assert!(
+        !server_out.packets.is_empty(),
+        "Server should produce a packet"
+    );
+    let good_record = &server_out.packets[0];
+
+    // Construct a bogus ciphertext record with unknown epoch (epoch_bits=01).
+    // Unified header: flags=0x2D (001 C=0 S=1 L=1 EE=01), seq=0x0000, length=32.
+    let mut bogus_record = Vec::new();
+    bogus_record.push(0x2D); // flags: S=1, L=1, epoch_bits=01
+    bogus_record.extend_from_slice(&0x0000u16.to_be_bytes()); // encrypted seq
+    bogus_record.extend_from_slice(&0x0020u16.to_be_bytes()); // length = 32
+    bogus_record.extend_from_slice(&[0xAA; 32]); // fake ciphertext
+
+    // Build a multi-record datagram: bogus record FIRST, then the valid record.
+    // If the bad record aborts the datagram, the good record is lost.
+    let mut combined = bogus_record;
+    combined.extend_from_slice(good_record);
+
+    // Deliver the combined datagram. Must not error.
+    client
+        .handle_packet(&combined)
+        .expect("multi-record datagram with bad first record should not error");
+
+    // The valid record should have been processed despite the bad first record.
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    assert!(
+        client_out
+            .app_data
+            .iter()
+            .any(|d| d.as_slice() == b"hello"),
+        "Client should receive the valid app data record that followed the bogus record"
+    );
+}
+
+/// Regression test for bug #3: single replay window across epochs.
+///
+/// Before the fix, a single `ReplayWindow` tracked all epochs. When a
+/// new-epoch record arrived (after KeyUpdate), the window advanced and
+/// permanently rejected all old-epoch records — even though old receive
+/// keys were still retained. This test verifies that a delayed old-epoch
+/// packet IS accepted and delivered as application data after a KeyUpdate.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_old_epoch_record_accepted_after_key_update() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Low limit to trigger KeyUpdate quickly.
+    let config = Arc::new(
+        Config::builder()
+            .aead_encryption_limit(5)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    // Complete handshake.
+    let mut client_connected = false;
+    let mut server_connected = false;
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+        now += Duration::from_millis(50);
+    }
+    assert!(client_connected, "Client should connect");
+    assert!(server_connected, "Server should connect");
+
+    // Send one message and capture its packet WITHOUT delivering to server.
+    // This packet is encrypted on the initial application epoch (epoch 3).
+    client
+        .send_application_data(b"old-epoch-data")
+        .expect("send delayed msg");
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    let delayed_packets = client_out.packets.clone();
+
+    // Process server output (don't deliver delayed to server).
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+    deliver_packets(&server_out.packets, &mut client);
+
+    // Send enough messages to trigger at least one KeyUpdate (limit=5).
+    let mut server_received = 0;
+    for i in 0..12 {
+        let msg = format!("msg-{}", i);
+        client
+            .send_application_data(msg.as_bytes())
+            .expect("send app data");
+
+        now += Duration::from_millis(10);
+
+        for _ in 0..3 {
+            client.handle_timeout(now).expect("client timeout");
+            let client_out = drain_outputs(&mut client);
+            deliver_packets(&client_out.packets, &mut server);
+
+            server.handle_timeout(now).expect("server timeout");
+            let server_out = drain_outputs(&mut server);
+            deliver_packets(&server_out.packets, &mut client);
+
+            server_received += server_out.app_data.len();
+        }
+    }
+
+    assert_eq!(server_received, 12, "All regular messages should be received");
+
+    // NOW deliver the old-epoch packet. With per-epoch replay windows,
+    // the epoch-3 window hasn't seen this sequence number, so it must be
+    // accepted and decrypted using the retained old-epoch keys.
+    deliver_packets(&delayed_packets, &mut server);
+    now += Duration::from_millis(10);
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+    deliver_packets(&server_out.packets, &mut client);
+
+    assert!(
+        server_out
+            .app_data
+            .iter()
+            .any(|d| d.as_slice() == b"old-epoch-data"),
+        "Server must receive the delayed old-epoch packet (per-epoch replay windows)"
+    );
+}
+
+/// Test that the ClientHello is padded to fill the configured MTU.
+///
+/// RFC 7685 defines the padding extension (type 0x0015) to increase
+/// the ClientHello size, reducing the server-to-client amplification
+/// factor in DTLS.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_client_hello_padded_to_mtu() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let mtu = 1150; // default MTU
+
+    let config = dtls13_config();
+
+    let mut client = Dtls::new_13(config, client_cert);
+    client.set_active(true);
+
+    let now = Instant::now();
+    client.handle_timeout(now).expect("client timeout");
+    let out = drain_outputs(&mut client);
+    assert!(!out.packets.is_empty(), "Client should send ClientHello");
+
+    let ch_packet = &out.packets[0];
+
+    // The ClientHello record should fill the MTU exactly.
+    assert_eq!(
+        ch_packet.len(),
+        mtu,
+        "ClientHello packet should be padded to MTU ({} bytes), got {} bytes",
+        mtu,
+        ch_packet.len()
+    );
+
+    // Verify the padding extension (type 0x0015) is present.
+    let padding_type: [u8; 2] = [0x00, 0x15];
+    let has_padding = ch_packet.windows(2).any(|w| w == padding_type);
+    assert!(
+        has_padding,
+        "ClientHello should contain a padding extension (type 0x0015)"
+    );
 }
