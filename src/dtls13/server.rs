@@ -409,8 +409,8 @@ impl State {
         let client_random = client_hello.random;
         server.client_session_id = Some(client_hello.legacy_session_id);
 
-        // Cookie-based DoS protection (disabled for interop testing)
-        let need_cookie = false;
+        // Cookie-based DoS protection
+        let need_cookie = true;
 
         if need_cookie {
             let expected_cookie = compute_cookie(
@@ -454,6 +454,7 @@ impl State {
                     None, // no group selection needed for cookie-only HRR
                 )?;
 
+                server.engine.advance_peer_handshake_seq();
                 server.engine.reset_for_hello_retry();
                 server.hello_retry = true;
 
@@ -523,6 +524,7 @@ impl State {
                     Some(group),
                 )?;
 
+                server.engine.advance_peer_handshake_seq();
                 server.engine.reset_for_hello_retry();
                 server.hello_retry = true;
 

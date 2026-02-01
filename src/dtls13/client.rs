@@ -449,6 +449,7 @@ impl State {
             client.engine.transcript.resize(transcript_len_before, 0);
             client.engine.replace_transcript_with_message_hash();
             client.engine.transcript.extend_from_slice(&hrr_bytes);
+            client.engine.advance_peer_handshake_seq();
             client.engine.reset_for_hello_retry();
             client.hello_retry = true;
 

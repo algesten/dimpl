@@ -1767,8 +1767,9 @@ impl Engine {
     /// Install send handshake keys for client flight (after receiving server Finished).
     /// Reset handshake state for a new ClientHello after HelloRetryRequest.
     pub fn reset_for_hello_retry(&mut self) {
-        self.peer_handshake_seq_no = 0;
-        self.next_handshake_seq_no = 0;
+        // Per RFC 9147, message_seq increments across HRR (CH1=0, HRR=0,
+        // CH2=1, SH=1), so neither peer nor own handshake sequence numbers
+        // are reset. Only reset epoch 2 record sequence (unused at HRR time).
         self.hs_send_seq = 0;
         self.handshake_ack_deadline = None;
         // Drain handled items so stale retransmissions with the same
