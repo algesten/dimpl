@@ -1,19 +1,23 @@
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{
-    Certificate, CertificateRequest, CertificateVerify, ClientHello, ClientKeyExchange,
-    Dtls12CipherSuite, Finished, HelloVerifyRequest, ServerHello, ServerKeyExchange,
-};
+use super::Certificate;
+use super::CertificateRequest;
+use super::CertificateVerify;
+use super::ClientHello;
+use super::ClientKeyExchange;
+use super::Dtls12CipherSuite;
+use super::Finished;
+use super::HelloVerifyRequest;
+use super::ServerHello;
+use super::ServerKeyExchange;
 use crate::buffer::Buf;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
+use nom::number::complete::{be_u16, be_u24};
 use nom::Err;
-use nom::{
-    number::complete::{be_u16, be_u24},
-    IResult,
-};
+use nom::IResult;
 
 #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
 pub struct Header {
@@ -501,9 +505,12 @@ mod tests {
 
     use super::*;
     use crate::buffer::Buf;
-    use crate::dtls12::message::{
-        CompressionMethod, Cookie, Dtls12CipherSuite, ProtocolVersion, Random, SessionId,
-    };
+    use crate::dtls12::message::CompressionMethod;
+    use crate::dtls12::message::Cookie;
+    use crate::dtls12::message::Dtls12CipherSuite;
+    use crate::dtls12::message::ProtocolVersion;
+    use crate::dtls12::message::Random;
+    use crate::dtls12::message::SessionId;
 
     const MESSAGE: &[u8] = &[
         0x01, // MessageType::ClientHello

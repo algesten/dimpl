@@ -776,7 +776,8 @@ impl State {
         // Capture session hash now for Extended Master Secret (RFC 7627)
         // At this point, the session hash includes: ClientHello, ServerHello, Certificate,
         // ServerKeyExchange, CertificateRequest, ServerHelloDone, Certificate, ClientKeyExchange
-        // This is correct per RFC 7627 - session hash should include messages up to and including ClientKeyExchange
+        // This is correct per RFC 7627 - session hash should include messages
+        // up to and including ClientKeyExchange
         let cipher_suite = client
             .engine
             .cipher_suite()

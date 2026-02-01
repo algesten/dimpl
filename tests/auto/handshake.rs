@@ -58,8 +58,14 @@ fn auto_client_to_dtls13_server() {
         now += Duration::from_millis(10);
     }
 
-    assert!(client_connected, "Auto client should connect to DTLS 1.3 server");
-    assert!(server_connected, "DTLS 1.3 server should connect to auto client");
+    assert!(
+        client_connected,
+        "Auto client should connect to DTLS 1.3 server"
+    );
+    assert!(
+        server_connected,
+        "DTLS 1.3 server should connect to auto client"
+    );
 }
 
 #[test]
@@ -122,7 +128,10 @@ fn auto_client_to_dtls13_server_keying_material() {
         client_km.1, server_km.1,
         "Client and server SRTP profile should match"
     );
-    assert!(!client_km.0.is_empty(), "Keying material should not be empty");
+    assert!(
+        !client_km.0.is_empty(),
+        "Keying material should not be empty"
+    );
 }
 
 #[test]
@@ -173,8 +182,14 @@ fn auto_client_to_auto_server() {
         now += Duration::from_millis(10);
     }
 
-    assert!(client_connected, "Auto client should connect to auto server");
-    assert!(server_connected, "Auto server should connect to auto client");
+    assert!(
+        client_connected,
+        "Auto client should connect to auto server"
+    );
+    assert!(
+        server_connected,
+        "Auto server should connect to auto client"
+    );
 }
 
 #[test]
@@ -225,8 +240,14 @@ fn auto_client_to_dtls12_server() {
         now += Duration::from_millis(10);
     }
 
-    assert!(client_connected, "Auto client should connect to DTLS 1.2 server");
-    assert!(server_connected, "DTLS 1.2 server should connect to auto client");
+    assert!(
+        client_connected,
+        "Auto client should connect to DTLS 1.2 server"
+    );
+    assert!(
+        server_connected,
+        "DTLS 1.2 server should connect to auto client"
+    );
 }
 
 #[test]
@@ -289,7 +310,10 @@ fn auto_client_to_dtls12_server_keying_material() {
         client_km.1, server_km.1,
         "Client and server SRTP profile should match"
     );
-    assert!(!client_km.0.is_empty(), "Keying material should not be empty");
+    assert!(
+        !client_km.0.is_empty(),
+        "Keying material should not be empty"
+    );
 }
 
 #[test]
@@ -341,7 +365,10 @@ fn auto_client_to_dtls13_server_application_data() {
         now += Duration::from_millis(10);
     }
 
-    assert!(client_connected && server_connected, "Handshake should complete");
+    assert!(
+        client_connected && server_connected,
+        "Handshake should complete"
+    );
 
     // Send data client -> server
     let msg = b"hello from auto client";

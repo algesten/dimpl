@@ -23,15 +23,15 @@ use crate::buffer::{Buf, ToBuf};
 use crate::crypto::SrtpProfile;
 use crate::dtls12::client::LocalEvent;
 use crate::dtls12::engine::Engine;
+use crate::dtls12::message::SignatureAlgorithmsExtension;
+use crate::dtls12::message::SignatureAndHashAlgorithm;
+use crate::dtls12::message::SrtpProfileId;
 use crate::dtls12::message::{Body, CertificateRequest, ClientCertificateType, Dtls12CipherSuite};
 use crate::dtls12::message::{CompressionMethod, ContentType, Cookie, CurveType};
 use crate::dtls12::message::{DistinguishedName, ExchangeKeys, ExtensionType};
 use crate::dtls12::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
 use crate::dtls12::message::{MessageType, NamedGroup, ProtocolVersion, Random, ServerHello};
 use crate::dtls12::message::{SessionId, SignatureAlgorithm};
-use crate::dtls12::message::{
-    SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId,
-};
 use crate::dtls12::message::{SupportedGroupsExtension, UseSrtpExtension};
 use crate::dtls12::Client;
 use crate::{Config, Error, Output};
@@ -681,7 +681,8 @@ impl State {
 
     fn await_certificate_verify(self, server: &mut Server) -> Result<Self, Error> {
         // Get handshake data BEFORE processing CertificateVerify message
-        // According to TLS spec, signature is over all handshake messages up to but not including CertificateVerify
+        // According to TLS spec, signature is over all handshake messages
+        // up to but not including CertificateVerify
         let data = server.engine.transcript().to_buf();
 
         let maybe = server.engine.next_handshake(
