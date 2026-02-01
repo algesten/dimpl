@@ -851,10 +851,7 @@ fn dtls13_bad_record_does_not_kill_datagram() {
     client.handle_timeout(now).expect("client timeout");
     let client_out = drain_outputs(&mut client);
     assert!(
-        client_out
-            .app_data
-            .iter()
-            .any(|d| d.as_slice() == b"hello"),
+        client_out.app_data.iter().any(|d| d.as_slice() == b"hello"),
         "Client should receive the valid app data record that followed the bogus record"
     );
 }
@@ -954,7 +951,10 @@ fn dtls13_old_epoch_record_accepted_after_key_update() {
         }
     }
 
-    assert_eq!(server_received, 12, "All regular messages should be received");
+    assert_eq!(
+        server_received, 12,
+        "All regular messages should be received"
+    );
 
     // NOW deliver the old-epoch packet. With per-epoch replay windows,
     // the epoch-3 window hasn't seen this sequence number, so it must be

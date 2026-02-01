@@ -561,8 +561,7 @@ impl SignatureScheme {
     pub fn is_supported(&self) -> bool {
         matches!(
             self,
-            SignatureScheme::ECDSA_SECP256R1_SHA256
-                | SignatureScheme::ECDSA_SECP384R1_SHA384
+            SignatureScheme::ECDSA_SECP256R1_SHA256 | SignatureScheme::ECDSA_SECP384R1_SHA384
         )
     }
 
