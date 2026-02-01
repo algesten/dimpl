@@ -2186,11 +2186,7 @@ impl RecordDecrypt for Engine {
         let accepted = if seq.epoch == 2 {
             self.hs_replay.check_and_update(seq.sequence_number)
         } else {
-            match self
-                .app_recv_keys
-                .iter_mut()
-                .find(|e| e.epoch == seq.epoch)
-            {
+            match self.app_recv_keys.iter_mut().find(|e| e.epoch == seq.epoch) {
                 Some(entry) => entry.replay.check_and_update(seq.sequence_number),
                 None => return false, // no keys for this epoch
             }
