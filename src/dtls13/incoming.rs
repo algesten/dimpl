@@ -216,7 +216,13 @@ impl Record {
             }
         }
 
-        let parsed = ParsedRecord::parse(&buffer, cs)?;
+        let parsed = match ParsedRecord::parse(&buffer, cs) {
+            Ok(p) => p,
+            Err(e) => {
+                trace!("Discarding record: parse failed: {}", e);
+                return Ok(None);
+            }
+        };
         let parsed = Box::new(parsed);
         let record = Record { buffer, parsed };
 
@@ -274,7 +280,13 @@ impl Record {
 
         // Recover inner content type from DTLSInnerPlaintext
         let decrypted = &buffer[header_end..header_end + new_len];
-        let (inner_content_type, content_len) = recover_inner_content_type(decrypted)?;
+        let (inner_content_type, content_len) = match recover_inner_content_type(decrypted) {
+            Ok(v) => v,
+            Err(e) => {
+                trace!("Discarding record: invalid inner content type: {}", e);
+                return Ok(None);
+            }
+        };
 
         let parsed = ParsedRecord::parse_decrypted(
             Dtls13Record {

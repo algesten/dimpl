@@ -1162,6 +1162,35 @@ fn handshake_create_client_hello(
         });
     }
 
+    // 7. padding extension (RFC 7685) — pad ClientHello to fill the MTU,
+    // reducing the server-to-client amplification factor.
+    let mtu = engine.config().mtu();
+    let record_header = 13; // DTLSPlaintext header
+    let handshake_header = 12; // DTLS handshake header
+    let body_without_padding = 2 // legacy_version
+        + 32 // random
+        + 1 + legacy_session_id.len()
+        + 1 + legacy_cookie.len()
+        + 2 + cipher_suites.len() * 2
+        + 1 + compression_methods.len()
+        + 2 // extensions_len
+        + extensions.len() * 4 // type(2) + len(2) per extension
+        + ext_buf.len(); // all extension data
+    let total_without_padding = record_header + handshake_header + body_without_padding;
+    let deficit = mtu.saturating_sub(total_without_padding);
+    if deficit >= 4 {
+        let pad_data_len = deficit - 4;
+        let pad_start = ext_buf.len();
+        for _ in 0..pad_data_len {
+            ext_buf.push(0);
+        }
+        let pad_end = ext_buf.len();
+        extensions.push(Extension {
+            extension_type: ExtensionType::Padding,
+            extension_data_range: pad_start..pad_end,
+        });
+    }
+
     let mut client_hello = ClientHello::new(
         legacy_version,
         random,

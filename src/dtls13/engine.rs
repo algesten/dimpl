@@ -107,8 +107,8 @@ pub struct Engine {
     /// TLS 1.3 transcript: msg_type(1) + length(3), no DTLS framing.
     pub(crate) transcript: Buf,
 
-    /// Anti-replay window state
-    replay: ReplayWindow,
+    /// Anti-replay window for handshake epoch (epoch 2)
+    hs_replay: ReplayWindow,
 
     /// Record numbers of received handshake records, for ACK generation.
     /// Each entry is (epoch, sequence_number).
@@ -164,6 +164,7 @@ struct RecvEpochEntry {
     epoch: u16,
     keys: EpochKeys,
     expected_recv_seq: u64,
+    replay: ReplayWindow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,7 +225,7 @@ impl Engine {
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
             transcript: Buf::new(),
-            replay: ReplayWindow::new(),
+            hs_replay: ReplayWindow::new(),
             received_record_numbers: Vec::new(),
             handshake_ack_deadline: None,
             datagram_sealed: false,
@@ -1642,6 +1643,7 @@ impl Engine {
             epoch: 3,
             keys: recv_keys,
             expected_recv_seq: 0,
+            replay: ReplayWindow::new(),
         });
 
         self.app_send_epoch = 3;
@@ -1717,6 +1719,7 @@ impl Engine {
             epoch: new_epoch,
             keys: new_keys,
             expected_recv_seq: 0,
+            replay: ReplayWindow::new(),
         });
 
         debug!("Recv keys updated to epoch {}", new_epoch);
@@ -2179,7 +2182,21 @@ impl RecordDecrypt for Engine {
     }
 
     fn replay_check_and_update(&mut self, seq: Sequence) -> bool {
-        if !self.replay.check_and_update(seq) {
+        // Route to the correct per-epoch replay window
+        let accepted = if seq.epoch == 2 {
+            self.hs_replay.check_and_update(seq.sequence_number)
+        } else {
+            match self
+                .app_recv_keys
+                .iter_mut()
+                .find(|e| e.epoch == seq.epoch)
+            {
+                Some(entry) => entry.replay.check_and_update(seq.sequence_number),
+                None => return false, // no keys for this epoch
+            }
+        };
+
+        if !accepted {
             return false;
         }
 
