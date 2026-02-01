@@ -33,7 +33,6 @@
 //! - **Cipher suites (TLS 1.3 over DTLS)**
 //!   - `TLS_AES_128_GCM_SHA256`
 //!   - `TLS_AES_256_GCM_SHA384`
-//!   - `TLS_CHACHA20_POLY1305_SHA256`
 //! - **AEAD**: AES‑GCM 128/256 only (no CBC/EtM modes).
 //! - **Key exchange**: ECDHE (P‑256/P‑384)
 //! - **Signatures**: ECDSA P‑256/SHA‑256, ECDSA P‑384/SHA‑384
@@ -135,11 +134,9 @@
 //! [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
 //! [RFC 7627]: https://www.rfc-editor.org/rfc/rfc7627
 //!
-//! [`Dtls::handle_packet`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.handle_packet
-//! [`Dtls::poll_output`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.poll_output
-//! [`Dtls::handle_timeout`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.handle_timeout
-//! [`Output`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html
-//! [`Output::PeerCert`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html#variant.PeerCert
+//! [`Dtls::handle_packet`]: Dtls::handle_packet
+//! [`Dtls::poll_output`]: Dtls::poll_output
+//! [`Dtls::handle_timeout`]: Dtls::handle_timeout
 //!
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
@@ -210,10 +207,15 @@ impl std::fmt::Debug for DtlsCertificate {
     }
 }
 
-/// Public DTLS endpoint wrapping either a client or server state.
+/// Sans-IO DTLS endpoint (client or server).
 ///
-/// Use the role helpers to query or switch between client and server modes
-/// and drive the handshake and record processing.
+/// New instances start in the **server role**. Call
+/// [`set_active(true)`](Self::set_active) to switch to client before
+/// the handshake begins.
+///
+/// Drive the state machine with [`handle_packet`](Self::handle_packet),
+/// [`poll_output`](Self::poll_output), and
+/// [`handle_timeout`](Self::handle_timeout).
 pub struct Dtls {
     inner: Option<Inner>,
 }
@@ -231,10 +233,10 @@ enum Inner {
 }
 
 impl Dtls {
-    /// Create a new DTLS 1.2 instance.
+    /// Create a new DTLS 1.2 instance in the server role.
     ///
-    /// The instance is initialized with the provided `config` and `certificate`
-    /// and will use DTLS 1.2 exclusively. The `now` parameter seeds the internal
+    /// Call [`set_active(true)`](Self::set_active) to switch to client
+    /// before the handshake begins. The `now` parameter seeds the internal
     /// time tracking for timeouts and retransmissions.
     ///
     /// During the handshake, the peer's leaf certificate is surfaced via
@@ -245,10 +247,10 @@ impl Dtls {
         Dtls { inner: Some(inner) }
     }
 
-    /// Create a new DTLS 1.3 instance.
+    /// Create a new DTLS 1.3 instance in the server role.
     ///
-    /// The instance is initialized with the provided `config` and `certificate`
-    /// and will use DTLS 1.3 exclusively.
+    /// Call [`set_active(true)`](Self::set_active) to switch to client
+    /// before the handshake begins.
     ///
     /// During the handshake, the peer's leaf certificate is surfaced via
     /// [`Output::PeerCert`]. It is up to the application to validate that
@@ -533,7 +535,10 @@ fn detect_dtls13_client_hello_inner(packet: &[u8]) -> Option<bool> {
 pub enum Output<'a> {
     /// A DTLS record to transmit on the wire.
     Packet(&'a [u8]),
-    /// A timeout instant for scheduling retransmission or handshake timers.
+    /// Schedule a timer and call [`Dtls::handle_timeout`] at this instant.
+    ///
+    /// This is always the last variant returned by a poll cycle.
+    /// Internal state is only consistent after reaching `Timeout`.
     Timeout(Instant),
     /// The handshake completed and the connection is established.
     Connected,
