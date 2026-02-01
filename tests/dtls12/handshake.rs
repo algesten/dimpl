@@ -1,12 +1,11 @@
 //! DTLS 1.2 handshake tests (cookie retry, parallel handshakes, basic handshake).
 
-mod dtls12_common;
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dimpl::{Config, Dtls, SrtpProfile};
-use dtls12_common::*;
+
+use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]

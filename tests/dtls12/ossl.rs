@@ -1,13 +1,12 @@
 //! DTLS 1.2 interop tests: dimpl <-> OpenSSL (client + server).
 
-mod ossl;
-
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
 use dimpl::{Config, Dtls, Output};
-use ossl::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
+
+use crate::ossl_helper::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
 
 #[test]
 fn dtls12_ossl_client_handshake() {
@@ -811,9 +810,7 @@ fn dtls12_ossl_server_bidirectional_data() {
                 Output::ApplicationData(data) => {
                     server_received_data.extend_from_slice(&data);
                     // After receiving from client, send a reply
-                    if !server_reply_sent
-                        && server_received_data.len() >= client_test_data.len()
-                    {
+                    if !server_reply_sent && server_received_data.len() >= client_test_data.len() {
                         server
                             .send_application_data(server_reply_data)
                             .expect("Server failed to send reply");
@@ -841,9 +838,7 @@ fn dtls12_ossl_server_bidirectional_data() {
                 DtlsEvent::Data(data) => {
                     client_received_data.extend_from_slice(&data);
                     // After receiving from server, send a reply
-                    if !client_reply_sent
-                        && client_received_data.len() >= server_test_data.len()
-                    {
+                    if !client_reply_sent && client_received_data.len() >= server_test_data.len() {
                         client
                             .handle_input(client_reply_data)
                             .expect("Client failed to send reply");

@@ -1,7 +1,4 @@
 //! Shared helpers for DTLS 1.2 integration tests.
-//!
-//! This file has no `#[test]` functions; Cargo compiles it as a no-op binary.
-//! Import it from other test files via `mod dtls12_common;`.
 
 #![allow(unused)]
 

@@ -1,14 +1,13 @@
 //! DTLS 1.2 cipher suite tests (all supported suites).
 
-mod ossl;
-
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
 use dimpl::crypto::{Dtls12CipherSuite, SignatureAlgorithm};
 use dimpl::{Config, Dtls, Output};
-use ossl::{DtlsCertOptions, DtlsEvent, DtlsPKeyType, OsslDtlsCert};
+
+use crate::ossl_helper::{DtlsCertOptions, DtlsEvent, DtlsPKeyType, OsslDtlsCert};
 
 #[test]
 fn dtls12_all_cipher_suites() {

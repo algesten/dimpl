@@ -1,12 +1,11 @@
 //! DTLS 1.2 edge case and error recovery tests.
 
-mod dtls12_common;
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dimpl::{Dtls, Output};
-use dtls12_common::*;
+
+use crate::common::*;
 
 /// Collected outputs from polling a DTLS 1.2 endpoint to `Timeout`.
 #[derive(Default, Debug)]
