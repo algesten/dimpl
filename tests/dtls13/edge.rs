@@ -714,7 +714,8 @@ fn dtls13_only_functional_signature_schemes_advertised() {
 
     // The first packet is a plaintext record containing the ClientHello.
     // DTLSPlaintext header: content_type(1) + version(2) + epoch(2) + seq(6) + length(2) = 13 bytes.
-    // Handshake header: msg_type(1) + length(3) + message_seq(2) + frag_offset(3) + frag_length(3) = 12 bytes.
+    // Handshake header: msg_type(1) + length(3) + message_seq(2)
+    //                   + frag_offset(3) + frag_length(3) = 12 bytes.
     // ClientHello body: version(2) + random(32) + session_id_len(1) + session_id + cookie_len(1) + cookie
     //                   + cipher_suites_len(2) + cipher_suites + comp_methods_len(1) + comp_methods
     //                   + extensions_len(2) + extensions...
