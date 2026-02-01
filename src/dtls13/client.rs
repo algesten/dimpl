@@ -442,8 +442,13 @@ impl State {
                 return Err(Error::SecurityError("HRR did not select DTLS 1.3".into()));
             }
 
-            // Replace transcript with message_hash per RFC 8446 Section 4.4.1
+            // Replace transcript with message_hash per RFC 8446 Section 4.4.1.
+            // The HRR was already appended to the transcript by next_handshake().
+            // We must hash only CH1, then re-append the HRR bytes.
+            let hrr_bytes = client.engine.transcript[transcript_len_before..].to_vec();
+            client.engine.transcript.resize(transcript_len_before, 0);
             client.engine.replace_transcript_with_message_hash();
+            client.engine.transcript.extend_from_slice(&hrr_bytes);
             client.engine.reset_for_hello_retry();
             client.hello_retry = true;
 

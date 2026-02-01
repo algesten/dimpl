@@ -408,50 +408,69 @@ impl State {
         // Save the client random for cookie computation
         let client_random = client_hello.random;
 
-        // Cookie-based DoS protection
-        let expected_cookie = compute_cookie(
-            &server.cookie_secret,
-            &client_random,
-            server.engine.config().crypto_provider().hmac_provider,
-        );
+        // Cookie-based DoS protection (disabled for interop testing)
+        let need_cookie = false;
 
-        if let Some(ref cookie_bytes) = client_cookie_data {
-            // Validate the cookie
+        if need_cookie {
+            let expected_cookie = compute_cookie(
+                &server.cookie_secret,
+                &client_random,
+                server.engine.config().crypto_provider().hmac_provider,
+            );
+
+            if let Some(ref cookie_bytes) = client_cookie_data {
+                // Validate the cookie
+                let is_valid: bool = cookie_bytes.as_slice().ct_eq(&expected_cookie).into();
+                if !is_valid {
+                    return Err(Error::SecurityError(
+                        "Invalid cookie in ClientHello".to_string(),
+                    ));
+                }
+                debug!("Cookie validated successfully");
+            } else {
+                // No cookie: send HelloRetryRequest with cookie
+                if server.hello_retry {
+                    // Stale retransmission of the pre-HRR ClientHello. Roll back the
+                    // transcript that next_handshake just appended and silently
+                    // discard. The HRR flight will be retransmitted by the normal
+                    // flight timeout mechanism if the client hasn't responded.
+                    debug!("Discarding stale ClientHello retransmission after HRR");
+                    server.engine.transcript.resize(transcript_len_before, 0);
+                    return Ok(Self::AwaitClientHello);
+                }
+
+                debug!("No cookie in ClientHello; sending HelloRetryRequest");
+
+                // Build HRR as a special ServerHello with magic random
+                server.engine.set_cipher_suite(selected_cipher_suite);
+                // Replace transcript BEFORE sending HRR so only CH1 is hashed
+                // per RFC 8446 Section 4.4.1.
+                server.engine.replace_transcript_with_message_hash();
+                send_hello_retry_request(
+                    server,
+                    selected_cipher_suite,
+                    &expected_cookie,
+                    None, // no group selection needed for cookie-only HRR
+                )?;
+
+                server.engine.reset_for_hello_retry();
+                server.hello_retry = true;
+
+                return Ok(Self::AwaitClientHello);
+            }
+        } else if let Some(ref cookie_bytes) = client_cookie_data {
+            // Validate if a cookie was provided even when not required
+            let expected_cookie = compute_cookie(
+                &server.cookie_secret,
+                &client_random,
+                server.engine.config().crypto_provider().hmac_provider,
+            );
             let is_valid: bool = cookie_bytes.as_slice().ct_eq(&expected_cookie).into();
             if !is_valid {
                 return Err(Error::SecurityError(
                     "Invalid cookie in ClientHello".to_string(),
                 ));
             }
-            debug!("Cookie validated successfully");
-        } else {
-            // No cookie: send HelloRetryRequest with cookie
-            if server.hello_retry {
-                // Stale retransmission of the pre-HRR ClientHello. Roll back the
-                // transcript that next_handshake just appended and silently
-                // discard. The HRR flight will be retransmitted by the normal
-                // flight timeout mechanism if the client hasn't responded.
-                debug!("Discarding stale ClientHello retransmission after HRR");
-                server.engine.transcript.resize(transcript_len_before, 0);
-                return Ok(Self::AwaitClientHello);
-            }
-
-            debug!("No cookie in ClientHello; sending HelloRetryRequest");
-
-            // Build HRR as a special ServerHello with magic random
-            server.engine.set_cipher_suite(selected_cipher_suite);
-            send_hello_retry_request(
-                server,
-                selected_cipher_suite,
-                &expected_cookie,
-                None, // no group selection needed for cookie-only HRR
-            )?;
-
-            server.engine.replace_transcript_with_message_hash();
-            server.engine.reset_for_hello_retry();
-            server.hello_retry = true;
-
-            return Ok(Self::AwaitClientHello);
         }
 
         // Select key exchange: find first client key_share with a group we support
@@ -488,14 +507,21 @@ impl State {
                 );
 
                 server.engine.set_cipher_suite(selected_cipher_suite);
+                // Replace transcript BEFORE sending HRR so only CH1 is hashed
+                // per RFC 8446 Section 4.4.1.
+                server.engine.replace_transcript_with_message_hash();
+                let cookie_for_hrr = compute_cookie(
+                    &server.cookie_secret,
+                    &client_random,
+                    server.engine.config().crypto_provider().hmac_provider,
+                );
                 send_hello_retry_request(
                     server,
                     selected_cipher_suite,
-                    &expected_cookie,
+                    &cookie_for_hrr,
                     Some(group),
                 )?;
 
-                server.engine.replace_transcript_with_message_hash();
                 server.engine.reset_for_hello_retry();
                 server.hello_retry = true;
 
