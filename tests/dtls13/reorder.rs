@@ -19,13 +19,13 @@ fn dtls13_handles_duplicate_packets() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -80,13 +80,13 @@ fn dtls13_handles_out_of_order_packets() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -146,12 +146,12 @@ fn dtls13_handles_severely_reordered_packets() {
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
-    client.set_active(true);
-    let mut server = Dtls::new_13(config, server_cert);
-    server.set_active(false);
-
     let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -220,12 +220,12 @@ fn dtls13_handles_delayed_burst_delivery() {
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
-    client.set_active(true);
-    let mut server = Dtls::new_13(config, server_cert);
-    server.set_active(false);
-
     let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -307,12 +307,12 @@ fn dtls13_handles_interleaved_old_and_new_packets() {
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
-    client.set_active(true);
-    let mut server = Dtls::new_13(config, server_cert);
-    server.set_active(false);
-
     let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -385,13 +385,13 @@ fn dtls13_replay_window_rejects_old_record() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -473,13 +473,13 @@ fn dtls13_replay_window_rejects_duplicate_app_data() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -549,13 +549,13 @@ fn dtls13_replay_window_accepts_within_range() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -641,13 +641,13 @@ fn dtls13_reorder_app_data_after_handshake() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 

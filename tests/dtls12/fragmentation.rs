@@ -109,7 +109,7 @@ fn run_client_server_with_mtu(mtu: usize) -> (usize, usize) {
                         .expect("Failed to send client data");
                 }
                 Output::ApplicationData(data) => {
-                    client_received_data.extend_from_slice(&data);
+                    client_received_data.extend_from_slice(data);
                 }
                 Output::Timeout(_) => {
                     continue_polling = false;
@@ -184,12 +184,12 @@ fn dtls12_fragmentation_increases_packet_count() {
 
     // Tight-ish bounds informed by expected DTLS handshake/message sizes and packing
     assert!(
-        large_c2s >= 3 && large_c2s <= 8,
+        (3..=8).contains(&large_c2s),
         "large MTU client->server packets: {}",
         large_c2s
     );
     assert!(
-        small_c2s >= 4 && small_c2s <= 20,
+        (4..=20).contains(&small_c2s),
         "small MTU client->server packets: {}",
         small_c2s
     );
@@ -200,12 +200,12 @@ fn dtls12_fragmentation_increases_packet_count() {
 
     // Optional checks for server->client direction with similarly tight bounds
     assert!(
-        large_s2c >= 3 && large_s2c <= 10,
+        (3..=10).contains(&large_s2c),
         "large MTU server->client packets: {}",
         large_s2c
     );
     assert!(
-        small_s2c >= 5 && small_s2c <= 20,
+        (5..=20).contains(&small_s2c),
         "small MTU server->client packets: {}",
         small_s2c
     );
@@ -230,13 +230,13 @@ fn dtls12_fragmentation_dimpl_to_dimpl() {
 
     let config = dtls12_config_with_mtu(200);
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -309,13 +309,13 @@ fn dtls12_fragmented_handshake_with_packet_loss() {
 
     let config = dtls12_config_with_mtu(200);
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // FLIGHT 1: Client sends ClientHello (possibly fragmented).
     // Trigger the initial timeout to start the handshake.
@@ -390,13 +390,13 @@ fn dtls12_out_of_order_fragments() {
 
     let config = dtls12_config_with_mtu(200);
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;

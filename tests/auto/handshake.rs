@@ -24,13 +24,13 @@ fn auto_client_to_dtls13_server() {
 
     let config = default_config();
 
-    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -83,13 +83,13 @@ fn auto_client_to_dtls13_server_keying_material() {
 
     let config = default_config();
 
-    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_km: Option<(Vec<u8>, SrtpProfile)> = None;
     let mut server_km: Option<(Vec<u8>, SrtpProfile)> = None;
 
@@ -148,13 +148,14 @@ fn auto_client_to_auto_server() {
 
     let config = default_config();
 
-    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_auto(config, server_cert);
+    let mut server = Dtls::new_auto(config, server_cert, now);
     server.set_active(false);
 
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -206,13 +207,14 @@ fn auto_client_to_dtls12_server() {
 
     let config = default_config();
 
-    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
 
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -265,13 +267,14 @@ fn auto_client_to_dtls12_server_keying_material() {
 
     let config = default_config();
 
-    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
 
-    let mut now = Instant::now();
     let mut client_km: Option<(Vec<u8>, SrtpProfile)> = None;
     let mut server_km: Option<(Vec<u8>, SrtpProfile)> = None;
 
@@ -330,13 +333,13 @@ fn auto_client_to_dtls13_server_application_data() {
 
     let config = default_config();
 
-    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -415,13 +418,14 @@ fn auto_client_to_dtls12_server_no_cookie() {
     let client_config = default_config();
     let server_config = no_cookie_config();
 
-    let mut client = Dtls::new_auto(client_config, client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_auto(client_config, client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(server_config, server_cert);
+    let mut server = Dtls::new_12(server_config, server_cert, now);
     server.set_active(false);
 
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 
@@ -474,13 +478,13 @@ fn auto_client_to_dtls13_server_no_cookie() {
     let client_config = default_config();
     let server_config = no_cookie_config();
 
-    let mut client = Dtls::new_auto(client_config, client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_auto(client_config, client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(server_config, server_cert);
+    let mut server = Dtls::new_13(server_config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 

@@ -20,13 +20,13 @@ fn dtls13_handshake_with_small_mtu() {
     // Use small MTU to force fragmentation
     let config = dtls13_config_with_mtu(200);
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -85,13 +85,13 @@ fn dtls13_large_application_data_fragmented() {
     // Small MTU
     let config = dtls13_config_with_mtu(300);
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // First complete handshake
     for _ in 0..40 {
@@ -156,13 +156,13 @@ fn dtls13_fragmentation_during_hrr() {
     // Small MTU to force fragmentation during HRR handshake
     let config = dtls13_config_with_mtu(200);
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -255,13 +255,13 @@ fn dtls13_fragmented_handshake_with_packet_loss() {
             .expect("Failed to build DTLS 1.3 config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;

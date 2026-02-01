@@ -19,13 +19,13 @@ fn dtls13_discards_too_short_ciphertext_record() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -93,13 +93,13 @@ fn dtls13_discards_cid_bit_records() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -160,13 +160,13 @@ fn dtls13_discards_unauthenticated_ciphertext_without_length_field() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -231,13 +231,13 @@ fn dtls13_recovers_from_corrupted_packet() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -316,13 +316,13 @@ fn dtls13_close_notify_graceful_shutdown() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -380,13 +380,13 @@ fn dtls13_discards_unknown_epoch_record() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -457,13 +457,13 @@ fn dtls13_discards_truncated_unified_header() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -526,13 +526,13 @@ fn dtls13_discards_plaintext_after_handshake() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -625,13 +625,13 @@ fn dtls13_alert_bad_certificate() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -703,11 +703,11 @@ fn dtls13_only_functional_signature_schemes_advertised() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(config, client_cert);
+    let now = Instant::now();
+    let mut client = Dtls::new_13(config, client_cert, now);
     client.set_active(true);
 
     // Trigger the first ClientHello
-    let now = Instant::now();
     client.handle_timeout(now).expect("client timeout");
     let out = drain_outputs(&mut client);
     assert!(!out.packets.is_empty(), "Client should send ClientHello");
@@ -785,13 +785,13 @@ fn dtls13_bad_record_does_not_kill_datagram() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -882,13 +882,13 @@ fn dtls13_old_epoch_record_accepted_after_key_update() {
             .expect("build config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake.
     let mut client_connected = false;
@@ -992,10 +992,10 @@ fn dtls13_client_hello_padded_to_mtu() {
 
     let config = dtls13_config();
 
-    let mut client = Dtls::new_13(config, client_cert);
+    let now = Instant::now();
+    let mut client = Dtls::new_13(config, client_cert, now);
     client.set_active(true);
 
-    let now = Instant::now();
     client.handle_timeout(now).expect("client timeout");
     let out = drain_outputs(&mut client);
     assert!(!out.packets.is_empty(), "Client should send ClientHello");

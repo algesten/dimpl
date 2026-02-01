@@ -26,13 +26,13 @@ fn dtls13_key_update_on_aead_limit() {
             .expect("build config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -108,13 +108,13 @@ fn dtls13_key_update_bidirectional_after_limit() {
             .expect("build config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -221,13 +221,13 @@ fn dtls13_key_update_old_epoch_packet_still_decrypted() {
             .expect("build config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -366,13 +366,13 @@ fn dtls13_key_update_multiple_sequential() {
             .expect("build config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -449,13 +449,13 @@ fn dtls13_key_update_with_packet_loss() {
             .expect("build config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -579,13 +579,13 @@ fn dtls13_key_update_high_frequency() {
             .expect("build config"),
     );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_13(config, server_cert);
+    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;

@@ -19,13 +19,13 @@ fn dtls12_handles_duplicate_packets() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -85,13 +85,13 @@ fn dtls12_handles_out_of_order_packets() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -152,13 +152,13 @@ fn dtls12_replay_window_rejects_old_app_data() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -249,13 +249,13 @@ fn dtls12_replay_window_rejects_duplicate_app_data() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Complete handshake
     let mut client_connected = false;
@@ -331,13 +331,13 @@ fn dtls12_handles_delayed_burst_delivery() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
 

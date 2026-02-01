@@ -97,13 +97,13 @@ fn dtls12_recovers_from_corrupted_packet() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // FLIGHT 1: Client sends ClientHello
     client.handle_timeout(now).expect("client timeout start");
@@ -213,13 +213,13 @@ fn dtls12_discards_wrong_epoch_record() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     now = complete_dtls12_handshake(&mut client, &mut server, now);
 
     // Craft a DTLS 1.2 record with epoch 0 (pre-handshake) and content_type 22 (handshake).
@@ -271,13 +271,13 @@ fn dtls12_discards_truncated_record() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     // Inject a truncated packet before the handshake begins
     let truncated = vec![0x16, 0xFE, 0xFD]; // 3 bytes — too short for any DTLS record
@@ -341,13 +341,13 @@ fn dtls12_close_notify_graceful_shutdown() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     now = complete_dtls12_handshake(&mut client, &mut server, now);
 
     // Verify the connection works before the alert
@@ -429,13 +429,13 @@ fn dtls12_rejects_renegotiation() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
     now = complete_dtls12_handshake(&mut client, &mut server, now);
 
     // Verify app data works before renegotiation attempt

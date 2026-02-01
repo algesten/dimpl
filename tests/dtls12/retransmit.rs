@@ -263,13 +263,13 @@ fn dtls12_handshake_completes_after_packet_loss() {
 
     let config = dtls12_config();
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -337,13 +337,13 @@ fn dtls12_handshake_completes_with_early_packet_loss() {
             .expect("Failed to build config"),
     );
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -421,13 +421,13 @@ fn dtls12_survives_random_packet_loss_pattern() {
             .expect("Failed to build config"),
     );
 
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
     client.set_active(true);
 
-    let mut server = Dtls::new_12(config, server_cert);
+    let mut server = Dtls::new_12(config, server_cert, now);
     server.set_active(false);
-
-    let mut now = Instant::now();
 
     let mut client_connected = false;
     let mut server_connected = false;
@@ -514,12 +514,12 @@ fn dtls12_retransmit_exponential_backoff() {
             .expect("Failed to build config"),
     );
 
-    let mut client = Dtls::new_12(config, client_cert);
+    let mut now = Instant::now();
+    let mut client = Dtls::new_12(config, client_cert, now);
     client.set_active(true);
 
     // No server -- we never deliver packets.
     // Start the handshake.
-    let mut now = Instant::now();
     client.handle_timeout(now).expect("client timeout start");
     client.handle_timeout(now).expect("client arm flight 1");
     let _ = collect_packets(&mut client);
@@ -532,12 +532,9 @@ fn dtls12_retransmit_exponential_backoff() {
     // Collect the first timeout
     let mut buf = vec![0u8; 2048];
     loop {
-        match client.poll_output(&mut buf) {
-            Output::Timeout(t) => {
-                timeouts.push(t);
-                break;
-            }
-            _ => {}
+        if let Output::Timeout(t) = client.poll_output(&mut buf) {
+            timeouts.push(t);
+            break;
         }
     }
 
@@ -550,12 +547,9 @@ fn dtls12_retransmit_exponential_backoff() {
 
         // Collect the next timeout
         loop {
-            match client.poll_output(&mut buf) {
-                Output::Timeout(t) => {
-                    timeouts.push(t);
-                    break;
-                }
-                _ => {}
+            if let Output::Timeout(t) = client.poll_output(&mut buf) {
+                timeouts.push(t);
+                break;
             }
         }
     }
@@ -602,10 +596,9 @@ fn dtls12_handshake_timeout_aborts() {
             .expect("Failed to build config"),
     );
 
-    let mut client = Dtls::new_12(config, client_cert);
-    client.set_active(true);
-
     let mut now = Instant::now();
+    let mut client = Dtls::new_12(config, client_cert, now);
+    client.set_active(true);
 
     // Start the handshake
     client.handle_timeout(now).expect("client timeout start");

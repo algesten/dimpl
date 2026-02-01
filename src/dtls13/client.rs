@@ -96,7 +96,7 @@ pub struct Client {
     saved_cookie: Option<Buf>,
 
     /// The last now we seen
-    last_now: Option<Instant>,
+    last_now: Instant,
 
     /// Local events
     local_events: VecDeque<LocalEvent>,
@@ -134,7 +134,7 @@ pub(crate) enum LocalEvent {
 }
 
 impl Client {
-    pub(crate) fn new_with_engine(mut engine: Engine) -> Client {
+    pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Client {
         engine.set_client(true);
 
         Client {
@@ -149,7 +149,7 @@ impl Client {
             client_auth_requested: false,
             cert_request_context: None,
             saved_cookie: None,
-            last_now: None,
+            last_now: now,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
             pending_key_update_response: false,
@@ -173,6 +173,7 @@ impl Client {
         hybrid: crate::detect::HybridClientHello,
         config: std::sync::Arc<crate::Config>,
         certificate: crate::DtlsCertificate,
+        now: Instant,
     ) -> Client {
         let mut engine = Engine::new(config, certificate);
         engine.set_client(true);
@@ -193,7 +194,7 @@ impl Client {
             client_auth_requested: false,
             cert_request_context: None,
             saved_cookie: None,
-            last_now: None,
+            last_now: now,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
             pending_key_update_response: false,
@@ -207,7 +208,7 @@ impl Client {
     }
 
     pub fn into_server(self) -> Server {
-        Server::new_with_engine(self.engine)
+        Server::new_with_engine(self.engine, self.last_now)
     }
 
     pub(crate) fn state_name(&self) -> &'static str {
@@ -221,20 +222,16 @@ impl Client {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
-        let last_now = self
-            .last_now
-            .expect("need handle_timeout before poll_output");
-
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.server_certificates);
         }
 
-        self.engine.poll_output(buf, last_now)
+        self.engine.poll_output(buf, self.last_now)
     }
 
     /// Explicitly start the handshake process by sending a ClientHello
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
-        self.last_now = Some(now);
+        self.last_now = now;
         if self.random.is_none() {
             self.random = Some(Random::new(&mut self.engine.rng));
         }
