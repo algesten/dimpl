@@ -21,6 +21,7 @@ pub struct Config {
     handshake_timeout: Duration,
     crypto_provider: CryptoProvider,
     rng_seed: Option<u64>,
+    aead_encryption_limit: u64,
 }
 
 impl Config {
@@ -36,6 +37,7 @@ impl Config {
             handshake_timeout: Duration::from_secs(40),
             crypto_provider: None,
             rng_seed: None,
+            aead_encryption_limit: 1 << 23,
         }
     }
 
@@ -109,6 +111,16 @@ impl Config {
     pub fn rng_seed(&self) -> Option<u64> {
         self.rng_seed
     }
+
+    /// Maximum number of AEAD encryptions before triggering a KeyUpdate.
+    ///
+    /// When the number of application-epoch ciphertext records reaches this
+    /// limit, the endpoint automatically initiates a KeyUpdate to rotate keys.
+    /// Defaults to 2^23 (8,388,608).
+    #[inline(always)]
+    pub fn aead_encryption_limit(&self) -> u64 {
+        self.aead_encryption_limit
+    }
 }
 
 /// Builder for DTLS configuration.
@@ -122,6 +134,7 @@ pub struct ConfigBuilder {
     handshake_timeout: Duration,
     crypto_provider: Option<CryptoProvider>,
     rng_seed: Option<u64>,
+    aead_encryption_limit: u64,
 }
 
 impl ConfigBuilder {
@@ -209,6 +222,14 @@ impl ConfigBuilder {
         self
     }
 
+    /// Set the maximum number of AEAD encryptions before triggering a KeyUpdate.
+    ///
+    /// Defaults to 2^23 (8,388,608).
+    pub fn aead_encryption_limit(mut self, limit: u64) -> Self {
+        self.aead_encryption_limit = limit;
+        self
+    }
+
     /// Build the configuration.
     ///
     /// This validates the crypto provider before returning the configuration.
@@ -250,6 +271,7 @@ impl ConfigBuilder {
             handshake_timeout: self.handshake_timeout,
             crypto_provider,
             rng_seed: self.rng_seed,
+            aead_encryption_limit: self.aead_encryption_limit,
         })
     }
 }
