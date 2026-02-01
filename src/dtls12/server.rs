@@ -163,7 +163,7 @@ impl Server {
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         self.last_now = now;
         if self.random.is_none() {
-            self.random = Some(Random::new(now, &mut self.engine.rng));
+            self.random = Some(Random::new_with_time(now, &mut self.engine.rng));
         }
         self.engine.handle_timeout(now)?;
         self.make_progress()?;
@@ -281,12 +281,14 @@ impl State {
         // Stateless cookie: require 32-byte cookie matching HMAC(secret, client_random)
         let client_random = ch.random;
         let hmac_provider = server.engine.config().crypto_provider().hmac_provider;
-        let cookie_valid = verify_cookie(
-            hmac_provider,
-            &server.cookie_secret,
-            client_random,
-            ch.cookie,
-        );
+        let need_cookie = server.engine.config().use_server_cookie();
+        let cookie_valid = !need_cookie
+            || verify_cookie(
+                hmac_provider,
+                &server.cookie_secret,
+                client_random,
+                ch.cookie,
+            );
         if !cookie_valid {
             debug!("Invalid/missing cookie; sending HelloVerifyRequest");
 

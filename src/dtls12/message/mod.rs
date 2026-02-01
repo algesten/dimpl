@@ -17,7 +17,6 @@ mod handshake;
 mod hello_verify;
 mod id;
 mod named_group;
-mod random;
 mod record;
 mod server_hello;
 mod server_key_exchange;
@@ -39,13 +38,12 @@ pub use handshake::{Body, Handshake, Header, MessageType};
 pub use hello_verify::HelloVerifyRequest;
 pub use id::{Cookie, SessionId};
 pub use named_group::CurveType;
-pub use random::Random;
 pub use record::DTLSRecord;
 
 // Re-export shared types for backwards compatibility
 pub use crate::types::{
     CompressionMethod, ContentType, HashAlgorithm, NamedGroup, NamedGroupVec, ProtocolVersion,
-    Sequence, SignatureAlgorithm,
+    Random, Sequence, SignatureAlgorithm,
 };
 pub use server_hello::ServerHello;
 pub use server_key_exchange::{ServerKeyExchange, ServerKeyExchangeParams};

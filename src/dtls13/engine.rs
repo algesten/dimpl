@@ -245,6 +245,22 @@ impl Engine {
         self.is_client = is_client;
     }
 
+    /// Inject a pre-built hybrid ClientHello into this engine.
+    ///
+    /// Inject the transcript and state from a hybrid ClientHello that was
+    /// already sent on the wire by [`ClientPending`].
+    ///
+    /// Sets the transcript, advances the handshake sequence number to 1,
+    /// and bumps the epoch-0 record sequence so subsequent records don't
+    /// collide.  Does **not** enqueue the record for output — the hybrid
+    /// CH was already transmitted.
+    pub fn inject_hybrid_client_hello(&mut self, transcript_bytes: &[u8]) {
+        self.transcript.extend_from_slice(transcript_bytes);
+        self.next_handshake_seq_no = 1;
+        // Advance past the record sequence used by the hybrid CH.
+        self.sequence_epoch_0.sequence_number += 1;
+    }
+
     pub fn config(&self) -> &Config {
         &self.config
     }

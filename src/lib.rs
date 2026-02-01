@@ -164,6 +164,10 @@ mod dtls13;
 use dtls12::{Client as Client12, Server as Server12};
 use dtls13::{Client as Client13, Server as Server13};
 
+use buffer::Buf;
+use detect::HybridClientHello;
+
+mod detect;
 mod time_tricks;
 
 pub(crate) mod buffer;
@@ -230,6 +234,21 @@ enum Inner {
         certificate: DtlsCertificate,
         last_now: Option<Instant>,
     },
+    ClientPending {
+        hybrid: HybridClientHello,
+        config: Arc<Config>,
+        certificate: DtlsCertificate,
+        /// Pre-built wire packet (record header + handshake fragment).
+        wire_packet: Buf,
+        /// Whether the wire_packet hasn't been polled yet.
+        needs_send: bool,
+        /// Last time handle_timeout was called.
+        last_now: Option<Instant>,
+        /// When to retransmit the wire_packet.
+        retransmit_at: Option<Instant>,
+        /// How many retransmits have occurred.
+        retransmit_count: usize,
+    },
 }
 
 impl Dtls {
@@ -262,13 +281,15 @@ impl Dtls {
 
     /// Create a new DTLS instance that auto‑senses the version.
     ///
-    /// The instance starts in a pending state. When the first ClientHello
-    /// arrives, it inspects the `supported_versions` extension and creates
-    /// either a DTLS 1.2 or 1.3 server accordingly.
+    /// **Server role** (default): the instance stays in a pending state.
+    /// When the first ClientHello arrives it inspects the
+    /// `supported_versions` extension and creates either a DTLS 1.2 or
+    /// 1.3 server.
     ///
-    /// This constructor is only useful for the server role. Calling
-    /// [`set_active(true)`](Self::set_active) on an auto‑sense instance will
-    /// panic because the version has not been determined yet.
+    /// **Client role** ([`set_active(true)`](Self::set_active)): the
+    /// instance sends a hybrid ClientHello compatible with both DTLS 1.2
+    /// and 1.3 servers and forks into the correct handshake once the
+    /// server responds.
     pub fn new_auto(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
         let inner = Inner::ServerPending {
             config,
@@ -280,18 +301,20 @@ impl Dtls {
 
     /// Return true if the instance is operating in the client role.
     pub fn is_active(&self) -> bool {
-        matches!(self.inner, Some(Inner::Client12(_) | Inner::Client13(_)))
+        matches!(
+            self.inner,
+            Some(Inner::Client12(_) | Inner::Client13(_) | Inner::ClientPending { .. })
+        )
     }
 
     /// Switch between server and client roles.
     ///
     /// Set `active` to true for client role, false for server role.
     ///
-    /// # Panics
-    ///
-    /// Panics if called with `active = true` on an auto‑sense instance
-    /// ([`Dtls::new_auto`]) that has not yet received a packet, because the
-    /// DTLS version is unknown.
+    /// When called on an auto‑sense instance ([`Dtls::new_auto`]) the
+    /// client sends a hybrid ClientHello compatible with both DTLS 1.2
+    /// and 1.3. The version is determined from the server's first
+    /// response.
     pub fn set_active(&mut self, active: bool) {
         match (self.is_active(), active) {
             (true, false) => {
@@ -302,6 +325,9 @@ impl Dtls {
                     }
                     Inner::Client13(c) => {
                         self.inner = Some(Inner::Server13(c.into_server()));
+                    }
+                    Inner::ClientPending { .. } => {
+                        panic!("cannot switch auto-sense client back to server: version unknown");
                     }
                     _ => unreachable!(),
                 }
@@ -315,8 +341,25 @@ impl Dtls {
                     Inner::Server13(s) => {
                         self.inner = Some(Inner::Client13(s.into_client()));
                     }
-                    Inner::ServerPending { .. } => {
-                        panic!("cannot switch auto-sense server to client role: version unknown");
+                    Inner::ServerPending {
+                        config,
+                        certificate,
+                        ..
+                    } => {
+                        // unwrap: HybridClientHello::new only fails on missing kx groups
+                        let hybrid = HybridClientHello::new(&config)
+                            .expect("failed to build hybrid ClientHello");
+                        let wire_packet = hybrid.wire_packet();
+                        self.inner = Some(Inner::ClientPending {
+                            hybrid,
+                            config,
+                            certificate,
+                            wire_packet,
+                            needs_send: true,
+                            last_now: None,
+                            retransmit_at: None,
+                            retransmit_count: 0,
+                        });
                     }
                     _ => unreachable!(),
                 }
@@ -327,7 +370,7 @@ impl Dtls {
 
     /// Process an incoming DTLS datagram.
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        // Auto-sense: resolve version on first packet
+        // Auto-sense server: resolve version on first ClientHello
         if matches!(self.inner, Some(Inner::ServerPending { .. })) {
             let inner = self.inner.take().unwrap();
             let Inner::ServerPending {
@@ -342,7 +385,11 @@ impl Dtls {
             // unwrap: handle_timeout must be called before handle_packet
             let now = last_now.expect("need handle_timeout before handle_packet");
 
-            let resolved = if detect_dtls13_client_hello(packet) {
+            let is_13 = matches!(
+                detect::client_hello_version(packet),
+                detect::DetectedVersion::Dtls13
+            );
+            let resolved = if is_13 {
                 let mut server = Server13::new(config, certificate);
                 server.handle_timeout(now)?;
                 Inner::Server13(server)
@@ -354,12 +401,59 @@ impl Dtls {
             self.inner = Some(resolved);
         }
 
+        // Auto-sense client: resolve version on first server response
+        if matches!(self.inner, Some(Inner::ClientPending { .. })) {
+            let version = detect::server_hello_version(packet);
+            match version {
+                detect::DetectedVersion::Dtls12 => {
+                    let inner = self.inner.take().unwrap();
+                    let Inner::ClientPending {
+                        hybrid,
+                        config,
+                        certificate,
+                        ..
+                    } = inner
+                    else {
+                        unreachable!()
+                    };
+                    let mut client12 = Client12::new_from_hybrid(
+                        hybrid.random,
+                        &hybrid.handshake_fragment,
+                        config,
+                        certificate,
+                    );
+                    // Feed the HVR to Client12 — it enters
+                    // AwaitHelloVerifyRequest and processes the cookie.
+                    client12.handle_packet(packet)?;
+                    self.inner = Some(Inner::Client12(client12));
+                    return Ok(());
+                }
+                detect::DetectedVersion::Dtls13 | detect::DetectedVersion::Unknown => {
+                    let inner = self.inner.take().unwrap();
+                    let Inner::ClientPending {
+                        hybrid,
+                        config,
+                        certificate,
+                        ..
+                    } = inner
+                    else {
+                        unreachable!()
+                    };
+                    let mut client13 =
+                        Client13::new_from_hybrid(hybrid, config, certificate);
+                    client13.handle_packet(packet)?;
+                    self.inner = Some(Inner::Client13(client13));
+                    return Ok(());
+                }
+            }
+        }
+
         match self.inner.as_mut().unwrap() {
             Inner::Client12(client) => client.handle_packet(packet),
             Inner::Server12(server) => server.handle_packet(packet),
             Inner::Client13(client) => client.handle_packet(packet),
             Inner::Server13(server) => server.handle_packet(packet),
-            Inner::ServerPending { .. } => unreachable!(),
+            Inner::ServerPending { .. } | Inner::ClientPending { .. } => unreachable!(),
         }
     }
 
@@ -375,6 +469,24 @@ impl Dtls {
                 let now = last_now.expect("need handle_timeout before poll_output");
                 Output::Timeout(now + Duration::from_secs(86400))
             }
+            Inner::ClientPending {
+                wire_packet,
+                needs_send,
+                last_now,
+                retransmit_at,
+                ..
+            } => {
+                if *needs_send {
+                    *needs_send = false;
+                    let len = wire_packet.len();
+                    buf[..len].copy_from_slice(wire_packet);
+                    return Output::Packet(&buf[..len]);
+                }
+                // unwrap: handle_timeout must be called before poll_output
+                let now = last_now.expect("need handle_timeout before poll_output");
+                let next = retransmit_at.unwrap_or(now + Duration::from_secs(1));
+                Output::Timeout(next)
+            }
         }
     }
 
@@ -387,6 +499,35 @@ impl Dtls {
             Inner::Server13(server) => server.handle_timeout(now),
             Inner::ServerPending { last_now, .. } => {
                 *last_now = Some(now);
+                Ok(())
+            }
+            Inner::ClientPending {
+                last_now,
+                retransmit_at,
+                retransmit_count,
+                needs_send,
+                config,
+                ..
+            } => {
+                *last_now = Some(now);
+                // Arm initial retransmit timer on first call
+                if retransmit_at.is_none() {
+                    *retransmit_at = Some(now + Duration::from_secs(1));
+                    return Ok(());
+                }
+                if let Some(deadline) = *retransmit_at {
+                    if now >= deadline {
+                        if *retransmit_count >= config.flight_retries() {
+                            return Err(Error::Timeout("hybrid ClientHello"));
+                        }
+                        *retransmit_count += 1;
+                        *needs_send = true;
+                        // Exponential backoff: 2s, 4s, 8s, ...
+                        let shift = (*retransmit_count).min(5) as u32;
+                        let rto = Duration::from_secs(1u64 << shift);
+                        *retransmit_at = Some(now + rto);
+                    }
+                }
                 Ok(())
             }
         }
@@ -402,6 +543,9 @@ impl Dtls {
             Inner::ServerPending { .. } => Err(Error::UnexpectedMessage(
                 "cannot send application data: handshake not started".to_string(),
             )),
+            Inner::ClientPending { .. } => Err(Error::UnexpectedMessage(
+                "cannot send application data: handshake not complete".to_string(),
+            )),
         }
     }
 }
@@ -414,6 +558,7 @@ impl fmt::Debug for Dtls {
             Some(Inner::Client13(c)) => ("Client13", c.state_name()),
             Some(Inner::Server13(s)) => ("Server13", s.state_name()),
             Some(Inner::ServerPending { .. }) => ("ServerPending", ""),
+            Some(Inner::ClientPending { .. }) => ("ClientPending", ""),
             None => ("None", ""),
         };
         f.debug_struct("Dtls")
@@ -421,114 +566,6 @@ impl fmt::Debug for Dtls {
             .field("state", &state)
             .finish()
     }
-}
-
-/// Detect whether a raw packet is a DTLS 1.3 ClientHello by scanning for the
-/// `supported_versions` extension containing DTLS 1.3 (0xFEFC).
-///
-/// Returns `false` on any parse failure, defaulting to DTLS 1.2.
-fn detect_dtls13_client_hello(packet: &[u8]) -> bool {
-    detect_dtls13_client_hello_inner(packet).unwrap_or(false)
-}
-
-fn detect_dtls13_client_hello_inner(packet: &[u8]) -> Option<bool> {
-    // Record header: content_type(1) + version(2) + epoch(2) + seq(6) + length(2) = 13
-    if packet.len() < 13 {
-        return Some(false);
-    }
-
-    // content_type must be 0x16 (Handshake)
-    if packet[0] != 0x16 {
-        return Some(false);
-    }
-
-    let record_len = u16::from_be_bytes([packet[11], packet[12]]) as usize;
-    let record_body = packet.get(13..13 + record_len)?;
-
-    // Handshake header: msg_type(1) + length(3) + message_seq(2) +
-    //   fragment_offset(3) + fragment_length(3) = 12
-    if record_body.len() < 12 {
-        return Some(false);
-    }
-
-    // msg_type must be 1 (ClientHello)
-    if record_body[0] != 1 {
-        return Some(false);
-    }
-
-    let fragment_len = ((record_body[9] as usize) << 16)
-        | ((record_body[10] as usize) << 8)
-        | (record_body[11] as usize);
-    let body = record_body.get(12..12 + fragment_len)?;
-
-    // ClientHello body:
-    //   client_version(2) + random(32) = 34 minimum before session_id
-    if body.len() < 34 {
-        return Some(false);
-    }
-    let mut pos = 34;
-
-    // session_id: 1-byte length + data
-    let sid_len = *body.get(pos)? as usize;
-    pos += 1 + sid_len;
-
-    // cookie: 1-byte length + data
-    let cookie_len = *body.get(pos)? as usize;
-    pos += 1 + cookie_len;
-
-    // cipher_suites: 2-byte length + data
-    if pos + 2 > body.len() {
-        return Some(false);
-    }
-    let cs_len = u16::from_be_bytes([body[pos], body[pos + 1]]) as usize;
-    pos += 2 + cs_len;
-
-    // compression_methods: 1-byte length + data
-    let cm_len = *body.get(pos)? as usize;
-    pos += 1 + cm_len;
-
-    // extensions: 2-byte total length
-    if pos + 2 > body.len() {
-        return Some(false);
-    }
-    let ext_total_len = u16::from_be_bytes([body[pos], body[pos + 1]]) as usize;
-    pos += 2;
-    let ext_end = pos + ext_total_len;
-    if ext_end > body.len() {
-        return Some(false);
-    }
-
-    // Walk extensions looking for supported_versions (0x002B)
-    while pos + 4 <= ext_end {
-        let ext_type = u16::from_be_bytes([body[pos], body[pos + 1]]);
-        let ext_len = u16::from_be_bytes([body[pos + 2], body[pos + 3]]) as usize;
-        pos += 4;
-
-        if ext_type == 0x002B {
-            // supported_versions client format: 1-byte list length, then 2-byte versions
-            if ext_len < 1 {
-                return Some(false);
-            }
-            let list_len = body[pos] as usize;
-            let list_start = pos + 1;
-            if list_start + list_len > pos + ext_len {
-                return Some(false);
-            }
-            let mut i = list_start;
-            while i + 2 <= list_start + list_len {
-                let version = u16::from_be_bytes([body[i], body[i + 1]]);
-                if version == 0xFEFC {
-                    return Some(true);
-                }
-                i += 2;
-            }
-            return Some(false);
-        }
-
-        pos += ext_len;
-    }
-
-    Some(false)
 }
 
 /// Output events produced by the DTLS engine when polled.
@@ -613,18 +650,25 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "cannot switch auto-sense server to client role")]
-    fn test_auto_sense_panics_on_set_active() {
+    fn test_auto_sense_set_active_creates_client_pending() {
         let mut dtls = new_instance_auto();
+        assert!(!dtls.is_active());
         dtls.set_active(true);
+        assert!(dtls.is_active());
+        assert!(matches!(dtls.inner, Some(Inner::ClientPending { .. })));
     }
 
     #[test]
-    fn test_auto_sense_poll_output_returns_timeout() {
+    fn test_auto_sense_client_sends_hybrid_ch() {
         let mut dtls = new_instance_auto();
+        dtls.set_active(true);
         let now = Instant::now();
         dtls.handle_timeout(now).unwrap();
         let output = &mut [0u8; 2048];
+        // First poll returns the hybrid ClientHello packet
+        let result = dtls.poll_output(output);
+        assert!(matches!(result, Output::Packet(_)));
+        // Second poll returns Timeout
         let result = dtls.poll_output(output);
         assert!(matches!(result, Output::Timeout(_)));
     }

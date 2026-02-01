@@ -5,12 +5,73 @@
 
 use std::cmp::Ordering;
 use std::fmt;
+use std::time::Instant;
 
 use arrayvec::ArrayVec;
+use nom::bytes::complete::take;
 use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
 
+use crate::buffer::Buf;
+use crate::time_tricks::InstantExt;
+use crate::SeededRng;
+
 pub type NamedGroupVec = ArrayVec<NamedGroup, { NamedGroup::supported().len() }>;
+
+// ============================================================================
+// Random
+// ============================================================================
+
+/// ClientHello / ServerHello random value (32 bytes on the wire).
+///
+/// Used by both DTLS 1.2 and DTLS 1.3. Construction differs:
+/// - DTLS 1.2: first 4 bytes are `gmt_unix_time` ([`Random::new_with_time`]).
+/// - DTLS 1.3: all 32 bytes are random ([`Random::new`]).
+///
+/// After construction neither version accesses sub-fields — all consumers
+/// use [`bytes`](Self::bytes) or [`serialize`](Self::serialize).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Random {
+    /// The 32 raw bytes of the random value.
+    pub bytes: [u8; 32],
+}
+
+impl Random {
+    /// All-random (DTLS 1.3 / hybrid style).
+    pub fn new(rng: &mut SeededRng) -> Self {
+        Self {
+            bytes: rng.random(),
+        }
+    }
+
+    /// Timestamp in first 4 bytes (DTLS 1.2 style).
+    pub fn new_with_time(now: Instant, rng: &mut SeededRng) -> Self {
+        let gmt_duration = now.to_unix_duration();
+        // This is valid until year 2106, at which point I will be beyond caring.
+        let gmt_unix_time = gmt_duration.as_secs() as u32;
+
+        let random_bytes: [u8; 28] = rng.random();
+
+        let mut bytes = [0u8; 32];
+        bytes[..4].copy_from_slice(&gmt_unix_time.to_be_bytes());
+        bytes[4..].copy_from_slice(&random_bytes);
+
+        Self { bytes }
+    }
+
+    /// Parse a 32-byte `Random` from wire format.
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Random> {
+        let (input, data) = take(32_usize)(input)?;
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(data);
+        Ok((input, Random { bytes }))
+    }
+
+    /// Serialize this `Random` to wire format.
+    pub fn serialize(&self, output: &mut Buf) {
+        output.extend_from_slice(&self.bytes);
+    }
+}
 
 // ============================================================================
 // Named Groups (Key Exchange)
@@ -799,5 +860,55 @@ impl CompressionMethod {
     pub fn parse(input: &[u8]) -> IResult<&[u8], CompressionMethod> {
         let (input, value) = be_u8(input)?;
         Ok((input, CompressionMethod::from_u8(value)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn random_parse() {
+        let data = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+            0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
+            0x1D, 0x1E, 0x1F, 0x20,
+        ];
+
+        let expected = Random { bytes: data };
+
+        let (_, parsed) = Random::parse(&data).unwrap();
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn random_serialize() {
+        let random = Random {
+            bytes: [
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+                0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A,
+                0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
+            ],
+        };
+
+        let mut serialized = Buf::new();
+        random.serialize(&mut serialized);
+
+        assert_eq!(&*serialized, &random.bytes);
+    }
+
+    #[test]
+    fn random_parse_roundtrip() {
+        let data = [
+            0x5F, 0x37, 0xA9, 0x4B, // could be gmt_unix_time in 1.2
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+            0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
+        ];
+
+        let (_, parsed) = Random::parse(&data).unwrap();
+        let mut serialized = Buf::new();
+        parsed.serialize(&mut serialized);
+
+        assert_eq!(&*serialized, &data[..]);
     }
 }

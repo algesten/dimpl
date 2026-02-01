@@ -13,7 +13,6 @@ mod extensions;
 mod finished;
 mod handshake;
 mod id;
-mod random;
 mod record;
 mod server_hello;
 mod wrapped;
@@ -36,13 +35,12 @@ pub use extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
 pub use finished::Finished;
 pub use handshake::{Body, Handshake, Header, KeyUpdateRequest, MessageType};
 pub use id::{Cookie, SessionId};
-pub use random::Random;
 pub use record::Dtls13Record;
 pub use server_hello::ServerHello;
 pub use wrapped::{Asn1Cert, DistinguishedName};
 
 // Re-export shared types
 pub use crate::types::{
-    CompressionMethod, ContentType, Dtls13CipherSuite, NamedGroup, ProtocolVersion, Sequence,
-    SignatureScheme,
+    CompressionMethod, ContentType, Dtls13CipherSuite, NamedGroup, ProtocolVersion, Random,
+    Sequence, SignatureScheme,
 };
