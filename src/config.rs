@@ -18,6 +18,7 @@ pub struct Config {
     max_queue_rx: usize,
     max_queue_tx: usize,
     require_client_certificate: bool,
+    use_server_cookie: bool,
     flight_start_rto: Duration,
     flight_retries: usize,
     handshake_timeout: Duration,
@@ -34,6 +35,7 @@ impl Config {
             max_queue_rx: 30,
             max_queue_tx: 10,
             require_client_certificate: true,
+            use_server_cookie: true,
             flight_start_rto: Duration::from_secs(1),
             flight_retries: 4,
             handshake_timeout: Duration::from_secs(40),
@@ -70,6 +72,19 @@ impl Config {
     #[inline(always)]
     pub fn require_client_certificate(&self) -> bool {
         self.require_client_certificate
+    }
+
+    /// Whether the server sends a cookie exchange before the handshake.
+    ///
+    /// When true (the default), the server requires a stateless cookie
+    /// roundtrip for DoS protection: HelloVerifyRequest in DTLS 1.2,
+    /// HelloRetryRequest with a cookie in DTLS 1.3.
+    ///
+    /// When false, the server proceeds directly to ServerHello without
+    /// a cookie exchange.
+    #[inline(always)]
+    pub fn use_server_cookie(&self) -> bool {
+        self.use_server_cookie
     }
 
     /// Time of first retry.
@@ -131,6 +146,7 @@ pub struct ConfigBuilder {
     max_queue_rx: usize,
     max_queue_tx: usize,
     require_client_certificate: bool,
+    use_server_cookie: bool,
     flight_start_rto: Duration,
     flight_retries: usize,
     handshake_timeout: Duration,
@@ -172,6 +188,19 @@ impl ConfigBuilder {
     /// Defaults to true.
     pub fn require_client_certificate(mut self, require: bool) -> Self {
         self.require_client_certificate = require;
+        self
+    }
+
+    /// Set whether the server sends a cookie exchange before the handshake.
+    ///
+    /// When true (the default), the server requires a stateless cookie
+    /// roundtrip for DoS protection: HelloVerifyRequest in DTLS 1.2,
+    /// HelloRetryRequest with a cookie in DTLS 1.3.
+    ///
+    /// When false, the server proceeds directly to ServerHello without
+    /// a cookie exchange.
+    pub fn use_server_cookie(mut self, use_cookie: bool) -> Self {
+        self.use_server_cookie = use_cookie;
         self
     }
 
@@ -268,6 +297,7 @@ impl ConfigBuilder {
             max_queue_rx: self.max_queue_rx,
             max_queue_tx: self.max_queue_tx,
             require_client_certificate: self.require_client_certificate,
+            use_server_cookie: self.use_server_cookie,
             flight_start_rto: self.flight_start_rto,
             flight_retries: self.flight_retries,
             handshake_timeout: self.handshake_timeout,

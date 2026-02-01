@@ -410,7 +410,7 @@ impl State {
         server.client_session_id = Some(client_hello.legacy_session_id);
 
         // Cookie-based DoS protection
-        let need_cookie = true;
+        let need_cookie = server.engine.config().use_server_cookie();
 
         if need_cookie {
             let expected_cookie = compute_cookie(

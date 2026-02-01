@@ -162,6 +162,50 @@ impl Client {
         }
     }
 
+    /// Create a client from a hybrid ClientHello probe.
+    ///
+    /// Injects the hybrid's transcript and ECDHE state into a fresh engine,
+    /// then starts in `AwaitServerHello`. The engine's handshake sequence
+    /// number is advanced to 1 (one CH has been sent). The hybrid CH was
+    /// already sent on the wire by `ClientPending`, so no record is
+    /// enqueued for output.
+    pub(crate) fn new_from_hybrid(
+        hybrid: crate::detect::HybridClientHello,
+        config: std::sync::Arc<crate::Config>,
+        certificate: crate::DtlsCertificate,
+    ) -> Client {
+        let mut engine = Engine::new(config, certificate);
+        engine.set_client(true);
+
+        // Inject transcript + sequence state from the hybrid CH that was
+        // already sent on the wire by ClientPending.
+        engine.inject_hybrid_client_hello(&hybrid.transcript_bytes);
+
+        Client {
+            state: State::AwaitServerHello,
+            engine,
+            random: Some(hybrid.random),
+            session_id: None,
+            extension_data: Buf::new(),
+            negotiated_srtp_profile: None,
+            server_certificates: Vec::with_capacity(3),
+            defragment_buffer: Buf::new(),
+            client_auth_requested: false,
+            cert_request_context: None,
+            saved_cookie: None,
+            last_now: None,
+            local_events: VecDeque::new(),
+            queued_data: Vec::new(),
+            pending_key_update_response: false,
+            active_key_exchange: Some(hybrid.active_key_exchange),
+            hello_retry: false,
+            hrr_selected_group: None,
+            handshake_secret: None,
+            client_hs_traffic_secret: None,
+            server_hs_traffic_secret: None,
+        }
+    }
+
     pub fn into_server(self) -> Server {
         Server::new_with_engine(self.engine)
     }

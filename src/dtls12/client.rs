@@ -109,6 +109,52 @@ impl Client {
         }
     }
 
+    /// Create a client from a hybrid ClientHello probe (DTLS 1.2 fork).
+    ///
+    /// Accepts the hybrid's random and DTLS-framed handshake bytes so that:
+    /// - The with-cookie ClientHello uses the same random (HMAC cookie verification).
+    /// - The transcript contains the initial ClientHello (needed when the
+    ///   server skips HelloVerifyRequest and sends ServerHello directly).
+    ///
+    /// If the server does send HVR, `reset_client_for_hello_verify_request`
+    /// clears the transcript anyway, so the injected bytes are harmless.
+    pub(crate) fn new_from_hybrid(
+        random: Random,
+        handshake_fragment: &[u8],
+        config: std::sync::Arc<crate::Config>,
+        certificate: crate::DtlsCertificate,
+    ) -> Client {
+        let mut engine = Engine::new(config, certificate);
+        engine.set_client(true);
+        // The hybrid ClientHello was sent with message_seq=0 outside this
+        // engine. Advance the counter so the with-cookie CH gets message_seq=1
+        // per RFC 6347 §4.2.2.
+        engine.set_next_handshake_seq_no(1);
+        // Inject the hybrid CH into the transcript so it matches the server's
+        // transcript when the server skips HelloVerifyRequest.
+        engine.transcript.extend_from_slice(handshake_fragment);
+        // Advance epoch-0 record sequence past the hybrid CH record.
+        engine.advance_epoch_0_sequence();
+
+        Client {
+            state: State::AwaitHelloVerifyRequest,
+            engine,
+            random: Some(random),
+            session_id: None,
+            cookie: None,
+            extension_data: Buf::new(),
+            negotiated_srtp_profile: None,
+            server_random: None,
+            server_certificates: Vec::with_capacity(3),
+            defragment_buffer: Buf::new(),
+            certificate_verify: false,
+            captured_session_hash: None,
+            last_now: None,
+            local_events: VecDeque::new(),
+            queued_data: Vec::new(),
+        }
+    }
+
     pub fn into_server(self) -> Server {
         Server::new_with_engine(self.engine, self.last_now)
     }
@@ -137,7 +183,7 @@ impl Client {
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         self.last_now = now;
         if self.random.is_none() {
-            self.random = Some(Random::new(now, &mut self.engine.rng));
+            self.random = Some(Random::new_with_time(now, &mut self.engine.rng));
         }
         self.engine.handle_timeout(now)?;
         self.make_progress()?;

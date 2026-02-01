@@ -139,6 +139,22 @@ impl Engine {
         self.is_client = is_client;
     }
 
+    /// Set the next outgoing handshake message sequence number.
+    ///
+    /// Used by `Client::new_from_hybrid` to account for the hybrid
+    /// ClientHello (message_seq=0) that was already sent outside this engine.
+    pub fn set_next_handshake_seq_no(&mut self, seq: u16) {
+        self.next_handshake_seq_no = seq;
+    }
+
+    /// Advance the epoch-0 record sequence number by one.
+    ///
+    /// Used by `Client::new_from_hybrid` so subsequent epoch-0 records
+    /// don't reuse the sequence number of the hybrid ClientHello record.
+    pub fn advance_epoch_0_sequence(&mut self) {
+        self.sequence_epoch_0.sequence_number += 1;
+    }
+
     pub fn config(&self) -> &Config {
         &self.config
     }
