@@ -5,7 +5,7 @@ mod dtls13_common;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::Dtls;
+use dimpl::{Dtls, Output};
 use dtls13_common::*;
 
 #[test]
@@ -638,5 +638,361 @@ fn dtls13_caches_app_data_when_handshake_packet_lost() {
 
     eprintln!(
         "SUCCESS: App data was cached during handshake packet loss and decrypted after retransmission"
+    );
+}
+
+/// Test that large application data (exceeding MTU) is sent and received intact.
+///
+/// With the default MTU of 1150, a 5000-byte message produces a single record
+/// in an oversized datagram. The receiver must decrypt and deliver the full payload.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_large_application_data() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls13_config();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    // Complete handshake
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_out.connected && server_out.connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    // Build a 5000-byte payload (exceeds 1150 MTU)
+    let large_data: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
+
+    client
+        .send_application_data(&large_data)
+        .expect("client send large data");
+
+    // Poll with a buffer large enough for the oversized record
+    let mut big_buf = vec![0u8; 8192];
+    let mut server_received: Vec<u8> = Vec::new();
+
+    for _ in 0..20 {
+        // Drain client outputs: collect packets with large buffer
+        let mut client_packets: Vec<Vec<u8>> = Vec::new();
+        loop {
+            match client.poll_output(&mut big_buf) {
+                Output::Packet(p) => client_packets.push(p.to_vec()),
+                Output::Timeout(_) => break,
+                _ => {}
+            }
+        }
+
+        deliver_packets(&client_packets, &mut server);
+
+        // Drain server outputs: collect app data with large buffer
+        loop {
+            match server.poll_output(&mut big_buf) {
+                Output::ApplicationData(data) => {
+                    server_received.extend_from_slice(data);
+                }
+                Output::Timeout(_) => break,
+                _ => {}
+            }
+        }
+
+        if !server_received.is_empty() {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert_eq!(
+        server_received.len(),
+        5000,
+        "Server should receive all 5000 bytes"
+    );
+    assert_eq!(
+        server_received, large_data,
+        "Server should receive the exact large payload"
+    );
+}
+
+/// Test that application data continues to work after a KeyUpdate.
+///
+/// Sets a very low AEAD encryption limit (5) so that sending 10 messages
+/// triggers an automatic KeyUpdate. Then sends 5 more messages and verifies
+/// all 15 are received, confirming data flows correctly on the new epoch keys.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_data_after_key_update() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Low AEAD limit triggers KeyUpdate after 5 encryptions (with jitter, ~4-5)
+    let config = Arc::new(
+        Config::builder()
+            .aead_encryption_limit(5)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    // Complete handshake
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_out.connected && server_out.connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    let total_messages = 15;
+    let mut server_received: Vec<Vec<u8>> = Vec::new();
+
+    // Send messages one at a time, polling between each to allow KeyUpdate
+    // handshake messages to flow and to avoid filling the TX queue
+    for i in 0..total_messages {
+        let msg = format!("Message {}", i);
+        client
+            .send_application_data(msg.as_bytes())
+            .expect("client send");
+
+        // Run several exchange rounds to let KeyUpdate complete
+        for _ in 0..10 {
+            client.handle_timeout(now).expect("client timeout");
+            server.handle_timeout(now).expect("server timeout");
+
+            let client_out = drain_outputs(&mut client);
+            let server_out = drain_outputs(&mut server);
+
+            for data in server_out.app_data {
+                server_received.push(data);
+            }
+
+            deliver_packets(&client_out.packets, &mut server);
+            deliver_packets(&server_out.packets, &mut client);
+
+            now += Duration::from_millis(10);
+        }
+    }
+
+    // Verify all messages received
+    assert_eq!(
+        server_received.len(),
+        total_messages,
+        "Server should receive all {} messages (got {})",
+        total_messages,
+        server_received.len()
+    );
+
+    for (i, data) in server_received.iter().enumerate() {
+        let expected = format!("Message {}", i);
+        assert_eq!(data, expected.as_bytes(), "Message {} should match", i);
+    }
+}
+
+/// Test that the transmit queue returns an error (not a panic) when full.
+///
+/// After handshake, sends application data without polling outputs until
+/// the transmit queue overflows. Verifies `Error::TransmitQueueFull` is returned.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_queue_overflow_tx() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Small TX queue to trigger overflow quickly
+    let config = Arc::new(
+        Config::builder()
+            .max_queue_tx(3)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    // Complete handshake
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_out.connected && server_out.connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    // Send messages WITHOUT polling outputs to fill the TX queue.
+    // Use messages large enough that each one creates a new datagram
+    // (exceeding MTU prevents coalescing into the same datagram).
+    let big_msg = vec![0xAB; 1100];
+    let mut overflow_error = false;
+
+    for i in 0..50 {
+        match client.send_application_data(&big_msg) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("TX queue overflow at message {}: {}", i, e);
+                assert!(
+                    matches!(e, dimpl::Error::TransmitQueueFull),
+                    "Expected TransmitQueueFull, got: {}",
+                    e
+                );
+                overflow_error = true;
+                break;
+            }
+        }
+    }
+
+    assert!(
+        overflow_error,
+        "Should have received TransmitQueueFull error"
+    );
+}
+
+/// Test that the receive queue drops packets gracefully when full.
+///
+/// After handshake, delivers more packets than `max_queue_rx` allows without
+/// reading application data. Verifies `handle_packet` returns `ReceiveQueueFull`
+/// (no panic).
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_queue_overflow_rx() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Small RX queue to trigger overflow quickly
+    let config = Arc::new(
+        Config::builder()
+            .max_queue_rx(5)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    // Complete handshake
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_out.connected && server_out.connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    // Send many messages from client, collecting the wire packets
+    let mut all_packets: Vec<Vec<u8>> = Vec::new();
+
+    for i in 0..20 {
+        let msg = format!("Overflow msg {}", i);
+        client
+            .send_application_data(msg.as_bytes())
+            .expect("client send");
+
+        let client_out = drain_outputs(&mut client);
+        all_packets.extend(client_out.packets);
+    }
+
+    // Deliver all packets to server WITHOUT draining its outputs.
+    // The server's RX queue (max 5) should eventually reject packets.
+    let mut overflow_error = false;
+
+    for (i, packet) in all_packets.iter().enumerate() {
+        match server.handle_packet(packet) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("RX queue overflow at packet {}: {}", i, e);
+                assert!(
+                    matches!(e, dimpl::Error::ReceiveQueueFull),
+                    "Expected ReceiveQueueFull, got: {}",
+                    e
+                );
+                overflow_error = true;
+                break;
+            }
+        }
+    }
+
+    assert!(
+        overflow_error,
+        "Should have received ReceiveQueueFull error"
     );
 }

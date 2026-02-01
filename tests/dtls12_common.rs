@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, Output};
+use dimpl::{Config, Dtls, Output, SrtpProfile};
 
 /// Parsed DTLS 1.2 record header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +107,47 @@ pub fn collect_packets(endpoint: &mut Dtls) -> Vec<Vec<u8>> {
         }
     }
     out
+}
+
+/// Collected outputs from polling an endpoint to `Timeout`.
+#[derive(Default, Debug)]
+pub struct DrainedOutputs {
+    pub packets: Vec<Vec<u8>>,
+    pub connected: bool,
+    pub peer_cert: Option<Vec<u8>>,
+    pub keying_material: Option<(Vec<u8>, SrtpProfile)>,
+    pub app_data: Vec<Vec<u8>>,
+    pub timeout: Option<Instant>,
+}
+
+/// Poll until `Timeout`, collecting everything.
+pub fn drain_outputs(endpoint: &mut Dtls) -> DrainedOutputs {
+    let mut result = DrainedOutputs::default();
+    let mut buf = vec![0u8; 2048];
+    loop {
+        match endpoint.poll_output(&mut buf) {
+            Output::Packet(p) => result.packets.push(p.to_vec()),
+            Output::Connected => result.connected = true,
+            Output::PeerCert(cert) => result.peer_cert = Some(cert.to_vec()),
+            Output::KeyingMaterial(km, profile) => {
+                result.keying_material = Some((km.to_vec(), profile));
+            }
+            Output::ApplicationData(data) => result.app_data.push(data.to_vec()),
+            Output::Timeout(t) => {
+                result.timeout = Some(t);
+                break;
+            }
+        }
+    }
+    result
+}
+
+/// Deliver a slice of packets to a destination endpoint.
+pub fn deliver_packets(packets: &[Vec<u8>], dest: &mut Dtls) {
+    for p in packets {
+        // Ignore errors - they may be expected for duplicates/replays
+        let _ = dest.handle_packet(p);
+    }
 }
 
 /// Trigger a timeout by advancing time 2 seconds.

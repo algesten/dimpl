@@ -1,11 +1,11 @@
-//! DTLS 1.2 handshake tests (cookie retry, parallel handshakes).
+//! DTLS 1.2 handshake tests (cookie retry, parallel handshakes, basic handshake).
 
 mod dtls12_common;
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls};
+use dimpl::{Config, Dtls, SrtpProfile};
 use dtls12_common::*;
 
 #[test]
@@ -393,4 +393,404 @@ fn dtls12_retransmit_no_cookie_before_cookie_received() {
     );
 
     println!("SUCCESS: Old duplicate ClientHello did not block new ClientHello with cookie");
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_basic_handshake() {
+    //! Complete a full dimpl-to-dimpl DTLS 1.2 handshake and verify both
+    //! client and server reach the connected state.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls12_config();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(client_connected, "Client should be connected");
+    assert!(server_connected, "Server should be connected");
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_handshake_with_keying_material() {
+    //! Complete a DTLS 1.2 handshake with SRTP profile configured and verify
+    //! both sides derive identical SRTP keying material.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls12_config();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    let mut client_km: Option<(Vec<u8>, SrtpProfile)> = None;
+    let mut server_km: Option<(Vec<u8>, SrtpProfile)> = None;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if let Some(km) = client_out.keying_material {
+            client_km = Some(km);
+        }
+        if let Some(km) = server_out.keying_material {
+            server_km = Some(km);
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_km.is_some() && server_km.is_some() {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    let client_km = client_km.expect("Client should have keying material");
+    let server_km = server_km.expect("Server should have keying material");
+
+    assert_eq!(
+        client_km.0, server_km.0,
+        "Client and server keying material should match"
+    );
+    assert_eq!(
+        client_km.1, server_km.1,
+        "Client and server SRTP profile should match"
+    );
+    assert!(
+        !client_km.0.is_empty(),
+        "Keying material should not be empty"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_peer_certificate_exchange() {
+    //! Complete a DTLS 1.2 handshake and verify the client can access the
+    //! server's certificate and the server can access the client's certificate.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let expected_client_cert = client_cert.certificate.clone();
+    let expected_server_cert = server_cert.certificate.clone();
+
+    let config = dtls12_config();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    let mut client_peer_cert: Option<Vec<u8>> = None;
+    let mut server_peer_cert: Option<Vec<u8>> = None;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if let Some(cert) = client_out.peer_cert {
+            client_peer_cert = Some(cert);
+        }
+        if let Some(cert) = server_out.peer_cert {
+            server_peer_cert = Some(cert);
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_peer_cert.is_some() && server_peer_cert.is_some() {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_peer_cert.is_some(),
+        "Client should receive server's certificate"
+    );
+    assert!(
+        server_peer_cert.is_some(),
+        "Server should receive client's certificate"
+    );
+
+    assert_eq!(
+        client_peer_cert.unwrap(),
+        expected_server_cert,
+        "Client should receive server's certificate"
+    );
+    assert_eq!(
+        server_peer_cert.unwrap(),
+        expected_client_cert,
+        "Server should receive client's certificate"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_handshake_client_certificate_auth() {
+    //! Configure the server to require a client certificate, complete the
+    //! handshake, and verify the server received and validated the client
+    //! certificate.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let expected_client_cert = client_cert.certificate.clone();
+
+    let config = Arc::new(
+        Config::builder()
+            .require_client_certificate(true)
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    let mut server_connected = false;
+    let mut server_peer_cert: Option<Vec<u8>> = None;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if server_out.connected {
+            server_connected = true;
+        }
+        if let Some(cert) = server_out.peer_cert {
+            server_peer_cert = Some(cert);
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if server_connected && server_peer_cert.is_some() {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        server_connected,
+        "Server should be connected after client certificate auth"
+    );
+    assert!(
+        server_peer_cert.is_some(),
+        "Server should receive client's certificate"
+    );
+    assert_eq!(
+        server_peer_cert.unwrap(),
+        expected_client_cert,
+        "Server should receive the correct client certificate"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_handshake_secp384r1_key_exchange() {
+    //! Configure to use only P-384 for key exchange, complete the handshake,
+    //! and verify both sides reach connected.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::crypto::aws_lc_rs;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Build a crypto provider with only the P-384 key exchange group.
+    let mut provider = aws_lc_rs::default_provider();
+    let p384_vec: Vec<&'static dyn dimpl::crypto::SupportedKxGroup> = provider
+        .kx_groups
+        .iter()
+        .copied()
+        .filter(|g| g.name() == dimpl::NamedGroup::Secp384r1)
+        .collect();
+    // leak: intentional leak to produce a &'static slice for the provider field
+    let p384_only: &'static [&'static dyn dimpl::crypto::SupportedKxGroup] =
+        Box::leak(p384_vec.into_boxed_slice());
+    provider.kx_groups = p384_only;
+
+    let config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider)
+            .build()
+            .expect("Failed to build config with P-384 only"),
+    );
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(client_connected, "Client should be connected with P-384");
+    assert!(server_connected, "Server should be connected with P-384");
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_handshake_timeout_expires() {
+    //! Create client and server but never deliver packets. Trigger timeouts
+    //! repeatedly and verify the handshake eventually times out/fails.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Use a short handshake timeout to speed up the test.
+    let config = Arc::new(
+        Config::builder()
+            .handshake_timeout(Duration::from_secs(5))
+            .flight_retries(2)
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert);
+    server.set_active(false);
+
+    let mut now = Instant::now();
+    let mut client_timed_out = false;
+    let mut server_timed_out = false;
+
+    // Run for many iterations, advancing time each round, but never deliver
+    // packets between client and server.
+    for _ in 0..100 {
+        if !client_timed_out {
+            match client.handle_timeout(now) {
+                Ok(()) => {
+                    // Drain outputs but discard packets (never deliver them)
+                    let _ = drain_outputs(&mut client);
+                }
+                Err(_) => {
+                    client_timed_out = true;
+                }
+            }
+        }
+
+        if !server_timed_out {
+            match server.handle_timeout(now) {
+                Ok(()) => {
+                    let _ = drain_outputs(&mut server);
+                }
+                Err(_) => {
+                    server_timed_out = true;
+                }
+            }
+        }
+
+        if client_timed_out && server_timed_out {
+            break;
+        }
+
+        now += Duration::from_secs(2);
+    }
+
+    assert!(
+        client_timed_out,
+        "Client handshake should eventually time out when no packets are delivered"
+    );
 }
