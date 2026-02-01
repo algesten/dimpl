@@ -1,12 +1,11 @@
 //! DTLS 1.2 packet reordering, replay, and duplicate tests.
 
-mod dtls12_common;
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dimpl::Dtls;
-use dtls12_common::*;
+
+use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]

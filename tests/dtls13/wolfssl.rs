@@ -4,17 +4,14 @@
 //! with dimpl as both client and server.
 
 #![allow(unused, dead_code)]
-// wolfssl-sys doesn't build on Windows
-#![cfg(not(windows))]
-
-mod wolfssl;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dimpl::{Config, Dtls, Output, SrtpProfile};
-use wolfssl::{DtlsEvent, WolfDtlsCert};
+
+use crate::wolfssl_helper::{DtlsEvent, WolfDtlsCert};
 
 // =============================================================================
 // Shared helpers

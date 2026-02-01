@@ -2,13 +2,12 @@
 
 #![allow(unused)]
 
-mod dtls12_common;
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dimpl::{Config, Dtls, Output};
-use dtls12_common::*;
+
+use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]

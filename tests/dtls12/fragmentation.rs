@@ -1,15 +1,13 @@
 //! DTLS 1.2 fragmentation test (MTU-based).
 
-mod dtls12_common;
-mod ossl;
-
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dimpl::{Config, Dtls, Output};
-use dtls12_common::*;
-use ossl::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
+
+use crate::common::*;
+use crate::ossl_helper::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
 
 fn run_client_server_with_mtu(mtu: usize) -> (usize, usize) {
     // Initialize logger once across test runs

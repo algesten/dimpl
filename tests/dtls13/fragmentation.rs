@@ -1,12 +1,11 @@
 //! DTLS 1.3 fragmentation tests.
 
-mod dtls13_common;
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dimpl::{Config, Dtls};
-use dtls13_common::*;
+
+use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]
