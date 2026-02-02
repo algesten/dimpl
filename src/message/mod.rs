@@ -215,7 +215,7 @@ impl CipherSuite {
 
     /// Returns true if this cipher suite is a known/supported variant.
     pub fn is_known(&self) -> bool {
-        !matches!(self, CipherSuite::Unknown(_))
+        Self::all().contains(self)
     }
 }
 
@@ -243,11 +243,10 @@ impl CompressionMethod {
 
     /// Returns true if this compression method is a known/supported variant.
     pub fn is_known(&self) -> bool {
-        !matches!(self, CompressionMethod::Unknown(_))
+        Self::all().contains(self)
     }
 
     /// All known compression methods.
-    #[cfg(test)]
     pub fn all() -> &'static [CompressionMethod] {
         &[CompressionMethod::Null, CompressionMethod::Deflate]
     }
