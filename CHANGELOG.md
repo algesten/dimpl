@@ -1,5 +1,7 @@
 # Unreleased
 
+ * Fix ClientHello parser failing due to incorrect is_known method logic
+
 # 0.2.5
 
   * Fix ClientHello Parser Failing when too many Cipher Suites #46

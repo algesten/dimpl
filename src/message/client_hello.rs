@@ -365,7 +365,7 @@ mod tests {
 
         assert_eq!(
             client_hello.extensions.capacity(),
-            ExtensionType::all_known().len(),
+            ExtensionType::all().len(),
             "extensions ArrayVec capacity must match all known ExtensionTypes"
         );
     }

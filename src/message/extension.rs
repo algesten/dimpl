@@ -193,12 +193,11 @@ impl ExtensionType {
 
     /// Returns true if this extension type is a known/supported variant.
     pub fn is_known(&self) -> bool {
-        !matches!(self, ExtensionType::Unknown(_))
+        Self::all().contains(self)
     }
 
     /// All known extension types that this implementation handles.
-    #[cfg(test)]
-    pub fn all_known() -> &'static [ExtensionType] {
+    pub fn all() -> &'static [ExtensionType] {
         &[
             ExtensionType::SupportedGroups,
             ExtensionType::EcPointFormats,
