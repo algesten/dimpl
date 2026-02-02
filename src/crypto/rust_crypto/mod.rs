@@ -19,7 +19,8 @@
 //! or when explicitly specified:
 //!
 //! ```
-//! # if cfg!(feature = "rcgen") {
+//! # #[cfg(feature = "rcgen")]
+//! # fn main() {
 //! use std::sync::Arc;
 //! use dimpl::{Config, Dtls, certificate};
 //! use dimpl::crypto::rust_crypto;
@@ -33,6 +34,8 @@
 //! );
 //! let dtls = Dtls::new(config, cert);
 //! # }
+//! # #[cfg(not(feature = "rcgen"))]
+//! # fn main() {}
 //! ```
 
 mod cipher_suite;
