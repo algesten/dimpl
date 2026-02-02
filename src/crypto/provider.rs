@@ -26,7 +26,8 @@
 //!
 //! To use a custom crypto provider, create one and pass it to the [`Config`](crate::Config):
 //!
-//! ```
+//! ```ignore
+//! // This example requires the `aws-lc-rs` and `rcgen` features
 //! use std::sync::Arc;
 //! use dimpl::{Config, Dtls, certificate};
 //! use dimpl::crypto::aws_lc_rs;
@@ -304,7 +305,8 @@ pub trait HmacProvider: CryptoSafe {
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
+/// // This example requires the `aws-lc-rs` feature
 /// use dimpl::crypto::{CryptoProvider, aws_lc_rs};
 ///
 /// // Use the default provider
@@ -368,7 +370,8 @@ impl CryptoProvider {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
+    /// // This example requires the `aws-lc-rs` feature
     /// use dimpl::crypto::{CryptoProvider, aws_lc_rs};
     ///
     /// // Install a default provider (can only be called once per process)
