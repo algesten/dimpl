@@ -1,15 +1,14 @@
 name: Fuzz
 
-# DTLS 1.3 dev: disabled, re-enable in Step 6
 on:
-  # push:
-  #   branches: ['main']
-  # pull_request:
+  push:
+    branches: ['main']
+  pull_request:
   # Allow manual trigger
   workflow_dispatch:
   # Run fuzz tests daily
-  # schedule:
-  #   - cron: '0 0 * * *'
+  schedule:
+    - cron: '0 0 * * *'
 
 permissions:
   contents: read
@@ -27,6 +26,8 @@ jobs:
         target:
           - fuzz_dtls_packet
           - fuzz_record_parse
+          - fuzz_dtls13_packet
+          - fuzz_dtls13_record_parse
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
