@@ -18,7 +18,8 @@
 //! The rust-crypto provider is used automatically as a fallback when aws-lc-rs is not available
 //! or when explicitly specified:
 //!
-//! ```
+//! ```ignore
+//! // This example requires the `rcgen` feature for certificate generation
 //! use std::sync::Arc;
 //! use dimpl::{Config, Dtls, certificate};
 //! use dimpl::crypto::rust_crypto;
