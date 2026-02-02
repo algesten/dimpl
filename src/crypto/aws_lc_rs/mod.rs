@@ -19,6 +19,8 @@
 //! The default provider is used automatically when no custom provider is specified:
 //!
 //! ```
+//! # #[cfg(feature = "rcgen")]
+//! # fn main() {
 //! use std::sync::Arc;
 //! use dimpl::{Config, Dtls, certificate};
 //!
@@ -26,11 +28,16 @@
 //! // Implicitly uses aws-lc-rs default provider
 //! let config = Arc::new(Config::default());
 //! let dtls = Dtls::new(config, cert);
+//! # }
+//! # #[cfg(not(feature = "rcgen"))]
+//! # fn main() {}
 //! ```
 //!
 //! Or explicitly:
 //!
 //! ```
+//! # #[cfg(feature = "rcgen")]
+//! # fn main() {
 //! use std::sync::Arc;
 //! use dimpl::{Config, Dtls, certificate};
 //! use dimpl::crypto::aws_lc_rs;
@@ -43,6 +50,9 @@
 //!         .unwrap()
 //! );
 //! let dtls = Dtls::new(config, cert);
+//! # }
+//! # #[cfg(not(feature = "rcgen"))]
+//! # fn main() {}
 //! ```
 
 mod cipher_suite;

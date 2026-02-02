@@ -27,6 +27,8 @@
 //! To use a custom crypto provider, create one and pass it to the [`Config`](crate::Config):
 //!
 //! ```
+//! # #[cfg(all(feature = "aws-lc-rs", feature = "rcgen"))]
+//! # fn main() {
 //! use std::sync::Arc;
 //! use dimpl::{Config, Dtls, certificate};
 //! use dimpl::crypto::aws_lc_rs;
@@ -52,6 +54,9 @@
 //! // );
 //!
 //! let dtls = Dtls::new(config, cert);
+//! # }
+//! # #[cfg(not(all(feature = "aws-lc-rs", feature = "rcgen")))]
+//! # fn main() {}
 //! ```
 //!
 //! # Implementing a Custom Provider
@@ -305,6 +310,8 @@ pub trait HmacProvider: CryptoSafe {
 /// # Example
 ///
 /// ```
+/// # #[cfg(feature = "aws-lc-rs")]
+/// # fn main() {
 /// use dimpl::crypto::{CryptoProvider, aws_lc_rs};
 ///
 /// // Use the default provider
@@ -321,6 +328,9 @@ pub trait HmacProvider: CryptoSafe {
 ///     prf_provider: provider.prf_provider,
 ///     hmac_provider: provider.hmac_provider,
 /// };
+/// # }
+/// # #[cfg(not(feature = "aws-lc-rs"))]
+/// # fn main() {}
 /// ```
 #[derive(Debug, Clone)]
 pub struct CryptoProvider {
@@ -368,11 +378,16 @@ impl CryptoProvider {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```
+    /// # #[cfg(feature = "aws-lc-rs")]
+    /// # fn main() {
     /// use dimpl::crypto::{CryptoProvider, aws_lc_rs};
     ///
     /// // Install a default provider (can only be called once per process)
     /// CryptoProvider::install_default(aws_lc_rs::default_provider());
+    /// # }
+    /// # #[cfg(not(feature = "aws-lc-rs"))]
+    /// # fn main() {}
     /// ```
     pub fn install_default(provider: CryptoProvider) {
         DEFAULT
