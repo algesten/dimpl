@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.2.6
+
  * Fix ClientHello parser failing due to incorrect is_known method logic
 
 # 0.2.5
