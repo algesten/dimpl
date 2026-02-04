@@ -17,10 +17,13 @@ rust-version = "1.81.0"
 default = ["aws-lc-rs", "rcgen"]
 
 # Default crypto provider
-aws-lc-rs = ["dep:aws-lc-rs"]
+aws-lc-rs = ["dep:aws-lc-rs", "_crypto-common"]
 
 # Pure Rust crypto provider
-rust-crypto = ["dep:aes-gcm", "dep:p256", "dep:p384", "dep:sha2", "dep:hmac", "dep:ecdsa", "dep:generic-array", "dep:rand_core"]
+rust-crypto = ["dep:aes-gcm", "dep:p256", "dep:p384", "dep:sha2", "dep:hmac", "dep:ecdsa", "dep:generic-array", "dep:rand_core", "_crypto-common"]
+
+# Internal for all cryptos
+_crypto-common = ["dep:der", "dep:pkcs8", "dep:sec1", "dep:signature", "dep:spki", "dep:x509-cert"]
 
 # Self-signed certificate generation.
 # rcgen can either use ring or aws-lc-rs. We have decided to use aws-lc-rs to limit the number
@@ -38,12 +41,12 @@ time = { version = "0.3", features = ["formatting"] }
 arrayvec = "0.7.6"
 subtle = "2.6"
 
-der = "0.7"
-pkcs8 = { version = "0.10", features = ["pem"] }
-sec1 = "0.7"
-signature = "2.1"
-spki = "0.7"
-x509-cert = { version = "0.2", default-features = false }
+der = { version = "0.7", optional = true }
+pkcs8 = { version = "0.10", features = ["pem"], optional = true }
+sec1 = { version = "0.7", optional = true }
+signature = { version = "2.1", optional = true }
+spki = { version = "0.7", optional = true }
+x509-cert = { version = "0.2", default-features = false, optional = true }
 
 # aws-lc-rs backend
 aws-lc-rs = { version = "^1.14", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"], optional = true }
