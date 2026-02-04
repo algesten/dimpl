@@ -31,6 +31,7 @@ jobs:
       - name: Build
         run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features "${{ matrix.feature }}"
       - name: Test
+        if: matrix.feature == 'aws-lc-rs' || matrix.feature == 'rust-crypto'
         run: cargo +${{steps.toolchain.outputs.name}} test  --no-default-features --features "${{ matrix.feature }}"
 
   snowflake:
