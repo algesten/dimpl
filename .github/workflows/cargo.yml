@@ -29,9 +29,9 @@ jobs:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v1
       - name: Build
-        run: cargo +${{steps.toolchain.outputs.name}} build --features "${{ matrix.feature }}"
+        run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features "${{ matrix.feature }}"
       - name: Test
-        run: cargo +${{steps.toolchain.outputs.name}} test --features "${{ matrix.feature }}"
+        run: cargo +${{steps.toolchain.outputs.name}} test  --no-default-features --features "${{ matrix.feature }}"
 
   snowflake:
     runs-on: ubuntu-latest
