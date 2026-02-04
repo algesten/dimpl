@@ -17,6 +17,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         rust: [stable, beta, 1.81.0]
+        feature:
+          [
+            "--features aws-lc-rs",
+            "--features rust-crypto",
+            "--features rcgen",
+            "",
+          ]
 
     runs-on: ${{ matrix.os }}
 
@@ -28,50 +35,9 @@ jobs:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v1
       - name: Build
-        run: cargo +${{steps.toolchain.outputs.name}} build
+        run: cargo +${{steps.toolchain.outputs.name}} build ${{ matrix.feature }}
       - name: Test
-        run: cargo +${{steps.toolchain.outputs.name}} test
-
-  test_no_features:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable, beta, 1.81.0]
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - uses: actions/checkout@v2
-      - uses: dtolnay/rust-toolchain@master
-        id: toolchain
-        with:
-          toolchain: ${{ matrix.rust }}
-      - uses: Swatinem/rust-cache@v1
-      - name: Build (no features)
-        run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features
-      - name: Test (no features)
-        run: cargo +${{steps.toolchain.outputs.name}} test --no-default-features
-
-  test_features:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable, beta, 1.81.0]
-        feature: [aws-lc-rs, rust-crypto, rcgen]
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - uses: actions/checkout@v2
-      - uses: dtolnay/rust-toolchain@master
-        id: toolchain
-        with:
-          toolchain: ${{ matrix.rust }}
-      - uses: Swatinem/rust-cache@v1
-      - name: Build
-        run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features ${{ matrix.feature }}
-      - name: Test
-        run: cargo +${{steps.toolchain.outputs.name}} test --no-default-features --features ${{ matrix.feature }}
+        run: cargo +${{steps.toolchain.outputs.name}} test ${{ matrix.feature }}
 
   snowflake:
     runs-on: ubuntu-latest
