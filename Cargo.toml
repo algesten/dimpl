@@ -17,25 +17,13 @@ rust-version = "1.81.0"
 default = ["aws-lc-rs", "rcgen"]
 
 # Default crypto provider
-aws-lc-rs = ["dep:aws-lc-rs", "dep:der", "dep:pkcs8", "dep:sec1", "dep:signature", "dep:spki", "dep:x509-cert"]
+aws-lc-rs = ["dep:aws-lc-rs", "_crypto-common"]
 
 # Pure Rust crypto provider
-rust-crypto = [
-    "dep:aes-gcm",
-    "dep:p256",
-    "dep:p384",
-    "dep:sha2",
-    "dep:hmac",
-    "dep:ecdsa",
-    "dep:generic-array",
-    "dep:rand_core",
-    "dep:der",
-    "dep:pkcs8",
-    "dep:sec1",
-    "dep:signature",
-    "dep:spki",
-    "dep:x509-cert"
-]
+rust-crypto = ["dep:aes-gcm", "dep:p256", "dep:p384", "dep:sha2", "dep:hmac", "dep:ecdsa", "dep:generic-array", "dep:rand_core", "_crypto-common"]
+
+# Internal for all cryptos
+_crypto-common = ["dep:der", "dep:pkcs8", "dep:sec1", "dep:signature", "dep:spki", "dep:x509-cert"]
 
 # Self-signed certificate generation.
 # rcgen can either use ring or aws-lc-rs. We have decided to use aws-lc-rs to limit the number
