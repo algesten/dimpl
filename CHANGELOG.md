@@ -1,5 +1,7 @@
 # Unreleased
- 
+
+# 0.2.7
+
   * Ensure compiling without features pulls in no deps #52
 
 # 0.2.6
