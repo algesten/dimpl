@@ -165,7 +165,7 @@ pub use types::{
 mod dtls12;
 mod dtls13;
 
-use dtls12::{Client, Server};
+use dtls12::{Client as Client12, Server as Server12};
 
 mod time_tricks;
 
@@ -219,8 +219,8 @@ pub struct Dtls {
 }
 
 enum Inner {
-    Client(Client),
-    Server(Server),
+    Client12(Client12),
+    Server12(Server12),
 }
 
 impl Dtls {
@@ -234,13 +234,13 @@ impl Dtls {
     /// [`Output::PeerCert`]. It is up to the application to validate that
     /// certificate according to its security policy.
     pub fn new(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
-        let inner = Inner::Server(Server::new(config, certificate, now));
+        let inner = Inner::Server12(Server12::new(config, certificate, now));
         Dtls { inner: Some(inner) }
     }
 
     /// Return true if the instance is operating in the client role.
     pub fn is_active(&self) -> bool {
-        matches!(self.inner, Some(Inner::Client(_)))
+        matches!(self.inner, Some(Inner::Client12(_)))
     }
 
     /// Switch between server and client roles.
@@ -250,17 +250,17 @@ impl Dtls {
         match (self.is_active(), active) {
             (true, false) => {
                 let inner = self.inner.take().unwrap();
-                let Inner::Client(inner) = inner else {
+                let Inner::Client12(inner) = inner else {
                     unreachable!();
                 };
-                self.inner = Some(Inner::Server(inner.into_server()));
+                self.inner = Some(Inner::Server12(inner.into_server()));
             }
             (false, true) => {
                 let inner = self.inner.take().unwrap();
-                let Inner::Server(inner) = inner else {
+                let Inner::Server12(inner) = inner else {
                     unreachable!();
                 };
-                self.inner = Some(Inner::Client(inner.into_client()));
+                self.inner = Some(Inner::Client12(inner.into_client()));
             }
             _ => {}
         }
@@ -269,32 +269,32 @@ impl Dtls {
     /// Process an incoming DTLS datagram.
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.handle_packet(packet),
-            Inner::Server(server) => server.handle_packet(packet),
+            Inner::Client12(client) => client.handle_packet(packet),
+            Inner::Server12(server) => server.handle_packet(packet),
         }
     }
 
     /// Poll for pending output from the DTLS engine.
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.poll_output(buf),
-            Inner::Server(server) => server.poll_output(buf),
+            Inner::Client12(client) => client.poll_output(buf),
+            Inner::Server12(server) => server.poll_output(buf),
         }
     }
 
     /// Handle time-based events such as retransmission timers.
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.handle_timeout(now),
-            Inner::Server(server) => server.handle_timeout(now),
+            Inner::Client12(client) => client.handle_timeout(now),
+            Inner::Server12(server) => server.handle_timeout(now),
         }
     }
 
     /// Send application data over the established DTLS session.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.send_application_data(data),
-            Inner::Server(server) => server.send_application_data(data),
+            Inner::Client12(client) => client.send_application_data(data),
+            Inner::Server12(server) => server.send_application_data(data),
         }
     }
 }
@@ -302,8 +302,8 @@ impl Dtls {
 impl fmt::Debug for Dtls {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (role, state) = match &self.inner {
-            Some(Inner::Client(c)) => ("Client", c.state_name()),
-            Some(Inner::Server(s)) => ("Server", s.state_name()),
+            Some(Inner::Client12(c)) => ("Client", c.state_name()),
+            Some(Inner::Server12(s)) => ("Server", s.state_name()),
             None => ("None", ""),
         };
         f.debug_struct("Dtls")
