@@ -147,31 +147,6 @@
 #![allow(unknown_lints)]
 #![deny(missing_docs)]
 
-// This is the full DTLS 1.2 handshake flow
-//
-// Client                                               Server
-//
-// 1     ClientHello                  -------->
-//
-// 2                                  <--------   HelloVerifyRequest
-//                                                 (contains cookie)
-//
-// 3     ClientHello                  -------->
-//       (with cookie)
-// 4                                                     ServerHello
-//                                                      Certificate*
-//                                                ServerKeyExchange*
-//                                               CertificateRequest*
-//                                    <--------      ServerHelloDone
-// 5     Certificate*
-//       ClientKeyExchange
-//       CertificateVerify*
-//       [ChangeCipherSpec]
-//       Finished                     -------->
-// 6                                              [ChangeCipherSpec]
-//                                    <--------             Finished
-//       Application Data             <------->     Application Data
-
 #[macro_use]
 extern crate log;
 
