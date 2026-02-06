@@ -38,7 +38,6 @@ use crate::dtls13::client::{
     handshake_create_certificate, handshake_create_certificate_verify,
     signature_scheme_to_components, LocalEvent,
 };
-use crate::dtls13::Client;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::{
     Body, CompressionMethod, ContentType, Dtls13CipherSuite, Extension, ExtensionType,
@@ -47,6 +46,7 @@ use crate::dtls13::message::{
     SupportedGroupsExtension, SupportedVersionsClientHello, SupportedVersionsServerHello,
     UseSrtpExtension,
 };
+use crate::dtls13::Client;
 use crate::{Config, DtlsCertificate, Error, KeyingMaterial, Output};
 
 /// Magic random value indicating HelloRetryRequest (RFC 8446 Section 4.1.3).
@@ -231,10 +231,14 @@ impl Server {
         }
 
         let epoch = self.engine.app_send_epoch();
-        self.engine
-            .create_ciphertext_record(ContentType::ApplicationData, epoch, false, |body| {
+        self.engine.create_ciphertext_record(
+            ContentType::ApplicationData,
+            epoch,
+            false,
+            |body| {
                 body.extend_from_slice(data);
-            })?;
+            },
+        )?;
 
         Ok(())
     }
@@ -967,10 +971,7 @@ impl State {
         }
 
         // Check for incoming KeyUpdate
-        if server
-            .engine
-            .has_complete_handshake(MessageType::KeyUpdate)
-        {
+        if server.engine.has_complete_handshake(MessageType::KeyUpdate) {
             let maybe = server.engine.next_handshake_no_transcript(
                 MessageType::KeyUpdate,
                 &mut server.defragment_buffer,

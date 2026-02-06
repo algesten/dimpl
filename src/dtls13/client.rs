@@ -28,7 +28,6 @@ use subtle::ConstantTimeEq;
 use crate::buffer::Buf;
 use crate::buffer::ToBuf;
 use crate::crypto::{ActiveKeyExchange, SrtpProfile};
-use crate::dtls13::Server;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::{
     Body, ClientHello, CompressionMethod, ContentType, Cookie, Dtls13CipherSuite, Extension,
@@ -37,6 +36,7 @@ use crate::dtls13::message::{
     SupportedGroupsExtension, SupportedVersionsClientHello, SupportedVersionsServerHello,
     UseSrtpExtension,
 };
+use crate::dtls13::Server;
 use crate::{Error, KeyingMaterial, Output};
 
 /// DTLS 1.3 client
@@ -209,10 +209,14 @@ impl Client {
         }
 
         let epoch = self.engine.app_send_epoch();
-        self.engine
-            .create_ciphertext_record(ContentType::ApplicationData, epoch, false, |body| {
+        self.engine.create_ciphertext_record(
+            ContentType::ApplicationData,
+            epoch,
+            false,
+            |body| {
                 body.extend_from_slice(data);
-            })?;
+            },
+        )?;
 
         Ok(())
     }
@@ -990,10 +994,7 @@ impl State {
         }
 
         // Check for incoming KeyUpdate
-        if client
-            .engine
-            .has_complete_handshake(MessageType::KeyUpdate)
-        {
+        if client.engine.has_complete_handshake(MessageType::KeyUpdate) {
             let maybe = client.engine.next_handshake_no_transcript(
                 MessageType::KeyUpdate,
                 &mut client.defragment_buffer,
