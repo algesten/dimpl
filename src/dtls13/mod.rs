@@ -1,6 +1,31 @@
 //! DTLS 1.3 protocol implementation.
 //!
-//! This module contains the DTLS 1.3 handshake message types and parsing.
+
+// This is the full DTLS 1.3 handshake flow (RFC 9147)
+//
+// Client                                               Server
+//
+// ClientHello
+//  + supported_versions
+//  + supported_groups
+//  + key_share
+//  + signature_algorithms             -------->
+//                                                       ServerHello
+//                                                        + key_share
+//                                               + supported_versions
+//                                               {EncryptedExtensions}
+//                                               {CertificateRequest*}
+//                                                      {Certificate}
+//                                                {CertificateVerify}
+//                                     <--------          {Finished}
+// {Certificate*}
+// {CertificateVerify*}
+// {Finished}                          -------->
+// [Application Data]                  <------->   [Application Data]
+//
+// {} = encrypted with handshake keys (epoch 2)
+// [] = encrypted with application keys (epoch 3)
+// *  = optional (client auth)
 
 pub mod incoming;
 pub mod message;
