@@ -314,9 +314,7 @@ impl Dtls {
                         self.inner = Some(Inner::Client13(s.into_client()));
                     }
                     Inner::ServerPending { .. } => {
-                        panic!(
-                            "cannot switch auto-sense server to client role: version unknown"
-                        );
+                        panic!("cannot switch auto-sense server to client role: version unknown");
                     }
                     _ => unreachable!(),
                 }
