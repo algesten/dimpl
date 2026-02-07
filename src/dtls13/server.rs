@@ -573,7 +573,6 @@ impl State {
             }
         }
 
-
         // Store selected group and public key range for ServerHello
         // already completed
         server.active_key_exchange = None;
