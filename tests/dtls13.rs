@@ -74,7 +74,6 @@ fn trigger_timeout(ep: &mut Dtls, now: &mut Instant) {
 fn dtls13_config() -> Arc<Config> {
     Arc::new(
         Config::builder()
-
             .build()
             .expect("Failed to build DTLS 1.3 config"),
     )
@@ -84,7 +83,6 @@ fn dtls13_config() -> Arc<Config> {
 fn dtls13_config_with_mtu(mtu: usize) -> Arc<Config> {
     Arc::new(
         Config::builder()
-
             .mtu(mtu)
             .build()
             .expect("Failed to build DTLS 1.3 config"),
@@ -98,7 +96,6 @@ fn dtls13_config_with_mtu(mtu: usize) -> Arc<Config> {
 fn dtls13_config_with_low_aead_limit(limit: u64) -> Arc<Config> {
     Arc::new(
         Config::builder()
-
             .aead_encryption_limit(limit)
             // Keep decryption failure limit high - we only want to test KeyUpdate on encryption limit
             .aead_decryption_failure_limit(1000)
@@ -1552,7 +1549,6 @@ fn dtls13_handshake_completes_with_early_packet_loss() {
     // Use a config with more retries to handle packet loss
     let config = Arc::new(
         Config::builder()
-
             .flight_retries(8)
             .build()
             .expect("Failed to build DTLS 1.3 config"),
