@@ -408,6 +408,24 @@ impl State {
         // Cookie-based DoS protection
         let need_cookie = server.engine.config().use_server_cookie();
 
+        // Pre-compute whether we also need a key_share group selection, so
+        // we can piggyback it on a cookie HRR (avoiding two sequential HRRs).
+        let provider = server.engine.config().crypto_provider();
+        let our_groups: ArrayVec<NamedGroup, 4> =
+            provider.kx_groups.iter().map(|g| g.name()).collect();
+        let key_shares = client_key_shares.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+        let has_matching_key_share = key_shares
+            .iter()
+            .any(|(group, _)| our_groups.contains(group));
+
+        // Determine which group to request if key_share is missing
+        let hrr_group = if !has_matching_key_share {
+            let client_groups = client_supported_groups.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+            our_groups.iter().find(|g| client_groups.contains(g)).copied()
+        } else {
+            None
+        };
+
         if need_cookie {
             let expected_cookie = compute_cookie(
                 &server.cookie_secret,
@@ -447,7 +465,7 @@ impl State {
                     server,
                     selected_cipher_suite,
                     &expected_cookie,
-                    None, // no group selection needed for cookie-only HRR
+                    hrr_group, // also request key_share group if needed
                 )?;
 
                 server.engine.advance_peer_handshake_seq();
@@ -472,10 +490,6 @@ impl State {
         }
 
         // Select key exchange: find first client key_share with a group we support
-        let provider = server.engine.config().crypto_provider();
-        let our_groups: ArrayVec<NamedGroup, 4> =
-            provider.kx_groups.iter().map(|g| g.name()).collect();
-
         let key_shares = client_key_shares.unwrap_or_default();
         let matching_entry = key_shares
             .iter()
