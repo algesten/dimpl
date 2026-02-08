@@ -10,9 +10,9 @@ use pkcs8::DecodePrivateKey;
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
+use super::super::{KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
 use crate::buffer::Buf;
-use crate::crypto::provider::{KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
-use crate::message::{CipherSuite, HashAlgorithm, SignatureAlgorithm};
+use crate::types::{HashAlgorithm, SignatureAlgorithm};
 
 /// ECDSA signing key implementation.
 enum EcdsaSigningKey {
@@ -80,13 +80,6 @@ impl SigningKeyTrait for EcdsaSigningKey {
             EcdsaSigningKey::P256(_) => HashAlgorithm::SHA256,
             EcdsaSigningKey::P384(_) => HashAlgorithm::SHA384,
         }
-    }
-
-    fn is_compatible(&self, cipher_suite: CipherSuite) -> bool {
-        matches!(
-            cipher_suite,
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-        )
     }
 }
 

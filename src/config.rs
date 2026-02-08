@@ -9,18 +9,22 @@ use crate::crypto::aws_lc_rs;
 #[cfg(feature = "rust-crypto")]
 use crate::crypto::rust_crypto;
 
-/// DTLS configuration
+/// DTLS configuration shared by all connections.
+///
+/// Build with [`Config::builder()`] or use [`Config::default()`].
 #[derive(Clone)]
 pub struct Config {
     mtu: usize,
     max_queue_rx: usize,
     max_queue_tx: usize,
     require_client_certificate: bool,
+    use_server_cookie: bool,
     flight_start_rto: Duration,
     flight_retries: usize,
     handshake_timeout: Duration,
     crypto_provider: CryptoProvider,
     rng_seed: Option<u64>,
+    aead_encryption_limit: u64,
 }
 
 impl Config {
@@ -31,11 +35,13 @@ impl Config {
             max_queue_rx: 30,
             max_queue_tx: 10,
             require_client_certificate: true,
+            use_server_cookie: true,
             flight_start_rto: Duration::from_secs(1),
             flight_retries: 4,
             handshake_timeout: Duration::from_secs(40),
             crypto_provider: None,
             rng_seed: None,
+            aead_encryption_limit: 1 << 23,
         }
     }
 
@@ -66,6 +72,19 @@ impl Config {
     #[inline(always)]
     pub fn require_client_certificate(&self) -> bool {
         self.require_client_certificate
+    }
+
+    /// Whether the server sends a cookie exchange before the handshake.
+    ///
+    /// When true (the default), the server requires a stateless cookie
+    /// roundtrip for DoS protection: HelloVerifyRequest in DTLS 1.2,
+    /// HelloRetryRequest with a cookie in DTLS 1.3.
+    ///
+    /// When false, the server proceeds directly to ServerHello without
+    /// a cookie exchange.
+    #[inline(always)]
+    pub fn use_server_cookie(&self) -> bool {
+        self.use_server_cookie
     }
 
     /// Time of first retry.
@@ -109,19 +128,31 @@ impl Config {
     pub fn rng_seed(&self) -> Option<u64> {
         self.rng_seed
     }
+
+    /// Maximum number of AEAD encryptions before triggering a KeyUpdate.
+    ///
+    /// When the number of application-epoch ciphertext records reaches this
+    /// limit, the endpoint automatically initiates a KeyUpdate to rotate keys.
+    /// Defaults to 2^23 (8,388,608).
+    #[inline(always)]
+    pub fn aead_encryption_limit(&self) -> u64 {
+        self.aead_encryption_limit
+    }
 }
 
-/// Builder for DTLS configuration.
+/// Builder for [`Config`]. See each setter for defaults.
 pub struct ConfigBuilder {
     mtu: usize,
     max_queue_rx: usize,
     max_queue_tx: usize,
     require_client_certificate: bool,
+    use_server_cookie: bool,
     flight_start_rto: Duration,
     flight_retries: usize,
     handshake_timeout: Duration,
     crypto_provider: Option<CryptoProvider>,
     rng_seed: Option<u64>,
+    aead_encryption_limit: u64,
 }
 
 impl ConfigBuilder {
@@ -157,6 +188,19 @@ impl ConfigBuilder {
     /// Defaults to true.
     pub fn require_client_certificate(mut self, require: bool) -> Self {
         self.require_client_certificate = require;
+        self
+    }
+
+    /// Set whether the server sends a cookie exchange before the handshake.
+    ///
+    /// When true (the default), the server requires a stateless cookie
+    /// roundtrip for DoS protection: HelloVerifyRequest in DTLS 1.2,
+    /// HelloRetryRequest with a cookie in DTLS 1.3.
+    ///
+    /// When false, the server proceeds directly to ServerHello without
+    /// a cookie exchange.
+    pub fn use_server_cookie(mut self, use_cookie: bool) -> Self {
+        self.use_server_cookie = use_cookie;
         self
     }
 
@@ -209,6 +253,14 @@ impl ConfigBuilder {
         self
     }
 
+    /// Set the maximum number of AEAD encryptions before triggering a KeyUpdate.
+    ///
+    /// Defaults to 2^23 (8,388,608).
+    pub fn aead_encryption_limit(mut self, limit: u64) -> Self {
+        self.aead_encryption_limit = limit;
+        self
+    }
+
     /// Build the configuration.
     ///
     /// This validates the crypto provider before returning the configuration.
@@ -245,11 +297,13 @@ impl ConfigBuilder {
             max_queue_rx: self.max_queue_rx,
             max_queue_tx: self.max_queue_tx,
             require_client_certificate: self.require_client_certificate,
+            use_server_cookie: self.use_server_cookie,
             flight_start_rto: self.flight_start_rto,
             flight_retries: self.flight_retries,
             handshake_timeout: self.handshake_timeout,
             crypto_provider,
             rng_seed: self.rng_seed,
+            aead_encryption_limit: self.aead_encryption_limit,
         })
     }
 }

@@ -12,27 +12,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # DTLS 1.3 dev: reduced matrix, re-enable in Step 6
+  # test:
+  #   strategy:
+  #     matrix:
+  #       os: [ubuntu-latest, macos-latest, windows-latest]
+  #       rust: [stable, beta, 1.81.0]
+  #       feature: ["aws-lc-rs", "rust-crypto", "rcgen", ""]
+  #
+  #   runs-on: ${{ matrix.os }}
+  #
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - uses: dtolnay/rust-toolchain@master
+  #       id: toolchain
+  #       with:
+  #         toolchain: ${{ matrix.rust }}
+  #     - uses: Swatinem/rust-cache@v1
+  #     - name: Build
+  #       run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features "${{ matrix.feature }}"
+  #     - name: Test
+  #       if: matrix.feature == 'aws-lc-rs' || matrix.feature == 'rust-crypto'
+  #       run: cargo +${{steps.toolchain.outputs.name}} test  --no-default-features --features "${{ matrix.feature }}"
+
   test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable, beta, 1.81.0]
-        feature: ["aws-lc-rs", "rust-crypto", "rcgen", ""]
-
-    runs-on: ${{ matrix.os }}
-
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - uses: dtolnay/rust-toolchain@master
         id: toolchain
         with:
-          toolchain: ${{ matrix.rust }}
+          toolchain: stable
       - uses: Swatinem/rust-cache@v1
       - name: Build
-        run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features "${{ matrix.feature }}"
+        run: cargo build --features aws-lc-rs
       - name: Test
-        if: matrix.feature == 'aws-lc-rs' || matrix.feature == 'rust-crypto'
-        run: cargo +${{steps.toolchain.outputs.name}} test  --no-default-features --features "${{ matrix.feature }}"
+        run: cargo test --features aws-lc-rs
 
   snowflake:
     runs-on: ubuntu-latest

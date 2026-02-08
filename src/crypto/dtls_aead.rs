@@ -3,7 +3,9 @@
 //! This module contains types and constants specific to DTLS AEAD record formatting,
 //! separate from the pluggable crypto provider abstraction.
 
-use crate::message::{ContentType, Sequence};
+use arrayvec::ArrayVec;
+
+use crate::types::{ContentType, Sequence};
 
 /// Explicit nonce length for DTLS AEAD records.
 ///
@@ -60,41 +62,68 @@ impl Iv {
 pub struct Nonce(pub [u8; 12]);
 
 impl Nonce {
-    /// Create a new AEAD nonce by combining fixed IV and explicit nonce.
+    /// Create a new AEAD nonce by combining fixed IV and explicit nonce (DTLS 1.2).
     pub(crate) fn new(iv: Iv, explicit_nonce: &[u8]) -> Self {
         let mut nonce = [0u8; 12];
         nonce[..4].copy_from_slice(&iv.0);
         nonce[4..].copy_from_slice(explicit_nonce);
         Self(nonce)
     }
+
+    /// Create a DTLS 1.3 nonce by XORing the IV with the padded sequence number.
+    ///
+    /// Per RFC 8446 Section 5.3: nonce = iv XOR pad_left(seq, iv_len)
+    pub(crate) fn xor(iv: &[u8; 12], seq: u64) -> Self {
+        let mut nonce = *iv;
+        let seq_bytes = seq.to_be_bytes(); // 8 bytes
+                                           // XOR the last 8 bytes of the 12-byte IV with the sequence number
+        for i in 0..8 {
+            nonce[4 + i] ^= seq_bytes[i];
+        }
+        Self(nonce)
+    }
 }
 
 /// Additional Authenticated Data for DTLS records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Aad(pub [u8; 13]);
+///
+/// Variable-length to support both DTLS 1.2 (13 bytes) and DTLS 1.3 (3-5 bytes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Aad(pub ArrayVec<u8, 13>);
 
 impl Aad {
-    /// Create Additional Authenticated Data for a DTLS record.
-    pub(crate) fn new(content_type: ContentType, sequence: Sequence, length: u16) -> Self {
-        // Exactly match the format used in the working dtls implementation
-        let mut aad = [0u8; 13];
+    /// Create Additional Authenticated Data for a DTLS 1.2 record.
+    pub(crate) fn new_dtls12(content_type: ContentType, sequence: Sequence, length: u16) -> Self {
+        let mut aad = ArrayVec::new();
 
         // First set the full 8-byte sequence number
-        aad[..8].copy_from_slice(&sequence.sequence_number.to_be_bytes());
+        let seq_bytes = sequence.sequence_number.to_be_bytes();
+        aad.try_extend_from_slice(&seq_bytes).unwrap();
 
-        // Then overwrite the first 2 bytes with epoch
-        aad[..2].copy_from_slice(&sequence.epoch.to_be_bytes());
+        // Overwrite the first 2 bytes with epoch
+        let epoch_bytes = sequence.epoch.to_be_bytes();
+        aad[0] = epoch_bytes[0];
+        aad[1] = epoch_bytes[1];
 
         // Content type at index 8
-        aad[8] = content_type.as_u8();
+        aad.push(content_type.as_u8());
 
         // Protocol version bytes (major:minor) at indexes 9-10
-        aad[9] = 0xfe; // DTLS 1.2 major version
-        aad[10] = 0xfd; // DTLS 1.2 minor version
+        aad.push(0xfe); // DTLS 1.2 major version
+        aad.push(0xfd); // DTLS 1.2 minor version
 
         // Payload length (2 bytes) at indexes 11-12
-        aad[11..].copy_from_slice(&length.to_be_bytes());
+        aad.try_extend_from_slice(&length.to_be_bytes()).unwrap();
 
+        Aad(aad)
+    }
+
+    /// Create Additional Authenticated Data for a DTLS 1.3 record.
+    ///
+    /// The AAD is the raw unified header bytes (3-5 bytes).
+    pub(crate) fn new_dtls13(header_bytes: &[u8]) -> Self {
+        let mut aad = ArrayVec::new();
+        // unwrap: header_bytes is at most 5 bytes, well within capacity 13
+        aad.try_extend_from_slice(header_bytes).unwrap();
         Aad(aad)
     }
 }

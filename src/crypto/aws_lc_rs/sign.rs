@@ -9,9 +9,9 @@ use der::{Decode, Encode};
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
+use super::super::{KeyProvider, SignatureVerifier, SigningKey};
 use crate::buffer::Buf;
-use crate::crypto::provider::{KeyProvider, SignatureVerifier, SigningKey};
-use crate::message::{CipherSuite, HashAlgorithm, SignatureAlgorithm};
+use crate::types::{HashAlgorithm, SignatureAlgorithm};
 
 /// ECDSA signing key implementation.
 struct EcdsaSigningKey {
@@ -51,13 +51,6 @@ impl SigningKey for EcdsaSigningKey {
         } else {
             panic!("Unsupported signing algorithm")
         }
-    }
-
-    fn is_compatible(&self, cipher_suite: CipherSuite) -> bool {
-        matches!(
-            cipher_suite,
-            CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 | CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-        )
     }
 }
 
