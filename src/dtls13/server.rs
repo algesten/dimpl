@@ -413,15 +413,24 @@ impl State {
         let provider = server.engine.config().crypto_provider();
         let our_groups: ArrayVec<NamedGroup, 4> =
             provider.kx_groups.iter().map(|g| g.name()).collect();
-        let key_shares = client_key_shares.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+        let key_shares = client_key_shares
+            .as_ref()
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
         let has_matching_key_share = key_shares
             .iter()
             .any(|(group, _)| our_groups.contains(group));
 
         // Determine which group to request if key_share is missing
         let hrr_group = if !has_matching_key_share {
-            let client_groups = client_supported_groups.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
-            our_groups.iter().find(|g| client_groups.contains(g)).copied()
+            let client_groups = client_supported_groups
+                .as_ref()
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            our_groups
+                .iter()
+                .find(|g| client_groups.contains(g))
+                .copied()
         } else {
             None
         };
