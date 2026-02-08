@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Require now: Instant in Dtls::new() instead of panicking
+
 # 0.2.7
 
   * Ensure compiling without features pulls in no deps #52

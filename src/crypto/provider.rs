@@ -30,6 +30,7 @@
 //! # #[cfg(all(feature = "aws-lc-rs", feature = "rcgen"))]
 //! # fn main() {
 //! use std::sync::Arc;
+//! use std::time::Instant;
 //! use dimpl::{Config, Dtls, certificate};
 //! use dimpl::crypto::aws_lc_rs;
 //!
@@ -53,7 +54,7 @@
 //! //         .unwrap()
 //! // );
 //!
-//! let dtls = Dtls::new(config, cert);
+//! let dtls = Dtls::new(config, cert, Instant::now());
 //! # }
 //! # #[cfg(not(all(feature = "aws-lc-rs", feature = "rcgen")))]
 //! # fn main() {}
