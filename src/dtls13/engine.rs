@@ -123,7 +123,7 @@ pub struct Engine {
     datagram_sealed: bool,
 
     /// The records that have been sent in the current flight.
-    flight_saved_records: Vec<Entry>,
+    flight_saved_records: ArrayVec<Entry, 12>,
 
     /// Flight backoff
     flight_backoff: ExponentialBackoff,
@@ -229,7 +229,7 @@ impl Engine {
             received_record_numbers: ArrayVec::new(),
             handshake_ack_deadline: None,
             datagram_sealed: false,
-            flight_saved_records: Vec::new(),
+            flight_saved_records: ArrayVec::new(),
             flight_backoff,
             flight_timeout: Timeout::Unarmed,
             connect_timeout: Timeout::Unarmed,

@@ -330,7 +330,7 @@ impl State {
         let mut client_supported_groups: Option<ArrayVec<NamedGroup, 4>> = None;
         let mut client_srtp_profiles: Option<ArrayVec<crate::dtls13::message::SrtpProfileId, 3>> =
             None;
-        let mut client_cookie_data: Option<Vec<u8>> = None;
+        let mut client_cookie_data: Option<ArrayVec<u8, 32>> = None;
 
         for ext in &client_hello.extensions {
             match ext.extension_type {
@@ -379,7 +379,8 @@ impl State {
                     if ext_data.len() >= 2 {
                         let cookie_len = u16::from_be_bytes([ext_data[0], ext_data[1]]) as usize;
                         if ext_data.len() >= 2 + cookie_len {
-                            client_cookie_data = Some(ext_data[2..2 + cookie_len].to_vec());
+                            client_cookie_data =
+                                ArrayVec::try_from(&ext_data[2..2 + cookie_len]).ok();
                         }
                     }
                 }
