@@ -158,7 +158,7 @@ impl Server {
     }
 
     pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Server {
-        let cookie_secret = engine.rng.random::<[u8; 32]>();
+        let cookie_secret = engine.random_arr();
 
         Server {
             state: State::AwaitClientHello,
@@ -210,7 +210,7 @@ impl Server {
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         self.last_now = now;
         if self.random.is_none() {
-            self.random = Some(Random::new(&mut self.engine.rng));
+            self.random = Some(self.engine.random());
         }
         self.engine.handle_timeout(now)?;
         self.make_progress()?;

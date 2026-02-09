@@ -25,7 +25,7 @@ use crate::dtls13::message::KeyUpdateRequest;
 use crate::dtls13::message::MessageType;
 use crate::dtls13::message::Sequence;
 use crate::timer::ExponentialBackoff;
-use crate::types::HashAlgorithm;
+use crate::types::{HashAlgorithm, Random};
 use crate::window::ReplayWindow;
 use crate::{Config, Error, Output, SeededRng};
 
@@ -36,10 +36,11 @@ const MAX_DEFRAGMENT_PACKETS: usize = 50;
 const MAX_SEQUENCE_NUMBER: u64 = (1u64 << 48) - 1;
 
 pub struct Engine {
+    /// Configuration options.
     config: Arc<Config>,
 
     /// Seedable random number generator for deterministic testing
-    pub(crate) rng: SeededRng,
+    rng: SeededRng,
 
     /// Pool of buffers
     buffers_free: BufferPool,
@@ -2173,6 +2174,14 @@ impl Engine {
     /// Internal buffer pop that doesn't require &mut self (used in const-like contexts)
     fn pop_buffer_internal(&self) -> Buf {
         Buf::new()
+    }
+
+    pub fn random(&mut self) -> Random {
+        Random::new(&mut self.rng)
+    }
+
+    pub fn random_arr<const N: usize>(&mut self) -> [u8; N] {
+        self.rng.random()
     }
 }
 
