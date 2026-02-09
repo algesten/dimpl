@@ -469,7 +469,10 @@ impl State {
                 server.engine.set_cipher_suite(selected_cipher_suite);
                 // Replace transcript BEFORE sending HRR so only CH1 is hashed
                 // per RFC 8446 Section 4.4.1.
-                server.engine.replace_transcript_with_message_hash();
+                let transcript_len = server.engine.transcript.len();
+                server
+                    .engine
+                    .replace_transcript_with_message_hash(transcript_len);
                 send_hello_retry_request(
                     server,
                     selected_cipher_suite,
@@ -530,7 +533,10 @@ impl State {
                 server.engine.set_cipher_suite(selected_cipher_suite);
                 // Replace transcript BEFORE sending HRR so only CH1 is hashed
                 // per RFC 8446 Section 4.4.1.
-                server.engine.replace_transcript_with_message_hash();
+                let transcript_len = server.engine.transcript.len();
+                server
+                    .engine
+                    .replace_transcript_with_message_hash(transcript_len);
                 let cookie_for_hrr = compute_cookie(
                     &server.cookie_secret,
                     &client_random,
@@ -915,7 +921,10 @@ impl State {
         signed_content.extend_from_slice(&transcript_hash);
 
         // Copy signature data since we need to drop handshake reference
-        let signature_copy = signature.to_vec();
+        let mut signature_copy = ArrayVec::<u8, 512>::new();
+        signature_copy
+            .try_extend_from_slice(signature)
+            .map_err(|_| Error::SecurityError("Signature too large".into()))?;
 
         drop(maybe);
 
@@ -1239,7 +1248,7 @@ fn handshake_create_encrypted_extensions(
         let profile_id: crate::dtls13::message::SrtpProfileId = profile.into();
         let mut profiles = ArrayVec::new();
         profiles.push(profile_id);
-        let use_srtp = UseSrtpExtension::new(profiles, Vec::new());
+        let use_srtp = UseSrtpExtension::new(profiles, ArrayVec::new());
         use_srtp.serialize(&mut ext_buf);
         let srtp_end = ext_buf.len();
         extensions.push(Extension {

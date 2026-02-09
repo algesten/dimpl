@@ -78,11 +78,11 @@ impl From<SrtpProfileId> for SrtpProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UseSrtpExtension {
     pub profiles: SrtpProfileVec,
-    pub mki: Vec<u8>, // MKI value (usually empty)
+    pub mki: ArrayVec<u8, 255>, // MKI value (usually empty)
 }
 
 impl UseSrtpExtension {
-    pub fn new(profiles: SrtpProfileVec, mki: Vec<u8>) -> Self {
+    pub fn new(profiles: SrtpProfileVec, mki: ArrayVec<u8, 255>) -> Self {
         UseSrtpExtension { profiles, mki }
     }
 
@@ -95,9 +95,10 @@ impl UseSrtpExtension {
         profiles.push(SrtpProfileId::SRTP_AES128_CM_SHA1_80);
 
         // MKI is typically empty as per RFC 5764
-        let mki = Vec::new();
-
-        UseSrtpExtension { profiles, mki }
+        UseSrtpExtension {
+            profiles,
+            mki: ArrayVec::new(),
+        }
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], UseSrtpExtension> {
@@ -129,7 +130,7 @@ impl UseSrtpExtension {
             input,
             UseSrtpExtension {
                 profiles,
-                mki: mki.to_vec(),
+                mki: ArrayVec::try_from(mki).unwrap_or_default(),
             },
         ))
     }
@@ -161,7 +162,10 @@ mod tests {
         profiles.push(SrtpProfileId::SRTP_AEAD_AES_128_GCM);
         profiles.push(SrtpProfileId::SRTP_AES128_CM_SHA1_80);
 
-        let mki = vec![1, 2, 3];
+        let mut mki = ArrayVec::new();
+        mki.push(1);
+        mki.push(2);
+        mki.push(3);
 
         let ext = UseSrtpExtension::new(profiles, mki.clone());
 
@@ -205,6 +209,6 @@ mod tests {
                 SrtpProfileId::SRTP_AES128_CM_SHA1_80
             ]
         );
-        assert_eq!(parsed.mki, Vec::<u8>::new());
+        assert_eq!(parsed.mki, ArrayVec::<u8, 255>::new());
     }
 }

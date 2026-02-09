@@ -56,7 +56,7 @@ impl ServerHello {
             let start = buf.len();
             let mut profiles = ArrayVec::new();
             profiles.push(pid);
-            let ext = UseSrtpExtension::new(profiles, Vec::new());
+            let ext = UseSrtpExtension::new(profiles, ArrayVec::new());
             ext.serialize(buf);
             ranges.push((ExtensionType::UseSrtp, start, buf.len()));
         }

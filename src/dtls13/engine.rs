@@ -112,7 +112,7 @@ pub struct Engine {
 
     /// Record numbers of received handshake records, for ACK generation.
     /// Each entry is (epoch, sequence_number).
-    received_record_numbers: Vec<(u64, u64)>,
+    received_record_numbers: ArrayVec<(u64, u64), 32>,
 
     /// Deadline for sending a handshake ACK (epoch 2).
     /// Set when we detect gaps or partial flights during handshake.
@@ -226,7 +226,7 @@ impl Engine {
             next_handshake_seq_no: 0,
             transcript: Buf::new(),
             hs_replay: ReplayWindow::new(),
-            received_record_numbers: Vec::new(),
+            received_record_numbers: ArrayVec::new(),
             handshake_ack_deadline: None,
             datagram_sealed: false,
             flight_saved_records: Vec::new(),
@@ -407,8 +407,9 @@ impl Engine {
                 for record in incoming.records().iter() {
                     let seq = record.record().sequence;
                     if seq.epoch >= 2 {
-                        self.received_record_numbers
-                            .push((seq.epoch as u64, seq.sequence_number));
+                        let _ = self
+                            .received_record_numbers
+                            .try_push((seq.epoch as u64, seq.sequence_number));
                     }
                 }
                 self.queue_rx.insert(index, incoming);
@@ -1398,17 +1399,17 @@ impl Engine {
         }
 
         // Collect record numbers for epoch-2 handshake records we have received.
-        let record_numbers: Vec<(u64, u64)> = self
-            .queue_rx
-            .iter()
-            .flat_map(|i| i.records().iter())
-            .filter(|r| r.record().sequence.epoch == 2)
-            .filter(|r| r.record().content_type == ContentType::Handshake)
-            .map(|r| {
-                let seq = r.record().sequence;
-                (seq.epoch as u64, seq.sequence_number)
-            })
-            .collect();
+        let mut record_numbers = ArrayVec::<(u64, u64), 32>::new();
+        for incoming in self.queue_rx.iter() {
+            for r in incoming.records().iter() {
+                if r.record().sequence.epoch == 2
+                    && r.record().content_type == ContentType::Handshake
+                {
+                    let seq = r.record().sequence;
+                    let _ = record_numbers.try_push((seq.epoch as u64, seq.sequence_number));
+                }
+            }
+        }
 
         self.handshake_ack_deadline = None;
 
@@ -1475,10 +1476,11 @@ impl Engine {
     pub fn derive_early_secret(&self) -> Result<Buf, Error> {
         let hash = self.hash_algorithm();
         let hash_len = hash.output_len();
-        let zeros = vec![0u8; hash_len];
+        let zeros = [0u8; 48];
+        let zeros = &zeros[..hash_len];
         let mut early_secret = self.pop_buffer_internal();
         self.hkdf()
-            .hkdf_extract(hash, &zeros, &zeros, &mut early_secret)
+            .hkdf_extract(hash, zeros, zeros, &mut early_secret)
             .map_err(|e| Error::CryptoError(format!("Failed to derive early secret: {}", e)))?;
         Ok(early_secret)
     }
@@ -1587,9 +1589,10 @@ impl Engine {
         .map_err(|e| Error::CryptoError(format!("Failed to derive 'derived' for master: {}", e)))?;
 
         // master_secret = HKDF-Extract(derived, 0)
-        let zeros = vec![0u8; hash_len];
+        let zeros = [0u8; 48];
+        let zeros = &zeros[..hash_len];
         let mut master_secret = Buf::new();
-        hkdf.hkdf_extract(hash, &derived, &zeros, &mut master_secret)
+        hkdf.hkdf_extract(hash, &derived, zeros, &mut master_secret)
             .map_err(|e| Error::CryptoError(format!("Failed to derive master secret: {}", e)))?;
 
         // Get transcript hash up to and including server Finished
@@ -1944,24 +1947,33 @@ impl Engine {
     ///
     /// Per RFC 8446 Section 4.4.1: Hash replaces transcript with
     /// message_hash = 0xFE || 00 00 Hash.length || Hash(CH1)
-    pub fn replace_transcript_with_message_hash(&mut self) {
+    ///
+    /// `split_at` is the byte offset that separates the portion to hash (CH1)
+    /// from the tail to preserve (HRR bytes appended by next_handshake).
+    /// The transcript becomes: message_hash(CH1) || transcript[split_at..].
+    pub fn replace_transcript_with_message_hash(&mut self, split_at: usize) {
         let hash = self.hash_algorithm();
         let mut hash_ctx = self
             .config
             .crypto_provider()
             .hash_provider
             .create_hash(hash);
-        hash_ctx.update(&self.transcript);
+        hash_ctx.update(&self.transcript[..split_at]);
         let mut hash_value = Buf::new();
         hash_ctx.clone_and_finalize(&mut hash_value);
 
-        self.transcript.clear();
-        // message_hash construct: msg_type=0xFE, length=hash_len
-        self.transcript.push(0xFE);
+        // Build new transcript: message_hash || tail
+        let mut new_transcript = self.buffers_free.pop();
+        // message_hash construct: msg_type=0xFE, length(3)=hash_len
+        new_transcript.push(0xFE);
         let hash_len = hash_value.len() as u32;
-        self.transcript
-            .extend_from_slice(&hash_len.to_be_bytes()[1..]);
-        self.transcript.extend_from_slice(&hash_value);
+        new_transcript.extend_from_slice(&hash_len.to_be_bytes()[1..]);
+        new_transcript.extend_from_slice(&hash_value);
+        // Append the preserved tail (HRR bytes)
+        new_transcript.extend_from_slice(&self.transcript[split_at..]);
+
+        let old = std::mem::replace(&mut self.transcript, new_transcript);
+        self.buffers_free.push(old);
     }
 
     // =========================================================================

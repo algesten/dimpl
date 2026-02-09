@@ -486,10 +486,9 @@ impl State {
             // Replace transcript with message_hash per RFC 8446 Section 4.4.1.
             // The HRR was already appended to the transcript by next_handshake().
             // We must hash only CH1, then re-append the HRR bytes.
-            let hrr_bytes = client.engine.transcript[transcript_len_before..].to_vec();
-            client.engine.transcript.resize(transcript_len_before, 0);
-            client.engine.replace_transcript_with_message_hash();
-            client.engine.transcript.extend_from_slice(&hrr_bytes);
+            client
+                .engine
+                .replace_transcript_with_message_hash(transcript_len_before);
             client.engine.advance_peer_handshake_seq();
             client.engine.reset_for_hello_retry();
             client.hello_retry = true;
@@ -833,7 +832,10 @@ impl State {
         signed_content.extend_from_slice(&transcript_hash);
 
         // Copy signature data since we need to drop handshake reference
-        let signature_copy = signature.to_vec();
+        let mut signature_copy = ArrayVec::<u8, 512>::new();
+        signature_copy
+            .try_extend_from_slice(signature)
+            .map_err(|_| Error::SecurityError("Signature too large".into()))?;
 
         drop(maybe);
 
@@ -936,26 +938,30 @@ impl State {
 
         if has_cert {
             let context = client.cert_request_context.as_deref().unwrap_or(&[]);
-            let context = context.to_vec(); // clone so we don't borrow client
+            let mut context_copy = ArrayVec::<u8, 255>::new();
+            // unwrap: cert_request_context is u8-length-prefixed, max 255 bytes
+            context_copy.try_extend_from_slice(context).unwrap();
 
             client
                 .engine
                 .create_handshake(MessageType::Certificate, |body, engine| {
-                    handshake_create_certificate(body, engine, &context)
+                    handshake_create_certificate(body, engine, &context_copy)
                 })?;
 
             Ok(Self::SendCertificateVerify)
         } else {
             // No client certificate: send empty Certificate and skip CertificateVerify
             let context = client.cert_request_context.as_deref().unwrap_or(&[]);
-            let context = context.to_vec();
+            let mut context_copy = ArrayVec::<u8, 255>::new();
+            // unwrap: cert_request_context is u8-length-prefixed, max 255 bytes
+            context_copy.try_extend_from_slice(context).unwrap();
 
             client
                 .engine
                 .create_handshake(MessageType::Certificate, |body, _engine| {
                     // certificate_request_context
-                    body.push(context.len() as u8);
-                    body.extend_from_slice(&context);
+                    body.push(context_copy.len() as u8);
+                    body.extend_from_slice(&context_copy);
                     // empty certificate_list (3-byte zero length)
                     body.extend_from_slice(&[0, 0, 0]);
                     Ok(())
