@@ -784,6 +784,15 @@ impl State {
         let scheme = cv.signed.scheme;
         let signature = cv.signed.signature(&client.defragment_buffer);
 
+        // RFC 8446 §4.4.3: The receiver MUST verify that the signature algorithm
+        // is one that was offered in the signature_algorithms extension.
+        if !SignatureScheme::supported().contains(&scheme) {
+            return Err(Error::SecurityError(format!(
+                "Server used un-offered signature scheme: {:?}",
+                scheme
+            )));
+        }
+
         // Build the signed content per RFC 8446 Section 4.4.3:
         // 0x20 * 64 || "TLS 1.3, server CertificateVerify\0" || transcript_hash
         let mut signed_content = Buf::new();

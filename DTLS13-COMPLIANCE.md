@@ -54,7 +54,7 @@ February 2026.
 |---|---|---|---|
 | legacy_record_version = 0xFEFD | 5.1 | **DONE** | `record.rs:195` |
 | legacy_version in CH = 0xFEFD | 5.1 | **DONE** | `client.rs:1069` |
-| No ChangeCipherSpec | 5.1 | **DONE** | CCS discarded |
+| No ChangeCipherSpec | 5.1 | **DONE** | CCS discarded in `engine.rs:insert_incoming` |
 | Version via supported_versions | 5.1 | **DONE** | Client+server |
 | 12-byte handshake header | 5.2 | **DONE** | `handshake.rs:63-131` |
 | message_seq (incl. HRR) | 5.2 | **DONE** | `engine.rs:1057-1773` |
@@ -91,11 +91,12 @@ February 2026.
 | Requirement | RFC | Status | Evidence |
 |---|---|---|---|
 | **Send alerts** | 6 | **MISSING** | Zero alert records sent |
-| **Process received alerts** | 6 | **MISSING** | Never read from queue |
-| **close_notify** | 6 | **MISSING** | Not implemented |
+| **Process received alerts** | 6 | **DONE** | Fatal alerts error in `engine.rs:insert_incoming` |
+| **close_notify** | 6 | **PARTIAL** | Received close_notify triggers error; sending not implemented |
 | **Fatal alert before teardown** | 6 | **MISSING** | Errors not sent |
 
-**The entire alert protocol is unimplemented.**
+**Receiving alerts is implemented (fatal alerts and close_notify close the connection).
+Sending alerts is not yet implemented.**
 
 ---
 

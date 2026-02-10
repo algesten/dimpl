@@ -58,6 +58,7 @@ use crate::dtls13::message::Random;
 use crate::dtls13::message::ServerHello;
 use crate::dtls13::message::SessionId;
 use crate::dtls13::message::SignatureAlgorithmsExtension;
+use crate::dtls13::message::SignatureScheme;
 use crate::dtls13::message::SupportedGroupsExtension;
 use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::SupportedVersionsServerHello;
@@ -899,6 +900,15 @@ impl State {
 
         let scheme = cv.signed.scheme;
         let signature = cv.signed.signature(&server.defragment_buffer);
+
+        // RFC 8446 §4.4.3: The signature algorithm MUST be one offered in
+        // the signature_algorithms field of the CertificateRequest message.
+        if !SignatureScheme::supported().contains(&scheme) {
+            return Err(Error::SecurityError(format!(
+                "Client used un-offered signature scheme: {:?}",
+                scheme
+            )));
+        }
 
         // Build the signed content per RFC 8446 Section 4.4.3:
         // 0x20 * 64 || "TLS 1.3, client CertificateVerify\0" || transcript_hash

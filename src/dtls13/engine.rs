@@ -332,16 +332,44 @@ impl Engine {
             return Err(Error::ReceiveQueueFull);
         }
 
-        // Handle ACK records immediately; collect non-ACK records for queuing.
-        // A single UDP datagram can contain ACK + other records (e.g., AppData),
-        // so we must not discard records that follow an ACK.
+        // Handle ACK, Alert, and CCS records immediately; collect the rest for queuing.
+        // A single UDP datagram can contain mixed record types, so we process
+        // each record individually without discarding siblings.
         let mut non_ack_records = ArrayVec::new();
         for record in incoming.into_records() {
-            if record.record().content_type == ContentType::Ack {
-                let fragment = record.record().fragment(record.buffer());
-                self.process_ack(fragment);
-            } else {
-                non_ack_records.try_push(record).ok();
+            match record.record().content_type {
+                ContentType::Ack => {
+                    let fragment = record.record().fragment(record.buffer());
+                    self.process_ack(fragment);
+                }
+                ContentType::Alert => {
+                    let fragment = record.record().fragment(record.buffer());
+                    if fragment.len() >= 2 {
+                        let level = fragment[0];
+                        let description = fragment[1];
+                        // RFC 8446 §6 / RFC 9147 §6: fatal alerts (level 2) and
+                        // close_notify (description 0) must close the connection.
+                        if level == 2 || description == 0 {
+                            return Err(Error::SecurityError(format!(
+                                "Received fatal alert: level={}, description={}",
+                                level, description
+                            )));
+                        }
+                        // Warning alerts (level 1) with non-zero description are
+                        // discarded per RFC 8446 §6.
+                        debug!(
+                            "Discarding warning alert: level={}, description={}",
+                            level, description
+                        );
+                    }
+                }
+                // RFC 9147 §5: CCS records must be discarded in DTLS 1.3.
+                ContentType::ChangeCipherSpec => {
+                    trace!("Discarding CCS record");
+                }
+                _ => {
+                    non_ack_records.try_push(record).ok();
+                }
             }
         }
 
@@ -668,7 +696,7 @@ impl Engine {
 
     pub fn flight_resend(&mut self, reason: &str) -> Result<(), Error> {
         debug!("Resending flight due to {}", reason);
-        let records = mem::take(&mut self.flight_saved_records);
+        let mut records = mem::take(&mut self.flight_saved_records);
 
         // Mark the current last datagram as "sealed" so resent records
         // go into fresh datagrams. Without this, can_append would pack
@@ -676,17 +704,30 @@ impl Engine {
         // which causes duplicate handshake fragments at the receiver.
         self.seal_current_datagram();
 
-        for entry in &records {
+        for entry in &mut records {
             // Selective retransmission: skip records that have been ACKed
             if entry.acked {
                 continue;
             }
 
             if entry.epoch == 0 {
+                // Capture the sequence number the retransmitted record will use
+                let new_seq = self.sequence_epoch_0.sequence_number;
                 self.create_plaintext_record(entry.content_type, false, |fragment| {
                     fragment.extend_from_slice(&entry.fragment);
                 })?;
+                entry.send_seq = new_seq;
             } else {
+                // Capture the sequence number the retransmitted record will use
+                let new_seq = if entry.epoch == 2 {
+                    self.hs_send_seq
+                } else if self.prev_app_send_keys.is_some()
+                    && entry.epoch == self.prev_app_send_epoch
+                {
+                    self.prev_app_send_seq
+                } else {
+                    self.app_send_seq
+                };
                 self.create_ciphertext_record(
                     entry.content_type,
                     entry.epoch,
@@ -695,6 +736,7 @@ impl Engine {
                         fragment.extend_from_slice(&entry.fragment);
                     },
                 )?;
+                entry.send_seq = new_seq;
             }
         }
 
