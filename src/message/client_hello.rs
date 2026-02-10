@@ -1,9 +1,7 @@
 use super::extensions::{ECPointFormatsExtension, SignatureAlgorithmsExtension};
 use super::extensions::{SupportedGroupsExtension, UseSrtpExtension};
-use super::{
-    CipherSuite, CipherSuiteVec, CompressionMethod, CompressionMethodVec, ProtocolVersion,
-};
-use super::{Cookie, Extension, ExtensionType, Random, SessionId};
+use super::{CipherSuite, CipherSuiteVec, CompressionMethod, CompressionMethodVec};
+use super::{Cookie, Extension, ExtensionType, ProtocolVersion, Random, SessionId};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};

@@ -26,11 +26,9 @@ use crate::engine::Engine;
 use crate::message::{Body, CertificateRequest, CertificateTypeVec, CipherSuite};
 use crate::message::{ClientCertificateType, CompressionMethod, ContentType, Cookie, CurveType};
 use crate::message::{DistinguishedName, ExchangeKeys, ExtensionType};
-use crate::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
-use crate::message::{
-    MessageType, NamedGroup, NamedGroupVec, ProtocolVersion, Random, ServerHello,
-};
-use crate::message::{SessionId, SignatureAlgorithm, SignatureAndHashAlgorithmVec};
+use crate::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm, MessageType};
+use crate::message::{NamedGroup, NamedGroupVec, ProtocolVersion, Random};
+use crate::message::{ServerHello, SessionId, SignatureAlgorithm, SignatureAndHashAlgorithmVec};
 use crate::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId};
 use crate::message::{SrtpProfileVec, SupportedGroupsExtension, UseSrtpExtension};
 use crate::{Client, Config, Error, Output};

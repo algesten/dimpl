@@ -1,7 +1,5 @@
-use super::{
-    CertificateTypeVec, ClientCertificateType, DistinguishedName, SignatureAndHashAlgorithm,
-    SignatureAndHashAlgorithmVec,
-};
+use super::{CertificateTypeVec, ClientCertificateType, DistinguishedName};
+use super::{SignatureAndHashAlgorithm, SignatureAndHashAlgorithmVec};
 use crate::buffer::Buf;
 use crate::util::{many0, many1};
 use arrayvec::ArrayVec;
