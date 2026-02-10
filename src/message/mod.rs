@@ -329,7 +329,7 @@ impl ClientCertificateType {
     /// Returns true if this certificate type is supported by this implementation.
     /// Currently only ECDSA_SIGN is supported.
     pub fn is_supported(&self) -> bool {
-        matches!(self, ClientCertificateType::ECDSA_SIGN)
+        Self::supported().contains(self)
     }
 
     /// Supported client certificate types.
@@ -524,11 +524,6 @@ impl SignatureAndHashAlgorithm {
 
     /// Returns true if this signature+hash combination is supported.
     pub fn is_supported(&self) -> bool {
-        let dominated_hash = matches!(self.hash, HashAlgorithm::SHA256 | HashAlgorithm::SHA384);
-        let supported_sig = matches!(
-            self.signature,
-            SignatureAlgorithm::ECDSA | SignatureAlgorithm::RSA
-        );
-        dominated_hash && supported_sig
+        Self::supported().contains(self)
     }
 }
