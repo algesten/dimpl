@@ -1,19 +1,18 @@
 use crate::buffer::Buf;
 use crate::crypto::CryptoProvider;
-use crate::message::NamedGroup;
-use arrayvec::ArrayVec;
+use crate::message::{NamedGroup, NamedGroupVec};
 use nom::IResult;
 
 /// SupportedGroups extension as defined in RFC 8422
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupportedGroupsExtension {
-    pub groups: ArrayVec<NamedGroup, 4>,
+    pub groups: NamedGroupVec,
 }
 
 impl SupportedGroupsExtension {
     /// Create a SupportedGroupsExtension from a crypto provider
     pub fn from_provider(provider: &CryptoProvider) -> Self {
-        let mut groups = ArrayVec::new();
+        let mut groups = NamedGroupVec::new();
         for kx_group in provider.supported_kx_groups() {
             groups.push(kx_group.name());
         }
@@ -22,7 +21,7 @@ impl SupportedGroupsExtension {
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], SupportedGroupsExtension> {
         let (mut input, list_len) = nom::number::complete::be_u16(input)?;
-        let mut groups: ArrayVec<NamedGroup, 4> = ArrayVec::new();
+        let mut groups = NamedGroupVec::new();
         let mut remaining = list_len as usize;
 
         // Parse groups; only include supported groups (skip Unknown and unsupported)
@@ -57,7 +56,7 @@ mod tests {
 
     #[test]
     fn test_supported_groups_extension() {
-        let mut groups = ArrayVec::new();
+        let mut groups = NamedGroupVec::new();
         groups.push(NamedGroup::X25519);
         groups.push(NamedGroup::Secp256r1);
 
@@ -99,18 +98,6 @@ mod tests {
                 NamedGroup::Secp256r1,
                 NamedGroup::Secp384r1
             ]
-        );
-    }
-
-    #[test]
-    fn capacity_matches_supported() {
-        let ext = SupportedGroupsExtension {
-            groups: ArrayVec::new(),
-        };
-        assert_eq!(
-            ext.groups.capacity(),
-            NamedGroup::supported().len(),
-            "SupportedGroupsExtension capacity must match all supported NamedGroups"
         );
     }
 }

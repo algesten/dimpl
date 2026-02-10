@@ -1,25 +1,26 @@
 use crate::buffer::Buf;
-use crate::message::SignatureAndHashAlgorithm;
-use arrayvec::ArrayVec;
+use crate::message::{SignatureAndHashAlgorithm, SignatureAndHashAlgorithmVec};
 use nom::IResult;
 
 /// SignatureAlgorithms extension as defined in RFC 5246
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureAlgorithmsExtension {
-    pub supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 4>,
+    pub supported_signature_algorithms: SignatureAndHashAlgorithmVec,
 }
 
 impl SignatureAlgorithmsExtension {
     /// Create a default SignatureAlgorithmsExtension with standard algorithms
     pub fn default() -> Self {
         SignatureAlgorithmsExtension {
-            supported_signature_algorithms: SignatureAndHashAlgorithm::supported(),
+            supported_signature_algorithms: SignatureAndHashAlgorithmVec::from(
+                *SignatureAndHashAlgorithm::supported(),
+            ),
         }
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAlgorithmsExtension> {
         let (input, list_len) = nom::number::complete::be_u16(input)?;
-        let mut algorithms: ArrayVec<SignatureAndHashAlgorithm, 4> = ArrayVec::new();
+        let mut algorithms = SignatureAndHashAlgorithmVec::new();
         let mut remaining = list_len as usize;
         let mut current_input = input;
 
@@ -64,7 +65,7 @@ mod tests {
 
     #[test]
     fn test_signature_algorithms_extension() {
-        let mut algorithms: ArrayVec<SignatureAndHashAlgorithm, 4> = ArrayVec::new();
+        let mut algorithms = SignatureAndHashAlgorithmVec::new();
         algorithms.push(SignatureAndHashAlgorithm::new(
             HashAlgorithm::SHA256,
             SignatureAlgorithm::ECDSA,
@@ -92,15 +93,5 @@ mod tests {
         let (_, parsed) = SignatureAlgorithmsExtension::parse(&serialized).unwrap();
 
         assert_eq!(parsed.supported_signature_algorithms, algorithms);
-    }
-
-    #[test]
-    fn capacity_matches_supported() {
-        let ext = SignatureAlgorithmsExtension::default();
-        assert_eq!(
-            ext.supported_signature_algorithms.capacity(),
-            SignatureAndHashAlgorithm::supported().len(),
-            "SignatureAlgorithmsExtension capacity must match supported algorithms count"
-        );
     }
 }

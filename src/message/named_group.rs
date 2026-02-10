@@ -1,5 +1,8 @@
+use arrayvec::ArrayVec;
 use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
+
+pub type NamedGroupVec = ArrayVec<NamedGroup, { NamedGroup::supported().len() }>;
 
 /// Elliptic curves for ECDHE key exchange (RFC 4492, RFC 8422).
 ///
@@ -145,7 +148,7 @@ impl NamedGroup {
     }
 
     /// All recognized named groups (every non-`Unknown` variant).
-    pub fn all() -> &'static [NamedGroup] {
+    pub const fn all() -> &'static [NamedGroup; 27] {
         &[
             NamedGroup::Sect163k1,
             NamedGroup::Sect163r1,
@@ -178,7 +181,7 @@ impl NamedGroup {
     }
 
     /// Supported named groups in preference order.
-    pub fn supported() -> &'static [NamedGroup] {
+    pub const fn supported() -> &'static [NamedGroup; 4] {
         &[
             NamedGroup::X25519,
             NamedGroup::Secp256r1,

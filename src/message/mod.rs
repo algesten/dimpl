@@ -33,12 +33,12 @@ pub use digitally_signed::DigitallySigned;
 pub use extension::{Extension, ExtensionType};
 pub use extensions::signature_algorithms::SignatureAlgorithmsExtension;
 pub use extensions::supported_groups::SupportedGroupsExtension;
-pub use extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
+pub use extensions::use_srtp::{SrtpProfileId, SrtpProfileVec, UseSrtpExtension};
 pub use finished::Finished;
 pub use handshake::{Body, Handshake, Header, MessageType};
 pub use hello_verify::HelloVerifyRequest;
 pub use id::{Cookie, SessionId};
-pub use named_group::{CurveType, NamedGroup};
+pub use named_group::{CurveType, NamedGroup, NamedGroupVec};
 pub use random::Random;
 pub use record::{ContentType, DTLSRecord, Sequence};
 pub use server_hello::ServerHello;
@@ -88,6 +88,8 @@ impl ProtocolVersion {
         output.extend_from_slice(&self.as_u16().to_be_bytes());
     }
 }
+
+pub type CipherSuiteVec = ArrayVec<CipherSuite, { CipherSuite::supported().len() }>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
@@ -169,7 +171,7 @@ impl CipherSuite {
     }
 
     /// All supported cipher suites in server preference order.
-    pub fn all() -> &'static [CipherSuite] {
+    pub const fn all() -> &'static [CipherSuite; 2] {
         &[
             CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
             CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
@@ -177,7 +179,7 @@ impl CipherSuite {
     }
 
     /// Cipher suites compatible with a given certificate's signature algorithm.
-    pub fn compatible_with_certificate(cert_type: SignatureAlgorithm) -> &'static [CipherSuite] {
+    pub fn compatible_with_certificate(cert_type: SignatureAlgorithm) -> &'static [CipherSuite; 2] {
         match cert_type {
             SignatureAlgorithm::ECDSA => &[
                 CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
@@ -219,10 +221,13 @@ impl CipherSuite {
     }
 
     /// Supported DTLS 1.2 cipher suites in server preference order.
-    pub fn supported() -> &'static [CipherSuite] {
+    pub const fn supported() -> &'static [CipherSuite; 2] {
         Self::all()
     }
 }
+
+pub type CompressionMethodVec =
+    ArrayVec<CompressionMethod, { CompressionMethod::supported().len() }>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionMethod {
@@ -251,9 +256,14 @@ impl CompressionMethod {
         Self::supported().contains(self)
     }
 
-    /// Supported compression methods.
-    pub fn supported() -> &'static [CompressionMethod] {
+    /// All recognized compression methods (every non-`Unknown` variant).
+    pub const fn all() -> &'static [CompressionMethod; 2] {
         &[CompressionMethod::Null, CompressionMethod::Deflate]
+    }
+
+    /// Supported compression methods.
+    pub const fn supported() -> &'static [CompressionMethod; 2] {
+        Self::all()
     }
 
     pub fn as_u8(&self) -> u8 {
@@ -277,6 +287,9 @@ pub enum KeyExchangeAlgorithm {
     EECDH,
     Unknown,
 }
+
+pub type CertificateTypeVec =
+    ArrayVec<ClientCertificateType, { ClientCertificateType::supported().len() }>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
@@ -320,8 +333,7 @@ impl ClientCertificateType {
     }
 
     /// Supported client certificate types.
-    #[cfg(test)]
-    pub fn supported() -> &'static [ClientCertificateType] {
+    pub const fn supported() -> &'static [ClientCertificateType; 1] {
         &[ClientCertificateType::ECDSA_SIGN]
     }
 
@@ -463,6 +475,9 @@ impl HashAlgorithm {
     }
 }
 
+pub type SignatureAndHashAlgorithmVec =
+    ArrayVec<SignatureAndHashAlgorithm, { SignatureAndHashAlgorithm::supported().len() }>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SignatureAndHashAlgorithm {
     pub hash: HashAlgorithm,
@@ -491,30 +506,20 @@ impl SignatureAndHashAlgorithm {
 
     /// All recognized signature+hash combinations (same as `supported()`).
     #[allow(dead_code)]
-    pub fn all() -> ArrayVec<SignatureAndHashAlgorithm, 4> {
+    pub const fn all() -> &'static [SignatureAndHashAlgorithm; 4] {
         Self::supported()
     }
 
     /// Supported signature+hash combinations.
-    pub fn supported() -> ArrayVec<SignatureAndHashAlgorithm, 4> {
-        let mut algos = ArrayVec::new();
-        algos.push(SignatureAndHashAlgorithm::new(
-            HashAlgorithm::SHA256,
-            SignatureAlgorithm::ECDSA,
-        ));
-        algos.push(SignatureAndHashAlgorithm::new(
-            HashAlgorithm::SHA384,
-            SignatureAlgorithm::ECDSA,
-        ));
-        algos.push(SignatureAndHashAlgorithm::new(
-            HashAlgorithm::SHA256,
-            SignatureAlgorithm::RSA,
-        ));
-        algos.push(SignatureAndHashAlgorithm::new(
-            HashAlgorithm::SHA384,
-            SignatureAlgorithm::RSA,
-        ));
-        algos
+    pub const fn supported() -> &'static [SignatureAndHashAlgorithm; 4] {
+        const SUPPORTED: &[SignatureAndHashAlgorithm; 4] = &[
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA),
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::ECDSA),
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA),
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::RSA),
+        ];
+
+        SUPPORTED
     }
 
     /// Returns true if this signature+hash combination is supported.

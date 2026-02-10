@@ -1,6 +1,8 @@
 use super::extensions::{ECPointFormatsExtension, SignatureAlgorithmsExtension};
 use super::extensions::{SupportedGroupsExtension, UseSrtpExtension};
-use super::{CipherSuite, CompressionMethod, ProtocolVersion};
+use super::{
+    CipherSuite, CipherSuiteVec, CompressionMethod, CompressionMethodVec, ProtocolVersion,
+};
 use super::{Cookie, Extension, ExtensionType, Random, SessionId};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
@@ -10,6 +12,7 @@ use nom::{Err, IResult};
 
 use crate::buffer::Buf;
 use crate::crypto::CryptoProvider;
+use crate::message::extension::ExtensionVec;
 use crate::util::many1;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -18,9 +21,9 @@ pub struct ClientHello {
     pub random: Random,
     pub session_id: SessionId,
     pub cookie: Cookie,
-    pub cipher_suites: ArrayVec<CipherSuite, 2>,
-    pub compression_methods: ArrayVec<CompressionMethod, 2>,
-    pub extensions: ArrayVec<Extension, 8>,
+    pub cipher_suites: CipherSuiteVec,
+    pub compression_methods: CompressionMethodVec,
+    pub extensions: ExtensionVec,
 }
 
 impl ClientHello {
@@ -29,8 +32,8 @@ impl ClientHello {
         random: Random,
         session_id: SessionId,
         cookie: Cookie,
-        cipher_suites: ArrayVec<CipherSuite, 2>,
-        compression_methods: ArrayVec<CompressionMethod, 2>,
+        cipher_suites: CipherSuiteVec,
+        compression_methods: CompressionMethodVec,
     ) -> Self {
         ClientHello {
             client_version,
@@ -158,10 +161,7 @@ impl ClientHello {
     }
 
     /// Parse extensions from the input, filtering to only known extension types
-    fn parse_extensions(
-        input: &[u8],
-        base_offset: usize,
-    ) -> IResult<&[u8], ArrayVec<Extension, 8>> {
+    fn parse_extensions(input: &[u8], base_offset: usize) -> IResult<&[u8], ExtensionVec> {
         let mut extensions = ArrayVec::new();
 
         // Early return if input is empty
@@ -312,62 +312,5 @@ mod tests {
 
         let result = ClientHello::parse(&message, 0);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn cipher_suites_capacity_matches_supported() {
-        let client_hello = ClientHello {
-            client_version: ProtocolVersion::DTLS1_2,
-            random: Random::parse(&MESSAGE[2..34]).unwrap().1,
-            session_id: SessionId::empty(),
-            cookie: Cookie::empty(),
-            cipher_suites: ArrayVec::new(),
-            compression_methods: ArrayVec::new(),
-            extensions: ArrayVec::new(),
-        };
-
-        assert_eq!(
-            client_hello.cipher_suites.capacity(),
-            CipherSuite::supported().len(),
-            "cipher_suites ArrayVec capacity must match supported CipherSuites"
-        );
-    }
-
-    #[test]
-    fn compression_methods_capacity_matches_supported() {
-        let client_hello = ClientHello {
-            client_version: ProtocolVersion::DTLS1_2,
-            random: Random::parse(&MESSAGE[2..34]).unwrap().1,
-            session_id: SessionId::empty(),
-            cookie: Cookie::empty(),
-            cipher_suites: ArrayVec::new(),
-            compression_methods: ArrayVec::new(),
-            extensions: ArrayVec::new(),
-        };
-
-        assert_eq!(
-            client_hello.compression_methods.capacity(),
-            CompressionMethod::supported().len(),
-            "compression_methods ArrayVec capacity must match supported CompressionMethods"
-        );
-    }
-
-    #[test]
-    fn extensions_capacity_matches_supported() {
-        let client_hello = ClientHello {
-            client_version: ProtocolVersion::DTLS1_2,
-            random: Random::parse(&MESSAGE[2..34]).unwrap().1,
-            session_id: SessionId::empty(),
-            cookie: Cookie::empty(),
-            cipher_suites: ArrayVec::new(),
-            compression_methods: ArrayVec::new(),
-            extensions: ArrayVec::new(),
-        };
-
-        assert_eq!(
-            client_hello.extensions.capacity(),
-            ExtensionType::supported().len(),
-            "extensions ArrayVec capacity must match supported ExtensionTypes"
-        );
     }
 }
