@@ -1,7 +1,7 @@
 use super::extensions::{ECPointFormatsExtension, SignatureAlgorithmsExtension};
 use super::extensions::{SupportedGroupsExtension, UseSrtpExtension};
-use super::{CipherSuite, CompressionMethod, ProtocolVersion};
-use super::{Cookie, Extension, ExtensionType, Random, SessionId};
+use super::{CipherSuite, CipherSuiteVec, CompressionMethod, CompressionMethodVec};
+use super::{Cookie, Extension, ExtensionType, ProtocolVersion, Random, SessionId};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
@@ -10,6 +10,7 @@ use nom::{Err, IResult};
 
 use crate::buffer::Buf;
 use crate::crypto::CryptoProvider;
+use crate::message::extension::ExtensionVec;
 use crate::util::many1;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -18,9 +19,9 @@ pub struct ClientHello {
     pub random: Random,
     pub session_id: SessionId,
     pub cookie: Cookie,
-    pub cipher_suites: ArrayVec<CipherSuite, 2>,
-    pub compression_methods: ArrayVec<CompressionMethod, 2>,
-    pub extensions: ArrayVec<Extension, 8>,
+    pub cipher_suites: CipherSuiteVec,
+    pub compression_methods: CompressionMethodVec,
+    pub extensions: ExtensionVec,
 }
 
 impl ClientHello {
@@ -29,8 +30,8 @@ impl ClientHello {
         random: Random,
         session_id: SessionId,
         cookie: Cookie,
-        cipher_suites: ArrayVec<CipherSuite, 2>,
-        compression_methods: ArrayVec<CompressionMethod, 2>,
+        cipher_suites: CipherSuiteVec,
+        compression_methods: CompressionMethodVec,
     ) -> Self {
         ClientHello {
             client_version,
@@ -123,14 +124,15 @@ impl ClientHello {
         let (input, cookie) = Cookie::parse(input)?;
         let (input, cipher_suites_len) = be_u16(input)?;
         let (input, input_cipher) = take(cipher_suites_len)(input)?;
-        let (rest, cipher_suites) = many1(CipherSuite::parse, CipherSuite::is_known)(input_cipher)?;
+        let (rest, cipher_suites) =
+            many1(CipherSuite::parse, CipherSuite::is_supported)(input_cipher)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
         let (input, compression_methods_len) = be_u8(input)?;
         let (input, input_compression) = take(compression_methods_len)(input)?;
         let (rest, compression_methods) =
-            many1(CompressionMethod::parse, CompressionMethod::is_known)(input_compression)?;
+            many1(CompressionMethod::parse, CompressionMethod::is_supported)(input_compression)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
@@ -157,10 +159,7 @@ impl ClientHello {
     }
 
     /// Parse extensions from the input, filtering to only known extension types
-    fn parse_extensions(
-        input: &[u8],
-        base_offset: usize,
-    ) -> IResult<&[u8], ArrayVec<Extension, 8>> {
+    fn parse_extensions(input: &[u8], base_offset: usize) -> IResult<&[u8], ExtensionVec> {
         let mut extensions = ArrayVec::new();
 
         // Early return if input is empty
@@ -194,8 +193,8 @@ impl ClientHello {
             let parsed_len = before_len - rest.len();
             current_offset += parsed_len;
 
-            // Only keep known extension types
-            if extension.extension_type.is_known() {
+            // Only keep supported extension types
+            if extension.extension_type.is_supported() {
                 extensions.push(extension);
             }
             extensions_rest = rest;
@@ -311,62 +310,5 @@ mod tests {
 
         let result = ClientHello::parse(&message, 0);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn cipher_suites_capacity_matches_known() {
-        let client_hello = ClientHello {
-            client_version: ProtocolVersion::DTLS1_2,
-            random: Random::parse(&MESSAGE[2..34]).unwrap().1,
-            session_id: SessionId::empty(),
-            cookie: Cookie::empty(),
-            cipher_suites: ArrayVec::new(),
-            compression_methods: ArrayVec::new(),
-            extensions: ArrayVec::new(),
-        };
-
-        assert_eq!(
-            client_hello.cipher_suites.capacity(),
-            CipherSuite::all().len(),
-            "cipher_suites ArrayVec capacity must match all known CipherSuites"
-        );
-    }
-
-    #[test]
-    fn compression_methods_capacity_matches_known() {
-        let client_hello = ClientHello {
-            client_version: ProtocolVersion::DTLS1_2,
-            random: Random::parse(&MESSAGE[2..34]).unwrap().1,
-            session_id: SessionId::empty(),
-            cookie: Cookie::empty(),
-            cipher_suites: ArrayVec::new(),
-            compression_methods: ArrayVec::new(),
-            extensions: ArrayVec::new(),
-        };
-
-        assert_eq!(
-            client_hello.compression_methods.capacity(),
-            CompressionMethod::all().len(),
-            "compression_methods ArrayVec capacity must match all known CompressionMethods"
-        );
-    }
-
-    #[test]
-    fn extensions_capacity_matches_known() {
-        let client_hello = ClientHello {
-            client_version: ProtocolVersion::DTLS1_2,
-            random: Random::parse(&MESSAGE[2..34]).unwrap().1,
-            session_id: SessionId::empty(),
-            cookie: Cookie::empty(),
-            cipher_suites: ArrayVec::new(),
-            compression_methods: ArrayVec::new(),
-            extensions: ArrayVec::new(),
-        };
-
-        assert_eq!(
-            client_hello.extensions.capacity(),
-            ExtensionType::all().len(),
-            "extensions ArrayVec capacity must match all known ExtensionTypes"
-        );
     }
 }

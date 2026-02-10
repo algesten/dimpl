@@ -7,6 +7,8 @@ use nom::{
     IResult,
 };
 
+pub type SrtpProfileVec = ArrayVec<SrtpProfileId, { SrtpProfileId::supported().len() }>;
+
 /// DTLS-SRTP protection profile identifiers
 /// From RFC 5764 Section 4.1.2
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -38,13 +40,18 @@ impl SrtpProfileId {
         *self as u16
     }
 
-    /// All supported SRTP profile IDs.
-    pub fn all() -> &'static [SrtpProfileId] {
+    /// All recognized SRTP profile IDs (every non-`Unknown` variant).
+    pub const fn all() -> &'static [SrtpProfileId; 3] {
         &[
             SrtpProfileId::SrtpAes128CmSha1_80,
             SrtpProfileId::SrtpAeadAes128Gcm,
             SrtpProfileId::SrtpAeadAes256Gcm,
         ]
+    }
+
+    /// Supported SRTP profile IDs.
+    pub const fn supported() -> &'static [SrtpProfileId; 3] {
+        Self::all()
     }
 }
 
@@ -71,18 +78,18 @@ impl From<SrtpProfileId> for SrtpProfile {
 /// UseSrtp extension as defined in RFC 5764
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UseSrtpExtension {
-    pub profiles: ArrayVec<SrtpProfileId, 3>,
+    pub profiles: SrtpProfileVec,
     pub mki: Vec<u8>, // MKI value (usually empty)
 }
 
 impl UseSrtpExtension {
-    pub fn new(profiles: ArrayVec<SrtpProfileId, 3>, mki: Vec<u8>) -> Self {
+    pub fn new(profiles: SrtpProfileVec, mki: Vec<u8>) -> Self {
         UseSrtpExtension { profiles, mki }
     }
 
     /// Create a default UseSrtpExtension with standard profiles
     pub fn default() -> Self {
-        let mut profiles = ArrayVec::new();
+        let mut profiles = SrtpProfileVec::new();
         // Add profiles in order of preference (most secure first)
         profiles.push(SrtpProfileId::SrtpAeadAes256Gcm);
         profiles.push(SrtpProfileId::SrtpAeadAes128Gcm);
@@ -99,7 +106,7 @@ impl UseSrtpExtension {
         let (input, profiles_data) = take(profiles_length)(input)?;
 
         // Parse the profiles (ignore unknown profile IDs instead of failing)
-        let mut profiles: ArrayVec<SrtpProfileId, 3> = ArrayVec::new();
+        let mut profiles = SrtpProfileVec::new();
         let mut profiles_rest = profiles_data;
 
         while profiles_rest.len() >= 2 {
@@ -150,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_use_srtp_extension() {
-        let mut profiles = ArrayVec::new();
+        let mut profiles = SrtpProfileVec::new();
         profiles.push(SrtpProfileId::SrtpAeadAes256Gcm);
         profiles.push(SrtpProfileId::SrtpAeadAes128Gcm);
         profiles.push(SrtpProfileId::SrtpAes128CmSha1_80);
@@ -200,15 +207,5 @@ mod tests {
             ]
         );
         assert_eq!(parsed.mki, Vec::<u8>::new());
-    }
-
-    #[test]
-    fn capacity_matches_profile_count() {
-        let ext = UseSrtpExtension::default();
-        assert_eq!(
-            ext.profiles.capacity(),
-            SrtpProfileId::all().len(),
-            "UseSrtpExtension capacity must match all profile IDs"
-        );
     }
 }

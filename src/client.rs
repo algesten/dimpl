@@ -21,7 +21,7 @@ use subtle::ConstantTimeEq;
 use crate::buffer::{Buf, ToBuf};
 use crate::crypto::CipherSuite;
 use crate::engine::Engine;
-use crate::message::{Body, ClientHello, ClientKeyExchange};
+use crate::message::{Body, CipherSuiteVec, ClientHello, ClientKeyExchange};
 use crate::message::{CompressionMethod, ContentType, Cookie};
 use crate::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
@@ -1030,11 +1030,11 @@ fn handshake_create_client_hello(
 
     // Get cipher suites from provider that are compatible with our key
     let provider = engine.crypto_context().provider();
-    let cipher_suites: ArrayVec<CipherSuite, 2> = provider
+    let cipher_suites: CipherSuiteVec = provider
         .supported_cipher_suites()
         .map(|cs| cs.suite())
         .filter(|suite| engine.crypto_context().is_cipher_suite_compatible(*suite))
-        .take(2)
+        .take(CipherSuite::supported().len())
         .collect();
 
     debug!(

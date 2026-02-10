@@ -1,5 +1,8 @@
+use arrayvec::ArrayVec;
 use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
+
+pub type NamedGroupVec = ArrayVec<NamedGroup, { NamedGroup::supported().len() }>;
 
 /// Elliptic curves for ECDHE key exchange (RFC 4492, RFC 8422).
 ///
@@ -141,17 +144,44 @@ impl NamedGroup {
 
     /// Returns true if this named group is supported by this implementation.
     pub fn is_supported(&self) -> bool {
-        matches!(
-            self,
-            NamedGroup::Secp256r1
-                | NamedGroup::Secp384r1
-                | NamedGroup::X25519
-                | NamedGroup::Secp521r1
-        )
+        Self::supported().contains(self)
     }
 
-    /// All supported named groups.
-    pub fn all_supported() -> &'static [NamedGroup] {
+    /// All recognized named groups (every non-`Unknown` variant).
+    pub const fn all() -> &'static [NamedGroup; 27] {
+        &[
+            NamedGroup::Sect163k1,
+            NamedGroup::Sect163r1,
+            NamedGroup::Sect163r2,
+            NamedGroup::Sect193r1,
+            NamedGroup::Sect193r2,
+            NamedGroup::Sect233k1,
+            NamedGroup::Sect233r1,
+            NamedGroup::Sect239k1,
+            NamedGroup::Sect283k1,
+            NamedGroup::Sect283r1,
+            NamedGroup::Sect409k1,
+            NamedGroup::Sect409r1,
+            NamedGroup::Sect571k1,
+            NamedGroup::Sect571r1,
+            NamedGroup::Secp160k1,
+            NamedGroup::Secp160r1,
+            NamedGroup::Secp160r2,
+            NamedGroup::Secp192k1,
+            NamedGroup::Secp192r1,
+            NamedGroup::Secp224k1,
+            NamedGroup::Secp224r1,
+            NamedGroup::Secp256k1,
+            NamedGroup::Secp256r1,
+            NamedGroup::Secp384r1,
+            NamedGroup::Secp521r1,
+            NamedGroup::X25519,
+            NamedGroup::X448,
+        ]
+    }
+
+    /// Supported named groups in preference order.
+    pub const fn supported() -> &'static [NamedGroup; 4] {
         &[
             NamedGroup::X25519,
             NamedGroup::Secp256r1,

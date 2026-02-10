@@ -1,6 +1,7 @@
 # Unreleased
 
   * Require now: Instant in Dtls::new() instead of panicking
+  * Refactor all/known/supported() #55
 
 # 0.2.7
 

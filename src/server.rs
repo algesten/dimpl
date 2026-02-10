@@ -23,14 +23,14 @@ use crate::buffer::{Buf, ToBuf};
 use crate::client::LocalEvent;
 use crate::crypto::SrtpProfile;
 use crate::engine::Engine;
-use crate::message::{Body, CertificateRequest, CipherSuite, ClientCertificateType};
-use crate::message::{CompressionMethod, ContentType, Cookie, CurveType};
+use crate::message::{Body, CertificateRequest, CertificateTypeVec, CipherSuite};
+use crate::message::{ClientCertificateType, CompressionMethod, ContentType, Cookie, CurveType};
 use crate::message::{DistinguishedName, ExchangeKeys, ExtensionType};
-use crate::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
-use crate::message::{MessageType, NamedGroup, ProtocolVersion, Random, ServerHello};
-use crate::message::{SessionId, SignatureAlgorithm};
+use crate::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm, MessageType};
+use crate::message::{NamedGroup, NamedGroupVec, ProtocolVersion, Random};
+use crate::message::{ServerHello, SessionId, SignatureAlgorithm, SignatureAndHashAlgorithmVec};
 use crate::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm, SrtpProfileId};
-use crate::message::{SupportedGroupsExtension, UseSrtpExtension};
+use crate::message::{SrtpProfileVec, SupportedGroupsExtension, UseSrtpExtension};
 use crate::{Client, Config, Error, Output};
 
 /// DTLS server
@@ -57,10 +57,10 @@ pub struct Server {
     negotiated_srtp_profile: Option<SrtpProfile>,
 
     /// Client's offered supported_groups (if any)
-    client_supported_groups: Option<ArrayVec<NamedGroup, 4>>,
+    client_supported_groups: Option<NamedGroupVec>,
 
     /// Client's offered signature_algorithms (if any)
-    client_signature_algorithms: Option<ArrayVec<SignatureAndHashAlgorithm, 4>>,
+    client_signature_algorithms: Option<SignatureAndHashAlgorithmVec>,
 
     /// Client random. Set by ClientHello.
     client_random: Option<Random>,
@@ -337,9 +337,9 @@ impl State {
 
         // Process client extensions: SRTP, EMS, SupportedGroups and SignatureAlgorithms
         let mut client_offers_ems = false;
-        let mut client_srtp_profiles: Option<ArrayVec<SrtpProfileId, 3>> = None;
-        let mut client_supported_groups: Option<ArrayVec<NamedGroup, 4>> = None;
-        let mut client_signature_algorithms: Option<ArrayVec<SignatureAndHashAlgorithm, 4>> = None;
+        let mut client_srtp_profiles: Option<SrtpProfileVec> = None;
+        let mut client_supported_groups: Option<NamedGroupVec> = None;
+        let mut client_signature_algorithms: Option<SignatureAndHashAlgorithmVec> = None;
         for ext in ch.extensions {
             match ext.extension_type {
                 ExtensionType::UseSrtp => {
@@ -1049,15 +1049,15 @@ fn handshake_create_server_key_exchange(
 
 fn handshake_serialize_certificate_request(
     body: &mut Buf,
-    sig_algs: &ArrayVec<SignatureAndHashAlgorithm, 4>,
+    sig_algs: &SignatureAndHashAlgorithmVec,
 ) -> Result<(), Error> {
     // Only advertise ECDSA_SIGN (the only supported client cert type)
-    let mut cert_types: ArrayVec<ClientCertificateType, 1> = ArrayVec::new();
+    let mut cert_types = CertificateTypeVec::new();
     cert_types.push(ClientCertificateType::ECDSA_SIGN);
 
     // If intersection is empty (e.g., client didn't advertise), fall back to our supported set
     // Build the selected list with the capacity expected by CertificateRequest
-    let mut selected: ArrayVec<SignatureAndHashAlgorithm, 4> = ArrayVec::new();
+    let mut selected = SignatureAndHashAlgorithmVec::new();
     if sig_algs.is_empty() {
         let fallback = SignatureAndHashAlgorithm::supported();
         for alg in fallback.iter() {
@@ -1076,7 +1076,7 @@ fn handshake_serialize_certificate_request(
     Ok(())
 }
 
-fn select_named_group(client_groups: Option<&ArrayVec<NamedGroup, 4>>) -> NamedGroup {
+fn select_named_group(client_groups: Option<&NamedGroupVec>) -> NamedGroup {
     // Server preference order
     let preferred = [NamedGroup::Secp256r1, NamedGroup::Secp384r1];
     if let Some(groups) = client_groups {
@@ -1091,7 +1091,7 @@ fn select_named_group(client_groups: Option<&ArrayVec<NamedGroup, 4>>) -> NamedG
 }
 
 fn select_ske_signature_algorithm(
-    client_algs: Option<&ArrayVec<SignatureAndHashAlgorithm, 4>>,
+    client_algs: Option<&SignatureAndHashAlgorithmVec>,
     our_sig: SignatureAlgorithm,
 ) -> SignatureAndHashAlgorithm {
     // Our hash preference order
@@ -1122,8 +1122,8 @@ fn engine_default_hash_for_sig(sig: SignatureAlgorithm) -> HashAlgorithm {
 }
 
 fn select_certificate_request_sig_algs(
-    client_algs: Option<&ArrayVec<SignatureAndHashAlgorithm, 4>>,
-) -> ArrayVec<SignatureAndHashAlgorithm, 4> {
+    client_algs: Option<&SignatureAndHashAlgorithmVec>,
+) -> SignatureAndHashAlgorithmVec {
     // Our supported set (RSA/ECDSA with SHA256/384)
     let ours = SignatureAndHashAlgorithm::supported();
 

@@ -1,4 +1,5 @@
-use super::{ClientCertificateType, DistinguishedName, SignatureAndHashAlgorithm};
+use super::{CertificateTypeVec, ClientCertificateType, DistinguishedName};
+use super::{SignatureAndHashAlgorithm, SignatureAndHashAlgorithmVec};
 use crate::buffer::Buf;
 use crate::util::{many0, many1};
 use arrayvec::ArrayVec;
@@ -9,15 +10,15 @@ use nom::{bytes::complete::take, IResult};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct CertificateRequest {
-    pub certificate_types: ArrayVec<ClientCertificateType, 1>,
-    pub supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 4>,
+    pub certificate_types: CertificateTypeVec,
+    pub supported_signature_algorithms: SignatureAndHashAlgorithmVec,
     pub certificate_authorities: ArrayVec<DistinguishedName, 32>,
 }
 
 impl CertificateRequest {
     pub fn new(
-        certificate_types: ArrayVec<ClientCertificateType, 1>,
-        supported_signature_algorithms: ArrayVec<SignatureAndHashAlgorithm, 4>,
+        certificate_types: CertificateTypeVec,
+        supported_signature_algorithms: SignatureAndHashAlgorithmVec,
         certificate_authorities: ArrayVec<DistinguishedName, 32>,
     ) -> Self {
         CertificateRequest {
@@ -175,25 +176,6 @@ mod test {
                 super::super::HashAlgorithm::SHA256,
                 super::super::SignatureAlgorithm::ECDSA
             )
-        );
-    }
-
-    #[test]
-    fn capacity_matches_supported() {
-        let req = CertificateRequest {
-            certificate_types: ArrayVec::new(),
-            supported_signature_algorithms: ArrayVec::new(),
-            certificate_authorities: ArrayVec::new(),
-        };
-        assert_eq!(
-            req.certificate_types.capacity(),
-            ClientCertificateType::all_supported().len(),
-            "certificate_types capacity must match supported types count"
-        );
-        assert_eq!(
-            req.supported_signature_algorithms.capacity(),
-            SignatureAndHashAlgorithm::supported().len(),
-            "supported_signature_algorithms capacity must match supported count"
         );
     }
 }
