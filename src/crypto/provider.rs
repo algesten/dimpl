@@ -13,7 +13,7 @@
 //!
 //! The provider system is organized into these main components:
 //!
-//! - **Cipher Suites** ([`SupportedCipherSuite`]): Factory for AEAD ciphers
+//! - **Cipher Suites** ([`SupportedDtls12CipherSuite`]): Factory for AEAD ciphers
 //! - **Key Exchange Groups** ([`SupportedKxGroup`]): Factory for ECDHE key exchanges
 //! - **Signature Verification** ([`SignatureVerifier`]): Verify signatures in certificates
 //! - **Key Provider** ([`KeyProvider`]): Parse and load private keys
@@ -54,7 +54,7 @@
 //! //         .unwrap()
 //! // );
 //!
-//! let dtls = Dtls::new(config, cert, Instant::now());
+//! let dtls = Dtls::new_12(config, cert, Instant::now());
 //! # }
 //! # #[cfg(not(all(feature = "aws-lc-rs", feature = "rcgen")))]
 //! # fn main() {}
@@ -71,8 +71,8 @@
 //! ## Example: Custom Cipher Suite
 //!
 //! ```
-//! use dimpl::crypto::{SupportedCipherSuite, Cipher, CipherSuite, HashAlgorithm};
-//! use dimpl::buffer::{Buf, TmpBuf};
+//! use dimpl::crypto::{SupportedDtls12CipherSuite, Cipher, Dtls12CipherSuite, HashAlgorithm};
+//! use dimpl::crypto::{Buf, TmpBuf};
 //! use dimpl::crypto::{Aad, Nonce};
 //!
 //! #[derive(Debug)]
@@ -94,11 +94,11 @@
 //! }
 //!
 //! #[derive(Debug)]
-//! struct MyCipherSuite;
+//! struct MyDtls12CipherSuite;
 //!
-//! impl SupportedCipherSuite for MyCipherSuite {
-//!     fn suite(&self) -> CipherSuite {
-//!         CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+//! impl SupportedDtls12CipherSuite for MyDtls12CipherSuite {
+//!     fn suite(&self) -> Dtls12CipherSuite {
+//!         Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
 //!     }
 //!
 //!     fn hash_algorithm(&self) -> HashAlgorithm {
@@ -115,8 +115,8 @@
 //!     }
 //! }
 //!
-//! static MY_CIPHER_SUITE: MyCipherSuite = MyCipherSuite;
-//! static ALL_CIPHER_SUITES: &[&dyn SupportedCipherSuite] = &[&MY_CIPHER_SUITE];
+//! static MY_CIPHER_SUITE: MyDtls12CipherSuite = MyDtls12CipherSuite;
+//! static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] = &[&MY_CIPHER_SUITE];
 //! ```
 //!
 //! # Requirements
@@ -140,7 +140,8 @@ use std::sync::OnceLock;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
-use crate::message::{CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
+use crate::dtls12::message::Dtls12CipherSuite;
+use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
 // ============================================================================
 // Marker Trait
@@ -173,7 +174,7 @@ pub trait Cipher: CryptoSafe {
 }
 
 /// Stateful hash context for incremental hashing.
-pub trait HashContext {
+pub trait HashContext: CryptoSafe {
     /// Update the hash with new data.
     fn update(&mut self, data: &[u8]);
 
@@ -192,9 +193,6 @@ pub trait SigningKey: CryptoSafe {
 
     /// Default hash algorithm for this key.
     fn hash_algorithm(&self) -> HashAlgorithm;
-
-    /// Check if this key is compatible with a cipher suite.
-    fn is_compatible(&self, cipher_suite: CipherSuite) -> bool;
 }
 
 /// Active key exchange instance (ephemeral keypair for one handshake).
@@ -214,9 +212,9 @@ pub trait ActiveKeyExchange: CryptoSafe {
 // ============================================================================
 
 /// Cipher suite support (factory for Cipher instances).
-pub trait SupportedCipherSuite: CryptoSafe {
+pub trait SupportedDtls12CipherSuite: CryptoSafe {
     /// The cipher suite this supports.
-    fn suite(&self) -> CipherSuite;
+    fn suite(&self) -> Dtls12CipherSuite;
 
     /// Hash algorithm used by this suite.
     fn hash_algorithm(&self) -> HashAlgorithm;
@@ -293,14 +291,121 @@ pub trait HmacProvider: CryptoSafe {
 }
 
 // ============================================================================
+// DTLS 1.3 Factory Traits
+// ============================================================================
+
+/// Cipher suite support for DTLS 1.3 (factory for Cipher instances).
+///
+/// Unlike DTLS 1.2 cipher suites, TLS 1.3 cipher suites only specify the
+/// AEAD algorithm and hash function. Key exchange is negotiated separately.
+pub trait SupportedDtls13CipherSuite: CryptoSafe {
+    /// The cipher suite this supports.
+    fn suite(&self) -> Dtls13CipherSuite;
+
+    /// Hash algorithm used by this suite.
+    fn hash_algorithm(&self) -> HashAlgorithm;
+
+    /// AEAD key length in bytes.
+    fn key_len(&self) -> usize;
+
+    /// AEAD nonce/IV length in bytes.
+    fn iv_len(&self) -> usize;
+
+    /// AEAD tag length in bytes.
+    fn tag_len(&self) -> usize;
+
+    /// Create a cipher instance with the given key.
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String>;
+
+    /// Encrypt a single AES block for record number encryption (RFC 9147 Section 4.2.3).
+    ///
+    /// Computes `mask = AES-ECB(sn_key, sample)` where `sample` is the first 16 bytes
+    /// of the ciphertext. The mask is XORed over the sequence number bytes in the header.
+    fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16];
+}
+
+/// HKDF provider for TLS 1.3 key derivation (RFC 5869).
+///
+/// TLS 1.3 uses HKDF instead of the TLS 1.2 PRF for all key derivation.
+pub trait HkdfProvider: CryptoSafe {
+    /// HKDF-Extract: Extract a pseudorandom key from input keying material.
+    /// PRK = HKDF-Extract(salt, IKM)
+    fn hkdf_extract(
+        &self,
+        hash: HashAlgorithm,
+        salt: &[u8],
+        ikm: &[u8],
+        out: &mut Buf,
+    ) -> Result<(), String>;
+
+    /// HKDF-Expand: Expand a pseudorandom key to the desired length.
+    /// OKM = HKDF-Expand(PRK, info, L)
+    fn hkdf_expand(
+        &self,
+        hash: HashAlgorithm,
+        prk: &[u8],
+        info: &[u8],
+        out: &mut Buf,
+        output_len: usize,
+    ) -> Result<(), String>;
+
+    /// HKDF-Expand-Label for TLS 1.3 (RFC 8446 Section 7.1).
+    /// Derives key material using the TLS 1.3 label format with "tls13 " prefix.
+    ///
+    /// HkdfLabel = struct {
+    ///     uint16 length;
+    ///     opaque label<7..255> = "tls13 " + Label;
+    ///     opaque context<0..255> = Context;
+    /// }
+    /// OKM = HKDF-Expand(Secret, HkdfLabel, Length)
+    fn hkdf_expand_label(
+        &self,
+        hash: HashAlgorithm,
+        secret: &[u8],
+        label: &[u8],
+        context: &[u8],
+        out: &mut Buf,
+        output_len: usize,
+    ) -> Result<(), String>;
+
+    /// HKDF-Expand-Label for DTLS 1.3 (RFC 9147).
+    /// Derives key material using the DTLS 1.3 label format with "dtls13" prefix.
+    ///
+    /// HkdfLabel = struct {
+    ///     uint16 length;
+    ///     opaque label<6..255> = "dtls13" + Label;
+    ///     opaque context<0..255> = Context;
+    /// }
+    /// OKM = HKDF-Expand(Secret, HkdfLabel, Length)
+    fn hkdf_expand_label_dtls13(
+        &self,
+        hash: HashAlgorithm,
+        secret: &[u8],
+        label: &[u8],
+        context: &[u8],
+        out: &mut Buf,
+        output_len: usize,
+    ) -> Result<(), String>;
+}
+
+// ============================================================================
 // Core Provider Struct
 // ============================================================================
 
 /// Cryptographic provider for DTLS operations.
 ///
 /// This struct holds references to all cryptographic components needed
-/// for DTLS 1.2. Users can provide custom implementations of each component
+/// for DTLS. Users can provide custom implementations of each component
 /// to replace the default aws-lc-rs-based provider.
+///
+/// # Version-Specific Components
+///
+/// Some components are version-specific:
+/// - **DTLS 1.2**: Uses `cipher_suites` and `prf_provider`
+/// - **DTLS 1.3**: Uses `dtls13_cipher_suites` and `hkdf_provider`
+///
+/// Shared components like `kx_groups`, `signature_verification`, `key_provider`,
+/// `secure_random`, `hash_provider`, and `hmac_provider` are used by both versions.
 ///
 /// # Design
 ///
@@ -320,14 +425,19 @@ pub trait HmacProvider: CryptoSafe {
 ///
 /// // Or build a custom one (using defaults for demonstration)
 /// let custom_provider = CryptoProvider {
-///     cipher_suites: provider.cipher_suites,
+///     // Shared components
 ///     kx_groups: provider.kx_groups,
 ///     signature_verification: provider.signature_verification,
 ///     key_provider: provider.key_provider,
 ///     secure_random: provider.secure_random,
 ///     hash_provider: provider.hash_provider,
-///     prf_provider: provider.prf_provider,
 ///     hmac_provider: provider.hmac_provider,
+///     // DTLS 1.2 components
+///     cipher_suites: provider.cipher_suites,
+///     prf_provider: provider.prf_provider,
+///     // DTLS 1.3 components
+///     dtls13_cipher_suites: provider.dtls13_cipher_suites,
+///     hkdf_provider: provider.hkdf_provider,
 /// };
 /// # }
 /// # #[cfg(not(feature = "aws-lc-rs"))]
@@ -335,10 +445,12 @@ pub trait HmacProvider: CryptoSafe {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CryptoProvider {
-    /// Supported cipher suites (for negotiation).
-    pub cipher_suites: &'static [&'static dyn SupportedCipherSuite],
-
-    /// Supported key exchange groups (P-256, P-384).
+    // =========================================================================
+    // Shared components (used by both DTLS 1.2 and DTLS 1.3)
+    // =========================================================================
+    /// Supported key exchange groups (P-256, P-384, X25519).
+    ///
+    /// Used for ECDHE key exchange in both DTLS versions.
     pub kx_groups: &'static [&'static dyn SupportedKxGroup],
 
     /// Signature verification for certificates.
@@ -353,11 +465,36 @@ pub struct CryptoProvider {
     /// Hash provider for handshake hashing.
     pub hash_provider: &'static dyn HashProvider,
 
-    /// PRF for TLS 1.2 key derivation.
-    pub prf_provider: &'static dyn PrfProvider,
-
     /// HMAC provider for computing HMAC signatures.
     pub hmac_provider: &'static dyn HmacProvider,
+
+    // =========================================================================
+    // DTLS 1.2 specific components
+    // =========================================================================
+    /// Supported DTLS 1.2 cipher suites (for negotiation).
+    ///
+    /// These cipher suites bundle key exchange, authentication, encryption,
+    /// and MAC algorithms together (e.g., TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256).
+    pub cipher_suites: &'static [&'static dyn SupportedDtls12CipherSuite],
+
+    /// PRF for TLS 1.2 key derivation.
+    ///
+    /// The Pseudo-Random Function used for key expansion in DTLS 1.2.
+    pub prf_provider: &'static dyn PrfProvider,
+
+    // =========================================================================
+    // DTLS 1.3 specific components
+    // =========================================================================
+    /// Supported DTLS 1.3 cipher suites (for negotiation).
+    ///
+    /// TLS 1.3 cipher suites only specify the AEAD and hash algorithms
+    /// (e.g., TLS_AES_128_GCM_SHA256). Key exchange is negotiated separately.
+    pub dtls13_cipher_suites: &'static [&'static dyn SupportedDtls13CipherSuite],
+
+    /// HKDF provider for TLS 1.3 key derivation.
+    ///
+    /// TLS 1.3 uses HKDF instead of the TLS 1.2 PRF for all key derivation.
+    pub hkdf_provider: &'static dyn HkdfProvider,
 }
 
 /// Static storage for the default crypto provider.

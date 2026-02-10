@@ -3,10 +3,10 @@
 //! This module defines the validation rules for crypto providers used with dimpl,
 //! based on the documented support in lib.rs.
 
+use super::{CryptoProvider, SupportedDtls12CipherSuite, SupportedKxGroup};
 use crate::buffer::Buf;
-use crate::crypto::provider::{CryptoProvider, SupportedCipherSuite, SupportedKxGroup};
-use crate::crypto::HashAlgorithm;
-use crate::message::{CipherSuite, NamedGroup, SignatureAlgorithm};
+use crate::dtls12::message::Dtls12CipherSuite;
+use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 use crate::Error;
 
 impl CryptoProvider {
@@ -17,12 +17,12 @@ impl CryptoProvider {
     /// - `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384`
     pub fn supported_cipher_suites(
         &self,
-    ) -> impl Iterator<Item = &'static dyn SupportedCipherSuite> {
+    ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> {
         self.cipher_suites.iter().copied().filter(|cs| {
             matches!(
                 cs.suite(),
-                CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-                    | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+                Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+                    | Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
             )
         })
     }
@@ -45,7 +45,7 @@ impl CryptoProvider {
     pub fn supported_cipher_suites_for_signature_algorithm(
         &self,
         sig_alg: SignatureAlgorithm,
-    ) -> impl Iterator<Item = &'static dyn SupportedCipherSuite> {
+    ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> {
         self.supported_cipher_suites()
             .filter(move |cs| cs.suite().signature_algorithm() == sig_alg)
     }
@@ -57,8 +57,8 @@ impl CryptoProvider {
         self.supported_cipher_suites().any(|cs| {
             matches!(
                 cs.suite(),
-                CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-                    | CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+                Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+                    | Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
             )
         })
     }
@@ -79,6 +79,7 @@ impl CryptoProvider {
         self.validate_prf_provider(&validated_hashes)?;
         self.validate_signature_verifier(&validated_hashes)?;
         self.validate_hmac_provider()?;
+        self.validate_dtls13_cipher_suites()?;
         Ok(())
     }
 
@@ -252,6 +253,41 @@ impl CryptoProvider {
         Ok(())
     }
 
+    /// Validate that DTLS 1.3 cipher suites and HKDF provider are configured.
+    fn validate_dtls13_cipher_suites(&self) -> Result<(), Error> {
+        if self.dtls13_cipher_suites.is_empty() {
+            return Err(Error::ConfigError(
+                "CryptoProvider has no DTLS 1.3 cipher suites.".to_string(),
+            ));
+        }
+
+        // Verify HKDF works for each DTLS 1.3 cipher suite's hash algorithm
+        for cs in self.dtls13_cipher_suites {
+            let hash = cs.suite().hash_algorithm();
+            let hash_len = hash.output_len();
+            let zeros = [0u8; 48];
+            let zeros = &zeros[..hash_len];
+            let mut out = Buf::new();
+            self.hkdf_provider
+                .hkdf_extract(hash, zeros, zeros, &mut out)
+                .map_err(|e| {
+                    Error::ConfigError(format!(
+                        "HKDF provider failed for DTLS 1.3 suite {:?}: {}",
+                        cs.suite(),
+                        e
+                    ))
+                })?;
+            if out.is_empty() {
+                return Err(Error::ConfigError(format!(
+                    "HKDF provider returned empty output for {:?}",
+                    cs.suite()
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Validate that HMAC provider supports required operations.
     ///
     /// We require HMAC-SHA256 for DTLS cookie computation.
@@ -384,7 +420,7 @@ mod tests {
             .collect();
 
         assert_eq!(ecdsa_suites.len(), 2);
-        assert!(ecdsa_suites.contains(&CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256));
-        assert!(ecdsa_suites.contains(&CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384));
+        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256));
+        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384));
     }
 }

@@ -28,3 +28,17 @@ path = "fuzz_targets/fuzz_record_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_dtls13_packet"
+path = "fuzz_targets/fuzz_dtls13_packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_dtls13_record_parse"
+path = "fuzz_targets/fuzz_dtls13_record_parse.rs"
+test = false
+doc = false
+bench = false

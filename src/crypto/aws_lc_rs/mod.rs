@@ -28,7 +28,7 @@
 //! let cert = certificate::generate_self_signed_certificate().unwrap();
 //! // Implicitly uses aws-lc-rs default provider
 //! let config = Arc::new(Config::default());
-//! let dtls = Dtls::new(config, cert, Instant::now());
+//! let dtls = Dtls::new_12(config, cert, Instant::now());
 //! # }
 //! # #[cfg(not(feature = "rcgen"))]
 //! # fn main() {}
@@ -51,7 +51,7 @@
 //!         .build()
 //!         .unwrap()
 //! );
-//! let dtls = Dtls::new(config, cert, Instant::now());
+//! let dtls = Dtls::new_12(config, cert, Instant::now());
 //! # }
 //! # #[cfg(not(feature = "rcgen"))]
 //! # fn main() {}
@@ -59,12 +59,14 @@
 
 mod cipher_suite;
 mod hash;
+mod hkdf;
 mod hmac;
 mod kx_group;
+mod random;
 mod sign;
 mod tls12;
 
-use crate::crypto::provider::CryptoProvider;
+use super::CryptoProvider;
 
 /// Get the default aws-lc-rs based crypto provider.
 ///
@@ -109,13 +111,18 @@ use crate::crypto::provider::CryptoProvider;
 /// Uses `SystemRandom` from aws-lc-rs for cryptographically secure random number generation.
 pub fn default_provider() -> CryptoProvider {
     CryptoProvider {
-        cipher_suites: cipher_suite::ALL_CIPHER_SUITES,
+        // Shared components
         kx_groups: kx_group::ALL_KX_GROUPS,
         signature_verification: &sign::SIGNATURE_VERIFIER,
         key_provider: &sign::KEY_PROVIDER,
-        secure_random: &tls12::SECURE_RANDOM,
+        secure_random: &random::SECURE_RANDOM,
         hash_provider: &hash::HASH_PROVIDER,
+        hmac_provider: &hmac::HMAC_PROVIDER,
+        // DTLS 1.2 components
+        cipher_suites: cipher_suite::ALL_CIPHER_SUITES,
         prf_provider: &tls12::PRF_PROVIDER,
-        hmac_provider: &tls12::HMAC_PROVIDER,
+        // DTLS 1.3 components
+        dtls13_cipher_suites: cipher_suite::ALL_DTLS13_CIPHER_SUITES,
+        hkdf_provider: &hkdf::HKDF_PROVIDER,
     }
 }

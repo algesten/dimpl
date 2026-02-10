@@ -28,6 +28,9 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v1
+      - name: Install autotools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install autoconf automake libtool
       - name: Build
         run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features "${{ matrix.feature }}"
       - name: Test

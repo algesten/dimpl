@@ -2,11 +2,13 @@
 
 use aws_lc_rs::aead::{Aad as AwsAad, LessSafeKey, Nonce as AwsNonce};
 use aws_lc_rs::aead::{UnboundKey, AES_128_GCM, AES_256_GCM};
+use aws_lc_rs::cipher::{self as aws_cipher, EncryptingKey, UnboundCipherKey, AES_128, AES_256};
 
+use super::super::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuite};
 use crate::buffer::{Buf, TmpBuf};
-use crate::crypto::provider::{Cipher, SupportedCipherSuite};
 use crate::crypto::{Aad, Nonce};
-use crate::message::{CipherSuite, HashAlgorithm};
+use crate::dtls12::message::Dtls12CipherSuite;
+use crate::types::{Dtls13CipherSuite, HashAlgorithm};
 
 /// AES-GCM cipher implementation using aws-lc-rs.
 struct AesGcm {
@@ -76,9 +78,9 @@ impl Cipher for AesGcm {
 #[derive(Debug)]
 struct Aes128GcmSha256;
 
-impl SupportedCipherSuite for Aes128GcmSha256 {
-    fn suite(&self) -> CipherSuite {
-        CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+impl SupportedDtls12CipherSuite for Aes128GcmSha256 {
+    fn suite(&self) -> Dtls12CipherSuite {
+        Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
     }
 
     fn hash_algorithm(&self) -> HashAlgorithm {
@@ -98,9 +100,9 @@ impl SupportedCipherSuite for Aes128GcmSha256 {
 #[derive(Debug)]
 struct Aes256GcmSha384;
 
-impl SupportedCipherSuite for Aes256GcmSha384 {
-    fn suite(&self) -> CipherSuite {
-        CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+impl SupportedDtls12CipherSuite for Aes256GcmSha384 {
+    fn suite(&self) -> Dtls12CipherSuite {
+        Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
     }
 
     fn hash_algorithm(&self) -> HashAlgorithm {
@@ -116,10 +118,106 @@ impl SupportedCipherSuite for Aes256GcmSha384 {
     }
 }
 
-/// Static instances of supported cipher suites.
+/// Static instances of supported DTLS 1.2 cipher suites.
 static AES_128_GCM_SHA256: Aes128GcmSha256 = Aes128GcmSha256;
 static AES_256_GCM_SHA384: Aes256GcmSha384 = Aes256GcmSha384;
 
-/// All supported cipher suites.
-pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedCipherSuite] =
+/// All supported DTLS 1.2 cipher suites.
+pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] =
     &[&AES_128_GCM_SHA256, &AES_256_GCM_SHA384];
+
+// ============================================================================
+// DTLS 1.3 Cipher Suites
+// ============================================================================
+
+/// TLS_AES_128_GCM_SHA256 cipher suite (TLS 1.3 / DTLS 1.3).
+#[derive(Debug)]
+struct Tls13Aes128GcmSha256;
+
+impl SupportedDtls13CipherSuite for Tls13Aes128GcmSha256 {
+    fn suite(&self) -> Dtls13CipherSuite {
+        Dtls13CipherSuite::AES_128_GCM_SHA256
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA256
+    }
+
+    fn key_len(&self) -> usize {
+        16 // AES-128
+    }
+
+    fn iv_len(&self) -> usize {
+        12 // GCM IV
+    }
+
+    fn tag_len(&self) -> usize {
+        16 // GCM tag
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+
+    fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16] {
+        aes_ecb_encrypt(&AES_128, sn_key, sample)
+    }
+}
+
+/// TLS_AES_256_GCM_SHA384 cipher suite (TLS 1.3 / DTLS 1.3).
+#[derive(Debug)]
+struct Tls13Aes256GcmSha384;
+
+impl SupportedDtls13CipherSuite for Tls13Aes256GcmSha384 {
+    fn suite(&self) -> Dtls13CipherSuite {
+        Dtls13CipherSuite::AES_256_GCM_SHA384
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA384
+    }
+
+    fn key_len(&self) -> usize {
+        32 // AES-256
+    }
+
+    fn iv_len(&self) -> usize {
+        12 // GCM IV
+    }
+
+    fn tag_len(&self) -> usize {
+        16 // GCM tag
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+
+    fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16] {
+        aes_ecb_encrypt(&AES_256, sn_key, sample)
+    }
+}
+
+/// Static instances of supported DTLS 1.3 cipher suites.
+static TLS13_AES_128_GCM_SHA256: Tls13Aes128GcmSha256 = Tls13Aes128GcmSha256;
+static TLS13_AES_256_GCM_SHA384: Tls13Aes256GcmSha384 = Tls13Aes256GcmSha384;
+
+/// All supported DTLS 1.3 cipher suites.
+pub(super) static ALL_DTLS13_CIPHER_SUITES: &[&dyn SupportedDtls13CipherSuite] =
+    &[&TLS13_AES_128_GCM_SHA256, &TLS13_AES_256_GCM_SHA384];
+
+/// AES-ECB single block encryption for record number protection.
+fn aes_ecb_encrypt(
+    algorithm: &'static aws_cipher::Algorithm,
+    key: &[u8],
+    input: &[u8; 16],
+) -> [u8; 16] {
+    // unwrap: key length is validated by caller (matches algorithm)
+    let unbound = UnboundCipherKey::new(algorithm, key).unwrap();
+    // unwrap: ECB key construction cannot fail for valid AES keys
+    let ecb_key = EncryptingKey::ecb(unbound).unwrap();
+    let mut block = *input;
+    // unwrap: 16-byte input is exactly one AES block
+    ecb_key.encrypt(&mut block).unwrap();
+    block
+}

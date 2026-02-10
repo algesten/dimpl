@@ -1,0 +1,2493 @@
+use std::mem;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use arrayvec::ArrayVec;
+
+use super::queue::{QueueRx, QueueTx};
+use crate::buffer::{Buf, BufferPool, TmpBuf};
+use crate::crypto::Aad;
+use crate::crypto::Cipher;
+use crate::crypto::HkdfProvider;
+use crate::crypto::Nonce;
+use crate::crypto::SigningKey;
+use crate::crypto::SupportedDtls13CipherSuite;
+use crate::crypto::SupportedKxGroup;
+use crate::dtls13::incoming::{Incoming, RecordDecrypt};
+use crate::dtls13::message::Body;
+use crate::dtls13::message::ContentType;
+use crate::dtls13::message::Dtls13CipherSuite;
+use crate::dtls13::message::Dtls13Record;
+use crate::dtls13::message::Handshake;
+use crate::dtls13::message::Header;
+use crate::dtls13::message::KeyUpdateRequest;
+use crate::dtls13::message::MessageType;
+use crate::dtls13::message::Sequence;
+use crate::timer::ExponentialBackoff;
+use crate::types::{HashAlgorithm, Random};
+use crate::window::ReplayWindow;
+use crate::{Config, Error, Output, SeededRng};
+
+const MAX_DEFRAGMENT_PACKETS: usize = 50;
+
+/// Maximum DTLS sequence number (2^48 - 1). Per RFC 9147 §4.2,
+/// implementations MUST NOT allow the sequence number to wrap.
+const MAX_SEQUENCE_NUMBER: u64 = (1u64 << 48) - 1;
+
+pub struct Engine {
+    /// Configuration options.
+    config: Arc<Config>,
+
+    /// Seedable random number generator for deterministic testing
+    rng: SeededRng,
+
+    /// Pool of buffers
+    buffers_free: BufferPool,
+
+    /// Counters for sending DTLSPlaintext during epoch 0.
+    sequence_epoch_0: Sequence,
+
+    /// Queue of incoming packets.
+    queue_rx: QueueRx,
+
+    /// Queue of outgoing packets.
+    queue_tx: QueueTx,
+
+    /// The cipher suite in use. Set by ServerHello.
+    cipher_suite: Option<Dtls13CipherSuite>,
+
+    /// Handshake send keys (epoch 2)
+    hs_send_keys: Option<EpochKeys>,
+
+    /// Handshake receive keys (epoch 2)
+    hs_recv_keys: Option<EpochKeys>,
+
+    /// Expected next receive sequence number for epoch 2 (handshake)
+    hs_expected_recv_seq: u64,
+
+    /// Application send epoch (3 initially, increments on KeyUpdate)
+    app_send_epoch: u16,
+
+    /// Sequence number for handshake epoch (epoch 2) sending
+    hs_send_seq: u64,
+
+    /// Sequence number within current send epoch
+    app_send_seq: u64,
+
+    /// Application send keys (only latest epoch; replaced on KeyUpdate)
+    app_send_keys: Option<EpochKeys>,
+
+    /// Previous application send keys, retained for KeyUpdate retransmission.
+    prev_app_send_keys: Option<EpochKeys>,
+
+    /// Epoch of the previous send keys.
+    prev_app_send_epoch: u16,
+
+    /// Next sequence number on the previous send epoch (for retransmissions).
+    prev_app_send_seq: u64,
+
+    /// Application receive keys. Multiple epochs may coexist due to KeyUpdate.
+    app_recv_keys: ArrayVec<RecvEpochEntry, 4>,
+
+    /// Whether the remote peer has enabled encryption
+    peer_encryption_enabled: bool,
+
+    /// Certificate in DER format
+    certificate_der: Vec<u8>,
+
+    /// Signing key for CertificateVerify
+    signing_key: Box<dyn SigningKey>,
+
+    /// Whether this engine is for a client (true) or server (false)
+    is_client: bool,
+
+    /// Expected peer handshake sequence number
+    peer_handshake_seq_no: u16,
+
+    /// Next handshake message sequence number for sending
+    next_handshake_seq_no: u16,
+
+    /// Handshakes collected for hash computation.
+    /// TLS 1.3 transcript: msg_type(1) + length(3), no DTLS framing.
+    pub(crate) transcript: Buf,
+
+    /// Anti-replay window for handshake epoch (epoch 2)
+    hs_replay: ReplayWindow,
+
+    /// Record numbers of received handshake records, for ACK generation.
+    /// Each entry is (epoch, sequence_number).
+    received_record_numbers: ArrayVec<(u64, u64), 32>,
+
+    /// Deadline for sending a handshake ACK (epoch 2).
+    /// Set when we detect gaps or partial flights during handshake.
+    handshake_ack_deadline: Option<Instant>,
+
+    /// When true, the next record must start a fresh datagram instead of
+    /// appending to the current last buffer in queue_tx.
+    datagram_sealed: bool,
+
+    /// The records that have been sent in the current flight.
+    flight_saved_records: ArrayVec<Entry, 12>,
+
+    /// Flight backoff
+    flight_backoff: ExponentialBackoff,
+
+    /// Timeout for the current flight
+    flight_timeout: Timeout,
+
+    /// Global timeout for the entire connect operation.
+    connect_timeout: Timeout,
+
+    /// Whether we are ready to release application data from poll_output.
+    release_app_data: bool,
+
+    /// Exporter master secret for TLS 1.3 exporters (RFC 8446 Section 7.5).
+    exporter_master_secret: Option<Buf>,
+
+    /// Number of AEAD encryptions on the current application send keys.
+    app_send_record_count: u64,
+
+    /// Jittered threshold for the current key epoch. When `app_send_record_count`
+    /// reaches this value, a KeyUpdate is triggered. Randomized to
+    /// `[3/4 * configured_limit, configured_limit]` to prevent both sides from
+    /// initiating KeyUpdate simultaneously when using the same config.
+    aead_encryption_threshold: u64,
+
+    /// Set when app_send_record_count reaches aead_encryption_threshold.
+    needs_key_update: bool,
+}
+
+struct EpochKeys {
+    cipher: Box<dyn Cipher>,
+    iv: [u8; 12],
+    traffic_secret: Buf,
+    sn_key: Buf,
+}
+
+struct RecvEpochEntry {
+    epoch: u16,
+    keys: EpochKeys,
+    expected_recv_seq: u64,
+    replay: ReplayWindow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Timeout {
+    Disabled,
+    Unarmed,
+    Armed(Instant),
+}
+
+#[derive(Debug)]
+struct Entry {
+    content_type: ContentType,
+    epoch: u16,
+    send_seq: u64,
+    fragment: Buf,
+    acked: bool,
+}
+
+impl Engine {
+    pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate) -> Self {
+        let mut rng = SeededRng::new(config.rng_seed());
+
+        let flight_backoff =
+            ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries(), &mut rng);
+
+        let signing_key = config
+            .crypto_provider()
+            .key_provider
+            .load_private_key(&certificate.private_key)
+            .expect("Failed to load private key");
+
+        let aead_encryption_threshold =
+            jittered_aead_threshold(config.aead_encryption_limit(), &mut rng);
+
+        Self {
+            config,
+            rng,
+            buffers_free: BufferPool::default(),
+            sequence_epoch_0: Sequence::new(0),
+            queue_rx: QueueRx::new(),
+            queue_tx: QueueTx::new(),
+            cipher_suite: None,
+            hs_send_keys: None,
+            hs_recv_keys: None,
+            hs_expected_recv_seq: 0,
+            app_send_epoch: 3,
+            hs_send_seq: 0,
+            app_send_seq: 0,
+            app_send_keys: None,
+            prev_app_send_keys: None,
+            prev_app_send_epoch: 0,
+            prev_app_send_seq: 0,
+            app_recv_keys: ArrayVec::new(),
+            peer_encryption_enabled: false,
+            certificate_der: certificate.certificate,
+            signing_key,
+            is_client: false,
+            peer_handshake_seq_no: 0,
+            next_handshake_seq_no: 0,
+            transcript: Buf::new(),
+            hs_replay: ReplayWindow::new(),
+            received_record_numbers: ArrayVec::new(),
+            handshake_ack_deadline: None,
+            datagram_sealed: false,
+            flight_saved_records: ArrayVec::new(),
+            flight_backoff,
+            flight_timeout: Timeout::Unarmed,
+            connect_timeout: Timeout::Unarmed,
+            release_app_data: false,
+            exporter_master_secret: None,
+            app_send_record_count: 0,
+            aead_encryption_threshold,
+            needs_key_update: false,
+        }
+    }
+
+    pub fn set_client(&mut self, is_client: bool) {
+        self.is_client = is_client;
+    }
+
+    /// Inject a pre-built hybrid ClientHello into this engine.
+    ///
+    /// Inject the transcript and state from a hybrid ClientHello that was
+    /// already sent on the wire by [`ClientPending`].
+    ///
+    /// Sets the transcript, advances the handshake sequence number to 1,
+    /// and bumps the epoch-0 record sequence so subsequent records don't
+    /// collide.  Does **not** enqueue the record for output — the hybrid
+    /// CH was already transmitted.
+    pub fn inject_hybrid_client_hello(&mut self, transcript_bytes: &[u8]) {
+        self.transcript.extend_from_slice(transcript_bytes);
+        self.next_handshake_seq_no = 1;
+        // Advance past the record sequence used by the hybrid CH.
+        // Defense-in-depth: guard against epoch-0 sequence overflow.
+        if self.sequence_epoch_0.sequence_number < MAX_SEQUENCE_NUMBER {
+            self.sequence_epoch_0.sequence_number += 1;
+        }
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    pub fn cipher_suite(&self) -> Option<Dtls13CipherSuite> {
+        self.cipher_suite
+    }
+
+    pub fn set_cipher_suite(&mut self, cipher_suite: Dtls13CipherSuite) {
+        self.cipher_suite = Some(cipher_suite);
+    }
+
+    pub fn app_send_epoch(&self) -> u16 {
+        self.app_send_epoch
+    }
+
+    pub fn is_key_update_in_flight(&self) -> bool {
+        self.prev_app_send_keys.is_some()
+    }
+
+    /// Returns true if the AEAD encryption limit has been reached and a
+    /// KeyUpdate should be initiated. Clears the flag after returning true.
+    pub fn needs_key_update(&mut self) -> bool {
+        if self.needs_key_update {
+            self.needs_key_update = false;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_cipher_suite_allowed(&self, suite: Dtls13CipherSuite) -> bool {
+        self.config
+            .crypto_provider()
+            .dtls13_cipher_suites
+            .iter()
+            .any(|cs| cs.suite() == suite)
+    }
+
+    pub fn certificate_der(&self) -> &[u8] {
+        &self.certificate_der
+    }
+
+    pub fn signing_key(&mut self) -> &mut dyn SigningKey {
+        &mut *self.signing_key
+    }
+
+    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+        let cs = self.cipher_suite;
+        let incoming = Incoming::parse_packet(packet, self, cs)?;
+        if let Some(incoming) = incoming {
+            self.insert_incoming(incoming)?;
+        }
+
+        Ok(())
+    }
+
+    fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
+        if self.queue_rx.len() >= self.config.max_queue_rx() {
+            warn!(
+                "Receive queue full (max {}): {:?}",
+                self.config.max_queue_rx(),
+                self.queue_rx
+            );
+            return Err(Error::ReceiveQueueFull);
+        }
+
+        // Handle ACK, Alert, and CCS records immediately; collect the rest for queuing.
+        // A single UDP datagram can contain mixed record types, so we process
+        // each record individually without discarding siblings.
+        let mut non_ack_records = ArrayVec::new();
+        for record in incoming.into_records() {
+            match record.record().content_type {
+                ContentType::Ack => {
+                    let fragment = record.record().fragment(record.buffer());
+                    self.process_ack(fragment);
+                }
+                ContentType::Alert => {
+                    let fragment = record.record().fragment(record.buffer());
+                    if fragment.len() >= 2 {
+                        let level = fragment[0];
+                        let description = fragment[1];
+                        // RFC 8446 §6 / RFC 9147 §6: fatal alerts (level 2) and
+                        // close_notify (description 0) must close the connection.
+                        if level == 2 || description == 0 {
+                            return Err(Error::SecurityError(format!(
+                                "Received fatal alert: level={}, description={}",
+                                level, description
+                            )));
+                        }
+                        // Warning alerts (level 1) with non-zero description are
+                        // discarded per RFC 8446 §6.
+                        debug!(
+                            "Discarding warning alert: level={}, description={}",
+                            level, description
+                        );
+                    }
+                }
+                // RFC 9147 §5: CCS records must be discarded in DTLS 1.3.
+                ContentType::ChangeCipherSpec => {
+                    trace!("Discarding CCS record");
+                }
+                _ => {
+                    non_ack_records.try_push(record).ok();
+                }
+            }
+        }
+
+        let incoming = match Incoming::from_records(non_ack_records) {
+            Some(incoming) => incoming,
+            None => return Ok(()),
+        };
+
+        if incoming.first().first_handshake().is_some() {
+            self.insert_incoming_handshake(incoming)
+        } else {
+            self.insert_incoming_non_handshake(incoming)
+        }
+    }
+
+    fn insert_incoming_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
+        let first_record = incoming.first();
+        let handshake = first_record
+            .first_handshake()
+            .expect("caller ensures handshake");
+
+        let key_current = (
+            handshake.header.message_seq,
+            handshake.header.fragment_offset,
+        );
+
+        let maybe_dupe_seq = incoming
+            .records()
+            .iter()
+            .filter_map(|r| r.first_handshake())
+            .filter_map(|h| h.dupe_triggers_resend())
+            .next();
+
+        if let Some(dupe_seq) = maybe_dupe_seq {
+            if dupe_seq < self.peer_handshake_seq_no {
+                self.flight_resend("dupe triggers resend")?;
+            }
+        }
+
+        // Drop old duplicates we've already processed
+        if handshake.header.message_seq < self.peer_handshake_seq_no {
+            return Ok(());
+        }
+
+        // Reject new handshakes after initial handshake is complete,
+        // but allow KeyUpdate (a post-handshake message).
+        if self.release_app_data
+            && handshake.header.message_seq >= self.peer_handshake_seq_no
+            && handshake.header.msg_type != MessageType::KeyUpdate
+        {
+            return Err(Error::RenegotiationAttempt);
+        }
+
+        let search_result = self.queue_rx.binary_search_by(|item| {
+            let key_other = item
+                .first()
+                .first_handshake()
+                .as_ref()
+                .map(|h| (h.header.message_seq, h.header.fragment_offset))
+                .unwrap_or((u16::MAX, u32::MAX));
+            key_other.cmp(&key_current)
+        });
+
+        match search_result {
+            Err(index) => {
+                // Track received record numbers for ACK generation
+                for record in incoming.records().iter() {
+                    let seq = record.record().sequence;
+                    if seq.epoch >= 2 {
+                        let _ = self
+                            .received_record_numbers
+                            .try_push((seq.epoch as u64, seq.sequence_number));
+                    }
+                }
+                self.queue_rx.insert(index, incoming);
+            }
+            Ok(index) => {
+                // Duplicate message_seq + fragment_offset. Replace if either:
+                // (a) the existing entry was already consumed (handled), so a
+                //     fresh retransmission (e.g., CH2 after HRR) can be processed.
+                // (b) the existing entry looks corrupted: its total `length`
+                //     differs from `fragment_length` while the new entry's match,
+                //     indicating the retransmission corrected a bit-flip.
+                let existing = &self.queue_rx[index];
+                let should_replace = existing.first().is_handled() || {
+                    let existing_corrupt = existing
+                        .first()
+                        .first_handshake()
+                        .map(|h| h.header.length != h.header.fragment_length)
+                        .unwrap_or(false);
+                    let incoming_ok = incoming
+                        .first()
+                        .first_handshake()
+                        .map(|h| h.header.length == h.header.fragment_length)
+                        .unwrap_or(false);
+                    existing_corrupt && incoming_ok
+                };
+                if should_replace {
+                    for record in incoming.records().iter() {
+                        let seq = record.record().sequence;
+                        if seq.epoch >= 2 {
+                            self.received_record_numbers
+                                .push((seq.epoch as u64, seq.sequence_number));
+                        }
+                    }
+                    self.queue_rx[index] = incoming;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn insert_incoming_non_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
+        let first = incoming.first();
+        let seq_current = first.record().sequence;
+
+        let search_result = self
+            .queue_rx
+            .binary_search_by_key(&seq_current, |item| item.first().record().sequence);
+
+        match search_result {
+            Err(index) => self.queue_rx.insert(index, incoming),
+            Ok(_) => {
+                // Duplicate - silently drop. For encrypted records (epoch >= 2) the replay
+                // window filters most duplicates, but undecrypted ciphertext records can
+                // reach here before enable_peer_encryption is called.
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
+        if self.connect_timeout == Timeout::Unarmed {
+            debug!(
+                "Connect timeout in: {:.03}s",
+                self.config.handshake_timeout().as_secs_f32()
+            );
+            let timeout = now + self.config.handshake_timeout();
+            self.connect_timeout = Timeout::Armed(timeout);
+        }
+        if self.flight_timeout == Timeout::Unarmed {
+            debug!(
+                "Flight timeout in: {:.03}s",
+                self.flight_backoff.rto().as_secs_f32()
+            );
+            let timeout = now + self.flight_backoff.rto();
+            self.flight_timeout = Timeout::Armed(timeout);
+        }
+
+        if let Timeout::Armed(connect_timeout) = self.connect_timeout {
+            if now >= connect_timeout {
+                return Err(Error::Timeout("connect"));
+            }
+        }
+
+        let Timeout::Armed(flight_timeout) = self.flight_timeout else {
+            return Ok(());
+        };
+
+        if now >= flight_timeout {
+            if self.flight_backoff.can_retry() {
+                self.flight_backoff.attempt(&mut self.rng);
+                debug!(
+                    "Re-arm flight timeout due to resend in {}",
+                    self.flight_backoff.rto().as_secs_f32()
+                );
+                let timeout = now + self.flight_backoff.rto();
+                self.flight_timeout = Timeout::Armed(timeout);
+                self.flight_resend("flight timeout")?;
+            } else {
+                return Err(Error::Timeout("handshake"));
+            }
+        }
+
+        // During handshake, schedule/flush ACKs to help peer with selective retransmission
+        self.maybe_schedule_handshake_ack(now);
+        self.maybe_flush_handshake_ack(now)?;
+
+        Ok(())
+    }
+
+    pub fn poll_output<'a>(&mut self, buf: &'a mut [u8], now: Instant) -> Output<'a> {
+        self.purge_handled_queue_rx();
+
+        let buf = match self.poll_app_data(buf) {
+            Ok(p) => return Output::ApplicationData(p),
+            Err(b) => b,
+        };
+
+        self.maybe_schedule_handshake_ack(now);
+
+        if let Ok(p) = self.poll_packet_tx(buf) {
+            return Output::Packet(p);
+        }
+
+        let next_timeout = self.poll_timeout(now);
+
+        Output::Timeout(next_timeout)
+    }
+
+    fn poll_app_data<'a>(&mut self, buf: &'a mut [u8]) -> Result<&'a [u8], &'a mut [u8]> {
+        if !self.release_app_data {
+            return Err(buf);
+        }
+
+        let mut unhandled = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .filter(|r| r.record().content_type == ContentType::ApplicationData)
+            .skip_while(|r| r.is_handled());
+
+        let Some(next) = unhandled.next() else {
+            return Err(buf);
+        };
+
+        let record_buffer = next.buffer();
+        let fragment = next.record().fragment(record_buffer);
+        let len = fragment.len();
+
+        assert!(
+            len <= buf.len(),
+            "Output buffer too small for application data {} > {}",
+            len,
+            buf.len()
+        );
+
+        buf[..len].copy_from_slice(fragment);
+        next.set_handled();
+
+        Ok(&buf[..len])
+    }
+
+    fn purge_handled_queue_rx(&mut self) {
+        while let Some(peek) = self.queue_rx.front() {
+            let fully_handled = peek.records().iter().all(|r| r.is_handled());
+
+            if fully_handled {
+                let incoming = self.queue_rx.pop_front().unwrap();
+                incoming
+                    .into_records()
+                    .for_each(|r| self.buffers_free.push(r.into_buffer()));
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn poll_packet_tx<'a>(&mut self, buf: &'a mut [u8]) -> Result<&'a [u8], &'a mut [u8]> {
+        let Some(p) = self.queue_tx.pop_front() else {
+            return Err(buf);
+        };
+
+        assert!(
+            p.len() <= buf.len(),
+            "Output buffer too small for packet {} > {}",
+            p.len(),
+            buf.len()
+        );
+
+        let len = p.len();
+        buf[..len].copy_from_slice(&p);
+
+        Ok(&buf[..len])
+    }
+
+    /// Prevent subsequent records from being appended to the current last
+    /// datagram in queue_tx. The next record will start a fresh datagram.
+    fn seal_current_datagram(&mut self) {
+        self.datagram_sealed = true;
+    }
+
+    fn poll_timeout(&self, now: Instant) -> Instant {
+        if self.connect_timeout == Timeout::Disabled
+            && self.flight_timeout == Timeout::Disabled
+            && self.handshake_ack_deadline.is_none()
+        {
+            const DISTANT_FUTURE: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
+            return now + DISTANT_FUTURE;
+        }
+
+        let mut timeout = match (self.connect_timeout, self.flight_timeout) {
+            (Timeout::Armed(c), Timeout::Armed(f)) => {
+                if c < f {
+                    c
+                } else {
+                    f
+                }
+            }
+            (Timeout::Armed(c), _) => c,
+            (_, Timeout::Armed(f)) => f,
+            _ => now + Duration::from_secs(10 * 365 * 24 * 60 * 60),
+        };
+
+        if let Some(deadline) = self.handshake_ack_deadline {
+            if deadline < timeout {
+                timeout = deadline;
+            }
+        }
+
+        timeout
+    }
+
+    pub fn flight_begin(&mut self, flight_no: u8) {
+        debug!("Begin flight {}", flight_no);
+        self.flight_backoff.reset(&mut self.rng);
+        self.flight_clear_resends();
+        self.flight_timeout = Timeout::Unarmed;
+    }
+
+    pub fn flight_stop_resend_timers(&mut self) {
+        debug!("Stop connect and flight timeouts");
+        self.flight_timeout = Timeout::Disabled;
+        self.connect_timeout = Timeout::Disabled;
+    }
+
+    fn flight_clear_resends(&mut self) {
+        for entry in self.flight_saved_records.drain(..) {
+            self.buffers_free.push(entry.fragment);
+        }
+    }
+
+    pub fn flight_resend(&mut self, reason: &str) -> Result<(), Error> {
+        debug!("Resending flight due to {}", reason);
+        let mut records = mem::take(&mut self.flight_saved_records);
+
+        // Mark the current last datagram as "sealed" so resent records
+        // go into fresh datagrams. Without this, can_append would pack
+        // resent records into the same datagram as the original flight,
+        // which causes duplicate handshake fragments at the receiver.
+        self.seal_current_datagram();
+
+        for entry in &mut records {
+            // Selective retransmission: skip records that have been ACKed
+            if entry.acked {
+                continue;
+            }
+
+            if entry.epoch == 0 {
+                // Capture the sequence number the retransmitted record will use
+                let new_seq = self.sequence_epoch_0.sequence_number;
+                self.create_plaintext_record(entry.content_type, false, |fragment| {
+                    fragment.extend_from_slice(&entry.fragment);
+                })?;
+                entry.send_seq = new_seq;
+            } else {
+                // Capture the sequence number the retransmitted record will use
+                let new_seq = if entry.epoch == 2 {
+                    self.hs_send_seq
+                } else if self.prev_app_send_keys.is_some()
+                    && entry.epoch == self.prev_app_send_epoch
+                {
+                    self.prev_app_send_seq
+                } else {
+                    self.app_send_seq
+                };
+                self.create_ciphertext_record(
+                    entry.content_type,
+                    entry.epoch,
+                    false,
+                    |fragment| {
+                        fragment.extend_from_slice(&entry.fragment);
+                    },
+                )?;
+                entry.send_seq = new_seq;
+            }
+        }
+
+        self.flight_saved_records = records;
+
+        Ok(())
+    }
+
+    pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
+        self.has_complete_handshake_with_seq(wanted, self.peer_handshake_seq_no)
+    }
+
+    fn has_complete_handshake_with_seq(&mut self, wanted: MessageType, expected_seq: u16) -> bool {
+        let mut skip_handled = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .skip_while(|r| r.is_handled())
+            .take(MAX_DEFRAGMENT_PACKETS)
+            .flat_map(|r| r.handshakes().iter())
+            .skip_while(|h| h.is_handled())
+            .peekable();
+
+        let maybe_first_handshake = skip_handled.peek();
+
+        let Some(first) = maybe_first_handshake else {
+            return false;
+        };
+
+        if first.header.message_seq != expected_seq {
+            return false;
+        }
+
+        if first.header.msg_type != wanted {
+            return false;
+        }
+
+        let wanted_seq = first.header.message_seq;
+        let wanted_length = first.header.length;
+        let mut last_fragment_end = 0;
+
+        for h in skip_handled {
+            if wanted_seq != h.header.message_seq {
+                continue;
+            }
+
+            // Overlap-tolerant: only reject if there's an actual gap
+            if h.header.fragment_offset > last_fragment_end {
+                return false;
+            }
+            let end = h.header.fragment_offset + h.header.fragment_length;
+            if end > last_fragment_end {
+                last_fragment_end = end;
+            }
+
+            if last_fragment_end == wanted_length {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn next_handshake(
+        &mut self,
+        wanted: MessageType,
+        defragment_buffer: &mut Buf,
+    ) -> Result<Option<Handshake>, Error> {
+        if !self.has_complete_handshake(wanted) {
+            return Ok(None);
+        }
+
+        let iter = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .skip_while(|r| r.is_handled())
+            .flat_map(|r| r.handshakes().iter().map(move |h| (h, r.buffer())))
+            .skip_while(|(h, _)| h.is_handled());
+
+        let handshake = Handshake::defragment(
+            iter,
+            defragment_buffer,
+            self.cipher_suite,
+            Some(&mut self.transcript),
+        )?;
+
+        Ok(Some(handshake))
+    }
+
+    /// Like `next_handshake` but does NOT update the transcript hash.
+    /// Used for post-handshake messages like KeyUpdate.
+    pub fn next_handshake_no_transcript(
+        &mut self,
+        wanted: MessageType,
+        defragment_buffer: &mut Buf,
+    ) -> Result<Option<Handshake>, Error> {
+        if !self.has_complete_handshake(wanted) {
+            return Ok(None);
+        }
+
+        let iter = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .skip_while(|r| r.is_handled())
+            .flat_map(|r| r.handshakes().iter().map(move |h| (h, r.buffer())))
+            .skip_while(|(h, _)| h.is_handled());
+
+        let handshake = Handshake::defragment(
+            iter,
+            defragment_buffer,
+            self.cipher_suite,
+            None, // no transcript update
+        )?;
+
+        Ok(Some(handshake))
+    }
+
+    /// Advance the expected peer handshake sequence number.
+    ///
+    /// Must be called by the caller of `next_handshake` / `next_handshake_no_transcript`
+    /// AFTER all validation of the handshake body succeeds. This prevents stale
+    /// retransmissions from advancing the counter before validation can reject them.
+    pub fn advance_peer_handshake_seq(&mut self) {
+        self.peer_handshake_seq_no += 1;
+    }
+
+    /// Create a DTLSPlaintext record (epoch 0, unencrypted).
+    pub fn create_plaintext_record<F>(
+        &mut self,
+        content_type: ContentType,
+        save_fragment: bool,
+        f: F,
+    ) -> Result<(), Error>
+    where
+        F: FnOnce(&mut Buf),
+    {
+        let mut fragment = self.buffers_free.pop();
+        f(&mut fragment);
+
+        let current_seq = self.sequence_epoch_0.sequence_number;
+
+        if save_fragment {
+            let mut clone = self.buffers_free.pop();
+            clone.extend_from_slice(&fragment);
+            self.flight_saved_records.push(Entry {
+                content_type,
+                epoch: 0,
+                send_seq: current_seq,
+                fragment: clone,
+                acked: false,
+            });
+        }
+
+        let record_wire_len = Dtls13Record::PLAINTEXT_HEADER_LEN + fragment.len();
+
+        let can_append = !self.datagram_sealed
+            && self
+                .queue_tx
+                .back()
+                .map(|b| b.len() + record_wire_len <= self.config.mtu())
+                .unwrap_or(false);
+
+        if !can_append && self.queue_tx.len() >= self.config.max_queue_tx() {
+            warn!(
+                "Transmit queue full (max {}): {:?}",
+                self.config.max_queue_tx(),
+                self.queue_tx
+            );
+            return Err(Error::TransmitQueueFull);
+        }
+
+        let sequence = self.sequence_epoch_0;
+
+        let record = Dtls13Record {
+            content_type,
+            sequence,
+            length: fragment.len() as u16,
+            fragment_range: 0..fragment.len(),
+        };
+
+        if self.sequence_epoch_0.sequence_number >= MAX_SEQUENCE_NUMBER {
+            return Err(Error::CryptoError(
+                "Epoch 0 sequence number exhausted".to_string(),
+            ));
+        }
+        self.sequence_epoch_0.sequence_number += 1;
+
+        if can_append {
+            let last = self.queue_tx.back_mut().unwrap();
+            record.serialize(&fragment, last);
+        } else {
+            self.datagram_sealed = false;
+            let mut buffer = self.buffers_free.pop();
+            buffer.clear();
+            record.serialize(&fragment, &mut buffer);
+            self.queue_tx.push_back(buffer);
+        }
+
+        self.buffers_free.push(fragment);
+
+        Ok(())
+    }
+
+    /// Create a DTLSCiphertext record (epoch >= 2, encrypted).
+    ///
+    /// The plaintext fragment is wrapped as DTLSInnerPlaintext:
+    /// `content || content_type(1) || zeros*` before AEAD encryption.
+    pub fn create_ciphertext_record<F>(
+        &mut self,
+        content_type: ContentType,
+        epoch: u16,
+        save_fragment: bool,
+        f: F,
+    ) -> Result<(), Error>
+    where
+        F: FnOnce(&mut Buf),
+    {
+        let mut fragment = self.buffers_free.pop();
+        f(&mut fragment);
+
+        // Determine sequence number for this record
+        let seq = if epoch == 2 {
+            self.hs_send_seq
+        } else if self.prev_app_send_keys.is_some() && epoch == self.prev_app_send_epoch {
+            self.prev_app_send_seq
+        } else {
+            self.app_send_seq
+        };
+
+        if save_fragment {
+            let mut clone = self.buffers_free.pop();
+            clone.extend_from_slice(&fragment);
+            self.flight_saved_records.push(Entry {
+                content_type,
+                epoch,
+                send_seq: seq,
+                fragment: clone,
+                acked: false,
+            });
+        }
+
+        // Build DTLSInnerPlaintext: content || content_type(1)
+        // (no zero padding for now)
+        fragment.push(content_type.as_u8());
+
+        let suite = self.suite_provider();
+        let tag_len = suite.tag_len();
+
+        // Get the send keys for this epoch
+        let keys = if epoch == 2 {
+            self.hs_send_keys.as_mut()
+        } else if self.prev_app_send_keys.is_some() && epoch == self.prev_app_send_epoch {
+            self.prev_app_send_keys.as_mut()
+        } else {
+            self.app_send_keys.as_mut()
+        };
+
+        let Some(keys) = keys else {
+            return Err(Error::CryptoError(format!(
+                "Send keys not available for epoch {}",
+                epoch
+            )));
+        };
+
+        // Construct the nonce: iv XOR padded_seq
+        let nonce = Nonce::xor(&keys.iv, seq);
+
+        // Build the unified header for AAD
+        // Always use S=1 (2-byte seq) and L=1 (length present)
+        let epoch_bits = (epoch & 0x03) as u8;
+        let flags: u8 = 0b0010_0000
+            | 0b0000_1000 // S=1
+            | 0b0000_0100 // L=1
+            | epoch_bits;
+
+        let ciphertext_len = fragment.len() + tag_len;
+
+        let mut header_buf = [0u8; 5];
+        header_buf[0] = flags;
+        header_buf[1..3].copy_from_slice(&(seq as u16).to_be_bytes());
+        header_buf[3..5].copy_from_slice(&(ciphertext_len as u16).to_be_bytes());
+
+        let aad = Aad::new_dtls13(&header_buf);
+
+        // Save sn_key before losing mutable borrow of keys
+        let mut sn_key = [0u8; 32];
+        let sn_key_len = keys.sn_key.len();
+        sn_key[..sn_key_len].copy_from_slice(&keys.sn_key);
+
+        // Encrypt in place (appends tag)
+        keys.cipher
+            .encrypt(&mut fragment, aad, nonce)
+            .map_err(|e| Error::CryptoError(format!("Encryption failed: {}", e)))?;
+
+        // Record number encryption (RFC 9147 Section 4.2.3):
+        // mask = AES-ECB(sn_key, ciphertext_sample)
+        // XOR mask[0..2] over the sequence number bytes in the header
+        let sn_mask = if fragment.len() >= 16 {
+            // unwrap: we checked length >= 16
+            let ciphertext_sample: [u8; 16] = fragment[..16].try_into().unwrap();
+            suite.encrypt_sn(&sn_key[..sn_key_len], &ciphertext_sample)
+        } else {
+            [0u8; 16] // degenerate case: no masking if ciphertext too short
+        };
+
+        // Unified header: flags(1) + seq(2) + length(2) = 5 bytes
+        let record_wire_len = 5 + fragment.len();
+
+        let can_append = !self.datagram_sealed
+            && self
+                .queue_tx
+                .back()
+                .map(|b| b.len() + record_wire_len <= self.config.mtu())
+                .unwrap_or(false);
+
+        if !can_append && self.queue_tx.len() >= self.config.max_queue_tx() {
+            warn!(
+                "Transmit queue full (max {}): {:?}",
+                self.config.max_queue_tx(),
+                self.queue_tx
+            );
+            return Err(Error::TransmitQueueFull);
+        }
+
+        // Build the record for serialization
+        let record = Dtls13Record {
+            content_type: ContentType::ApplicationData,
+            sequence: Sequence {
+                epoch,
+                sequence_number: seq,
+            },
+            length: fragment.len() as u16,
+            fragment_range: 0..fragment.len(),
+        };
+
+        // Increment send sequence, guarding against 48-bit overflow (RFC 9147 §4.2)
+        if epoch == 2 {
+            if self.hs_send_seq >= MAX_SEQUENCE_NUMBER {
+                return Err(Error::CryptoError(
+                    "Handshake epoch sequence number exhausted".to_string(),
+                ));
+            }
+            self.hs_send_seq += 1;
+        } else if self.prev_app_send_keys.is_some() && epoch == self.prev_app_send_epoch {
+            if self.prev_app_send_seq >= MAX_SEQUENCE_NUMBER {
+                return Err(Error::CryptoError(
+                    "Previous epoch sequence number exhausted".to_string(),
+                ));
+            }
+            self.prev_app_send_seq += 1;
+        } else {
+            if self.app_send_seq >= MAX_SEQUENCE_NUMBER {
+                return Err(Error::CryptoError(
+                    "Application epoch sequence number exhausted".to_string(),
+                ));
+            }
+            self.app_send_seq += 1;
+
+            // Track AEAD encryptions on current application keys
+            if epoch >= 3 {
+                self.app_send_record_count += 1;
+                if self.app_send_record_count >= self.aead_encryption_threshold {
+                    self.needs_key_update = true;
+                }
+            }
+        }
+
+        if can_append {
+            let last = self.queue_tx.back_mut().unwrap();
+            let header_start = last.len();
+            record.serialize(&fragment, last);
+            // Apply record number encryption: XOR mask over seq bytes
+            // Seq bytes are at offset header_start+1..header_start+3
+            last[header_start + 1] ^= sn_mask[0];
+            last[header_start + 2] ^= sn_mask[1];
+        } else {
+            self.datagram_sealed = false;
+            let mut buffer = self.buffers_free.pop();
+            buffer.clear();
+            record.serialize(&fragment, &mut buffer);
+            // Apply record number encryption: XOR mask over seq bytes
+            buffer[1] ^= sn_mask[0];
+            buffer[2] ^= sn_mask[1];
+            self.queue_tx.push_back(buffer);
+        }
+
+        self.buffers_free.push(fragment);
+
+        Ok(())
+    }
+
+    /// Create a handshake message and wrap it in a DTLS record.
+    pub fn create_handshake<F>(&mut self, msg_type: MessageType, f: F) -> Result<(), Error>
+    where
+        F: FnOnce(&mut Buf, &mut Self) -> Result<(), Error>,
+    {
+        let mut body_buffer = self.buffers_free.pop();
+
+        f(&mut body_buffer, self)?;
+
+        let handshake_header = Header {
+            msg_type,
+            length: body_buffer.len() as u32,
+            message_seq: self.next_handshake_seq_no,
+            fragment_offset: 0,
+            fragment_length: body_buffer.len() as u32,
+        };
+
+        // Write TLS 1.3 transcript: msg_type(1) + length(3) + body (no DTLS framing)
+        self.transcript.push(msg_type.as_u8());
+        self.transcript
+            .extend_from_slice(&handshake_header.length.to_be_bytes()[1..]);
+        self.transcript
+            .extend_from_slice(&body_buffer[..handshake_header.length as usize]);
+
+        self.next_handshake_seq_no += 1;
+
+        let epoch = epoch_for_message(msg_type);
+        let total_len = body_buffer.len();
+        let mut offset: usize = 0;
+
+        let handshake_header_len = 12usize;
+        let tag_len = if epoch >= 2 {
+            self.suite_provider().tag_len()
+        } else {
+            0
+        };
+        let aead_overhead = if epoch >= 2 { tag_len + 1 } else { 0 }; // +1 for inner content type
+
+        while offset < total_len || (total_len == 0 && offset == 0) {
+            let already_used_in_current = self.queue_tx.back().map(|b| b.len()).unwrap_or(0);
+            let available_in_current = self.config.mtu().saturating_sub(already_used_in_current);
+
+            let record_header_len = if epoch == 0 {
+                Dtls13Record::PLAINTEXT_HEADER_LEN
+            } else {
+                5 // unified header: flags(1) + seq(2) + length(2)
+            };
+
+            let fixed_overhead = record_header_len + handshake_header_len + aead_overhead;
+
+            let available_for_body = if available_in_current > fixed_overhead {
+                available_in_current - fixed_overhead
+            } else {
+                self.config.mtu().saturating_sub(fixed_overhead)
+            };
+
+            let remaining_body_bytes = total_len.saturating_sub(offset);
+
+            let chunk_len = if total_len == 0 {
+                0
+            } else {
+                remaining_body_bytes.min(available_for_body)
+            };
+
+            let frag_range = if chunk_len == 0 {
+                0..0
+            } else {
+                offset..offset + chunk_len
+            };
+
+            let frag_handshake = Handshake {
+                header: Header {
+                    msg_type,
+                    length: handshake_header.length,
+                    message_seq: handshake_header.message_seq,
+                    fragment_offset: offset as u32,
+                    fragment_length: chunk_len as u32,
+                },
+                body: Body::Fragment(frag_range),
+                handled: AtomicBool::new(false),
+            };
+
+            if epoch == 0 {
+                self.create_plaintext_record(ContentType::Handshake, true, |fragment| {
+                    frag_handshake.serialize(&body_buffer, fragment);
+                })?;
+            } else {
+                self.create_ciphertext_record(ContentType::Handshake, epoch, true, |fragment| {
+                    frag_handshake.serialize(&body_buffer, fragment);
+                })?;
+            }
+
+            if total_len == 0 {
+                break;
+            }
+
+            offset += chunk_len;
+        }
+
+        self.buffers_free.push(body_buffer);
+
+        Ok(())
+    }
+
+    /// Release application data from the incoming queue.
+    ///
+    /// Also clears handshake receive keys to prevent epoch collision:
+    /// after 3+ KeyUpdates the app recv epoch's low 2 bits can match
+    /// the handshake epoch (2), causing records to be routed to stale
+    /// handshake keys instead of the correct application keys.
+    pub fn release_application_data(&mut self) {
+        self.release_app_data = true;
+        self.hs_recv_keys = None;
+    }
+
+    /// Send an ACK record listing received handshake record numbers.
+    ///
+    /// ACK format: record_numbers_length(2) + N * (epoch(8) + sequence(8))
+    pub fn send_ack(&mut self) -> Result<(), Error> {
+        if self.received_record_numbers.is_empty() {
+            return Ok(());
+        }
+
+        let entries = mem::take(&mut self.received_record_numbers);
+        let epoch = if self.app_send_keys.is_some() {
+            self.app_send_epoch
+        } else {
+            2
+        };
+
+        self.create_ciphertext_record(ContentType::Ack, epoch, false, |fragment| {
+            // record_numbers_length: 2 bytes, value = entries.len() * 16
+            let len = (entries.len() * 16) as u16;
+            fragment.extend_from_slice(&len.to_be_bytes());
+            for &(ep, seq) in &entries {
+                fragment.extend_from_slice(&ep.to_be_bytes());
+                fragment.extend_from_slice(&seq.to_be_bytes());
+            }
+        })?;
+
+        Ok(())
+    }
+
+    /// Process an incoming ACK record, marking acknowledged flight entries.
+    fn process_ack(&mut self, ack_data: &[u8]) {
+        if ack_data.len() < 2 {
+            return;
+        }
+
+        let record_numbers_len = u16::from_be_bytes([ack_data[0], ack_data[1]]) as usize;
+        let entries_data = &ack_data[2..];
+
+        if entries_data.len() < record_numbers_len {
+            return;
+        }
+
+        let num_entries = record_numbers_len / 16;
+        for i in 0..num_entries {
+            let offset = i * 16;
+            if offset + 16 > entries_data.len() {
+                break;
+            }
+            let ack_epoch = u64::from_be_bytes(
+                // unwrap: bounds checked above
+                entries_data[offset..offset + 8].try_into().unwrap(),
+            );
+            let ack_seq = u64::from_be_bytes(
+                // unwrap: bounds checked above
+                entries_data[offset + 8..offset + 16].try_into().unwrap(),
+            );
+
+            // Mark matching flight entries as acknowledged
+            for entry in &mut self.flight_saved_records {
+                if entry.epoch as u64 == ack_epoch && entry.send_seq == ack_seq {
+                    entry.acked = true;
+                }
+            }
+        }
+
+        // If all epoch-2 records in the flight are ACKed, stop retransmitting.
+        // This happens when the peer ACKs our handshake flight.
+        let has_epoch2 = self.flight_saved_records.iter().any(|e| e.epoch == 2);
+        let all_epoch2_acked = self
+            .flight_saved_records
+            .iter()
+            .filter(|e| e.epoch == 2)
+            .all(|e| e.acked);
+        if has_epoch2 && all_epoch2_acked {
+            debug!("Handshake flight ACKed; stopping retransmission");
+            self.flight_timeout = Timeout::Disabled;
+            self.flight_clear_resends();
+        }
+
+        // If all saved records are acked and we have prev send keys (KeyUpdate in flight),
+        // clear them and stop the flight timer.
+        if self.prev_app_send_keys.is_some()
+            && !self.flight_saved_records.is_empty()
+            && self.flight_saved_records.iter().all(|e| e.acked)
+        {
+            debug!("KeyUpdate ACKed; clearing previous send keys");
+            self.prev_app_send_keys = None;
+            self.flight_clear_resends();
+            self.flight_timeout = Timeout::Disabled;
+        }
+    }
+
+    // =========================================================================
+    // Handshake ACK Scheduling (RFC 9147 Section 7)
+    // =========================================================================
+
+    /// Whether we're in the DTLS 1.3 handshake phase where ACK scheduling applies.
+    ///
+    /// True when handshake send keys are installed but application keys are not yet.
+    /// This corresponds to the client receiving the server's encrypted flight.
+    fn handshake_in_progress(&self) -> bool {
+        self.hs_send_keys.is_some() && self.app_send_keys.is_none() && !self.release_app_data
+    }
+
+    /// Check if the incoming handshake queue needs help (missing fragments/messages).
+    fn handshake_ack_help_needed(&self) -> bool {
+        let mut skip_handled = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .skip_while(|r| r.is_handled())
+            .take(MAX_DEFRAGMENT_PACKETS)
+            .flat_map(|r| r.handshakes().iter())
+            .skip_while(|h| h.is_handled())
+            .peekable();
+
+        let Some(first) = skip_handled.peek() else {
+            return false;
+        };
+
+        // If we're not seeing the expected message_seq, we're missing earlier fragments.
+        if first.header.message_seq != self.peer_handshake_seq_no {
+            return true;
+        }
+
+        // Check if the current message is complete
+        let wanted_seq = first.header.message_seq;
+        let wanted_length = first.header.length;
+        let mut last_fragment_end = 0;
+
+        for h in skip_handled {
+            if wanted_seq != h.header.message_seq {
+                continue;
+            }
+            // Overlap-tolerant: only flag help needed if there's an actual gap
+            if h.header.fragment_offset > last_fragment_end {
+                return true;
+            }
+            let end = h.header.fragment_offset + h.header.fragment_length;
+            if end > last_fragment_end {
+                last_fragment_end = end;
+            }
+            if last_fragment_end == wanted_length {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Check if there's a gap in the incoming handshake data that requires
+    /// an immediate ACK to help the peer retransmit.
+    fn has_gap_in_incoming_handshake(&self) -> bool {
+        let mut skip_handled = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            .skip_while(|r| r.is_handled())
+            .take(MAX_DEFRAGMENT_PACKETS)
+            .flat_map(|r| r.handshakes().iter())
+            .skip_while(|h| h.is_handled())
+            .peekable();
+
+        let Some(first) = skip_handled.peek() else {
+            return false;
+        };
+
+        // Gap: not seeing the expected message_seq
+        if first.header.message_seq != self.peer_handshake_seq_no {
+            return true;
+        }
+
+        // Check for fragment gaps within the expected message
+        let wanted_seq = first.header.message_seq;
+        let wanted_length = first.header.length;
+        let mut last_fragment_end = 0;
+
+        for h in skip_handled {
+            if wanted_seq != h.header.message_seq {
+                continue;
+            }
+            // Overlap-tolerant: only flag a gap if there's an actual gap
+            if h.header.fragment_offset > last_fragment_end {
+                return true;
+            }
+            let end = h.header.fragment_offset + h.header.fragment_length;
+            if end > last_fragment_end {
+                last_fragment_end = end;
+            }
+            if last_fragment_end == wanted_length {
+                return false;
+            }
+        }
+
+        false
+    }
+
+    /// Schedule a handshake ACK if we detect gaps or partial flights.
+    fn maybe_schedule_handshake_ack(&mut self, now: Instant) {
+        if !self.handshake_in_progress() {
+            self.handshake_ack_deadline = None;
+            return;
+        }
+
+        if self.handshake_ack_deadline.is_some() {
+            return;
+        }
+
+        if !self.handshake_ack_help_needed() {
+            return;
+        }
+
+        // If we detect a gap (missing fragments/messages), send ACK immediately.
+        // Otherwise, use RTO/4 delay to allow piggybacking on the next flight.
+        let delay = if self.has_gap_in_incoming_handshake() {
+            Duration::from_millis(0)
+        } else {
+            let rto = self.flight_backoff.rto();
+            if rto > Duration::from_millis(0) {
+                rto / 4
+            } else {
+                Duration::from_millis(0)
+            }
+        };
+
+        self.handshake_ack_deadline = Some(now + delay);
+    }
+
+    /// Flush a scheduled handshake ACK if the deadline has passed.
+    fn maybe_flush_handshake_ack(&mut self, now: Instant) -> Result<(), Error> {
+        let Some(deadline) = self.handshake_ack_deadline else {
+            return Ok(());
+        };
+
+        if now < deadline {
+            return Ok(());
+        }
+
+        // Collect record numbers for epoch-2 handshake records we have received.
+        let mut record_numbers = ArrayVec::<(u64, u64), 32>::new();
+        for incoming in self.queue_rx.iter() {
+            for r in incoming.records().iter() {
+                if r.record().sequence.epoch == 2
+                    && r.record().content_type == ContentType::Handshake
+                {
+                    let seq = r.record().sequence;
+                    let _ = record_numbers.try_push((seq.epoch as u64, seq.sequence_number));
+                }
+            }
+        }
+
+        self.handshake_ack_deadline = None;
+
+        if record_numbers.is_empty() {
+            return Ok(());
+        }
+
+        self.send_handshake_ack_epoch2(&record_numbers)
+    }
+
+    /// Send a handshake ACK on epoch 2 listing received epoch-2 record numbers.
+    fn send_handshake_ack_epoch2(&mut self, record_numbers: &[(u64, u64)]) -> Result<(), Error> {
+        if !self.handshake_in_progress() {
+            return Ok(());
+        }
+
+        self.create_ciphertext_record(ContentType::Ack, 2, false, |fragment| {
+            let len = (record_numbers.len() * 16) as u16;
+            fragment.extend_from_slice(&len.to_be_bytes());
+            for &(epoch, seq) in record_numbers {
+                fragment.extend_from_slice(&epoch.to_be_bytes());
+                fragment.extend_from_slice(&seq.to_be_bytes());
+            }
+        })?;
+
+        Ok(())
+    }
+
+    /// Pop a buffer from the buffer pool for temporary use
+    pub(crate) fn pop_buffer(&mut self) -> Buf {
+        self.buffers_free.pop()
+    }
+
+    /// Return a buffer to the buffer pool
+    pub(crate) fn push_buffer(&mut self, buf: Buf) {
+        self.buffers_free.push(buf);
+    }
+
+    // =========================================================================
+    // Key Schedule
+    // =========================================================================
+
+    fn hkdf(&self) -> &dyn HkdfProvider {
+        self.config.crypto_provider().hkdf_provider
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        // unwrap: cipher_suite must be set before key schedule operations
+        self.cipher_suite.unwrap().hash_algorithm()
+    }
+
+    fn suite_provider(&self) -> &'static dyn SupportedDtls13CipherSuite {
+        let suite = self.cipher_suite.unwrap();
+        *self
+            .config
+            .crypto_provider()
+            .dtls13_cipher_suites
+            .iter()
+            .find(|cs| cs.suite() == suite)
+            .expect("cipher suite not found in provider")
+    }
+
+    /// Derive the early secret: HKDF-Extract(0, 0) [no PSK support]
+    pub fn derive_early_secret(&mut self) -> Result<Buf, Error> {
+        let hash = self.hash_algorithm();
+        let hash_len = hash.output_len();
+        let zeros = [0u8; 48];
+        let zeros = &zeros[..hash_len];
+        let mut early_secret = self.buffers_free.pop();
+        self.hkdf()
+            .hkdf_extract(hash, zeros, zeros, &mut early_secret)
+            .map_err(|e| Error::CryptoError(format!("Failed to derive early secret: {}", e)))?;
+        Ok(early_secret)
+    }
+
+    /// Derive handshake secrets from ECDHE shared secret + transcript hash through ServerHello.
+    ///
+    /// Returns (client_handshake_traffic_secret, server_handshake_traffic_secret, handshake_secret)
+    pub fn derive_handshake_secrets(
+        &mut self,
+        shared_secret: &[u8],
+    ) -> Result<(Buf, Buf, Buf), Error> {
+        // Call derive_early_secret first (needs &mut self) before borrowing hkdf
+        let early_secret = self.derive_early_secret()?;
+
+        let hash = self.hash_algorithm();
+        let hash_len = hash.output_len();
+        let hkdf = self.hkdf();
+
+        // Derive-Secret(early_secret, "derived", "")
+        let empty_hash = self.transcript_hash_of(b"");
+        let mut derived = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            &early_secret,
+            b"derived",
+            &empty_hash,
+            &mut derived,
+            hash_len,
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive 'derived' secret: {}", e)))?;
+
+        // handshake_secret = HKDF-Extract(derived, shared_secret)
+        let mut handshake_secret = Buf::new();
+        hkdf.hkdf_extract(hash, &derived, shared_secret, &mut handshake_secret)
+            .map_err(|e| Error::CryptoError(format!("Failed to derive handshake secret: {}", e)))?;
+
+        // Get transcript hash up to and including ServerHello
+        let mut transcript_hash = Buf::new();
+        self.transcript_hash(&mut transcript_hash);
+
+        // client_handshake_traffic_secret
+        let mut c_hs_traffic = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            &handshake_secret,
+            b"c hs traffic",
+            &transcript_hash,
+            &mut c_hs_traffic,
+            hash_len,
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive c_hs_traffic: {}", e)))?;
+
+        // server_handshake_traffic_secret
+        let mut s_hs_traffic = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            &handshake_secret,
+            b"s hs traffic",
+            &transcript_hash,
+            &mut s_hs_traffic,
+            hash_len,
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive s_hs_traffic: {}", e)))?;
+
+        Ok((c_hs_traffic, s_hs_traffic, handshake_secret))
+    }
+
+    /// Install handshake keys (epoch 2) from the traffic secrets.
+    pub fn install_handshake_keys(
+        &mut self,
+        client_traffic_secret: &Buf,
+        server_traffic_secret: &Buf,
+    ) -> Result<(), Error> {
+        let (send_secret, recv_secret) = if self.is_client {
+            (client_traffic_secret, server_traffic_secret)
+        } else {
+            (server_traffic_secret, client_traffic_secret)
+        };
+
+        self.hs_send_keys = Some(self.derive_epoch_keys(send_secret)?);
+        self.hs_recv_keys = Some(self.derive_epoch_keys(recv_secret)?);
+
+        // Reset send sequence for epoch 2
+        self.hs_send_seq = 0;
+
+        Ok(())
+    }
+
+    /// Derive application secrets from transcript hash through server Finished.
+    ///
+    /// Returns (client_app_traffic_secret, server_app_traffic_secret)
+    pub fn derive_application_secrets(
+        &mut self,
+        handshake_secret: &[u8],
+    ) -> Result<(Buf, Buf), Error> {
+        let hash = self.hash_algorithm();
+        let hash_len = hash.output_len();
+        let hkdf = self.hkdf();
+
+        // Derive-Secret(handshake_secret, "derived", "")
+        let empty_hash = self.transcript_hash_of(b"");
+        let mut derived = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            handshake_secret,
+            b"derived",
+            &empty_hash,
+            &mut derived,
+            hash_len,
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive 'derived' for master: {}", e)))?;
+
+        // master_secret = HKDF-Extract(derived, 0)
+        let zeros = [0u8; 48];
+        let zeros = &zeros[..hash_len];
+        let mut master_secret = Buf::new();
+        hkdf.hkdf_extract(hash, &derived, zeros, &mut master_secret)
+            .map_err(|e| Error::CryptoError(format!("Failed to derive master secret: {}", e)))?;
+
+        // Get transcript hash up to and including server Finished
+        let mut transcript_hash = Buf::new();
+        self.transcript_hash(&mut transcript_hash);
+
+        // exporter_master_secret = Derive-Secret(master_secret, "exp master", transcript_hash)
+        let mut exp_master = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            &master_secret,
+            b"exp master",
+            &transcript_hash,
+            &mut exp_master,
+            hash_len,
+        )
+        .map_err(|e| {
+            Error::CryptoError(format!("Failed to derive exporter master secret: {}", e))
+        })?;
+
+        // client_application_traffic_secret_0
+        let mut c_ap_traffic = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            &master_secret,
+            b"c ap traffic",
+            &transcript_hash,
+            &mut c_ap_traffic,
+            hash_len,
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive c_ap_traffic: {}", e)))?;
+
+        // server_application_traffic_secret_0
+        let mut s_ap_traffic = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            &master_secret,
+            b"s ap traffic",
+            &transcript_hash,
+            &mut s_ap_traffic,
+            hash_len,
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive s_ap_traffic: {}", e)))?;
+
+        // Store exporter master secret (deferred to avoid borrow conflict with hkdf)
+        self.exporter_master_secret = Some(exp_master);
+
+        Ok((c_ap_traffic, s_ap_traffic))
+    }
+
+    /// Install application keys (epoch 3) from the traffic secrets.
+    pub fn install_application_keys(
+        &mut self,
+        client_traffic_secret: &Buf,
+        server_traffic_secret: &Buf,
+    ) -> Result<(), Error> {
+        let (send_secret, recv_secret) = if self.is_client {
+            (client_traffic_secret, server_traffic_secret)
+        } else {
+            (server_traffic_secret, client_traffic_secret)
+        };
+
+        self.app_send_keys = Some(self.derive_epoch_keys(send_secret)?);
+
+        let recv_keys = self.derive_epoch_keys(recv_secret)?;
+        self.app_recv_keys.push(RecvEpochEntry {
+            epoch: 3,
+            keys: recv_keys,
+            expected_recv_seq: 0,
+            replay: ReplayWindow::new(),
+        });
+
+        self.app_send_epoch = 3;
+        self.app_send_seq = 0;
+
+        Ok(())
+    }
+
+    /// Derive the next application traffic secret from the current one.
+    /// Per RFC 8446 Section 7.2: application_traffic_secret_N+1 =
+    ///   HKDF-Expand-Label(application_traffic_secret_N, "traffic upd", "", Hash.length)
+    fn derive_next_traffic_secret(&self, current: &Buf) -> Result<Buf, Error> {
+        let hash = self.hash_algorithm();
+        let hash_len = hash.output_len();
+        let hkdf = self.hkdf();
+
+        let mut next = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(hash, current, b"traffic upd", &[], &mut next, hash_len)
+            .map_err(|e| {
+                Error::CryptoError(format!("Failed to derive next traffic secret: {}", e))
+            })?;
+
+        Ok(next)
+    }
+
+    /// Rotate send keys: move current app send keys → prev, derive new ones.
+    fn update_send_keys(&mut self) -> Result<(), Error> {
+        let current_keys = self.app_send_keys.take().ok_or_else(|| {
+            Error::CryptoError("No current app send keys for KeyUpdate".to_string())
+        })?;
+
+        let next_secret = self.derive_next_traffic_secret(&current_keys.traffic_secret)?;
+        let new_keys = self.derive_epoch_keys(&next_secret)?;
+
+        // Save old keys for retransmission
+        self.prev_app_send_keys = Some(current_keys);
+        self.prev_app_send_epoch = self.app_send_epoch;
+        self.prev_app_send_seq = self.app_send_seq;
+
+        // Install new keys
+        self.app_send_keys = Some(new_keys);
+        self.app_send_epoch += 1;
+        self.app_send_seq = 0;
+        self.app_send_record_count = 0;
+        self.aead_encryption_threshold =
+            jittered_aead_threshold(self.config.aead_encryption_limit(), &mut self.rng);
+        self.needs_key_update = false;
+
+        debug!("Send keys updated to epoch {}", self.app_send_epoch);
+
+        Ok(())
+    }
+
+    /// Install new receive keys from the current recv epoch's traffic secret.
+    /// Derives the next secret, creates keys, and adds a new RecvEpochEntry.
+    /// Returns the new epoch number.
+    pub fn update_recv_keys(&mut self) -> Result<u16, Error> {
+        // Find the latest recv epoch entry
+        let latest = self.app_recv_keys.last().ok_or_else(|| {
+            Error::CryptoError("No current app recv keys for KeyUpdate".to_string())
+        })?;
+
+        let next_secret = self.derive_next_traffic_secret(&latest.keys.traffic_secret)?;
+        let new_epoch = latest.epoch + 1;
+        let new_keys = self.derive_epoch_keys(&next_secret)?;
+
+        // Evict oldest if full
+        if self.app_recv_keys.is_full() {
+            self.app_recv_keys.remove(0);
+        }
+
+        self.app_recv_keys.push(RecvEpochEntry {
+            epoch: new_epoch,
+            keys: new_keys,
+            expected_recv_seq: 0,
+            replay: ReplayWindow::new(),
+        });
+
+        debug!("Recv keys updated to epoch {}", new_epoch);
+
+        Ok(new_epoch)
+    }
+
+    /// Create and send a KeyUpdate handshake message.
+    ///
+    /// Arms the flight timer for retransmission. The KeyUpdate is sent on
+    /// the current app epoch, then send keys are rotated (old keys saved
+    /// in `prev_app_send_*` for retransmission).
+    pub fn create_key_update(&mut self, request: KeyUpdateRequest) -> Result<(), Error> {
+        // Set up retransmission
+        self.flight_backoff.reset(&mut self.rng);
+        self.flight_clear_resends();
+        self.flight_timeout = Timeout::Unarmed;
+
+        let msg_seq = self.next_handshake_seq_no;
+        self.next_handshake_seq_no += 1;
+
+        let epoch = self.app_send_epoch;
+
+        // Build the handshake message manually (12-byte DTLS header + 1-byte body)
+        self.create_ciphertext_record(ContentType::Handshake, epoch, true, |fragment| {
+            // DTLS handshake header (12 bytes):
+            // msg_type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3)
+            fragment.push(MessageType::KeyUpdate.as_u8());
+            fragment.extend_from_slice(&1u32.to_be_bytes()[1..]); // length = 1
+            fragment.extend_from_slice(&msg_seq.to_be_bytes()); // message_seq
+            fragment.extend_from_slice(&0u32.to_be_bytes()[1..]); // fragment_offset = 0
+            fragment.extend_from_slice(&1u32.to_be_bytes()[1..]); // fragment_length = 1
+                                                                  // Body: 1 byte
+            fragment.push(request.as_u8());
+        })?;
+
+        // Now rotate send keys (saves old keys for retransmission)
+        self.update_send_keys()?;
+
+        debug!(
+            "KeyUpdate sent (request={:?}) on epoch {}, new send epoch {}",
+            request, epoch, self.app_send_epoch
+        );
+
+        Ok(())
+    }
+
+    /// Install send handshake keys for client flight (after receiving server Finished).
+    /// Reset handshake state for a new ClientHello after HelloRetryRequest.
+    pub fn reset_for_hello_retry(&mut self) {
+        // Per RFC 9147, message_seq increments across HRR (CH1=0, HRR=0,
+        // CH2=1, SH=1), so neither peer nor own handshake sequence numbers
+        // are reset. Only reset epoch 2 record sequence (unused at HRR time).
+        self.hs_send_seq = 0;
+        self.handshake_ack_deadline = None;
+        // Drain handled items so stale retransmissions with the same
+        // message_seq can be accepted after the sequence number reset.
+        self.queue_rx.retain(|item| !item.first().is_handled());
+    }
+
+    /// Derive epoch keys (cipher + IV + sn_key) from a traffic secret.
+    fn derive_epoch_keys(&self, traffic_secret: &Buf) -> Result<EpochKeys, Error> {
+        let hash = self.hash_algorithm();
+        let suite = self.suite_provider();
+        let hkdf = self.hkdf();
+
+        // key = HKDF-Expand-Label(secret, "key", "", key_length)
+        let mut key = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(hash, traffic_secret, b"key", &[], &mut key, suite.key_len())
+            .map_err(|e| Error::CryptoError(format!("Failed to derive key: {}", e)))?;
+
+        // iv = HKDF-Expand-Label(secret, "iv", "", iv_length)
+        let mut iv_buf = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            traffic_secret,
+            b"iv",
+            &[],
+            &mut iv_buf,
+            suite.iv_len(),
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive iv: {}", e)))?;
+
+        // sn_key = HKDF-Expand-Label(secret, "sn", "", key_length)
+        let mut sn_key = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            traffic_secret,
+            b"sn",
+            &[],
+            &mut sn_key,
+            suite.key_len(),
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive sn_key: {}", e)))?;
+
+        let cipher = suite
+            .create_cipher(&key)
+            .map_err(|e| Error::CryptoError(format!("Failed to create cipher: {}", e)))?;
+
+        let mut iv = [0u8; 12];
+        iv.copy_from_slice(&iv_buf);
+
+        let mut secret = Buf::new();
+        secret.extend_from_slice(traffic_secret);
+
+        Ok(EpochKeys {
+            cipher,
+            iv,
+            traffic_secret: secret,
+            sn_key,
+        })
+    }
+
+    /// Compute verify_data for Finished messages.
+    ///
+    /// finished_key = HKDF-Expand-Label(traffic_secret, "finished", "", Hash.len)
+    /// verify_data = HMAC(finished_key, transcript_hash)
+    ///
+    /// We use `hkdf_extract(salt=finished_key, IKM=transcript_hash)` to compute
+    /// the HMAC because HKDF-Extract is defined as HMAC-Hash(salt, IKM) (RFC 5869
+    /// §2.2). This gives us a generic HMAC that works for any hash algorithm
+    /// (SHA-256, SHA-384) without needing a separate per-algorithm HMAC API.
+    pub fn compute_verify_data(&self, traffic_secret: &[u8]) -> Result<Buf, Error> {
+        let hash = self.hash_algorithm();
+        let hash_len = hash.output_len();
+        let hkdf = self.hkdf();
+
+        // finished_key = HKDF-Expand-Label(secret, "finished", "", Hash.len)
+        let mut finished_key = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            traffic_secret,
+            b"finished",
+            &[],
+            &mut finished_key,
+            hash_len,
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive finished key: {}", e)))?;
+
+        let mut transcript_hash = Buf::new();
+        self.transcript_hash(&mut transcript_hash);
+
+        // HMAC(finished_key, transcript_hash) via HKDF-Extract(salt=key, IKM=data)
+        let mut verify_data = Buf::new();
+        hkdf.hkdf_extract(hash, &finished_key, &transcript_hash, &mut verify_data)
+            .map_err(|e| Error::CryptoError(format!("Failed to compute verify data: {}", e)))?;
+
+        Ok(verify_data)
+    }
+
+    // =========================================================================
+    // Transcript Management
+    // =========================================================================
+
+    pub fn transcript_hash(&self, out: &mut Buf) {
+        let hash = self.hash_algorithm();
+        let mut ctx = self
+            .config
+            .crypto_provider()
+            .hash_provider
+            .create_hash(hash);
+        ctx.update(&self.transcript);
+        ctx.clone_and_finalize(out);
+    }
+
+    /// Compute transcript hash of arbitrary data (e.g. empty for "derived" label).
+    fn transcript_hash_of(&self, data: &[u8]) -> Buf {
+        let hash = self.hash_algorithm();
+        let mut ctx = self
+            .config
+            .crypto_provider()
+            .hash_provider
+            .create_hash(hash);
+        ctx.update(data);
+        let mut out = Buf::new();
+        ctx.clone_and_finalize(&mut out);
+        out
+    }
+
+    /// Replace transcript with message_hash for HelloRetryRequest.
+    ///
+    /// Per RFC 8446 Section 4.4.1: Hash replaces transcript with
+    /// message_hash = 0xFE || 00 00 Hash.length || Hash(CH1)
+    ///
+    /// `split_at` is the byte offset that separates the portion to hash (CH1)
+    /// from the tail to preserve (HRR bytes appended by next_handshake).
+    /// The transcript becomes: message_hash(CH1) || transcript[split_at..].
+    pub fn replace_transcript_with_message_hash(&mut self, split_at: usize) {
+        let hash = self.hash_algorithm();
+        let mut hash_ctx = self
+            .config
+            .crypto_provider()
+            .hash_provider
+            .create_hash(hash);
+        hash_ctx.update(&self.transcript[..split_at]);
+        let mut hash_value = Buf::new();
+        hash_ctx.clone_and_finalize(&mut hash_value);
+
+        // Build new transcript: message_hash || tail
+        let mut new_transcript = self.buffers_free.pop();
+        // message_hash construct: msg_type=0xFE, length(3)=hash_len
+        new_transcript.push(0xFE);
+        let hash_len = hash_value.len() as u32;
+        new_transcript.extend_from_slice(&hash_len.to_be_bytes()[1..]);
+        new_transcript.extend_from_slice(&hash_value);
+        // Append the preserved tail (HRR bytes)
+        new_transcript.extend_from_slice(&self.transcript[split_at..]);
+
+        let old = std::mem::replace(&mut self.transcript, new_transcript);
+        self.buffers_free.push(old);
+    }
+
+    // =========================================================================
+    // Peer Encryption Management
+    // =========================================================================
+
+    pub fn enable_peer_encryption(&mut self) -> Result<(), Error> {
+        debug!("Peer encryption enabled");
+        self.peer_encryption_enabled = true;
+
+        // Re-parse any buffered epoch 2+ records
+        let maybe_index = self
+            .queue_rx
+            .iter()
+            .position(|i| i.records().iter().any(|r| r.record().sequence.epoch >= 2));
+
+        let Some(index) = maybe_index else {
+            return Ok(());
+        };
+
+        let all = self.queue_rx.split_off(index);
+
+        for incoming in all {
+            let unhandled = incoming.into_records().filter(|r| !r.is_handled());
+
+            for record in unhandled {
+                let buf = record.into_buffer();
+                self.parse_packet(&buf)?;
+                self.buffers_free.push(buf);
+            }
+        }
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // Key Exchange Helpers
+    // =========================================================================
+
+    pub fn find_kx_group(
+        &self,
+        group: crate::types::NamedGroup,
+    ) -> Option<&'static dyn SupportedKxGroup> {
+        self.config
+            .crypto_provider()
+            .kx_groups
+            .iter()
+            .find(|g| g.name() == group)
+            .copied()
+    }
+
+    // =========================================================================
+    // Signature Verification
+    // =========================================================================
+
+    pub fn verify_signature(
+        &self,
+        cert_der: &[u8],
+        data: &[u8],
+        signature: &[u8],
+        hash_alg: HashAlgorithm,
+        sig_alg: crate::types::SignatureAlgorithm,
+    ) -> Result<(), Error> {
+        self.config
+            .crypto_provider()
+            .signature_verification
+            .verify_signature(cert_der, data, signature, hash_alg, sig_alg)
+            .map_err(|e| Error::CryptoError(format!("Signature verification failed: {}", e)))
+    }
+
+    // =========================================================================
+    // Extract SRTP Keying Material
+    // =========================================================================
+
+    pub fn extract_srtp_keying_material(
+        &self,
+        profile: crate::crypto::SrtpProfile,
+    ) -> Result<(ArrayVec<u8, 88>, crate::crypto::SrtpProfile), Error> {
+        let hash = self.hash_algorithm();
+        let hash_len = hash.output_len();
+        let hkdf = self.hkdf();
+
+        let exp_master = self.exporter_master_secret.as_ref().ok_or_else(|| {
+            Error::CryptoError("Exporter master secret not yet derived".to_string())
+        })?;
+
+        let total_len = profile.keying_material_len();
+
+        // RFC 8446 Section 7.5:
+        // 1. derived_secret = Derive-Secret(exporter_master_secret, label, "")
+        let empty_hash = self.transcript_hash_of(b"");
+        let mut derived = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            exp_master,
+            b"EXTRACTOR-dtls_srtp",
+            &empty_hash,
+            &mut derived,
+            hash_len,
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive SRTP exporter secret: {}", e)))?;
+
+        // 2. result = HKDF-Expand-Label(derived_secret, "exporter", Hash(context), length)
+        let context_hash = self.transcript_hash_of(b"");
+        let mut keying_material_buf = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            &derived,
+            b"exporter",
+            &context_hash,
+            &mut keying_material_buf,
+            total_len,
+        )
+        .map_err(|e| {
+            Error::CryptoError(format!("Failed to extract SRTP keying material: {}", e))
+        })?;
+
+        let mut keying_material = ArrayVec::new();
+        for &b in keying_material_buf.iter().take(total_len) {
+            keying_material.push(b);
+        }
+
+        Ok((keying_material, profile))
+    }
+
+    pub fn random(&mut self) -> Random {
+        Random::new(&mut self.rng)
+    }
+
+    pub fn random_arr<const N: usize>(&mut self) -> [u8; N] {
+        self.rng.random()
+    }
+}
+
+// =========================================================================
+// Helper Functions
+// =========================================================================
+
+/// Pick a random AEAD encryption threshold in `[3/4 * limit, limit]`.
+///
+/// Jittering prevents both sides from triggering KeyUpdate simultaneously
+/// when they share the same configured limit.
+fn jittered_aead_threshold(limit: u64, rng: &mut SeededRng) -> u64 {
+    let quarter = limit / 4;
+    if quarter == 0 {
+        return limit;
+    }
+    let offset: u64 = rng.random::<u64>() % (quarter + 1);
+    limit - quarter + offset
+}
+
+/// Determine the epoch for a handshake message type.
+///
+/// In DTLS 1.3, ClientHello and ServerHello are sent as plaintext (epoch 0).
+/// All other handshake messages are encrypted (epoch 2).
+fn epoch_for_message(msg_type: MessageType) -> u16 {
+    match msg_type {
+        MessageType::ClientHello | MessageType::ServerHello => 0,
+        _ => 2,
+    }
+}
+
+/// Reconstruct a full sequence number from a partial value (RFC 9147 Section 4.2.2).
+///
+/// Uses a sliding window centered on the expected sequence to find the full
+/// 48-bit sequence that is closest to `expected`.
+fn reconstruct_sequence(partial: u64, expected: u64, bits: u32) -> u64 {
+    let mask = (1u64 << bits) - 1;
+    let window = 1u64 << bits;
+    let half = window / 2;
+
+    let received_partial = partial & mask;
+    let expected_partial = expected & mask;
+
+    let diff = (received_partial as i64) - (expected_partial as i64);
+    let diff = if diff > half as i64 {
+        diff - window as i64
+    } else if diff < -(half as i64) {
+        diff + window as i64
+    } else {
+        diff
+    };
+
+    // Clamp to 0 to avoid underflow for very early sequence numbers
+    (expected as i64 + diff).max(0) as u64
+}
+
+// =========================================================================
+// RecordDecrypt Implementation
+// =========================================================================
+
+impl RecordDecrypt for Engine {
+    fn is_peer_encryption_enabled(&self) -> bool {
+        self.peer_encryption_enabled
+    }
+
+    fn resolve_epoch(&self, epoch_bits: u8) -> u16 {
+        // Map 2-bit epoch field to full epoch.
+        // In practice during handshake, epoch_bits=2 maps to epoch 2.
+        // After KeyUpdate, epoch_bits cycles: 3→0→1→2→3→...
+        let epoch_bits = epoch_bits as u16;
+
+        // Check handshake epoch first
+        if self.hs_recv_keys.is_some() && (2 & 0x03) == epoch_bits {
+            return 2;
+        }
+
+        // Check application recv epochs - return the newest (last) match
+        // when multiple epochs share the same 2-bit value (e.g. epoch 3 and 7).
+        let mut best = None;
+        for entry in &self.app_recv_keys {
+            if (entry.epoch & 0x03) == epoch_bits {
+                best = Some(entry.epoch);
+            }
+        }
+        if let Some(epoch) = best {
+            return epoch;
+        }
+
+        // Default to the epoch bits value
+        epoch_bits
+    }
+
+    fn resolve_sequence(&self, epoch: u16, seq_bits: u64, s_flag: bool) -> u64 {
+        let expected = if epoch == 2 {
+            self.hs_expected_recv_seq
+        } else {
+            self.app_recv_keys
+                .iter()
+                .find(|e| e.epoch == epoch)
+                .map(|e| e.expected_recv_seq)
+                .unwrap_or(0)
+        };
+
+        let bits: u32 = if s_flag { 16 } else { 8 };
+        reconstruct_sequence(seq_bits, expected, bits)
+    }
+
+    fn replay_check_and_update(&mut self, seq: Sequence) -> bool {
+        // Route to the correct per-epoch replay window
+        let accepted = if seq.epoch == 2 {
+            self.hs_replay.check_and_update(seq.sequence_number)
+        } else {
+            match self.app_recv_keys.iter_mut().find(|e| e.epoch == seq.epoch) {
+                Some(entry) => entry.replay.check_and_update(seq.sequence_number),
+                None => return false, // no keys for this epoch
+            }
+        };
+
+        if !accepted {
+            return false;
+        }
+
+        // Advance expected receive sequence for this epoch
+        let next = seq.sequence_number + 1;
+        if seq.epoch == 2 {
+            if next > self.hs_expected_recv_seq {
+                self.hs_expected_recv_seq = next;
+            }
+        } else {
+            for entry in &mut self.app_recv_keys {
+                if entry.epoch == seq.epoch {
+                    if next > entry.expected_recv_seq {
+                        entry.expected_recv_seq = next;
+                    }
+                    break;
+                }
+            }
+        }
+
+        true
+    }
+
+    fn decrypt_record(
+        &mut self,
+        header: &[u8],
+        seq: Sequence,
+        ciphertext: &mut TmpBuf,
+    ) -> Result<(), Error> {
+        // Find the right keys based on epoch
+        let keys = if seq.epoch == 2 {
+            self.hs_recv_keys.as_mut()
+        } else {
+            // Look up in app recv keys
+            self.app_recv_keys
+                .iter_mut()
+                .find(|e| e.epoch == seq.epoch)
+                .map(|e| &mut e.keys)
+        };
+
+        let Some(keys) = keys else {
+            return Err(Error::CryptoError(format!(
+                "No recv keys for epoch {}",
+                seq.epoch
+            )));
+        };
+
+        // Construct nonce: iv XOR padded_seq
+        let nonce = Nonce::xor(&keys.iv, seq.sequence_number);
+
+        // AAD is the raw header bytes
+        let aad = Aad::new_dtls13(header);
+
+        keys.cipher
+            .decrypt(ciphertext, aad, nonce)
+            .map_err(|e| Error::CryptoError(format!("Decryption failed: {}", e)))?;
+
+        Ok(())
+    }
+
+    fn decrypt_sequence_number(
+        &self,
+        epoch: u16,
+        seq_bytes: &mut [u8],
+        ciphertext_sample: &[u8; 16],
+    ) {
+        // Find the sn_key for this epoch
+        let sn_key = if epoch == 2 {
+            self.hs_recv_keys.as_ref().map(|k| &k.sn_key)
+        } else {
+            self.app_recv_keys
+                .iter()
+                .find(|e| e.epoch == epoch)
+                .map(|e| &e.keys.sn_key)
+        };
+
+        let Some(sn_key) = sn_key else {
+            return; // No keys yet, leave seq bytes as-is
+        };
+
+        let mask = self.suite_provider().encrypt_sn(sn_key, ciphertext_sample);
+        for (i, byte) in seq_bytes.iter_mut().enumerate() {
+            *byte ^= mask[i];
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "rcgen")]
+    use crate::certificate::generate_self_signed_certificate;
+
+    #[cfg(feature = "rcgen")]
+    fn test_engine() -> Engine {
+        let cert = generate_self_signed_certificate().expect("gen cert");
+        let config = Arc::new(Config::builder().build().expect("build config"));
+        Engine::new(config, cert)
+    }
+
+    /// Issue 2: Epoch-0 sequence number must have an overflow guard.
+    ///
+    /// Per RFC 9147 §4.2, implementations MUST NOT allow the sequence number
+    /// to exceed MAX_SEQUENCE_NUMBER (2^48 - 1). This test sets the counter
+    /// to MAX and verifies that `create_plaintext_record` returns an error.
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn epoch_0_sequence_number_rejects_overflow() {
+        let mut engine = test_engine();
+
+        // Set epoch-0 sequence to MAX — the next increment should be rejected
+        engine.sequence_epoch_0.sequence_number = MAX_SEQUENCE_NUMBER;
+
+        let result = engine.create_plaintext_record(ContentType::Handshake, false, |buf| {
+            buf.extend_from_slice(b"test")
+        });
+        assert!(
+            result.is_err(),
+            "epoch-0 must reject sequence overflow at MAX_SEQUENCE_NUMBER"
+        );
+    }
+
+    /// Issue 3: `derive_handshake_secrets` must return the handshake_secret
+    /// alongside the traffic secrets, eliminating the need for a separate
+    /// `derive_handshake_secret` method.
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn derive_handshake_secrets_returns_handshake_secret() {
+        let mut engine = test_engine();
+        engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+
+        // Simulate some transcript content (normally built during handshake)
+        engine
+            .transcript
+            .extend_from_slice(b"dummy transcript for test");
+
+        let shared_secret = [0x42u8; 32];
+
+        // derive_handshake_secrets returns a 3-tuple:
+        //   (client_hs_traffic, server_hs_traffic, handshake_secret)
+        let (c_hs_traffic, _s_hs_traffic, handshake_secret) =
+            engine.derive_handshake_secrets(&shared_secret).unwrap();
+
+        // Verify the handshake_secret can reproduce the same c_hs_traffic
+        let hash = engine.hash_algorithm();
+        let hash_len = hash.output_len();
+        let hkdf = engine.hkdf();
+
+        let mut transcript_hash = Buf::new();
+        engine.transcript_hash(&mut transcript_hash);
+
+        let mut c_hs_manual = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            &handshake_secret,
+            b"c hs traffic",
+            &transcript_hash,
+            &mut c_hs_manual,
+            hash_len,
+        )
+        .expect("hkdf_expand_label_dtls13");
+
+        assert_eq!(
+            c_hs_manual.as_ref(),
+            c_hs_traffic.as_ref(),
+            "handshake_secret from derive_handshake_secrets() must reproduce \
+             the same traffic secrets"
+        );
+    }
+
+    /// Issue 4: `derive_early_secret` must use the buffer pool.
+    ///
+    /// `derive_early_secret` takes `&mut self` and allocates its output buffer
+    /// via `self.buffers_free.pop()`, reusing pooled allocations instead of
+    /// creating a fresh `Buf::new()`.
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn derive_early_secret_uses_buffer_pool() {
+        let mut engine = test_engine();
+        engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+
+        // Pre-fill the pool with a buffer that has allocated capacity.
+        // BufferPool::push clears contents but retains the allocation.
+        let mut marked = Buf::new();
+        marked.extend_from_slice(&[0xAA; 256]);
+        engine.buffers_free.push(marked);
+
+        // derive_early_secret takes &mut self and uses the buffer pool.
+        let early_secret = engine.derive_early_secret().unwrap();
+
+        // The returned buffer should have pooled capacity (>= 256),
+        // not 0 from Buf::new().
+        assert!(
+            early_secret.into_vec().capacity() >= 256,
+            "derive_early_secret must use the buffer pool, returning a buffer with pooled capacity"
+        );
+    }
+}

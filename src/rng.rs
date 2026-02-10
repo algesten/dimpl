@@ -37,6 +37,15 @@ impl SeededRng {
     }
 }
 
+impl std::fmt::Debug for SeededRng {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let is_seeded = self.inner.is_some();
+        f.debug_struct("SeededRng")
+            .field("seeded", &is_seeded)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,14 +96,5 @@ mod tests {
             value1, value2,
             "Different seeds should produce different values"
         );
-    }
-}
-
-impl std::fmt::Debug for SeededRng {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let is_seeded = self.inner.is_some();
-        f.debug_struct("SeededRng")
-            .field("seeded", &is_seeded)
-            .finish()
     }
 }

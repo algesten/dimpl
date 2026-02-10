@@ -26,6 +26,8 @@ jobs:
         target:
           - fuzz_dtls_packet
           - fuzz_record_parse
+          - fuzz_dtls13_packet
+          - fuzz_dtls13_record_parse
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

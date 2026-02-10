@@ -3,9 +3,9 @@
 use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey};
 use p384::{ecdh::EphemeralSecret as P384EphemeralSecret, PublicKey as P384PublicKey};
 
+use super::super::{ActiveKeyExchange, SupportedKxGroup};
 use crate::buffer::Buf;
-use crate::crypto::provider::{ActiveKeyExchange, SupportedKxGroup};
-use crate::message::NamedGroup;
+use crate::types::NamedGroup;
 
 /// ECDHE key exchange implementation.
 enum EcdhKeyExchange {

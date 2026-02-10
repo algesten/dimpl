@@ -174,9 +174,9 @@ pub fn dtls_create_ctx(cert: &OsslDtlsCert) -> Result<SslContext, CryptoError> {
 
 fn openssl_name(profile: &SrtpProfile) -> &'static str {
     match profile {
-        SrtpProfile::Aes128CmSha1_80 => "SRTP_AES128_CM_SHA1_80",
-        SrtpProfile::AeadAes128Gcm => "SRTP_AEAD_AES_128_GCM",
-        SrtpProfile::AeadAes256Gcm => "SRTP_AEAD_AES_256_GCM",
+        SrtpProfile::AES128_CM_SHA1_80 => "SRTP_AES128_CM_SHA1_80",
+        SrtpProfile::AEAD_AES_128_GCM => "SRTP_AEAD_AES_128_GCM",
+        SrtpProfile::AEAD_AES_256_GCM => "SRTP_AEAD_AES_256_GCM",
     }
 }
 

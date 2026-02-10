@@ -1,12 +1,12 @@
-//! dimpl — DTLS 1.2 implementation (Sans‑IO, Sync)
+//! dimpl — DTLS 1.2 and 1.3 implementation (Sans‑IO, Sync)
 //!
-//! dimpl is a focused DTLS 1.2 implementation aimed at WebRTC. It is a Sans‑IO
+//! dimpl is a DTLS 1.2 and 1.3 implementation aimed at WebRTC. It is a Sans‑IO
 //! state machine you embed into your own UDP/RTC event loop: you feed incoming
 //! datagrams, poll for outgoing records or timers, and wire up certificate
 //! verification and SRTP key export yourself.
 //!
 //! # Goals
-//! - **DTLS 1.2**: Implements the DTLS 1.2 handshake and record layer used by WebRTC.
+//! - **DTLS 1.2 and 1.3**: Implements the DTLS handshake and record layer used by WebRTC.
 //! - **Safety**: `forbid(unsafe_code)` throughout the crate.
 //! - **Minimal Rust‑only deps**: Uses small, well‑maintained Rust crypto crates.
 //! - **Low overhead**: Tight control over allocations and buffers; Sans‑IO integration.
@@ -18,28 +18,27 @@
 //! - **RSA**
 //! - **DHE**
 //!
-//! ## Regarding DTLS 1.3 and the future of this crate
+//! ## Version selection
 //!
-//! dimpl was built as a support package for [str0m](https://github.com/algesten/str0m),
-//! with WebRTC as its primary use case, which currently uses DTLS 1.2. The author
-//! is not a cryptography expert; however, our understanding is that DTLS 1.2 is acceptable
-//! provided we narrow the protocol's scope—for example, by supporting only specific
-//! cipher suites and hash algorithms and by requiring the Extended Master Secret extension.
-//!
-//! If you are interested in extending this crate to support DTLS 1.3 and/or additional
-//! cipher suites or hash algorithms, we welcome collaboration, but we are not planning
-//! to lead such initiatives.
+//! Three constructors control which DTLS version is used:
+//! - [`Dtls::new_12`] — explicit DTLS 1.2
+//! - [`Dtls::new_13`] — explicit DTLS 1.3
+//! - [`Dtls::new_auto`] — auto‑sense: the first incoming ClientHello determines
+//!   the version (based on the `supported_versions` extension)
 //!
 //! # Cryptography surface
 //! - **Cipher suites (TLS 1.2 over DTLS)**
 //!   - `ECDHE_ECDSA_AES256_GCM_SHA384`
 //!   - `ECDHE_ECDSA_AES128_GCM_SHA256`
+//! - **Cipher suites (TLS 1.3 over DTLS)**
+//!   - `TLS_AES_128_GCM_SHA256`
+//!   - `TLS_AES_256_GCM_SHA384`
 //! - **AEAD**: AES‑GCM 128/256 only (no CBC/EtM modes).
 //! - **Key exchange**: ECDHE (P‑256/P‑384)
 //! - **Signatures**: ECDSA P‑256/SHA‑256, ECDSA P‑384/SHA‑384
 //! - **DTLS‑SRTP**: Exports keying material for `SRTP_AEAD_AES_256_GCM`,
 //!   `SRTP_AEAD_AES_128_GCM`, and `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
-//! - **Extended Master Secret** ([RFC 7627]) is negotiated and enforced.
+//! - **Extended Master Secret** ([RFC 7627]) is negotiated and enforced (DTLS 1.2).
 //! - Not supported: PSK cipher suites.
 //!
 //! ## Certificate model
@@ -113,7 +112,7 @@
 //! fn mk_dtls_client() -> Dtls {
 //!     let cert = certificate::generate_self_signed_certificate().unwrap();
 //!     let cfg = Arc::new(Config::default());
-//!     let mut dtls = Dtls::new(cfg, cert, Instant::now());
+//!     let mut dtls = Dtls::new_12(cfg, cert, Instant::now());
 //!     dtls.set_active(true); // client role
 //!     dtls
 //! }
@@ -130,47 +129,19 @@
 //! ### Status
 //! - Session resumption is not implemented (WebRTC does a full handshake on ICE restart).
 //! - Renegotiation is not implemented (WebRTC does full restart).
-//! - Only DTLS 1.2 is accepted/advertised.
 //!
 //! [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
 //! [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
 //! [RFC 7627]: https://www.rfc-editor.org/rfc/rfc7627
 //!
-//! [`Dtls::handle_packet`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.handle_packet
-//! [`Dtls::poll_output`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.poll_output
-//! [`Dtls::handle_timeout`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.handle_timeout
-//! [`Output`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html
-//! [`Output::PeerCert`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html#variant.PeerCert
+//! [`Dtls::handle_packet`]: Dtls::handle_packet
+//! [`Dtls::poll_output`]: Dtls::poll_output
+//! [`Dtls::handle_timeout`]: Dtls::handle_timeout
 //!
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 #![allow(unknown_lints)]
 #![deny(missing_docs)]
-
-// This is the full DTLS 1.2 handshake flow
-//
-// Client                                               Server
-//
-// 1     ClientHello                  -------->
-//
-// 2                                  <--------   HelloVerifyRequest
-//                                                 (contains cookie)
-//
-// 3     ClientHello                  -------->
-//       (with cookie)
-// 4                                                     ServerHello
-//                                                      Certificate*
-//                                                ServerKeyExchange*
-//                                               CertificateRequest*
-//                                    <--------      ServerHelloDone
-// 5     Certificate*
-//       ClientKeyExchange
-//       CertificateVerify*
-//       [ChangeCipherSpec]
-//       Finished                     -------->
-// 6                                              [ChangeCipherSpec]
-//                                    <--------             Finished
-//       Application Data             <------->     Application Data
 
 #[macro_use]
 extern crate log;
@@ -179,20 +150,26 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-mod client;
-use client::Client;
+// Shared types used by both DTLS versions
+mod types;
+pub use types::{
+    CompressionMethod, ContentType, HashAlgorithm, NamedGroup, ProtocolVersion, Sequence,
+    SignatureAlgorithm,
+};
 
-mod server;
-use server::Server;
+// DTLS version-specific modules
+mod dtls12;
+mod dtls13;
 
-mod message;
+use dtls12::{Client as Client12, Server as Server12};
+use dtls13::{Client as Client13, Server as Server13};
 
+use detect::{ClientPending, ServerPending};
+
+mod detect;
 mod time_tricks;
 
-pub mod buffer;
-mod engine;
-mod incoming;
-mod queue;
+pub(crate) mod buffer;
 mod window;
 
 mod util;
@@ -233,57 +210,123 @@ impl std::fmt::Debug for DtlsCertificate {
     }
 }
 
-/// Public DTLS endpoint wrapping either a client or server state.
+/// Sans-IO DTLS endpoint (client or server).
 ///
-/// Use the role helpers to query or switch between client and server modes
-/// and drive the handshake and record processing.
+/// New instances start in the **server role**. Call
+/// [`set_active(true)`](Self::set_active) to switch to client before
+/// the handshake begins.
+///
+/// Drive the state machine with [`handle_packet`](Self::handle_packet),
+/// [`poll_output`](Self::poll_output), and
+/// [`handle_timeout`](Self::handle_timeout).
 pub struct Dtls {
     inner: Option<Inner>,
 }
 
 enum Inner {
-    Client(Client),
-    Server(Server),
+    Client12(Client12),
+    Server12(Server12),
+    Client13(Client13),
+    Server13(Server13),
+    ServerPending(ServerPending),
+    ClientPending(ClientPending),
 }
 
 impl Dtls {
-    /// Create a new DTLS instance.
+    /// Create a new DTLS 1.2 instance in the server role.
     ///
-    /// The instance is initialized with the provided `config` and `certificate`.
-    /// The `now` parameter seeds the internal time tracking for timeouts and
-    /// retransmissions.
+    /// Call [`set_active(true)`](Self::set_active) to switch to client
+    /// before the handshake begins. The `now` parameter seeds the internal
+    /// time tracking for timeouts and retransmissions.
     ///
     /// During the handshake, the peer's leaf certificate is surfaced via
     /// [`Output::PeerCert`]. It is up to the application to validate that
     /// certificate according to its security policy.
-    pub fn new(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
-        let inner = Inner::Server(Server::new(config, certificate, now));
+    pub fn new_12(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
+        let inner = Inner::Server12(Server12::new(config, certificate, now));
+        Dtls { inner: Some(inner) }
+    }
+
+    /// Create a new DTLS 1.3 instance in the server role.
+    ///
+    /// Call [`set_active(true)`](Self::set_active) to switch to client
+    /// before the handshake begins.
+    ///
+    /// During the handshake, the peer's leaf certificate is surfaced via
+    /// [`Output::PeerCert`]. It is up to the application to validate that
+    /// certificate according to its security policy.
+    pub fn new_13(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
+        let inner = Inner::Server13(Server13::new(config, certificate, now));
+        Dtls { inner: Some(inner) }
+    }
+
+    /// Create a new DTLS instance that auto‑senses the version.
+    ///
+    /// **Server role** (default): the instance stays in a pending state.
+    /// When the first ClientHello arrives it inspects the
+    /// `supported_versions` extension and creates either a DTLS 1.2 or
+    /// 1.3 server.
+    ///
+    /// **Client role** ([`set_active(true)`](Self::set_active)): the
+    /// instance sends a hybrid ClientHello compatible with both DTLS 1.2
+    /// and 1.3 servers and forks into the correct handshake once the
+    /// server responds.
+    pub fn new_auto(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
+        let inner = Inner::ServerPending(ServerPending::new(config, certificate, now));
         Dtls { inner: Some(inner) }
     }
 
     /// Return true if the instance is operating in the client role.
     pub fn is_active(&self) -> bool {
-        matches!(self.inner, Some(Inner::Client(_)))
+        matches!(
+            self.inner,
+            Some(Inner::Client12(_) | Inner::Client13(_) | Inner::ClientPending(_))
+        )
     }
 
     /// Switch between server and client roles.
     ///
     /// Set `active` to true for client role, false for server role.
+    ///
+    /// When called on an auto‑sense instance ([`Dtls::new_auto`]) the
+    /// client sends a hybrid ClientHello compatible with both DTLS 1.2
+    /// and 1.3. The version is determined from the server's first
+    /// response.
     pub fn set_active(&mut self, active: bool) {
         match (self.is_active(), active) {
             (true, false) => {
                 let inner = self.inner.take().unwrap();
-                let Inner::Client(inner) = inner else {
-                    unreachable!();
-                };
-                self.inner = Some(Inner::Server(inner.into_server()));
+                match inner {
+                    Inner::Client12(c) => {
+                        self.inner = Some(Inner::Server12(c.into_server()));
+                    }
+                    Inner::Client13(c) => {
+                        self.inner = Some(Inner::Server13(c.into_server()));
+                    }
+                    Inner::ClientPending(_) => {
+                        panic!("cannot switch auto-sense client back to server: version unknown");
+                    }
+                    _ => unreachable!(),
+                }
             }
             (false, true) => {
                 let inner = self.inner.take().unwrap();
-                let Inner::Server(inner) = inner else {
-                    unreachable!();
-                };
-                self.inner = Some(Inner::Client(inner.into_client()));
+                match inner {
+                    Inner::Server12(s) => {
+                        self.inner = Some(Inner::Client12(s.into_client()));
+                    }
+                    Inner::Server13(s) => {
+                        self.inner = Some(Inner::Client13(s.into_client()));
+                    }
+                    Inner::ServerPending(sp) => {
+                        let (config, certificate, now) = sp.into_parts();
+                        // unwrap: ClientPending::new only fails on missing kx groups
+                        let cp = ClientPending::new(config, certificate, now)
+                            .expect("failed to build hybrid ClientHello");
+                        self.inner = Some(Inner::ClientPending(cp));
+                    }
+                    _ => unreachable!(),
+                }
             }
             _ => {}
         }
@@ -291,33 +334,116 @@ impl Dtls {
 
     /// Process an incoming DTLS datagram.
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+        // Auto-sense server: resolve version on first ClientHello
+        if matches!(self.inner, Some(Inner::ServerPending(_))) {
+            let inner = self.inner.take().unwrap();
+            let Inner::ServerPending(sp) = inner else {
+                unreachable!()
+            };
+            let (config, certificate, now) = sp.into_parts();
+
+            let is_13 = matches!(
+                detect::client_hello_version(packet),
+                detect::DetectedVersion::Dtls13
+            );
+            let resolved = if is_13 {
+                let mut server = Server13::new(config, certificate, now);
+                server.handle_timeout(now)?;
+                Inner::Server13(server)
+            } else {
+                let mut server = Server12::new(config, certificate, now);
+                server.handle_timeout(now)?;
+                Inner::Server12(server)
+            };
+            self.inner = Some(resolved);
+        }
+
+        // Auto-sense client: resolve version on first server response
+        if matches!(self.inner, Some(Inner::ClientPending(_))) {
+            let version = detect::server_hello_version(packet);
+            let inner = self.inner.take().unwrap();
+            let Inner::ClientPending(cp) = inner else {
+                unreachable!()
+            };
+            let (hybrid, config, certificate, now) = cp.into_parts();
+            match version {
+                detect::DetectedVersion::Dtls12 => {
+                    let mut client12 = Client12::new_from_hybrid(
+                        hybrid.random,
+                        &hybrid.handshake_fragment,
+                        config,
+                        certificate,
+                        now,
+                    );
+                    // Feed the HVR to Client12 — it enters
+                    // AwaitHelloVerifyRequest and processes the cookie.
+                    client12.handle_packet(packet)?;
+                    self.inner = Some(Inner::Client12(client12));
+                    return Ok(());
+                }
+                detect::DetectedVersion::Dtls13 => {
+                    let mut client13 = Client13::new_from_hybrid(hybrid, config, certificate, now);
+                    client13.handle_packet(packet)?;
+                    self.inner = Some(Inner::Client13(client13));
+                    return Ok(());
+                }
+                detect::DetectedVersion::Unknown => {
+                    return Err(Error::UnexpectedMessage(
+                        "Unrecognized response from server".to_string(),
+                    ));
+                }
+            }
+        }
+
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.handle_packet(packet),
-            Inner::Server(server) => server.handle_packet(packet),
+            Inner::Client12(client) => client.handle_packet(packet),
+            Inner::Server12(server) => server.handle_packet(packet),
+            Inner::Client13(client) => client.handle_packet(packet),
+            Inner::Server13(server) => server.handle_packet(packet),
+            Inner::ServerPending(_) | Inner::ClientPending(_) => unreachable!(),
         }
     }
 
     /// Poll for pending output from the DTLS engine.
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.poll_output(buf),
-            Inner::Server(server) => server.poll_output(buf),
+            Inner::Client12(client) => client.poll_output(buf),
+            Inner::Server12(server) => server.poll_output(buf),
+            Inner::Client13(client) => client.poll_output(buf),
+            Inner::Server13(server) => server.poll_output(buf),
+            Inner::ServerPending(sp) => sp.poll_output(buf),
+            Inner::ClientPending(cp) => cp.poll_output(buf),
         }
     }
 
     /// Handle time-based events such as retransmission timers.
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.handle_timeout(now),
-            Inner::Server(server) => server.handle_timeout(now),
+            Inner::Client12(client) => client.handle_timeout(now),
+            Inner::Server12(server) => server.handle_timeout(now),
+            Inner::Client13(client) => client.handle_timeout(now),
+            Inner::Server13(server) => server.handle_timeout(now),
+            Inner::ServerPending(sp) => {
+                sp.handle_timeout(now);
+                Ok(())
+            }
+            Inner::ClientPending(cp) => cp.handle_timeout(now),
         }
     }
 
     /// Send application data over the established DTLS session.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
-            Inner::Client(client) => client.send_application_data(data),
-            Inner::Server(server) => server.send_application_data(data),
+            Inner::Client12(client) => client.send_application_data(data),
+            Inner::Server12(server) => server.send_application_data(data),
+            Inner::Client13(client) => client.send_application_data(data),
+            Inner::Server13(server) => server.send_application_data(data),
+            Inner::ServerPending(_) => Err(Error::UnexpectedMessage(
+                "cannot send application data: handshake not started".to_string(),
+            )),
+            Inner::ClientPending(_) => Err(Error::UnexpectedMessage(
+                "cannot send application data: handshake not complete".to_string(),
+            )),
         }
     }
 }
@@ -325,8 +451,12 @@ impl Dtls {
 impl fmt::Debug for Dtls {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (role, state) = match &self.inner {
-            Some(Inner::Client(c)) => ("Client", c.state_name()),
-            Some(Inner::Server(s)) => ("Server", s.state_name()),
+            Some(Inner::Client12(c)) => ("Client12", c.state_name()),
+            Some(Inner::Server12(s)) => ("Server12", s.state_name()),
+            Some(Inner::Client13(c)) => ("Client13", c.state_name()),
+            Some(Inner::Server13(s)) => ("Server13", s.state_name()),
+            Some(Inner::ServerPending(_)) => ("ServerPending", ""),
+            Some(Inner::ClientPending(_)) => ("ClientPending", ""),
             None => ("None", ""),
         };
         f.debug_struct("Dtls")
@@ -340,7 +470,10 @@ impl fmt::Debug for Dtls {
 pub enum Output<'a> {
     /// A DTLS record to transmit on the wire.
     Packet(&'a [u8]),
-    /// A timeout instant for scheduling retransmission or handshake timers.
+    /// Schedule a timer and call [`Dtls::handle_timeout`] at this instant.
+    ///
+    /// This is always the last variant returned by a poll cycle.
+    /// Internal state is only consistent after reaching `Timeout`.
     Timeout(Instant),
     /// The handshake completed and the connection is established.
     Connected,
@@ -380,11 +513,20 @@ mod test {
     fn new_instance() -> Dtls {
         let client_cert =
             generate_self_signed_certificate().expect("Failed to generate client cert");
-
-        // Initialize client
         let config = Arc::new(Config::default());
+        Dtls::new_12(config, client_cert, Instant::now())
+    }
 
-        Dtls::new(config, client_cert, Instant::now())
+    fn new_instance_13() -> Dtls {
+        let cert = generate_self_signed_certificate().expect("Failed to generate cert");
+        let config = Arc::new(Config::default());
+        Dtls::new_13(config, cert, Instant::now())
+    }
+
+    fn new_instance_auto() -> Dtls {
+        let cert = generate_self_signed_certificate().expect("Failed to generate cert");
+        let config = Arc::new(Config::default());
+        Dtls::new_auto(config, cert, Instant::now())
     }
 
     #[test]
@@ -397,16 +539,55 @@ mod test {
     }
 
     #[test]
+    fn test_dtls13_default() {
+        let mut dtls = new_instance_13();
+        assert!(!dtls.is_active());
+        dtls.set_active(true);
+        assert!(dtls.is_active());
+        dtls.set_active(false);
+    }
+
+    #[test]
+    fn test_auto_sense_set_active_creates_client_pending() {
+        let mut dtls = new_instance_auto();
+        assert!(!dtls.is_active());
+        dtls.set_active(true);
+        assert!(dtls.is_active());
+        assert!(matches!(dtls.inner, Some(Inner::ClientPending(_))));
+    }
+
+    #[test]
+    fn test_auto_sense_client_sends_hybrid_ch() {
+        let mut dtls = new_instance_auto();
+        dtls.set_active(true);
+        let now = Instant::now();
+        dtls.handle_timeout(now).unwrap();
+        let output = &mut [0u8; 2048];
+        // First poll returns the hybrid ClientHello packet
+        let result = dtls.poll_output(output);
+        assert!(matches!(result, Output::Packet(_)));
+        // Second poll returns Timeout
+        let result = dtls.poll_output(output);
+        assert!(matches!(result, Output::Timeout(_)));
+    }
+
+    #[test]
     fn is_send() {
         fn is_send<T: Send>(_t: T) {}
         fn is_sync<T: Sync>(_t: T) {}
         is_send(new_instance());
         is_sync(new_instance());
+        is_send(new_instance_13());
+        is_sync(new_instance_13());
+        is_send(new_instance_auto());
+        is_sync(new_instance_auto());
     }
 
     #[test]
     fn is_unwind_safe() {
         fn is_unwind_safe<T: UnwindSafe>(_t: T) {}
         is_unwind_safe(new_instance());
+        is_unwind_safe(new_instance_13());
+        is_unwind_safe(new_instance_auto());
     }
 }

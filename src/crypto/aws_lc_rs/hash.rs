@@ -2,13 +2,19 @@
 
 use aws_lc_rs::digest::{Context, SHA256, SHA384};
 
+use super::super::{HashContext, HashProvider};
 use crate::buffer::Buf;
-use crate::crypto::provider::{HashContext, HashProvider};
-use crate::message::HashAlgorithm;
+use crate::types::HashAlgorithm;
 
 /// Hash context implementation using aws-lc-rs.
 struct AwsLcHashContext {
     context: Context,
+}
+
+impl std::fmt::Debug for AwsLcHashContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsLcHashContext").finish_non_exhaustive()
+    }
 }
 
 impl HashContext for AwsLcHashContext {

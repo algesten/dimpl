@@ -1,14 +1,14 @@
 # dimpl
 
-dimpl — DTLS 1.2 implementation (Sans‑IO, Sync)
+dimpl — DTLS 1.2 and 1.3 implementation (Sans‑IO, Sync)
 
-dimpl is a focused DTLS 1.2 implementation aimed at WebRTC. It is a Sans‑IO
+dimpl is a DTLS 1.2 and 1.3 implementation aimed at WebRTC. It is a Sans‑IO
 state machine you embed into your own UDP/RTC event loop: you feed incoming
 datagrams, poll for outgoing records or timers, and wire up certificate
 verification and SRTP key export yourself.
 
 ## Goals
-- **DTLS 1.2**: Implements the DTLS 1.2 handshake and record layer used by WebRTC.
+- **DTLS 1.2 and 1.3**: Implements the DTLS handshake and record layer used by WebRTC.
 - **Safety**: `forbid(unsafe_code)` throughout the crate.
 - **Minimal Rust‑only deps**: Uses small, well‑maintained Rust crypto crates.
 - **Low overhead**: Tight control over allocations and buffers; Sans‑IO integration.
@@ -20,28 +20,27 @@ verification and SRTP key export yourself.
 - **RSA**
 - **DHE**
 
-### Regarding DTLS 1.3 and the future of this crate
+### Version selection
 
-dimpl was built as a support package for [str0m](https://github.com/algesten/str0m),
-with WebRTC as its primary use case, which currently uses DTLS 1.2. The author
-is not a cryptography expert; however, our understanding is that DTLS 1.2 is acceptable
-provided we narrow the protocol's scope—for example, by supporting only specific
-cipher suites and hash algorithms and by requiring the Extended Master Secret extension.
-
-If you are interested in extending this crate to support DTLS 1.3 and/or additional
-cipher suites or hash algorithms, we welcome collaboration, but we are not planning
-to lead such initiatives.
+Three constructors control which DTLS version is used:
+- [`Dtls::new_12`] — explicit DTLS 1.2
+- [`Dtls::new_13`] — explicit DTLS 1.3
+- [`Dtls::new_auto`] — auto‑sense: the first incoming ClientHello determines
+  the version (based on the `supported_versions` extension)
 
 ## Cryptography surface
 - **Cipher suites (TLS 1.2 over DTLS)**
   - `ECDHE_ECDSA_AES256_GCM_SHA384`
   - `ECDHE_ECDSA_AES128_GCM_SHA256`
+- **Cipher suites (TLS 1.3 over DTLS)**
+  - `TLS_AES_128_GCM_SHA256`
+  - `TLS_AES_256_GCM_SHA384`
 - **AEAD**: AES‑GCM 128/256 only (no CBC/EtM modes).
 - **Key exchange**: ECDHE (P‑256/P‑384)
 - **Signatures**: ECDSA P‑256/SHA‑256, ECDSA P‑384/SHA‑384
 - **DTLS‑SRTP**: Exports keying material for `SRTP_AEAD_AES_256_GCM`,
   `SRTP_AEAD_AES_128_GCM`, and `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
-- **Extended Master Secret** ([RFC 7627]) is negotiated and enforced.
+- **Extended Master Secret** ([RFC 7627]) is negotiated and enforced (DTLS 1.2).
 - Not supported: PSK cipher suites.
 
 ### Certificate model
@@ -113,7 +112,7 @@ fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
 fn mk_dtls_client() -> Dtls {
     let cert = certificate::generate_self_signed_certificate().unwrap();
     let cfg = Arc::new(Config::default());
-    let mut dtls = Dtls::new(cfg, cert, Instant::now());
+    let mut dtls = Dtls::new_12(cfg, cert, Instant::now());
     dtls.set_active(true); // client role
     dtls
 }
@@ -129,17 +128,14 @@ Rust 1.81.0
 #### Status
 - Session resumption is not implemented (WebRTC does a full handshake on ICE restart).
 - Renegotiation is not implemented (WebRTC does full restart).
-- Only DTLS 1.2 is accepted/advertised.
 
 [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
 [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
 [RFC 7627]: https://www.rfc-editor.org/rfc/rfc7627
 
-[`Dtls::handle_packet`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.handle_packet
-[`Dtls::poll_output`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.poll_output
-[`Dtls::handle_timeout`]: https://docs.rs/dimpl/0.1.0/dimpl/struct.Dtls.html#method.handle_timeout
-[`Output`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html
-[`Output::PeerCert`]: https://docs.rs/dimpl/0.1.0/dimpl/enum.Output.html#variant.PeerCert
+[`Dtls::handle_packet`]: Dtls::handle_packet
+[`Dtls::poll_output`]: Dtls::poll_output
+[`Dtls::handle_timeout`]: Dtls::handle_timeout
 
 
 License: MIT OR Apache-2.0

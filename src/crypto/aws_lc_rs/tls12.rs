@@ -1,8 +1,8 @@
-//! TLS 1.2 PRF, random number generation, and HMAC using aws-lc-rs.
+//! TLS 1.2 PRF using aws-lc-rs.
 
+use super::super::PrfProvider;
 use crate::buffer::Buf;
-use crate::crypto::provider::{HmacProvider, PrfProvider, SecureRandom};
-use crate::message::HashAlgorithm;
+use crate::types::HashAlgorithm;
 
 use super::hmac;
 
@@ -33,39 +33,5 @@ impl PrfProvider for AwsLcPrfProvider {
     }
 }
 
-/// Secure random number generator implementation.
-#[derive(Debug)]
-pub(super) struct AwsLcSecureRandom;
-
-impl SecureRandom for AwsLcSecureRandom {
-    fn fill(&self, buf: &mut [u8]) -> Result<(), String> {
-        use aws_lc_rs::rand::SecureRandom as _;
-        let rng = aws_lc_rs::rand::SystemRandom::new();
-        rng.fill(buf)
-            .map_err(|_| "Failed to generate random bytes".to_string())
-    }
-}
-
-/// HMAC provider implementation.
-#[derive(Debug)]
-pub(super) struct AwsLcHmacProvider;
-
-impl HmacProvider for AwsLcHmacProvider {
-    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String> {
-        use aws_lc_rs::hmac;
-        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, key);
-        let tag = hmac::sign(&hmac_key, data);
-        let mut result = [0u8; 32];
-        result.copy_from_slice(tag.as_ref());
-        Ok(result)
-    }
-}
-
 /// Static instance of the PRF provider.
 pub(super) static PRF_PROVIDER: AwsLcPrfProvider = AwsLcPrfProvider;
-
-/// Static instance of the secure random generator.
-pub(super) static SECURE_RANDOM: AwsLcSecureRandom = AwsLcSecureRandom;
-
-/// Static instance of the HMAC provider.
-pub(super) static HMAC_PROVIDER: AwsLcHmacProvider = AwsLcHmacProvider;
