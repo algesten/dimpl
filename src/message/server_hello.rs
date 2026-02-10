@@ -117,8 +117,8 @@ impl ServerHello {
                     let (new_rest, ext) = Extension::parse(current_input, current_offset)?;
                     let parsed_len = before_len - new_rest.len();
                     current_offset += parsed_len;
-                    // Only keep known extension types
-                    if ext.extension_type.is_known() {
+                    // Only keep supported extension types
+                    if ext.extension_type.is_supported() {
                         extensions_vec.push(ext);
                     }
                     current_input = new_rest;

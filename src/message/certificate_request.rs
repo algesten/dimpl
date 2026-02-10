@@ -187,7 +187,7 @@ mod test {
         };
         assert_eq!(
             req.certificate_types.capacity(),
-            ClientCertificateType::all_supported().len(),
+            ClientCertificateType::supported().len(),
             "certificate_types capacity must match supported types count"
         );
         assert_eq!(

@@ -213,9 +213,14 @@ impl CipherSuite {
         }
     }
 
-    /// Returns true if this cipher suite is a known/supported variant.
-    pub fn is_known(&self) -> bool {
-        Self::all().contains(self)
+    /// Returns true if this cipher suite is supported by this implementation.
+    pub fn is_supported(&self) -> bool {
+        Self::supported().contains(self)
+    }
+
+    /// Supported DTLS 1.2 cipher suites in server preference order.
+    pub fn supported() -> &'static [CipherSuite] {
+        Self::all()
     }
 }
 
@@ -241,13 +246,13 @@ impl CompressionMethod {
         }
     }
 
-    /// Returns true if this compression method is a known/supported variant.
-    pub fn is_known(&self) -> bool {
-        Self::all().contains(self)
+    /// Returns true if this compression method is supported by this implementation.
+    pub fn is_supported(&self) -> bool {
+        Self::supported().contains(self)
     }
 
-    /// All known compression methods.
-    pub fn all() -> &'static [CompressionMethod] {
+    /// Supported compression methods.
+    pub fn supported() -> &'static [CompressionMethod] {
         &[CompressionMethod::Null, CompressionMethod::Deflate]
     }
 
@@ -314,9 +319,9 @@ impl ClientCertificateType {
         matches!(self, ClientCertificateType::ECDSA_SIGN)
     }
 
-    /// All supported client certificate types.
+    /// Supported client certificate types.
     #[cfg(test)]
-    pub fn all_supported() -> &'static [ClientCertificateType] {
+    pub fn supported() -> &'static [ClientCertificateType] {
         &[ClientCertificateType::ECDSA_SIGN]
     }
 
@@ -484,6 +489,13 @@ impl SignatureAndHashAlgorithm {
         Ok((input, SignatureAndHashAlgorithm::from_u16(value)))
     }
 
+    /// All recognized signature+hash combinations (same as `supported()`).
+    #[allow(dead_code)]
+    pub fn all() -> ArrayVec<SignatureAndHashAlgorithm, 4> {
+        Self::supported()
+    }
+
+    /// Supported signature+hash combinations.
     pub fn supported() -> ArrayVec<SignatureAndHashAlgorithm, 4> {
         let mut algos = ArrayVec::new();
         algos.push(SignatureAndHashAlgorithm::new(

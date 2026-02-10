@@ -109,7 +109,7 @@ mod tests {
         };
         assert_eq!(
             ext.groups.capacity(),
-            NamedGroup::all_supported().len(),
+            NamedGroup::supported().len(),
             "SupportedGroupsExtension capacity must match all supported NamedGroups"
         );
     }

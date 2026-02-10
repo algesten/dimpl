@@ -191,13 +191,13 @@ impl ExtensionType {
         Ok((input, ExtensionType::from_u16(value)))
     }
 
-    /// Returns true if this extension type is a known/supported variant.
-    pub fn is_known(&self) -> bool {
-        Self::all().contains(self)
+    /// Returns true if this extension type is supported by this implementation.
+    pub fn is_supported(&self) -> bool {
+        Self::supported().contains(self)
     }
 
-    /// All known extension types that this implementation handles.
-    pub fn all() -> &'static [ExtensionType] {
+    /// Supported extension types that this implementation handles.
+    pub fn supported() -> &'static [ExtensionType] {
         &[
             ExtensionType::SupportedGroups,
             ExtensionType::EcPointFormats,

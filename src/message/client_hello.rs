@@ -123,14 +123,15 @@ impl ClientHello {
         let (input, cookie) = Cookie::parse(input)?;
         let (input, cipher_suites_len) = be_u16(input)?;
         let (input, input_cipher) = take(cipher_suites_len)(input)?;
-        let (rest, cipher_suites) = many1(CipherSuite::parse, CipherSuite::is_known)(input_cipher)?;
+        let (rest, cipher_suites) =
+            many1(CipherSuite::parse, CipherSuite::is_supported)(input_cipher)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
         let (input, compression_methods_len) = be_u8(input)?;
         let (input, input_compression) = take(compression_methods_len)(input)?;
         let (rest, compression_methods) =
-            many1(CompressionMethod::parse, CompressionMethod::is_known)(input_compression)?;
+            many1(CompressionMethod::parse, CompressionMethod::is_supported)(input_compression)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
@@ -194,8 +195,8 @@ impl ClientHello {
             let parsed_len = before_len - rest.len();
             current_offset += parsed_len;
 
-            // Only keep known extension types
-            if extension.extension_type.is_known() {
+            // Only keep supported extension types
+            if extension.extension_type.is_supported() {
                 extensions.push(extension);
             }
             extensions_rest = rest;
@@ -314,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn cipher_suites_capacity_matches_known() {
+    fn cipher_suites_capacity_matches_supported() {
         let client_hello = ClientHello {
             client_version: ProtocolVersion::DTLS1_2,
             random: Random::parse(&MESSAGE[2..34]).unwrap().1,
@@ -327,13 +328,13 @@ mod tests {
 
         assert_eq!(
             client_hello.cipher_suites.capacity(),
-            CipherSuite::all().len(),
-            "cipher_suites ArrayVec capacity must match all known CipherSuites"
+            CipherSuite::supported().len(),
+            "cipher_suites ArrayVec capacity must match supported CipherSuites"
         );
     }
 
     #[test]
-    fn compression_methods_capacity_matches_known() {
+    fn compression_methods_capacity_matches_supported() {
         let client_hello = ClientHello {
             client_version: ProtocolVersion::DTLS1_2,
             random: Random::parse(&MESSAGE[2..34]).unwrap().1,
@@ -346,13 +347,13 @@ mod tests {
 
         assert_eq!(
             client_hello.compression_methods.capacity(),
-            CompressionMethod::all().len(),
-            "compression_methods ArrayVec capacity must match all known CompressionMethods"
+            CompressionMethod::supported().len(),
+            "compression_methods ArrayVec capacity must match supported CompressionMethods"
         );
     }
 
     #[test]
-    fn extensions_capacity_matches_known() {
+    fn extensions_capacity_matches_supported() {
         let client_hello = ClientHello {
             client_version: ProtocolVersion::DTLS1_2,
             random: Random::parse(&MESSAGE[2..34]).unwrap().1,
@@ -365,8 +366,8 @@ mod tests {
 
         assert_eq!(
             client_hello.extensions.capacity(),
-            ExtensionType::all().len(),
-            "extensions ArrayVec capacity must match all known ExtensionTypes"
+            ExtensionType::supported().len(),
+            "extensions ArrayVec capacity must match supported ExtensionTypes"
         );
     }
 }
