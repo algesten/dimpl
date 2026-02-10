@@ -263,7 +263,10 @@ impl Engine {
         self.transcript.extend_from_slice(transcript_bytes);
         self.next_handshake_seq_no = 1;
         // Advance past the record sequence used by the hybrid CH.
-        self.sequence_epoch_0.sequence_number += 1;
+        // Defense-in-depth: guard against epoch-0 sequence overflow.
+        if self.sequence_epoch_0.sequence_number < MAX_SEQUENCE_NUMBER {
+            self.sequence_epoch_0.sequence_number += 1;
+        }
     }
 
     pub fn config(&self) -> &Config {
@@ -784,10 +787,14 @@ impl Engine {
                 continue;
             }
 
-            if h.header.fragment_offset != last_fragment_end {
+            // Overlap-tolerant: only reject if there's an actual gap
+            if h.header.fragment_offset > last_fragment_end {
                 return false;
             }
-            last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
+            let end = h.header.fragment_offset + h.header.fragment_length;
+            if end > last_fragment_end {
+                last_fragment_end = end;
+            }
 
             if last_fragment_end == wanted_length {
                 return true;
@@ -916,6 +923,11 @@ impl Engine {
             fragment_range: 0..fragment.len(),
         };
 
+        if self.sequence_epoch_0.sequence_number >= MAX_SEQUENCE_NUMBER {
+            return Err(Error::CryptoError(
+                "Epoch 0 sequence number exhausted".to_string(),
+            ));
+        }
         self.sequence_epoch_0.sequence_number += 1;
 
         if can_append {
@@ -1370,10 +1382,14 @@ impl Engine {
             if wanted_seq != h.header.message_seq {
                 continue;
             }
-            if h.header.fragment_offset != last_fragment_end {
+            // Overlap-tolerant: only flag help needed if there's an actual gap
+            if h.header.fragment_offset > last_fragment_end {
                 return true;
             }
-            last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
+            let end = h.header.fragment_offset + h.header.fragment_length;
+            if end > last_fragment_end {
+                last_fragment_end = end;
+            }
             if last_fragment_end == wanted_length {
                 return false;
             }
@@ -1413,10 +1429,14 @@ impl Engine {
             if wanted_seq != h.header.message_seq {
                 continue;
             }
-            if h.header.fragment_offset != last_fragment_end {
+            // Overlap-tolerant: only flag a gap if there's an actual gap
+            if h.header.fragment_offset > last_fragment_end {
                 return true;
             }
-            last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
+            let end = h.header.fragment_offset + h.header.fragment_length;
+            if end > last_fragment_end {
+                last_fragment_end = end;
+            }
             if last_fragment_end == wanted_length {
                 return false;
             }
@@ -1541,12 +1561,12 @@ impl Engine {
     }
 
     /// Derive the early secret: HKDF-Extract(0, 0) [no PSK support]
-    pub fn derive_early_secret(&self) -> Result<Buf, Error> {
+    pub fn derive_early_secret(&mut self) -> Result<Buf, Error> {
         let hash = self.hash_algorithm();
         let hash_len = hash.output_len();
         let zeros = [0u8; 48];
         let zeros = &zeros[..hash_len];
-        let mut early_secret = self.pop_buffer_internal();
+        let mut early_secret = self.buffers_free.pop();
         self.hkdf()
             .hkdf_extract(hash, zeros, zeros, &mut early_secret)
             .map_err(|e| Error::CryptoError(format!("Failed to derive early secret: {}", e)))?;
@@ -1555,14 +1575,19 @@ impl Engine {
 
     /// Derive handshake secrets from ECDHE shared secret + transcript hash through ServerHello.
     ///
-    /// Returns (client_handshake_traffic_secret, server_handshake_traffic_secret)
-    pub fn derive_handshake_secrets(&mut self, shared_secret: &[u8]) -> Result<(Buf, Buf), Error> {
+    /// Returns (client_handshake_traffic_secret, server_handshake_traffic_secret, handshake_secret)
+    pub fn derive_handshake_secrets(
+        &mut self,
+        shared_secret: &[u8],
+    ) -> Result<(Buf, Buf, Buf), Error> {
+        // Call derive_early_secret first (needs &mut self) before borrowing hkdf
+        let early_secret = self.derive_early_secret()?;
+
         let hash = self.hash_algorithm();
         let hash_len = hash.output_len();
         let hkdf = self.hkdf();
 
         // Derive-Secret(early_secret, "derived", "")
-        let early_secret = self.derive_early_secret()?;
         let empty_hash = self.transcript_hash_of(b"");
         let mut derived = Buf::new();
         hkdf.hkdf_expand_label_dtls13(
@@ -1608,7 +1633,7 @@ impl Engine {
         )
         .map_err(|e| Error::CryptoError(format!("Failed to derive s_hs_traffic: {}", e)))?;
 
-        Ok((c_hs_traffic, s_hs_traffic))
+        Ok((c_hs_traffic, s_hs_traffic, handshake_secret))
     }
 
     /// Install handshake keys (epoch 2) from the traffic secrets.
@@ -1920,35 +1945,6 @@ impl Engine {
         })
     }
 
-    /// Compute the handshake secret needed for derive_application_secrets.
-    ///
-    /// This re-derives the handshake secret from the shared secret and early secret.
-    /// Call after handshake secrets have been derived and the shared secret is still available.
-    pub fn derive_handshake_secret(&self, shared_secret: &[u8]) -> Result<Buf, Error> {
-        let hash = self.hash_algorithm();
-        let hash_len = hash.output_len();
-        let hkdf = self.hkdf();
-
-        let early_secret = self.derive_early_secret()?;
-        let empty_hash = self.transcript_hash_of(b"");
-        let mut derived = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
-            hash,
-            &early_secret,
-            b"derived",
-            &empty_hash,
-            &mut derived,
-            hash_len,
-        )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive 'derived' secret: {}", e)))?;
-
-        let mut handshake_secret = Buf::new();
-        hkdf.hkdf_extract(hash, &derived, shared_secret, &mut handshake_secret)
-            .map_err(|e| Error::CryptoError(format!("Failed to derive handshake secret: {}", e)))?;
-
-        Ok(handshake_secret)
-    }
-
     /// Compute verify_data for Finished messages.
     ///
     /// finished_key = HKDF-Expand-Label(traffic_secret, "finished", "", Hash.len)
@@ -2171,11 +2167,6 @@ impl Engine {
         Ok((keying_material, profile))
     }
 
-    /// Internal buffer pop that doesn't require &mut self (used in const-like contexts)
-    fn pop_buffer_internal(&self) -> Buf {
-        Buf::new()
-    }
-
     pub fn random(&mut self) -> Random {
         Random::new(&mut self.rng)
     }
@@ -2385,5 +2376,118 @@ impl RecordDecrypt for Engine {
         for (i, byte) in seq_bytes.iter_mut().enumerate() {
             *byte ^= mask[i];
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "rcgen")]
+    use crate::certificate::generate_self_signed_certificate;
+
+    #[cfg(feature = "rcgen")]
+    fn test_engine() -> Engine {
+        let cert = generate_self_signed_certificate().expect("gen cert");
+        let config = Arc::new(Config::builder().build().expect("build config"));
+        Engine::new(config, cert)
+    }
+
+    /// Issue 2: Epoch-0 sequence number must have an overflow guard.
+    ///
+    /// Per RFC 9147 §4.2, implementations MUST NOT allow the sequence number
+    /// to exceed MAX_SEQUENCE_NUMBER (2^48 - 1). This test sets the counter
+    /// to MAX and verifies that `create_plaintext_record` returns an error.
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn epoch_0_sequence_number_rejects_overflow() {
+        let mut engine = test_engine();
+
+        // Set epoch-0 sequence to MAX — the next increment should be rejected
+        engine.sequence_epoch_0.sequence_number = MAX_SEQUENCE_NUMBER;
+
+        let result = engine.create_plaintext_record(ContentType::Handshake, false, |buf| {
+            buf.extend_from_slice(b"test")
+        });
+        assert!(
+            result.is_err(),
+            "epoch-0 must reject sequence overflow at MAX_SEQUENCE_NUMBER"
+        );
+    }
+
+    /// Issue 3: `derive_handshake_secrets` must return the handshake_secret
+    /// alongside the traffic secrets, eliminating the need for a separate
+    /// `derive_handshake_secret` method.
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn derive_handshake_secrets_returns_handshake_secret() {
+        let mut engine = test_engine();
+        engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+
+        // Simulate some transcript content (normally built during handshake)
+        engine
+            .transcript
+            .extend_from_slice(b"dummy transcript for test");
+
+        let shared_secret = [0x42u8; 32];
+
+        // derive_handshake_secrets returns a 3-tuple:
+        //   (client_hs_traffic, server_hs_traffic, handshake_secret)
+        let (c_hs_traffic, _s_hs_traffic, handshake_secret) =
+            engine.derive_handshake_secrets(&shared_secret).unwrap();
+
+        // Verify the handshake_secret can reproduce the same c_hs_traffic
+        let hash = engine.hash_algorithm();
+        let hash_len = hash.output_len();
+        let hkdf = engine.hkdf();
+
+        let mut transcript_hash = Buf::new();
+        engine.transcript_hash(&mut transcript_hash);
+
+        let mut c_hs_manual = Buf::new();
+        hkdf.hkdf_expand_label_dtls13(
+            hash,
+            &handshake_secret,
+            b"c hs traffic",
+            &transcript_hash,
+            &mut c_hs_manual,
+            hash_len,
+        )
+        .expect("hkdf_expand_label_dtls13");
+
+        assert_eq!(
+            c_hs_manual.as_ref(),
+            c_hs_traffic.as_ref(),
+            "handshake_secret from derive_handshake_secrets() must reproduce \
+             the same traffic secrets"
+        );
+    }
+
+    /// Issue 4: `derive_early_secret` must use the buffer pool.
+    ///
+    /// `derive_early_secret` takes `&mut self` and allocates its output buffer
+    /// via `self.buffers_free.pop()`, reusing pooled allocations instead of
+    /// creating a fresh `Buf::new()`.
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn derive_early_secret_uses_buffer_pool() {
+        let mut engine = test_engine();
+        engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+
+        // Pre-fill the pool with a buffer that has allocated capacity.
+        // BufferPool::push clears contents but retains the allocation.
+        let mut marked = Buf::new();
+        marked.extend_from_slice(&[0xAA; 256]);
+        engine.buffers_free.push(marked);
+
+        // derive_early_secret takes &mut self and uses the buffer pool.
+        let early_secret = engine.derive_early_secret().unwrap();
+
+        // The returned buffer should have pooled capacity (>= 256),
+        // not 0 from Buf::new().
+        assert!(
+            early_secret.into_vec().capacity() >= 256,
+            "derive_early_secret must use the buffer pool, returning a buffer with pooled capacity"
+        );
     }
 }

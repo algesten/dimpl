@@ -692,11 +692,10 @@ impl State {
             Error::CryptoError("No shared secret for handshake key derivation".to_string())
         })?;
 
-        let (c_hs_traffic, s_hs_traffic) =
+        let (c_hs_traffic, s_hs_traffic, handshake_secret) =
             server.engine.derive_handshake_secrets(&shared_secret)?;
 
         // Save handshake secret for later application key derivation
-        let handshake_secret = server.engine.derive_handshake_secret(&shared_secret)?;
         server.handshake_secret = Some(handshake_secret);
         server.engine.push_buffer(shared_secret);
 

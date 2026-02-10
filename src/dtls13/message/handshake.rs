@@ -148,6 +148,9 @@ impl Handshake {
         buffer.extend_from_slice(&first_buffer[range.clone()]);
         first_handshake.set_handled();
 
+        let mut assembled_end =
+            first_handshake.header.fragment_offset + first_handshake.header.fragment_length;
+
         for (handshake, source_buf) in iter {
             if handshake.header.msg_type != first_handshake.header.msg_type {
                 break;
@@ -159,7 +162,17 @@ impl Handshake {
 
             handshake.handled.store(true, Ordering::Relaxed);
 
-            buffer.extend_from_slice(&source_buf[range.clone()]);
+            // Handle overlapping fragment data: skip bytes already assembled
+            let frag_start = handshake.header.fragment_offset as usize;
+            let frag_len = handshake.header.fragment_length as usize;
+            let skip = (assembled_end as usize).saturating_sub(frag_start);
+            if skip < frag_len {
+                buffer.extend_from_slice(&source_buf[range.start + skip..range.end]);
+            }
+            let end = handshake.header.fragment_offset + handshake.header.fragment_length;
+            if end > assembled_end {
+                assembled_end = end;
+            }
         }
 
         if buffer.len() != first_handshake.header.length as usize {

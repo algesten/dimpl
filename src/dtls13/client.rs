@@ -604,11 +604,10 @@ impl State {
             .map_err(|e| Error::CryptoError(format!("ECDHE completion failed: {}", e)))?;
 
         // Derive handshake secrets
-        let (c_hs_traffic, s_hs_traffic) =
+        let (c_hs_traffic, s_hs_traffic, handshake_secret) =
             client.engine.derive_handshake_secrets(&shared_secret)?;
 
         // Save handshake secret for later application key derivation
-        let handshake_secret = client.engine.derive_handshake_secret(&shared_secret)?;
         client.handshake_secret = Some(handshake_secret);
         client.engine.push_buffer(shared_secret);
 

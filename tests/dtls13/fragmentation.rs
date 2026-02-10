@@ -354,3 +354,162 @@ fn dtls13_fragmented_handshake_with_packet_loss() {
         "Should have dropped at least one server packet"
     );
 }
+
+/// Issue 1: Overlapping handshake fragments must be reassembled successfully.
+///
+/// RFC 9147 allows overlapping handshake fragments. The reassembly logic must
+/// tolerate overlaps (e.g., [0..100] then [50..200]) and still consider the
+/// message complete once all bytes are covered.
+///
+/// This test captures a fragmented ClientHello, modifies the second fragment
+/// to create a 10-byte overlap, and verifies the server completes the handshake.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_overlapping_fragments_reassembled_successfully() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Small MTU forces ClientHello into multiple fragments while keeping
+    // the server's response flight within the flight_saved_records capacity.
+    let config = dtls13_config_with_mtu(150);
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    // Get the client's first flight (fragmented ClientHello)
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+
+    // Find handshake fragments: DTLSPlaintext records with content_type 0x16
+    // and epoch 0 (bytes 3-4 == 0x00 0x00).
+    let handshake_packets: Vec<usize> = client_out
+        .packets
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.len() > 25 && p[0] == 0x16 && p[3] == 0x00 && p[4] == 0x00)
+        .map(|(i, _)| i)
+        .collect();
+
+    assert!(
+        handshake_packets.len() >= 2,
+        "ClientHello should be fragmented into at least 2 packets, got {}",
+        handshake_packets.len()
+    );
+
+    // Create modified packets with overlapping second fragment.
+    //
+    // DTLSPlaintext layout:
+    //   Bytes 0:     content_type (0x16 = handshake)
+    //   Bytes 1-2:   version
+    //   Bytes 3-4:   epoch
+    //   Bytes 5-10:  sequence_number (6 bytes)
+    //   Bytes 11-12: record length
+    //   Bytes 13:    msg_type (handshake header)
+    //   Bytes 14-16: total message length (3 bytes)
+    //   Bytes 17-18: message_seq (2 bytes)
+    //   Bytes 19-21: fragment_offset (3 bytes, big-endian u24)
+    //   Bytes 22-24: fragment_length (3 bytes, big-endian u24)
+    //   Bytes 25+:   body
+    let mut modified_packets = client_out.packets.clone();
+    let first_idx = handshake_packets[0];
+    let second_idx = handshake_packets[1];
+
+    // Get overlap data from the end of the first fragment's body
+    let first_frag_len = {
+        let p = &modified_packets[first_idx];
+        ((p[22] as usize) << 16) | ((p[23] as usize) << 8) | (p[24] as usize)
+    };
+    let overlap_data: Vec<u8> = {
+        let p = &modified_packets[first_idx];
+        let body_end = 25 + first_frag_len;
+        p[body_end - 10..body_end].to_vec()
+    };
+
+    // Build a new second packet with the overlap data prepended to its body.
+    // This shifts fragment_offset back by 10, increases fragment_length by 10,
+    // and updates the record length accordingly.
+    let new_packet = {
+        let packet = &modified_packets[second_idx];
+        let orig_offset =
+            ((packet[19] as u32) << 16) | ((packet[20] as u32) << 8) | (packet[21] as u32);
+        assert!(
+            orig_offset >= 10,
+            "Second fragment offset should be >= 10 for overlap test, got {}",
+            orig_offset
+        );
+        let orig_frag_len =
+            ((packet[22] as u32) << 16) | ((packet[23] as u32) << 8) | (packet[24] as u32);
+        let orig_record_len = u16::from_be_bytes([packet[11], packet[12]]);
+
+        let new_offset = orig_offset - 10;
+        let new_frag_len = orig_frag_len + 10;
+        let new_record_len = orig_record_len + 10;
+
+        let mut p = Vec::with_capacity(packet.len() + 10);
+        // Record header through message_seq (bytes 0-18)
+        p.extend_from_slice(&packet[..19]);
+        // fragment_offset (3 bytes)
+        p.push((new_offset >> 16) as u8);
+        p.push((new_offset >> 8) as u8);
+        p.push(new_offset as u8);
+        // fragment_length (3 bytes)
+        p.push((new_frag_len >> 16) as u8);
+        p.push((new_frag_len >> 8) as u8);
+        p.push(new_frag_len as u8);
+        // Overlap bytes + original body
+        p.extend_from_slice(&overlap_data);
+        p.extend_from_slice(&packet[25..]);
+        // Fix record length (bytes 11-12)
+        p[11] = (new_record_len >> 8) as u8;
+        p[12] = new_record_len as u8;
+        p
+    };
+    modified_packets[second_idx] = new_packet;
+
+    // Deliver overlapping fragments to server
+    deliver_packets(&modified_packets, &mut server);
+
+    // Drive the handshake to completion. The server must reassemble the
+    // overlapping fragments and complete the handshake with the client.
+    let mut client_connected = false;
+    let mut server_connected = false;
+    for _ in 0..40 {
+        now += Duration::from_millis(10);
+        client.handle_timeout(now).expect("client timeout");
+        match server.handle_timeout(now) {
+            Ok(()) => {}
+            Err(e) => panic!("Server should not error with overlapping fragments: {}", e),
+        }
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+    }
+
+    assert!(
+        server_connected,
+        "Server should reassemble overlapping fragments and complete the handshake"
+    );
+}
