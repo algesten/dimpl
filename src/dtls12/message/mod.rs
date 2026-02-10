@@ -187,7 +187,7 @@ impl Dtls12CipherSuite {
     }
 
     /// Supported DTLS 1.2 cipher suites in server preference order.
-    pub const fn supported() -> &'static [CipherSuite; 2] {
+    pub const fn supported() -> &'static [Dtls12CipherSuite; 2] {
         Self::all()
     }
 }

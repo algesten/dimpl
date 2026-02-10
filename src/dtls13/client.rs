@@ -1088,11 +1088,11 @@ fn handshake_create_client_hello(
 
     // Cipher suites from provider
     let provider = engine.config().crypto_provider();
-    let cipher_suites: ArrayVec<Dtls13CipherSuite, 3> = provider
+    let cipher_suites: ArrayVec<Dtls13CipherSuite, 2> = provider
         .dtls13_cipher_suites
         .iter()
         .map(|cs| cs.suite())
-        .take(3)
+        .take(2)
         .collect();
 
     debug!(

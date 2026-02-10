@@ -8,9 +8,9 @@ use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u16, be_u8};
 use nom::{Err, IResult};
 
+use super::extension::ExtensionVec;
 use crate::buffer::Buf;
 use crate::crypto::CryptoProvider;
-use super::extension::ExtensionVec;
 use crate::util::many1;
 
 #[derive(Debug, PartialEq, Eq)]

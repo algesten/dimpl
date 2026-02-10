@@ -29,7 +29,7 @@ impl EncryptedExtensions {
             let parsed_len = before_len - new_rest.len();
             current_offset += parsed_len;
 
-            if ext.extension_type.is_known() {
+            if ext.extension_type.is_supported() {
                 extensions.push(ext);
             }
             rest = new_rest;

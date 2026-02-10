@@ -1,8 +1,8 @@
+use super::extension::ExtensionVec;
 use super::extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
 use super::{CompressionMethod, Dtls12CipherSuite, Extension, ExtensionType};
 use super::{ProtocolVersion, Random, SessionId};
 use crate::buffer::Buf;
-use crate::message::extension::ExtensionVec;
 use arrayvec::ArrayVec;
 use nom::error::{Error, ErrorKind};
 use nom::Err;

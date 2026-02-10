@@ -49,14 +49,14 @@ impl ClientHello {
         let (input, cipher_suites_len) = be_u16(input)?;
         let (input, input_cipher) = take(cipher_suites_len)(input)?;
         let (rest, cipher_suites) =
-            many1(Dtls13CipherSuite::parse, Dtls13CipherSuite::is_known)(input_cipher)?;
+            many1(Dtls13CipherSuite::parse, Dtls13CipherSuite::is_supported)(input_cipher)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
         let (input, compression_methods_len) = be_u8(input)?;
         let (input, input_compression) = take(compression_methods_len)(input)?;
         let (rest, legacy_compression_methods) =
-            many1(CompressionMethod::parse, CompressionMethod::is_known)(input_compression)?;
+            many1(CompressionMethod::parse, CompressionMethod::is_supported)(input_compression)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
@@ -110,7 +110,7 @@ impl ClientHello {
             let parsed_len = before_len - rest.len();
             current_offset += parsed_len;
 
-            if extension.extension_type.is_known() {
+            if extension.extension_type.is_supported() {
                 extensions.push(extension);
             }
             extensions_rest = rest;
@@ -236,13 +236,13 @@ mod tests {
 
         assert_eq!(
             client_hello.cipher_suites.capacity(),
-            Dtls13CipherSuite::all().len(),
-            "cipher_suites ArrayVec capacity must match all known Dtls13CipherSuites"
+            Dtls13CipherSuite::supported().len(),
+            "cipher_suites ArrayVec capacity must match supported Dtls13CipherSuites"
         );
     }
 
     #[test]
-    fn extensions_capacity_fits_known() {
+    fn extensions_capacity_fits_supported() {
         let client_hello = ClientHello {
             legacy_version: ProtocolVersion::DTLS1_2,
             random: Random::parse(&MESSAGE[2..34]).unwrap().1,
@@ -254,8 +254,8 @@ mod tests {
         };
 
         assert!(
-            client_hello.extensions.capacity() >= ExtensionType::all().len(),
-            "extensions ArrayVec capacity must fit all known ExtensionTypes"
+            client_hello.extensions.capacity() >= ExtensionType::supported().len(),
+            "extensions ArrayVec capacity must fit all supported ExtensionTypes"
         );
     }
 }

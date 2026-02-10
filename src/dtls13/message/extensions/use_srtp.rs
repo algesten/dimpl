@@ -37,13 +37,18 @@ impl SrtpProfileId {
         *self as u16
     }
 
-    /// All supported SRTP profile IDs.
-    pub fn all() -> &'static [SrtpProfileId] {
+    /// All recognized SRTP profile IDs (every non-`Unknown` variant).
+    pub const fn all() -> &'static [SrtpProfileId; 3] {
         &[
             SrtpProfileId::SRTP_AES128_CM_SHA1_80,
             SrtpProfileId::SRTP_AEAD_AES_128_GCM,
             SrtpProfileId::SRTP_AEAD_AES_256_GCM,
         ]
+    }
+
+    /// Supported SRTP profile IDs.
+    pub const fn supported() -> &'static [SrtpProfileId; 3] {
+        Self::all()
     }
 }
 
@@ -204,8 +209,8 @@ mod tests {
         let ext = UseSrtpExtension::default();
         assert_eq!(
             ext.profiles.capacity(),
-            SrtpProfileId::all().len(),
-            "UseSrtpExtension capacity must match all profile IDs"
+            SrtpProfileId::supported().len(),
+            "UseSrtpExtension capacity must match supported profile IDs"
         );
     }
 }

@@ -620,13 +620,35 @@ impl SignatureScheme {
 
     /// Returns true if this signature scheme is supported by this implementation.
     pub fn is_supported(&self) -> bool {
-        matches!(
-            self,
-            SignatureScheme::ECDSA_SECP256R1_SHA256 | SignatureScheme::ECDSA_SECP384R1_SHA384
-        )
+        Self::SUPPORTED.contains(self)
     }
 
-    /// All supported signature schemes.
+    /// All recognized signature schemes (every non-`Unknown` variant).
+    pub fn all() -> &'static [SignatureScheme] {
+        &[
+            SignatureScheme::ECDSA_SECP256R1_SHA256,
+            SignatureScheme::ECDSA_SECP384R1_SHA384,
+            SignatureScheme::ECDSA_SECP521R1_SHA512,
+            SignatureScheme::ED25519,
+            SignatureScheme::ED448,
+            SignatureScheme::RSA_PSS_RSAE_SHA256,
+            SignatureScheme::RSA_PSS_RSAE_SHA384,
+            SignatureScheme::RSA_PSS_RSAE_SHA512,
+            SignatureScheme::RSA_PSS_PSS_SHA256,
+            SignatureScheme::RSA_PSS_PSS_SHA384,
+            SignatureScheme::RSA_PSS_PSS_SHA512,
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::RSA_PKCS1_SHA384,
+            SignatureScheme::RSA_PKCS1_SHA512,
+        ]
+    }
+
+    const SUPPORTED: &[SignatureScheme] = &[
+        SignatureScheme::ECDSA_SECP256R1_SHA256,
+        SignatureScheme::ECDSA_SECP384R1_SHA384,
+    ];
+
+    /// Supported signature schemes in preference order.
     pub fn supported() -> ArrayVec<SignatureScheme, 2> {
         let mut schemes = ArrayVec::new();
         schemes.push(SignatureScheme::ECDSA_SECP256R1_SHA256);
@@ -724,17 +746,27 @@ impl Dtls13CipherSuite {
         }
     }
 
-    /// Returns true if this cipher suite is a known/supported variant.
-    pub fn is_known(&self) -> bool {
-        Self::all().contains(self)
+    /// Returns true if this cipher suite is supported by this implementation.
+    pub fn is_supported(&self) -> bool {
+        Self::supported().contains(self)
     }
 
-    /// All supported DTLS 1.3 cipher suites in preference order.
+    /// All recognized DTLS 1.3 cipher suites (every non-`Unknown` variant).
     pub fn all() -> &'static [Dtls13CipherSuite] {
         &[
             Dtls13CipherSuite::AES_128_GCM_SHA256,
             Dtls13CipherSuite::AES_256_GCM_SHA384,
             Dtls13CipherSuite::CHACHA20_POLY1305_SHA256,
+            Dtls13CipherSuite::AES_128_CCM_SHA256,
+            Dtls13CipherSuite::AES_128_CCM_8_SHA256,
+        ]
+    }
+
+    /// Supported DTLS 1.3 cipher suites in preference order.
+    pub fn supported() -> &'static [Dtls13CipherSuite] {
+        &[
+            Dtls13CipherSuite::AES_128_GCM_SHA256,
+            Dtls13CipherSuite::AES_256_GCM_SHA384,
         ]
     }
 
