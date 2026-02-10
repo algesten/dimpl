@@ -31,6 +31,10 @@ use crate::{Config, Error, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
+/// Maximum DTLS sequence number (2^48 - 1). Per RFC 9147 §4.2,
+/// implementations MUST NOT allow the sequence number to wrap.
+const MAX_SEQUENCE_NUMBER: u64 = (1u64 << 48) - 1;
+
 pub struct Engine {
     config: Arc<Config>,
 
@@ -1019,12 +1023,27 @@ impl Engine {
             fragment_range: 0..fragment.len(),
         };
 
-        // Increment send sequence
+        // Increment send sequence, guarding against 48-bit overflow (RFC 9147 §4.2)
         if epoch == 2 {
+            if self.hs_send_seq >= MAX_SEQUENCE_NUMBER {
+                return Err(Error::CryptoError(
+                    "Handshake epoch sequence number exhausted".to_string(),
+                ));
+            }
             self.hs_send_seq += 1;
         } else if self.prev_app_send_keys.is_some() && epoch == self.prev_app_send_epoch {
+            if self.prev_app_send_seq >= MAX_SEQUENCE_NUMBER {
+                return Err(Error::CryptoError(
+                    "Previous epoch sequence number exhausted".to_string(),
+                ));
+            }
             self.prev_app_send_seq += 1;
         } else {
+            if self.app_send_seq >= MAX_SEQUENCE_NUMBER {
+                return Err(Error::CryptoError(
+                    "Application epoch sequence number exhausted".to_string(),
+                ));
+            }
             self.app_send_seq += 1;
 
             // Track AEAD encryptions on current application keys
@@ -1164,9 +1183,15 @@ impl Engine {
         Ok(())
     }
 
-    /// Release application data from the incoming queue
+    /// Release application data from the incoming queue.
+    ///
+    /// Also clears handshake receive keys to prevent epoch collision:
+    /// after 3+ KeyUpdates the app recv epoch's low 2 bits can match
+    /// the handshake epoch (2), causing records to be routed to stale
+    /// handshake keys instead of the correct application keys.
     pub fn release_application_data(&mut self) {
         self.release_app_data = true;
+        self.hs_recv_keys = None;
     }
 
     /// Send an ACK record listing received handshake record numbers.
@@ -1884,7 +1909,12 @@ impl Engine {
     /// Compute verify_data for Finished messages.
     ///
     /// finished_key = HKDF-Expand-Label(traffic_secret, "finished", "", Hash.len)
-    /// verify_data = HMAC(finished_key, transcript_hash) = HKDF-Extract(finished_key, transcript_hash)
+    /// verify_data = HMAC(finished_key, transcript_hash)
+    ///
+    /// We use `hkdf_extract(salt=finished_key, IKM=transcript_hash)` to compute
+    /// the HMAC because HKDF-Extract is defined as HMAC-Hash(salt, IKM) (RFC 5869
+    /// §2.2). This gives us a generic HMAC that works for any hash algorithm
+    /// (SHA-256, SHA-384) without needing a separate per-algorithm HMAC API.
     pub fn compute_verify_data(&self, traffic_secret: &[u8]) -> Result<Buf, Error> {
         let hash = self.hash_algorithm();
         let hash_len = hash.output_len();
@@ -1902,11 +1932,10 @@ impl Engine {
         )
         .map_err(|e| Error::CryptoError(format!("Failed to derive finished key: {}", e)))?;
 
-        // verify_data = HMAC(finished_key, transcript_hash)
-        // HMAC = HKDF-Extract with salt=finished_key, IKM=transcript_hash
         let mut transcript_hash = Buf::new();
         self.transcript_hash(&mut transcript_hash);
 
+        // HMAC(finished_key, transcript_hash) via HKDF-Extract(salt=key, IKM=data)
         let mut verify_data = Buf::new();
         hkdf.hkdf_extract(hash, &finished_key, &transcript_hash, &mut verify_data)
             .map_err(|e| Error::CryptoError(format!("Failed to compute verify data: {}", e)))?;

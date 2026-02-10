@@ -381,11 +381,16 @@ impl Dtls {
                     self.inner = Some(Inner::Client12(client12));
                     return Ok(());
                 }
-                detect::DetectedVersion::Dtls13 | detect::DetectedVersion::Unknown => {
+                detect::DetectedVersion::Dtls13 => {
                     let mut client13 = Client13::new_from_hybrid(hybrid, config, certificate, now);
                     client13.handle_packet(packet)?;
                     self.inner = Some(Inner::Client13(client13));
                     return Ok(());
+                }
+                detect::DetectedVersion::Unknown => {
+                    return Err(Error::UnexpectedMessage(
+                        "Unrecognized response from server".to_string(),
+                    ));
                 }
             }
         }

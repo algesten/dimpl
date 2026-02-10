@@ -1029,3 +1029,156 @@ fn dtls13_hrr_handshake_completes_after_packet_loss() {
         "Server should connect after HRR despite packet loss"
     );
 }
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_handshake_no_client_auth() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = Arc::new(
+        Config::builder()
+            .require_client_certificate(false)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+        now += Duration::from_millis(50);
+    }
+
+    assert!(
+        client_connected,
+        "Client should connect without client auth"
+    );
+    assert!(
+        server_connected,
+        "Server should connect without client auth"
+    );
+
+    // Verify data exchange works after handshake
+    client
+        .send_application_data(b"no-auth-ping")
+        .expect("send app data");
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    deliver_packets(&client_out.packets, &mut server);
+
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+    assert!(
+        server_out
+            .app_data
+            .iter()
+            .any(|d| d.as_slice() == b"no-auth-ping"),
+        "Server should receive app data after no-client-auth handshake"
+    );
+}
+
+/// Verify the Finished flight is retransmitted on packet loss when client
+/// auth is NOT requested (regression test for flight_begin fix).
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_no_client_auth_retransmit_finished() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = Arc::new(
+        Config::builder()
+            .require_client_certificate(false)
+            .flight_retries(6)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut dropped_client_finished = false;
+
+    for i in 0..80 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+
+        // Drop the first client flight after the client reports Connected.
+        // This simulates loss of the client's Finished message.
+        if client_connected && !dropped_client_finished && !client_out.packets.is_empty() {
+            dropped_client_finished = true;
+            // Don't deliver — the Finished flight is lost.
+        } else {
+            deliver_packets(&client_out.packets, &mut server);
+        }
+
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        // Trigger retransmissions
+        if i % 5 == 4 {
+            now += Duration::from_secs(2);
+        } else {
+            now += Duration::from_millis(50);
+        }
+    }
+
+    assert!(
+        client_connected,
+        "Client should connect despite Finished loss"
+    );
+    assert!(
+        server_connected,
+        "Server should connect via retransmitted Finished"
+    );
+}

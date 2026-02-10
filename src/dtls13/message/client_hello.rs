@@ -15,8 +15,8 @@ pub struct ClientHello {
     pub random: Random,
     pub legacy_session_id: SessionId,
     pub legacy_cookie: Cookie,
-    pub cipher_suites: ArrayVec<Dtls13CipherSuite, 3>,
-    pub legacy_compression_methods: ArrayVec<CompressionMethod, 2>,
+    pub cipher_suites: ArrayVec<Dtls13CipherSuite, 2>,
+    pub legacy_compression_methods: ArrayVec<CompressionMethod, 1>,
     pub extensions: ArrayVec<Extension, 8>,
 }
 
@@ -26,8 +26,8 @@ impl ClientHello {
         random: Random,
         legacy_session_id: SessionId,
         legacy_cookie: Cookie,
-        cipher_suites: ArrayVec<Dtls13CipherSuite, 3>,
-        legacy_compression_methods: ArrayVec<CompressionMethod, 2>,
+        cipher_suites: ArrayVec<Dtls13CipherSuite, 2>,
+        legacy_compression_methods: ArrayVec<CompressionMethod, 1>,
     ) -> Self {
         ClientHello {
             legacy_version,

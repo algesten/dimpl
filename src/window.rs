@@ -21,9 +21,13 @@ impl ReplayWindow {
     pub fn check_and_update(&mut self, seqno: u64) -> bool {
         if seqno > self.max_seq {
             let delta = seqno - self.max_seq;
-            let shift = core::cmp::min(delta, 63);
-            self.window <<= shift;
-            self.window |= 1; // mark newest as seen
+            if delta > 63 {
+                // Jump exceeds window size: clear entirely, only newest is seen
+                self.window = 1;
+            } else {
+                self.window <<= delta;
+                self.window |= 1; // mark newest as seen
+            }
             self.max_seq = seqno;
             true
         } else {
@@ -76,11 +80,23 @@ mod tests {
     fn handles_large_jump_and_window_shift() {
         let mut w = ReplayWindow::new();
         assert!(w.check_and_update(1));
-        // Large forward jump; shifting is capped at 63, but semantics remain correct
+        // Large forward jump clears the window entirely
         assert!(w.check_and_update(80));
         // Within window of new max and unseen
         assert!(w.check_and_update(79));
         // Too old relative to new max
         assert!(!w.check_and_update(15));
+    }
+
+    #[test]
+    fn large_jump_does_not_leave_stale_bits() {
+        let mut w = ReplayWindow::new();
+        assert!(w.check_and_update(0));
+        // Jump of 200 exceeds window size (64). The window must be fully
+        // cleared so no stale bits from seq 0 remain.
+        assert!(w.check_and_update(200));
+        // seq 137 is within the window (offset = 200 - 137 = 63) and was
+        // never seen, so it must be accepted.
+        assert!(w.check_and_update(137));
     }
 }

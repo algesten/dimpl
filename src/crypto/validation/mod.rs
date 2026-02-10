@@ -79,6 +79,7 @@ impl CryptoProvider {
         self.validate_prf_provider(&validated_hashes)?;
         self.validate_signature_verifier(&validated_hashes)?;
         self.validate_hmac_provider()?;
+        self.validate_dtls13_cipher_suites()?;
         Ok(())
     }
 
@@ -247,6 +248,41 @@ impl CryptoProvider {
                         hash_alg, sig_alg, e
                     ))
                 })?;
+        }
+
+        Ok(())
+    }
+
+    /// Validate that DTLS 1.3 cipher suites and HKDF provider are configured.
+    fn validate_dtls13_cipher_suites(&self) -> Result<(), Error> {
+        if self.dtls13_cipher_suites.is_empty() {
+            return Err(Error::ConfigError(
+                "CryptoProvider has no DTLS 1.3 cipher suites.".to_string(),
+            ));
+        }
+
+        // Verify HKDF works for each DTLS 1.3 cipher suite's hash algorithm
+        for cs in self.dtls13_cipher_suites {
+            let hash = cs.suite().hash_algorithm();
+            let hash_len = hash.output_len();
+            let zeros = [0u8; 48];
+            let zeros = &zeros[..hash_len];
+            let mut out = Buf::new();
+            self.hkdf_provider
+                .hkdf_extract(hash, zeros, zeros, &mut out)
+                .map_err(|e| {
+                    Error::ConfigError(format!(
+                        "HKDF provider failed for DTLS 1.3 suite {:?}: {}",
+                        cs.suite(),
+                        e
+                    ))
+                })?;
+            if out.is_empty() {
+                return Err(Error::ConfigError(format!(
+                    "HKDF provider returned empty output for {:?}",
+                    cs.suite()
+                )));
+            }
         }
 
         Ok(())

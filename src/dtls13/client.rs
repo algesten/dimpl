@@ -761,6 +761,13 @@ impl State {
     }
 
     fn await_certificate_verify(self, client: &mut Client) -> Result<Self, Error> {
+        // Compute transcript hash BEFORE consuming CertificateVerify.
+        // Per RFC 8446 §4.4.3, the hash covers all messages up to but NOT
+        // including CertificateVerify. next_handshake() will append CV to
+        // the transcript, so we must capture the hash first.
+        let mut transcript_hash = Buf::new();
+        client.engine.transcript_hash(&mut transcript_hash);
+
         let maybe = client.engine.next_handshake(
             MessageType::CertificateVerify,
             &mut client.defragment_buffer,
@@ -782,53 +789,6 @@ impl State {
         let mut signed_content = Buf::new();
         signed_content.extend_from_slice(&[0x20u8; 64]);
         signed_content.extend_from_slice(b"TLS 1.3, server CertificateVerify\0");
-
-        // Transcript hash up to (but not including) CertificateVerify is already in
-        // the transcript at this point because next_handshake added the Certificate.
-        // But CertificateVerify was also added. We need the hash BEFORE CertificateVerify.
-        // Actually, next_handshake already added CertificateVerify to transcript.
-        // We need to compute the hash of the transcript excluding CertificateVerify.
-        //
-        // However, the way defragment works, the transcript is updated during
-        // next_handshake. So at this point the transcript INCLUDES CertificateVerify.
-        // We need to back out the CertificateVerify from the transcript.
-        //
-        // The correct approach: compute transcript hash BEFORE consuming CertificateVerify.
-        // But our architecture consumes it then verifies. We need to compute hash beforehand.
-        //
-        // Actually, per RFC 8446 4.4.3, the hash used for CertificateVerify is the
-        // transcript hash of all messages up to but NOT including CertificateVerify.
-        // Since next_handshake adds the message to the transcript, we've already
-        // committed it. We need to save the transcript hash before consuming CV.
-        //
-        // Let's fix this: we need to capture transcript hash before processing CV.
-        // This means we need to compute it before calling next_handshake for CV.
-
-        // WORKAROUND: The transcript currently includes CertificateVerify.
-        // We need the hash *before* CertificateVerify was added.
-        // We can reconstruct by removing the CertificateVerify bytes from transcript.
-        // CertificateVerify transcript entry: msg_type(1) + length(3) + body
-        let cv_transcript_len = 1 + 3 + (2 + 2 + signature.len()); // scheme(2) + sig_len(2) + sig
-        let transcript_before_cv_len = client.engine.transcript.len() - cv_transcript_len;
-        let transcript_before_cv = &client.engine.transcript[..transcript_before_cv_len];
-
-        // Hash the transcript before CertificateVerify
-        let hash = client
-            .engine
-            .cipher_suite()
-            // unwrap: cipher_suite is set by AwaitServerHello
-            .unwrap()
-            .hash_algorithm();
-        let mut hash_ctx = client
-            .engine
-            .config()
-            .crypto_provider()
-            .hash_provider
-            .create_hash(hash);
-        hash_ctx.update(transcript_before_cv);
-        let mut transcript_hash = Buf::new();
-        hash_ctx.clone_and_finalize(&mut transcript_hash);
-
         signed_content.extend_from_slice(&transcript_hash);
 
         // Copy signature data since we need to drop handshake reference
@@ -989,6 +949,14 @@ impl State {
 
     fn send_finished(self, client: &mut Client) -> Result<Self, Error> {
         trace!("Sending Finished message to complete handshake");
+
+        // When the server did NOT request client authentication, we skip
+        // send_certificate (which calls flight_begin(5)). Start flight 5
+        // here so the old ClientHello flight records are cleared before
+        // building the Finished retransmission set.
+        if !client.client_auth_requested {
+            client.engine.flight_begin(5);
+        }
 
         let client_hs_secret = client.client_hs_traffic_secret.as_ref().ok_or_else(|| {
             Error::CryptoError("No client handshake traffic secret for Finished".to_string())

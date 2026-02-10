@@ -346,8 +346,16 @@ impl ClientPending {
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
         if self.needs_send {
-            self.needs_send = false;
             let len = self.wire_packet.len();
+            if buf.len() < len {
+                // Buffer too small; keep needs_send armed so the packet
+                // is emitted on the next poll with a sufficiently large buffer.
+                let next = self
+                    .retransmit_at
+                    .unwrap_or(self.last_now + Duration::from_secs(1));
+                return Output::Timeout(next);
+            }
+            self.needs_send = false;
             buf[..len].copy_from_slice(&self.wire_packet);
             return Output::Packet(&buf[..len]);
         }

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::Dtls;
+use dimpl::{Dtls, Error, Output};
 
 use crate::common::*;
 
@@ -520,4 +520,81 @@ fn auto_client_to_dtls13_server_no_cookie() {
         server_connected,
         "DTLS 1.3 server (no cookie) should connect to auto client"
     );
+}
+
+/// Auto-sense client defers the hybrid ClientHello when the poll buffer
+/// is too small, and emits it on the next poll with a large enough buffer.
+#[test]
+#[cfg(feature = "rcgen")]
+fn auto_client_poll_output_undersized_buffer() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let cert = generate_self_signed_certificate().expect("gen cert");
+    let config = default_config();
+
+    let now = Instant::now();
+    let mut client = Dtls::new_auto(config, cert, now);
+    client.set_active(true);
+
+    // Trigger the hybrid ClientHello
+    client.handle_timeout(now).expect("handle_timeout");
+
+    // Poll with a buffer that is too small for the wire packet.
+    // Before the fix this would panic with an index-out-of-bounds.
+    let mut tiny_buf = [0u8; 4];
+    let output = client.poll_output(&mut tiny_buf);
+
+    // Should return Timeout (packet deferred), not a Packet.
+    assert!(
+        matches!(output, Output::Timeout(_)),
+        "undersized buffer should yield Timeout, got: {output:?}"
+    );
+
+    // Now poll with a large buffer — the deferred packet should come through.
+    let mut big_buf = vec![0u8; 2048];
+    let output = client.poll_output(&mut big_buf);
+    assert!(
+        matches!(output, Output::Packet(_)),
+        "large buffer should yield Packet, got: {output:?}"
+    );
+}
+
+/// Auto-sense client returns an error when the server response cannot be
+/// identified as any known DTLS version.
+#[test]
+#[cfg(feature = "rcgen")]
+fn auto_client_rejects_unknown_version_response() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let cert = generate_self_signed_certificate().expect("gen cert");
+    let config = default_config();
+
+    let now = Instant::now();
+    let mut client = Dtls::new_auto(config, cert, now);
+    client.set_active(true);
+
+    // Trigger the hybrid ClientHello
+    client.handle_timeout(now).expect("handle_timeout");
+    drain_outputs(&mut client);
+
+    // Feed a garbage "server response" that won't parse as any known version.
+    // server_hello_version returns Unknown for non-handshake content types.
+    let garbage = vec![0xFF, 0x00, 0x01, 0x02];
+    let result = client.handle_packet(&garbage);
+
+    assert!(
+        result.is_err(),
+        "Unknown version response should be an error"
+    );
+    match result.unwrap_err() {
+        Error::UnexpectedMessage(msg) => assert!(
+            msg.contains("Unrecognized"),
+            "error should mention unrecognized: {msg}"
+        ),
+        other => panic!("expected UnexpectedMessage, got: {other:?}"),
+    }
 }

@@ -591,11 +591,16 @@ impl State {
 
         server.shared_secret = Some(shared_secret);
 
-        // Select SRTP profile (first from client list that we support)
+        // Select SRTP profile: first from client list that the server supports.
+        // Per RFC 5764 Section 4.1.1, the server MUST select a profile that
+        // both sides support.
         if let Some(ref profiles) = client_srtp_profiles {
-            if let Some(profile_id) = profiles.first() {
+            for profile_id in profiles {
                 let profile: SrtpProfile = (*profile_id).into();
-                server.negotiated_srtp_profile = Some(profile);
+                if SrtpProfile::ALL.contains(&profile) {
+                    server.negotiated_srtp_profile = Some(profile);
+                    break;
+                }
             }
         }
 
@@ -872,6 +877,13 @@ impl State {
     }
 
     fn await_certificate_verify(self, server: &mut Server) -> Result<Self, Error> {
+        // Compute transcript hash BEFORE consuming CertificateVerify.
+        // Per RFC 8446 §4.4.3, the hash covers all messages up to but NOT
+        // including CertificateVerify. next_handshake() will append CV to
+        // the transcript, so we must capture the hash first.
+        let mut transcript_hash = Buf::new();
+        server.engine.transcript_hash(&mut transcript_hash);
+
         let maybe = server.engine.next_handshake(
             MessageType::CertificateVerify,
             &mut server.defragment_buffer,
@@ -893,32 +905,6 @@ impl State {
         let mut signed_content = Buf::new();
         signed_content.extend_from_slice(&[0x20u8; 64]);
         signed_content.extend_from_slice(b"TLS 1.3, client CertificateVerify\0");
-
-        // Compute transcript hash BEFORE CertificateVerify was added.
-        // next_handshake already added CertificateVerify to transcript.
-        // We need to back out the CertificateVerify bytes.
-        // msg_type(1) + length(3) + scheme(2) + sig_len(2) + sig
-        let cv_transcript_len = 1 + 3 + (2 + 2 + signature.len());
-        let transcript_before_cv_len = server.engine.transcript.len() - cv_transcript_len;
-        let transcript_before_cv = &server.engine.transcript[..transcript_before_cv_len];
-
-        // Hash the transcript before CertificateVerify
-        let hash = server
-            .engine
-            .cipher_suite()
-            // unwrap: cipher_suite is set by AwaitClientHello
-            .unwrap()
-            .hash_algorithm();
-        let mut hash_ctx = server
-            .engine
-            .config()
-            .crypto_provider()
-            .hash_provider
-            .create_hash(hash);
-        hash_ctx.update(transcript_before_cv);
-        let mut transcript_hash = Buf::new();
-        hash_ctx.clone_and_finalize(&mut transcript_hash);
-
         signed_content.extend_from_slice(&transcript_hash);
 
         // Copy signature data since we need to drop handshake reference

@@ -843,8 +843,12 @@ impl CompressionMethod {
     }
 
     /// Supported compression methods.
-    pub const fn supported() -> &'static [CompressionMethod; 2] {
-        Self::all()
+    ///
+    /// Only null compression is supported. TLS 1.3 / DTLS 1.3 (RFC 8446
+    /// §4.1.2) mandates exactly one compression method (null). DEFLATE
+    /// is recognized by parsing but not accepted.
+    pub const fn supported() -> &'static [CompressionMethod; 1] {
+        &[CompressionMethod::Null]
     }
 
     /// Convert this `CompressionMethod` to its u8 value.
@@ -895,6 +899,16 @@ mod tests {
         random.serialize(&mut serialized);
 
         assert_eq!(&*serialized, &random.bytes);
+    }
+
+    #[test]
+    fn compression_supported_has_only_null() {
+        let supported = CompressionMethod::supported();
+        assert_eq!(
+            supported,
+            &[CompressionMethod::Null],
+            "Only Null compression should be supported"
+        );
     }
 
     #[test]

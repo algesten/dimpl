@@ -292,6 +292,21 @@ impl ConfigBuilder {
         // Always validate the crypto provider
         crypto_provider.validate()?;
 
+        // Validate MTU: must be large enough for DTLS record + handshake headers
+        if self.mtu < 64 {
+            return Err(Error::ConfigError(format!(
+                "MTU {} is too small (minimum 64)",
+                self.mtu
+            )));
+        }
+
+        // Validate aead_encryption_limit: must be at least 1
+        if self.aead_encryption_limit == 0 {
+            return Err(Error::ConfigError(
+                "aead_encryption_limit must be at least 1".to_string(),
+            ));
+        }
+
         Ok(Config {
             mtu: self.mtu,
             max_queue_rx: self.max_queue_rx,
@@ -313,5 +328,60 @@ impl Default for Config {
         Config::builder()
             .build()
             .expect("Default config should always validate")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_zero_mtu() {
+        match Config::builder().mtu(0).build() {
+            Err(Error::ConfigError(msg)) => {
+                assert!(msg.contains("MTU"), "error should mention MTU: {msg}")
+            }
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!("expected error for MTU=0"),
+        }
+    }
+
+    #[test]
+    fn rejects_small_mtu() {
+        match Config::builder().mtu(32).build() {
+            Err(Error::ConfigError(msg)) => {
+                assert!(msg.contains("MTU"), "error should mention MTU: {msg}")
+            }
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!("expected error for MTU=32"),
+        }
+    }
+
+    #[test]
+    fn accepts_minimum_mtu() {
+        Config::builder()
+            .mtu(64)
+            .build()
+            .expect("MTU 64 should be accepted");
+    }
+
+    #[test]
+    fn rejects_zero_aead_limit() {
+        match Config::builder().aead_encryption_limit(0).build() {
+            Err(Error::ConfigError(msg)) => assert!(
+                msg.contains("aead_encryption_limit"),
+                "error should mention aead_encryption_limit: {msg}"
+            ),
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!("expected error for aead_encryption_limit=0"),
+        }
+    }
+
+    #[test]
+    fn accepts_minimum_aead_limit() {
+        Config::builder()
+            .aead_encryption_limit(1)
+            .build()
+            .expect("aead_encryption_limit 1 should be accepted");
     }
 }
