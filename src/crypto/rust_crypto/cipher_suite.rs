@@ -1,5 +1,5 @@
 //! Cipher suite implementations using RustCrypto.
-use aes_gcm::aead::{AeadInPlace, KeyInit};
+use aes_gcm::aead::AeadInPlace;
 use aes_gcm::aes::cipher::{BlockEncrypt, KeyInit as BlockKeyInit};
 use aes_gcm::aes::{Aes128, Aes256};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, Key};
