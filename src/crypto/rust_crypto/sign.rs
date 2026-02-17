@@ -10,7 +10,10 @@ use pkcs8::DecodePrivateKey;
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
-use super::super::{check_verify_scheme, KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
+use super::super::{
+    check_verify_scheme, KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait, OID_P256,
+    OID_P384,
+};
 use crate::buffer::Buf;
 use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
@@ -209,9 +212,6 @@ impl SignatureVerifier for RustCryptoSignatureVerifier {
             .decode_as()
             .map_err(|_| "Invalid EC curve parameter in certificate".to_string())?;
 
-        const OID_P256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
-        const OID_P384: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.34");
-
         let group = match curve_oid {
             OID_P256 => NamedGroup::Secp256r1,
             OID_P384 => NamedGroup::Secp384r1,
@@ -237,18 +237,24 @@ impl SignatureVerifier for RustCryptoSignatureVerifier {
                     .map_err(|_| "Invalid P-256 public key".to_string())?;
                 let sig = Signature::<NistP256>::from_der(signature)
                     .map_err(|_| "Invalid signature format".to_string())?;
-                verifying_key
-                    .verify_prehash(&hash, &sig)
-                    .map_err(|_| format!("ECDSA signature verification failed for {:?}", hash_alg))
+                verifying_key.verify_prehash(&hash, &sig).map_err(|_| {
+                    format!(
+                        "ECDSA signature verification failed for {:?} {:?}",
+                        hash_alg, group
+                    )
+                })
             }
             NamedGroup::Secp384r1 => {
                 let verifying_key = VerifyingKey::<NistP384>::from_sec1_bytes(pubkey_bytes)
                     .map_err(|_| "Invalid P-384 public key".to_string())?;
                 let sig = Signature::<NistP384>::from_der(signature)
                     .map_err(|_| "Invalid signature format".to_string())?;
-                verifying_key
-                    .verify_prehash(&hash, &sig)
-                    .map_err(|_| format!("ECDSA signature verification failed for {:?}", hash_alg))
+                verifying_key.verify_prehash(&hash, &sig).map_err(|_| {
+                    format!(
+                        "ECDSA signature verification failed for {:?} {:?}",
+                        hash_alg, group
+                    )
+                })
             }
             // unreachable: OID match above only produces Secp256r1/Secp384r1
             _ => unreachable!(),

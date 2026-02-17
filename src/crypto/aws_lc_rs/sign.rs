@@ -2,16 +2,18 @@
 
 use std::str;
 
+use aws_lc_rs::signature::ECDSA_P384_SHA384_ASN1_SIGNING;
 use aws_lc_rs::signature::{EcdsaKeyPair, EcdsaSigningAlgorithm, EcdsaVerificationAlgorithm};
 use aws_lc_rs::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_ASN1_SIGNING};
 use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA384_ASN1};
 use aws_lc_rs::signature::{ECDSA_P384_SHA256_ASN1, ECDSA_P384_SHA384_ASN1};
-use aws_lc_rs::signature::ECDSA_P384_SHA384_ASN1_SIGNING;
 use der::{Decode, Encode};
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
-use super::super::{check_verify_scheme, KeyProvider, SignatureVerifier, SigningKey};
+use super::super::{
+    check_verify_scheme, KeyProvider, SignatureVerifier, SigningKey, OID_P256, OID_P384,
+};
 use crate::buffer::Buf;
 use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
@@ -198,9 +200,6 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
             .decode_as()
             .map_err(|_| "Invalid EC curve parameter in certificate".to_string())?;
 
-        const OID_P256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
-        const OID_P384: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.34");
-
         let group = match curve_oid {
             OID_P256 => NamedGroup::Secp256r1,
             OID_P384 => NamedGroup::Secp384r1,
@@ -219,9 +218,12 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
         };
 
         let public_key = UnparsedPublicKey::new(algorithm, pubkey_bytes);
-        public_key
-            .verify(data, signature)
-            .map_err(|_| format!("ECDSA signature verification failed for {:?}", hash_alg))
+        public_key.verify(data, signature).map_err(|_| {
+            format!(
+                "ECDSA signature verification failed for {:?} {:?}",
+                hash_alg, group
+            )
+        })
     }
 }
 
