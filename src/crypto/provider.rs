@@ -249,6 +249,44 @@ pub trait SignatureVerifier: CryptoSafe {
     ) -> Result<(), String>;
 }
 
+/// Allow-list of supported (signature, hash, curve) combinations for
+/// DTLS 1.2 signature verification.
+///
+/// In DTLS 1.2 the hash algorithm and the certificate's curve are
+/// independent choices, so all cross-combinations are valid.
+///
+///  Signature | Hash    | Curve
+/// -----------+---------+-----------
+///  ECDSA     | SHA-256 | P-256
+///  ECDSA     | SHA-256 | P-384
+///  ECDSA     | SHA-384 | P-256
+///  ECDSA     | SHA-384 | P-384
+const SUPPORTED_VERIFY_SCHEMES: &[(SignatureAlgorithm, HashAlgorithm, NamedGroup)] = &[
+    (SignatureAlgorithm::ECDSA, HashAlgorithm::SHA256, NamedGroup::Secp256r1),
+    (SignatureAlgorithm::ECDSA, HashAlgorithm::SHA256, NamedGroup::Secp384r1),
+    (SignatureAlgorithm::ECDSA, HashAlgorithm::SHA384, NamedGroup::Secp256r1),
+    (SignatureAlgorithm::ECDSA, HashAlgorithm::SHA384, NamedGroup::Secp384r1),
+];
+
+/// Check that a (signature, hash, curve) combination is in the allow-list.
+pub fn check_verify_scheme(
+    sig_alg: SignatureAlgorithm,
+    hash_alg: HashAlgorithm,
+    group: NamedGroup,
+) -> Result<(), String> {
+    if SUPPORTED_VERIFY_SCHEMES
+        .iter()
+        .any(|(s, h, g)| *s == sig_alg && *h == hash_alg && *g == group)
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Unsupported signature verification: {:?} + {:?} + {:?}",
+            sig_alg, hash_alg, group
+        ))
+    }
+}
+
 /// Private key parser (factory for SigningKey).
 pub trait KeyProvider: CryptoSafe {
     /// Parse and load a private key from DER/PEM bytes.

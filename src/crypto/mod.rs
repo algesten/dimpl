@@ -30,9 +30,10 @@ pub use crate::buffer::{Buf, TmpBuf};
 // Re-export all provider traits and types (similar to rustls structure)
 // This allows users to do: use dimpl::crypto::{CryptoProvider, SupportedDtls12CipherSuite, ...};
 pub use provider::{
-    ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext, HashProvider, HkdfProvider,
-    HmacProvider, KeyProvider, PrfProvider, SecureRandom, SignatureVerifier, SigningKey,
-    SupportedDtls12CipherSuite, SupportedDtls13CipherSuite, SupportedKxGroup,
+    check_verify_scheme, ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext,
+    HashProvider, HkdfProvider, HmacProvider, KeyProvider, PrfProvider, SecureRandom,
+    SignatureVerifier, SigningKey, SupportedDtls12CipherSuite, SupportedDtls13CipherSuite,
+    SupportedKxGroup,
 };
 
 // Re-export shared types for provider trait implementations
