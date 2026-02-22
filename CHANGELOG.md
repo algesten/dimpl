@@ -1,5 +1,7 @@
 # Unreleased
 
+  * DTLS 1.2 ECDSA not assume curve from hash algorithm #57
+
 # 0.3.0
 
   * DTLS 1.3 (breaking) #53

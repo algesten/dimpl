@@ -10,9 +10,9 @@ use pkcs8::DecodePrivateKey;
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
-use super::super::{KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
+use super::super::{check_verify_scheme, KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
 use crate::buffer::Buf;
-use crate::types::{HashAlgorithm, SignatureAlgorithm};
+use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
 /// ECDSA signing key implementation.
 enum EcdsaSigningKey {
@@ -201,47 +201,57 @@ impl SignatureVerifier for RustCryptoSignatureVerifier {
             .as_bytes()
             .ok_or_else(|| "Invalid EC subject_public_key bitstring".to_string())?;
 
-        match hash_alg {
-            HashAlgorithm::SHA256 => {
-                use ecdsa::signature::hazmat::PrehashVerifier;
-                use sha2::{Digest, Sha256};
+        let curve_oid: ObjectIdentifier = spki
+            .algorithm
+            .parameters
+            .as_ref()
+            .ok_or("Missing EC curve parameter in certificate")?
+            .decode_as()
+            .map_err(|_| "Invalid EC curve parameter in certificate".to_string())?;
 
+        const OID_P256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
+        const OID_P384: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.34");
+
+        let group = match curve_oid {
+            OID_P256 => NamedGroup::Secp256r1,
+            OID_P384 => NamedGroup::Secp384r1,
+            _ => return Err(format!("Unsupported EC curve: {}", curve_oid)),
+        };
+
+        check_verify_scheme(sig_alg, hash_alg, group)?;
+
+        use ecdsa::signature::hazmat::PrehashVerifier;
+        use sha2::Digest;
+
+        // Hash the data before verification (PrehashVerifier expects a hash digest)
+        let hash: Box<[u8]> = match hash_alg {
+            HashAlgorithm::SHA256 => Box::from(sha2::Sha256::digest(data).as_slice()),
+            HashAlgorithm::SHA384 => Box::from(sha2::Sha384::digest(data).as_slice()),
+            // unreachable: check_verify_scheme already validated
+            _ => unreachable!(),
+        };
+
+        match group {
+            NamedGroup::Secp256r1 => {
                 let verifying_key = VerifyingKey::<NistP256>::from_sec1_bytes(pubkey_bytes)
                     .map_err(|_| "Invalid P-256 public key".to_string())?;
-                let signature = Signature::<NistP256>::from_der(signature)
+                let sig = Signature::<NistP256>::from_der(signature)
                     .map_err(|_| "Invalid signature format".to_string())?;
-
-                // Hash the data before verification (PrehashVerifier expects a hash digest)
-                let mut hasher = Sha256::new();
-                hasher.update(data);
-                let hash = hasher.finalize();
-
                 verifying_key
-                    .verify_prehash(&hash, &signature)
+                    .verify_prehash(&hash, &sig)
                     .map_err(|_| format!("ECDSA signature verification failed for {:?}", hash_alg))
             }
-            HashAlgorithm::SHA384 => {
-                use ecdsa::signature::hazmat::PrehashVerifier;
-                use sha2::{Digest, Sha384};
-
+            NamedGroup::Secp384r1 => {
                 let verifying_key = VerifyingKey::<NistP384>::from_sec1_bytes(pubkey_bytes)
                     .map_err(|_| "Invalid P-384 public key".to_string())?;
-                let signature = Signature::<NistP384>::from_der(signature)
+                let sig = Signature::<NistP384>::from_der(signature)
                     .map_err(|_| "Invalid signature format".to_string())?;
-
-                // Hash the data before verification (PrehashVerifier expects a hash digest)
-                let mut hasher = Sha384::new();
-                hasher.update(data);
-                let hash = hasher.finalize();
-
                 verifying_key
-                    .verify_prehash(&hash, &signature)
+                    .verify_prehash(&hash, &sig)
                     .map_err(|_| format!("ECDSA signature verification failed for {:?}", hash_alg))
             }
-            _ => Err(format!(
-                "Unsupported hash algorithm for ECDSA: {:?}",
-                hash_alg
-            )),
+            // unreachable: OID match above only produces Secp256r1/Secp384r1
+            _ => unreachable!(),
         }
     }
 }

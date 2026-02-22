@@ -2,16 +2,18 @@
 
 use std::str;
 
-use aws_lc_rs::signature::{EcdsaKeyPair, EcdsaSigningAlgorithm, UnparsedPublicKey};
-use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_ASN1_SIGNING};
-use aws_lc_rs::signature::{ECDSA_P384_SHA384_ASN1, ECDSA_P384_SHA384_ASN1_SIGNING};
+use aws_lc_rs::signature::{EcdsaKeyPair, EcdsaSigningAlgorithm, EcdsaVerificationAlgorithm};
+use aws_lc_rs::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_ASN1_SIGNING};
+use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA384_ASN1};
+use aws_lc_rs::signature::{ECDSA_P384_SHA256_ASN1, ECDSA_P384_SHA384_ASN1};
+use aws_lc_rs::signature::ECDSA_P384_SHA384_ASN1_SIGNING;
 use der::{Decode, Encode};
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
-use super::super::{KeyProvider, SignatureVerifier, SigningKey};
+use super::super::{check_verify_scheme, KeyProvider, SignatureVerifier, SigningKey};
 use crate::buffer::Buf;
-use crate::types::{HashAlgorithm, SignatureAlgorithm};
+use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
 /// ECDSA signing key implementation.
 struct EcdsaSigningKey {
@@ -188,15 +190,32 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
             .as_bytes()
             .ok_or_else(|| "Invalid EC subject_public_key bitstring".to_string())?;
 
-        let algorithm = match hash_alg {
-            HashAlgorithm::SHA256 => &ECDSA_P256_SHA256_ASN1,
-            HashAlgorithm::SHA384 => &ECDSA_P384_SHA384_ASN1,
-            _ => {
-                return Err(format!(
-                    "Unsupported hash algorithm for ECDSA: {:?}",
-                    hash_alg
-                ));
-            }
+        let curve_oid: ObjectIdentifier = spki
+            .algorithm
+            .parameters
+            .as_ref()
+            .ok_or("Missing EC curve parameter in certificate")?
+            .decode_as()
+            .map_err(|_| "Invalid EC curve parameter in certificate".to_string())?;
+
+        const OID_P256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
+        const OID_P384: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.34");
+
+        let group = match curve_oid {
+            OID_P256 => NamedGroup::Secp256r1,
+            OID_P384 => NamedGroup::Secp384r1,
+            _ => return Err(format!("Unsupported EC curve: {}", curve_oid)),
+        };
+
+        check_verify_scheme(sig_alg, hash_alg, group)?;
+
+        let algorithm: &EcdsaVerificationAlgorithm = match (group, hash_alg) {
+            (NamedGroup::Secp256r1, HashAlgorithm::SHA256) => &ECDSA_P256_SHA256_ASN1,
+            (NamedGroup::Secp256r1, HashAlgorithm::SHA384) => &ECDSA_P256_SHA384_ASN1,
+            (NamedGroup::Secp384r1, HashAlgorithm::SHA256) => &ECDSA_P384_SHA256_ASN1,
+            (NamedGroup::Secp384r1, HashAlgorithm::SHA384) => &ECDSA_P384_SHA384_ASN1,
+            // unreachable: check_verify_scheme already validated
+            _ => unreachable!(),
         };
 
         let public_key = UnparsedPublicKey::new(algorithm, pubkey_bytes);
