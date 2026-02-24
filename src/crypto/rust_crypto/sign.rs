@@ -10,7 +10,8 @@ use pkcs8::DecodePrivateKey;
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
-use super::super::{check_verify_scheme, KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
+use super::super::check_verify_scheme;
+use super::super::{KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait};
 use super::super::{OID_P256, OID_P384};
 use crate::buffer::Buf;
 use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};

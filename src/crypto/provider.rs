@@ -150,8 +150,7 @@ pub const OID_P256: spki::ObjectIdentifier =
 
 /// OID for the P-384 elliptic curve (secp384r1).
 #[cfg(feature = "_crypto-common")]
-pub const OID_P384: spki::ObjectIdentifier =
-    spki::ObjectIdentifier::new_unwrap("1.3.132.0.34");
+pub const OID_P384: spki::ObjectIdentifier = spki::ObjectIdentifier::new_unwrap("1.3.132.0.34");
 
 // ============================================================================
 // Marker Trait
