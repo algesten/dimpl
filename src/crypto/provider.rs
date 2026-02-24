@@ -138,18 +138,20 @@ use std::fmt::Debug;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::OnceLock;
 
-use spki::ObjectIdentifier;
-
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
 /// OID for the P-256 elliptic curve (secp256r1 / prime256v1).
-pub const OID_P256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
+#[cfg(feature = "_crypto-common")]
+pub const OID_P256: spki::ObjectIdentifier =
+    spki::ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
 
 /// OID for the P-384 elliptic curve (secp384r1).
-pub const OID_P384: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.34");
+#[cfg(feature = "_crypto-common")]
+pub const OID_P384: spki::ObjectIdentifier =
+    spki::ObjectIdentifier::new_unwrap("1.3.132.0.34");
 
 // ============================================================================
 // Marker Trait

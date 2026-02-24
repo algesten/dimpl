@@ -33,8 +33,10 @@ pub use provider::{
     check_verify_scheme, ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext,
     HashProvider, HkdfProvider, HmacProvider, KeyProvider, PrfProvider, SecureRandom,
     SignatureVerifier, SigningKey, SupportedDtls12CipherSuite, SupportedDtls13CipherSuite,
-    SupportedKxGroup, OID_P256, OID_P384,
+    SupportedKxGroup,
 };
+#[cfg(feature = "_crypto-common")]
+pub use provider::{OID_P256, OID_P384};
 
 // Re-export shared types for provider trait implementations
 pub use crate::dtls12::message::Dtls12CipherSuite;
