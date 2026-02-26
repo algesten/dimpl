@@ -143,6 +143,15 @@ use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
 
+/// OID for the P-256 elliptic curve (secp256r1 / prime256v1).
+#[cfg(feature = "_crypto-common")]
+pub const OID_P256: spki::ObjectIdentifier =
+    spki::ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
+
+/// OID for the P-384 elliptic curve (secp384r1).
+#[cfg(feature = "_crypto-common")]
+pub const OID_P384: spki::ObjectIdentifier = spki::ObjectIdentifier::new_unwrap("1.3.132.0.34");
+
 // ============================================================================
 // Marker Trait
 // ============================================================================
@@ -247,6 +256,60 @@ pub trait SignatureVerifier: CryptoSafe {
         hash_alg: HashAlgorithm,
         sig_alg: SignatureAlgorithm,
     ) -> Result<(), String>;
+}
+
+/// Allow-list of supported (signature, hash, curve) combinations for
+/// DTLS 1.2 signature verification.
+///
+/// In DTLS 1.2 the hash algorithm and the certificate's curve are
+/// independent choices, so all cross-combinations are valid.
+///
+///  Signature | Hash    | Curve
+/// -----------+---------+-----------
+///  ECDSA     | SHA-256 | P-256
+///  ECDSA     | SHA-256 | P-384
+///  ECDSA     | SHA-384 | P-256
+///  ECDSA     | SHA-384 | P-384
+const SUPPORTED_VERIFY_SCHEMES: &[(SignatureAlgorithm, HashAlgorithm, NamedGroup)] = &[
+    (
+        SignatureAlgorithm::ECDSA,
+        HashAlgorithm::SHA256,
+        NamedGroup::Secp256r1,
+    ),
+    (
+        SignatureAlgorithm::ECDSA,
+        HashAlgorithm::SHA256,
+        NamedGroup::Secp384r1,
+    ),
+    (
+        SignatureAlgorithm::ECDSA,
+        HashAlgorithm::SHA384,
+        NamedGroup::Secp256r1,
+    ),
+    (
+        SignatureAlgorithm::ECDSA,
+        HashAlgorithm::SHA384,
+        NamedGroup::Secp384r1,
+    ),
+];
+
+/// Check that a (signature, hash, curve) combination is in the allow-list.
+pub fn check_verify_scheme(
+    sig_alg: SignatureAlgorithm,
+    hash_alg: HashAlgorithm,
+    group: NamedGroup,
+) -> Result<(), String> {
+    if SUPPORTED_VERIFY_SCHEMES
+        .iter()
+        .any(|(s, h, g)| *s == sig_alg && *h == hash_alg && *g == group)
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Unsupported signature verification: {:?} + {:?} + {:?}",
+            sig_alg, hash_alg, group
+        ))
+    }
 }
 
 /// Private key parser (factory for SigningKey).

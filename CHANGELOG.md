@@ -1,5 +1,7 @@
 # Unreleased
 
+  * DTLS 1.2 ECDSA determine curve from certificate, not hash algorithm #57
+
 # 0.3.0
 
   * DTLS 1.3 (breaking) #53
