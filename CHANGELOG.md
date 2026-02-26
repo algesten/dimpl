@@ -1,6 +1,6 @@
 # Unreleased
 
-  * Fix ECDSA: determine curve from certificate, not hash algorithm #57
+  * DTLS 1.2 ECDSA determine curve from certificate, not hash algorithm #57
 
 # 0.3.0
 
