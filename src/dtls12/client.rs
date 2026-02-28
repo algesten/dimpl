@@ -124,7 +124,7 @@ impl Client {
         config: std::sync::Arc<crate::Config>,
         certificate: crate::DtlsCertificate,
         now: Instant,
-    ) -> Client {
+    ) -> Result<Client, Error> {
         let mut engine = Engine::new(config, certificate);
         engine.set_client(true);
         // The hybrid ClientHello was sent with message_seq=0 outside this
@@ -137,7 +137,7 @@ impl Client {
         // Advance epoch-0 record sequence past the hybrid CH record.
         engine.advance_epoch_0_sequence();
 
-        Client {
+        let mut client = Client {
             state: State::AwaitHelloVerifyRequest,
             engine,
             random: Some(random),
@@ -153,7 +153,9 @@ impl Client {
             last_now: now,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
-        }
+        };
+        client.handle_timeout(now)?;
+        Ok(client)
     }
 
     pub fn into_server(self) -> Server {

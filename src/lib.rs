@@ -359,20 +359,16 @@ impl Dtls {
                 detect::DetectedVersion::Dtls13
             );
             if is_13 {
-                let mut server = Server13::new(config, certificate, now);
-                if let Err(e) = server.handle_timeout(now) {
-                    self.inner = Some(Inner::Server13(server));
-                    return Err(e);
-                }
+                let server = Server13::new(config, certificate, now);
                 self.inner = Some(Inner::Server13(server));
             } else {
-                let mut server = Server12::new(config, certificate, now);
-                if let Err(e) = server.handle_timeout(now) {
-                    self.inner = Some(Inner::Server12(server));
-                    return Err(e);
-                }
+                let server = Server12::new(config, certificate, now);
                 self.inner = Some(Inner::Server12(server));
             };
+
+            // Arm the server's random + retransmit timers.
+            // inner is already set, so errors won't leave it as None.
+            self.handle_timeout(now)?;
         }
 
         // Auto-sense client: resolve version on first server response
@@ -401,12 +397,7 @@ impl Dtls {
                         config,
                         certificate,
                         now,
-                    );
-                    // Arm timeouts before processing the packet.
-                    if let Err(e) = client12.handle_timeout(now) {
-                        self.inner = Some(Inner::Client12(client12));
-                        return Err(e);
-                    }
+                    )?;
                     // Feed the HVR to Client12 — it enters
                     // AwaitHelloVerifyRequest and processes the cookie.
                     if let Err(e) = client12.handle_packet(packet) {
@@ -417,11 +408,8 @@ impl Dtls {
                     return Ok(());
                 }
                 detect::DetectedVersion::Dtls13 => {
-                    let mut client13 = Client13::new_from_hybrid(hybrid, config, certificate, now);
-                    if let Err(e) = client13.handle_timeout(now) {
-                        self.inner = Some(Inner::Client13(client13));
-                        return Err(e);
-                    }
+                    let mut client13 =
+                        Client13::new_from_hybrid(hybrid, config, certificate, now)?;
                     if let Err(e) = client13.handle_packet(packet) {
                         self.inner = Some(Inner::Client13(client13));
                         return Err(e);
