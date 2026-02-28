@@ -408,8 +408,7 @@ impl Dtls {
                     return Ok(());
                 }
                 detect::DetectedVersion::Dtls13 => {
-                    let mut client13 =
-                        Client13::new_from_hybrid(hybrid, config, certificate, now)?;
+                    let mut client13 = Client13::new_from_hybrid(hybrid, config, certificate, now)?;
                     if let Err(e) = client13.handle_packet(packet) {
                         self.inner = Some(Inner::Client13(client13));
                         return Err(e);
