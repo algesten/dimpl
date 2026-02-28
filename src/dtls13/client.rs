@@ -1369,8 +1369,7 @@ pub(crate) fn verify_scheme_curve(
     cert_der: &[u8],
 ) -> Result<(), crate::Error> {
     if let Some(expected_group) = scheme.named_group() {
-        let cert_group =
-            crate::crypto::cert_named_group(cert_der).map_err(Error::SecurityError)?;
+        let cert_group = crate::crypto::cert_named_group(cert_der).map_err(Error::SecurityError)?;
         if expected_group != cert_group {
             return Err(Error::SecurityError(format!(
                 "SignatureScheme {:?} requires {:?} but certificate uses {:?}",
