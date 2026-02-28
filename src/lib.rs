@@ -358,12 +358,10 @@ impl Dtls {
                 detect::client_hello_version(packet),
                 detect::DetectedVersion::Dtls13
             );
-            if is_13 {
-                let server = Server13::new(config, certificate, now);
-                self.inner = Some(Inner::Server13(server));
+            self.inner = if is_13 {
+                Some(Inner::Server13(Server13::new(config, certificate, now)))
             } else {
-                let server = Server12::new(config, certificate, now);
-                self.inner = Some(Inner::Server12(server));
+                Some(Inner::Server12(Server12::new(config, certificate, now)))
             };
 
             // Arm the server's random + retransmit timers.
