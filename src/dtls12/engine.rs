@@ -446,7 +446,9 @@ impl Engine {
             }
             (Timeout::Armed(c), _) => c,
             (_, Timeout::Armed(f)) => f,
-            _ => unreachable!(),
+            // Both Unarmed or mixed Unarmed/Disabled: return current time
+            // to trigger handle_timeout on the next cycle.
+            _ => now,
         }
     }
 

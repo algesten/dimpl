@@ -358,21 +358,36 @@ impl Dtls {
                 detect::client_hello_version(packet),
                 detect::DetectedVersion::Dtls13
             );
-            let resolved = if is_13 {
+            if is_13 {
                 let mut server = Server13::new(config, certificate, now);
-                server.handle_timeout(now)?;
-                Inner::Server13(server)
+                if let Err(e) = server.handle_timeout(now) {
+                    self.inner = Some(Inner::Server13(server));
+                    return Err(e);
+                }
+                self.inner = Some(Inner::Server13(server));
             } else {
                 let mut server = Server12::new(config, certificate, now);
-                server.handle_timeout(now)?;
-                Inner::Server12(server)
+                if let Err(e) = server.handle_timeout(now) {
+                    self.inner = Some(Inner::Server12(server));
+                    return Err(e);
+                }
+                self.inner = Some(Inner::Server12(server));
             };
-            self.inner = Some(resolved);
         }
 
         // Auto-sense client: resolve version on first server response
         if matches!(self.inner, Some(Inner::ClientPending(_))) {
             let version = detect::server_hello_version(packet);
+
+            // Check version before taking inner — returning an error
+            // while inner is None would leave us unable to poll/timeout.
+            if matches!(version, detect::DetectedVersion::Unknown) {
+                return Err(Error::UnexpectedMessage(
+                    "Unrecognized response from server".to_string(),
+                ));
+            }
+
+            // unwrap: guarded by the matches! check above
             let inner = self.inner.take().unwrap();
             let Inner::ClientPending(cp) = inner else {
                 unreachable!()
@@ -387,23 +402,34 @@ impl Dtls {
                         certificate,
                         now,
                     );
+                    // Arm timeouts before processing the packet.
+                    if let Err(e) = client12.handle_timeout(now) {
+                        self.inner = Some(Inner::Client12(client12));
+                        return Err(e);
+                    }
                     // Feed the HVR to Client12 — it enters
                     // AwaitHelloVerifyRequest and processes the cookie.
-                    client12.handle_packet(packet)?;
+                    if let Err(e) = client12.handle_packet(packet) {
+                        self.inner = Some(Inner::Client12(client12));
+                        return Err(e);
+                    }
                     self.inner = Some(Inner::Client12(client12));
                     return Ok(());
                 }
                 detect::DetectedVersion::Dtls13 => {
                     let mut client13 = Client13::new_from_hybrid(hybrid, config, certificate, now);
-                    client13.handle_packet(packet)?;
+                    if let Err(e) = client13.handle_timeout(now) {
+                        self.inner = Some(Inner::Client13(client13));
+                        return Err(e);
+                    }
+                    if let Err(e) = client13.handle_packet(packet) {
+                        self.inner = Some(Inner::Client13(client13));
+                        return Err(e);
+                    }
                     self.inner = Some(Inner::Client13(client13));
                     return Ok(());
                 }
-                detect::DetectedVersion::Unknown => {
-                    return Err(Error::UnexpectedMessage(
-                        "Unrecognized response from server".to_string(),
-                    ));
-                }
+                detect::DetectedVersion::Unknown => unreachable!(),
             }
         }
 
@@ -444,18 +470,17 @@ impl Dtls {
     }
 
     /// Send application data over the established DTLS session.
+    ///
+    /// Returns [`Error::HandshakePending`] if the DTLS version has not
+    /// yet been resolved (auto-sense pending).  Callers should buffer
+    /// the data externally and retry after the handshake progresses.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
             Inner::Client12(client) => client.send_application_data(data),
             Inner::Server12(server) => server.send_application_data(data),
             Inner::Client13(client) => client.send_application_data(data),
             Inner::Server13(server) => server.send_application_data(data),
-            Inner::ServerPending(_) => Err(Error::UnexpectedMessage(
-                "cannot send application data: handshake not started".to_string(),
-            )),
-            Inner::ClientPending(_) => Err(Error::UnexpectedMessage(
-                "cannot send application data: handshake not complete".to_string(),
-            )),
+            Inner::ServerPending(_) | Inner::ClientPending(_) => Err(Error::HandshakePending),
         }
     }
 }
@@ -581,6 +606,34 @@ mod test {
         // Second poll returns Timeout
         let result = dtls.poll_output(output);
         assert!(matches!(result, Output::Timeout(_)));
+    }
+
+    #[test]
+    fn test_auto_client_unknown_version_no_panic() {
+        // Regression: handle_packet returning UnexpectedMessage for an
+        // unrecognized server response must not leave inner as None,
+        // which would panic on the next poll_output/handle_timeout.
+        let mut dtls = new_instance_auto();
+        dtls.set_active(true);
+        let now = Instant::now();
+        dtls.handle_timeout(now).unwrap();
+
+        // Drain the hybrid ClientHello
+        let mut buf = [0u8; 2048];
+        loop {
+            if matches!(dtls.poll_output(&mut buf), Output::Timeout(_)) {
+                break;
+            }
+        }
+
+        // Feed a garbage packet that won't be recognized as DTLS 1.2 or 1.3
+        let garbage = [0xFF; 64];
+        let err = dtls.handle_packet(&garbage).unwrap_err();
+        assert!(matches!(err, Error::UnexpectedMessage(_)));
+
+        // These must NOT panic — inner should still be intact
+        dtls.handle_timeout(now).unwrap();
+        let _ = dtls.poll_output(&mut buf);
     }
 
     #[test]
