@@ -37,6 +37,8 @@ use crate::crypto::{ActiveKeyExchange, SrtpProfile};
 use crate::dtls13::client::handshake_create_certificate;
 use crate::dtls13::client::handshake_create_certificate_verify;
 use crate::dtls13::client::signature_scheme_to_components;
+#[cfg(feature = "_crypto-common")]
+use crate::dtls13::client::verify_scheme_curve;
 use crate::dtls13::client::LocalEvent;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::Body;
@@ -929,19 +931,8 @@ impl State {
             Error::CertificateError("No client certificate for verification".to_string())
         })?;
 
-        // RFC 8446 §4.4.3: For ECDSA schemes, the curve in the SignatureScheme
-        // must match the certificate's public key curve.
         #[cfg(feature = "_crypto-common")]
-        if let Some(expected_group) = scheme.named_group() {
-            let cert_group =
-                crate::crypto::cert_named_group(cert_der).map_err(Error::SecurityError)?;
-            if expected_group != cert_group {
-                return Err(Error::SecurityError(format!(
-                    "SignatureScheme {:?} requires {:?} but certificate uses {:?}",
-                    scheme, expected_group, cert_group
-                )));
-            }
-        }
+        verify_scheme_curve(scheme, cert_der)?;
 
         let (hash_alg, sig_alg) = signature_scheme_to_components(scheme)?;
 

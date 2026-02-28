@@ -812,19 +812,8 @@ impl State {
             Error::CertificateError("No server certificate for verification".to_string())
         })?;
 
-        // RFC 8446 §4.4.3: For ECDSA schemes, the curve in the SignatureScheme
-        // must match the certificate's public key curve.
         #[cfg(feature = "_crypto-common")]
-        if let Some(expected_group) = scheme.named_group() {
-            let cert_group =
-                crate::crypto::cert_named_group(cert_der).map_err(Error::SecurityError)?;
-            if expected_group != cert_group {
-                return Err(Error::SecurityError(format!(
-                    "SignatureScheme {:?} requires {:?} but certificate uses {:?}",
-                    scheme, expected_group, cert_group
-                )));
-            }
-        }
+        verify_scheme_curve(scheme, cert_der)?;
 
         let (hash_alg, sig_alg) = signature_scheme_to_components(scheme)?;
 
@@ -1370,6 +1359,26 @@ pub(crate) fn signature_scheme_to_components(
             scheme
         ))),
     }
+}
+
+/// RFC 8446 §4.4.3: For ECDSA schemes, verify the curve in the [`SignatureScheme`]
+/// matches the certificate's public key curve.
+#[cfg(feature = "_crypto-common")]
+pub(crate) fn verify_scheme_curve(
+    scheme: SignatureScheme,
+    cert_der: &[u8],
+) -> Result<(), crate::Error> {
+    if let Some(expected_group) = scheme.named_group() {
+        let cert_group =
+            crate::crypto::cert_named_group(cert_der).map_err(Error::SecurityError)?;
+        if expected_group != cert_group {
+            return Err(Error::SecurityError(format!(
+                "SignatureScheme {:?} requires {:?} but certificate uses {:?}",
+                scheme, expected_group, cert_group
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Parse a TLS 1.3 CertificateRequest message (RFC 8446 Section 4.3.2).
