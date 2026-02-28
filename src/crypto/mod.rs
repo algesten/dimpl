@@ -36,7 +36,7 @@ pub use provider::{
     SupportedKxGroup,
 };
 #[cfg(feature = "_crypto-common")]
-pub use provider::{OID_P256, OID_P384};
+pub use provider::{cert_named_group, OID_P256, OID_P384};
 
 // Re-export shared types for provider trait implementations
 pub use crate::dtls12::message::Dtls12CipherSuite;
