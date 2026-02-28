@@ -276,6 +276,18 @@ impl Dtls {
         Dtls { inner: Some(inner) }
     }
 
+    /// Returns the negotiated DTLS protocol version.
+    ///
+    /// Returns `None` for auto-sense instances that have not yet completed
+    /// version negotiation (i.e. still in a `Pending` state).
+    pub fn protocol_version(&self) -> Option<ProtocolVersion> {
+        match self.inner.as_ref()? {
+            Inner::Client12(_) | Inner::Server12(_) => Some(ProtocolVersion::DTLS1_2),
+            Inner::Client13(_) | Inner::Server13(_) => Some(ProtocolVersion::DTLS1_3),
+            Inner::ServerPending(_) | Inner::ClientPending(_) => None,
+        }
+    }
+
     /// Return true if the instance is operating in the client role.
     pub fn is_active(&self) -> bool {
         matches!(
@@ -589,5 +601,24 @@ mod test {
         is_unwind_safe(new_instance());
         is_unwind_safe(new_instance_13());
         is_unwind_safe(new_instance_auto());
+    }
+
+    #[test]
+    fn test_protocol_version_12() {
+        let dtls = new_instance();
+        assert_eq!(dtls.protocol_version(), Some(ProtocolVersion::DTLS1_2));
+    }
+
+    #[test]
+    fn test_protocol_version_13() {
+        let dtls = new_instance_13();
+        assert_eq!(dtls.protocol_version(), Some(ProtocolVersion::DTLS1_3));
+    }
+
+    #[test]
+    fn test_protocol_version_auto_pending() {
+        let dtls = new_instance_auto();
+        // Auto-sense instance before negotiation should return None
+        assert_eq!(dtls.protocol_version(), None);
     }
 }
