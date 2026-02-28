@@ -598,3 +598,119 @@ fn auto_client_rejects_unknown_version_response() {
         other => panic!("expected UnexpectedMessage, got: {other:?}"),
     }
 }
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn auto_client_protocol_version_after_negotiating_dtls13() {
+    //! After completing a handshake against a DTLS 1.3 server, the
+    //! auto-sense client should report `Some(ProtocolVersion::DTLS1_3)`.
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::ProtocolVersion;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = default_config();
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    // Before negotiation, auto-sense returns None.
+    assert_eq!(client.protocol_version(), None);
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected && server_connected,
+        "Handshake should complete"
+    );
+    assert_eq!(client.protocol_version(), Some(ProtocolVersion::DTLS1_3));
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn auto_client_protocol_version_after_negotiating_dtls12() {
+    //! After completing a handshake against a DTLS 1.2 server, the
+    //! auto-sense client should report `Some(ProtocolVersion::DTLS1_2)`.
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::ProtocolVersion;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = default_config();
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_auto(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+
+    // Before negotiation, auto-sense returns None.
+    assert_eq!(client.protocol_version(), None);
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected && server_connected,
+        "Handshake should complete"
+    );
+    assert_eq!(client.protocol_version(), Some(ProtocolVersion::DTLS1_2));
+}
