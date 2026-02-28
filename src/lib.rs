@@ -373,6 +373,16 @@ impl Dtls {
         // Auto-sense client: resolve version on first server response
         if matches!(self.inner, Some(Inner::ClientPending(_))) {
             let version = detect::server_hello_version(packet);
+
+            // Check version before taking inner — returning an error
+            // while inner is None would leave us unable to poll/timeout.
+            if matches!(version, detect::DetectedVersion::Unknown) {
+                return Err(Error::UnexpectedMessage(
+                    "Unrecognized response from server".to_string(),
+                ));
+            }
+
+            // unwrap: guarded by the matches! check above
             let inner = self.inner.take().unwrap();
             let Inner::ClientPending(cp) = inner else {
                 unreachable!()
@@ -399,11 +409,7 @@ impl Dtls {
                     self.inner = Some(Inner::Client13(client13));
                     return Ok(());
                 }
-                detect::DetectedVersion::Unknown => {
-                    return Err(Error::UnexpectedMessage(
-                        "Unrecognized response from server".to_string(),
-                    ));
-                }
+                detect::DetectedVersion::Unknown => unreachable!(),
             }
         }
 
@@ -581,6 +587,34 @@ mod test {
         // Second poll returns Timeout
         let result = dtls.poll_output(output);
         assert!(matches!(result, Output::Timeout(_)));
+    }
+
+    #[test]
+    fn test_auto_client_unknown_version_no_panic() {
+        // Regression: handle_packet returning UnexpectedMessage for an
+        // unrecognized server response must not leave inner as None,
+        // which would panic on the next poll_output/handle_timeout.
+        let mut dtls = new_instance_auto();
+        dtls.set_active(true);
+        let now = Instant::now();
+        dtls.handle_timeout(now).unwrap();
+
+        // Drain the hybrid ClientHello
+        let mut buf = [0u8; 2048];
+        loop {
+            if matches!(dtls.poll_output(&mut buf), Output::Timeout(_)) {
+                break;
+            }
+        }
+
+        // Feed a garbage packet that won't be recognized as DTLS 1.2 or 1.3
+        let garbage = [0xFF; 64];
+        let err = dtls.handle_packet(&garbage).unwrap_err();
+        assert!(matches!(err, Error::UnexpectedMessage(_)));
+
+        // These must NOT panic — inner should still be intact
+        dtls.handle_timeout(now).unwrap();
+        let _ = dtls.poll_output(&mut buf);
     }
 
     #[test]
