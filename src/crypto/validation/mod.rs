@@ -30,13 +30,16 @@ impl CryptoProvider {
     /// Returns an iterator over validated key exchange groups supported by dimpl.
     ///
     /// Only key exchange groups documented in lib.rs are returned:
+    /// - X25519
     /// - P-256 (secp256r1)
     /// - P-384 (secp384r1)
     pub fn supported_kx_groups(&self) -> impl Iterator<Item = &'static dyn SupportedKxGroup> {
-        self.kx_groups
-            .iter()
-            .copied()
-            .filter(|kx| matches!(kx.name(), NamedGroup::Secp256r1 | NamedGroup::Secp384r1))
+        self.kx_groups.iter().copied().filter(|kx| {
+            matches!(
+                kx.name(),
+                NamedGroup::X25519 | NamedGroup::Secp256r1 | NamedGroup::Secp384r1
+            )
+        })
     }
 
     /// Returns cipher suites compatible with a specific signature algorithm.
@@ -402,7 +405,7 @@ mod tests {
     fn test_default_provider_has_kx_groups() {
         let provider = aws_lc_rs::default_provider();
         let count = provider.supported_kx_groups().count();
-        assert_eq!(count, 2); // P-256 and P-384
+        assert_eq!(count, 3); // X25519, P-256, and P-384
     }
 
     #[test]
