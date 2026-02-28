@@ -37,6 +37,8 @@ use crate::crypto::{ActiveKeyExchange, SrtpProfile};
 use crate::dtls13::client::handshake_create_certificate;
 use crate::dtls13::client::handshake_create_certificate_verify;
 use crate::dtls13::client::signature_scheme_to_components;
+#[cfg(feature = "_crypto-common")]
+use crate::dtls13::client::verify_scheme_curve;
 use crate::dtls13::client::LocalEvent;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::Body;
@@ -928,6 +930,9 @@ impl State {
         let cert_der = server.client_certificates.first().ok_or_else(|| {
             Error::CertificateError("No client certificate for verification".to_string())
         })?;
+
+        #[cfg(feature = "_crypto-common")]
+        verify_scheme_curve(scheme, cert_der)?;
 
         let (hash_alg, sig_alg) = signature_scheme_to_components(scheme)?;
 

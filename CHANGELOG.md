@@ -1,6 +1,7 @@
 # Unreleased
 
   * DTLS 1.2 ECDSA determine curve from certificate, not hash algorithm #57
+  * DTLS 1.3 enforce SignatureScheme curve matches certificate key #60
 
 # 0.3.0
 

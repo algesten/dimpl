@@ -656,6 +656,18 @@ impl SignatureScheme {
         schemes
     }
 
+    /// Returns the named group (EC curve) implied by this signature scheme, if any.
+    ///
+    /// In DTLS 1.3, ECDSA signature schemes encode the expected curve.
+    /// Returns `None` for non-ECDSA schemes.
+    pub fn named_group(&self) -> Option<NamedGroup> {
+        match self {
+            SignatureScheme::ECDSA_SECP256R1_SHA256 => Some(NamedGroup::Secp256r1),
+            SignatureScheme::ECDSA_SECP384R1_SHA384 => Some(NamedGroup::Secp384r1),
+            _ => None,
+        }
+    }
+
     /// Returns the hash algorithm associated with this signature scheme.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
         match self {
@@ -941,6 +953,26 @@ mod tests {
             &[CompressionMethod::Null],
             "Only Null compression should be supported"
         );
+    }
+
+    #[test]
+    fn signature_scheme_named_group_ecdsa() {
+        assert_eq!(
+            SignatureScheme::ECDSA_SECP256R1_SHA256.named_group(),
+            Some(NamedGroup::Secp256r1)
+        );
+        assert_eq!(
+            SignatureScheme::ECDSA_SECP384R1_SHA384.named_group(),
+            Some(NamedGroup::Secp384r1)
+        );
+    }
+
+    #[test]
+    fn signature_scheme_named_group_non_ecdsa() {
+        assert_eq!(SignatureScheme::RSA_PSS_RSAE_SHA256.named_group(), None);
+        assert_eq!(SignatureScheme::ED25519.named_group(), None);
+        assert_eq!(SignatureScheme::ECDSA_SECP521R1_SHA512.named_group(), None);
+        assert_eq!(SignatureScheme::Unknown(0xFFFF).named_group(), None);
     }
 
     #[test]

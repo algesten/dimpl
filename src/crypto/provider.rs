@@ -312,6 +312,35 @@ pub fn check_verify_scheme(
     }
 }
 
+/// Extract the EC curve ([`NamedGroup`]) from a DER-encoded X.509 certificate.
+///
+/// Used by DTLS 1.3 to verify that the [`SignatureScheme`](crate::types::SignatureScheme)
+/// in `CertificateVerify` is consistent with the peer's certificate key.
+#[cfg(feature = "_crypto-common")]
+pub fn cert_named_group(cert_der: &[u8]) -> Result<NamedGroup, String> {
+    use der::Decode;
+    use spki::ObjectIdentifier;
+    use x509_cert::Certificate as X509Certificate;
+
+    let cert = X509Certificate::from_der(cert_der)
+        .map_err(|e| format!("Failed to parse certificate: {e}"))?;
+    let spki = &cert.tbs_certificate.subject_public_key_info;
+
+    let curve_oid: ObjectIdentifier = spki
+        .algorithm
+        .parameters
+        .as_ref()
+        .ok_or("Missing EC curve parameter in certificate")?
+        .decode_as()
+        .map_err(|_| "Invalid EC curve parameter in certificate".to_string())?;
+
+    match curve_oid {
+        OID_P256 => Ok(NamedGroup::Secp256r1),
+        OID_P384 => Ok(NamedGroup::Secp384r1),
+        _ => Err(format!("Unsupported EC curve: {}", curve_oid)),
+    }
+}
+
 /// Private key parser (factory for SigningKey).
 pub trait KeyProvider: CryptoSafe {
     /// Parse and load a private key from DER/PEM bytes.
@@ -615,5 +644,43 @@ impl CryptoProvider {
     /// ```
     pub fn get_default() -> Option<&'static CryptoProvider> {
         DEFAULT.get()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn cert_named_group_p256() {
+        use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256};
+
+        let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        let cert = params.self_signed(&key_pair).unwrap();
+
+        let group = cert_named_group(cert.der()).unwrap();
+        assert_eq!(group, NamedGroup::Secp256r1);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn cert_named_group_p384() {
+        use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P384_SHA384};
+
+        let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
+        let params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        let cert = params.self_signed(&key_pair).unwrap();
+
+        let group = cert_named_group(cert.der()).unwrap();
+        assert_eq!(group, NamedGroup::Secp384r1);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn cert_named_group_invalid_der() {
+        let result = cert_named_group(&[0x00, 0x01, 0x02]);
+        assert!(result.is_err());
     }
 }
