@@ -46,6 +46,7 @@ fn drain_dimpl_outputs(endpoint: &mut Dtls) -> DrainedOutputs {
                 result.timeout = Some(t);
                 break;
             }
+            _ => {}
         }
     }
 

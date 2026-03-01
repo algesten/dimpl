@@ -1,6 +1,7 @@
 //! Public error type returned by the high-level DTLS API.
 
 #[derive(Debug)]
+#[non_exhaustive]
 /// Errors returned by DTLS processing functions.
 pub enum Error {
     /// Parser requested more data

@@ -118,6 +118,7 @@ fn dtls12_ossl_client_handshake() {
                     // so we stop polling in this iteration
                     continue_polling = false;
                 }
+                _ => {}
             }
         }
 
@@ -315,6 +316,7 @@ fn dtls12_ossl_server_handshake() {
                     server_received_data.extend_from_slice(data);
                 }
                 Output::Timeout(_) => break,
+                _ => {}
             }
         }
 

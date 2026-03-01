@@ -500,6 +500,7 @@ impl fmt::Debug for Dtls {
 }
 
 /// Output events produced by the DTLS engine when polled.
+#[non_exhaustive]
 pub enum Output<'a> {
     /// A DTLS record to transmit on the wire.
     Packet(&'a [u8]),

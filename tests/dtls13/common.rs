@@ -49,6 +49,7 @@ pub fn drain_outputs(endpoint: &mut Dtls) -> DrainedOutputs {
                 result.timeout = Some(t);
                 break;
             }
+            _ => {}
         }
     }
     result
