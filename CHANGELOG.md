@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Add #[non_exhaustive] to public API enums likely to grow (breaking) #69
+  * feat: Add protocol_version() accessor to Dtls #59
   * Bump all deps (possible with the current MSRV) #67
   * DTLS1.3 chacha20poly1305 and x25519 support #64
   * Fix panic in auto DTLS version selection #65
