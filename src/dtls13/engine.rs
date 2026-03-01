@@ -302,9 +302,7 @@ impl Engine {
 
     pub fn is_cipher_suite_allowed(&self, suite: Dtls13CipherSuite) -> bool {
         self.config
-            .crypto_provider()
-            .dtls13_cipher_suites
-            .iter()
+            .dtls13_cipher_suites()
             .any(|cs| cs.suite() == suite)
     }
 
@@ -2085,12 +2083,7 @@ impl Engine {
         &self,
         group: crate::types::NamedGroup,
     ) -> Option<&'static dyn SupportedKxGroup> {
-        self.config
-            .crypto_provider()
-            .kx_groups
-            .iter()
-            .find(|g| g.name() == group)
-            .copied()
+        self.config.kx_groups().find(|g| g.name() == group)
     }
 
     // =========================================================================

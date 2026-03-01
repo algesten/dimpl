@@ -166,9 +166,8 @@ impl Engine {
 
     /// Is the given cipher suite allowed by configuration
     pub fn is_cipher_suite_allowed(&self, suite: Dtls12CipherSuite) -> bool {
-        self.crypto_context
-            .provider()
-            .supported_cipher_suites()
+        self.config
+            .dtls12_cipher_suites()
             .any(|cs| cs.suite() == suite)
     }
 

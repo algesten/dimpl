@@ -1,6 +1,5 @@
 use super::super::{NamedGroup, NamedGroupVec};
 use crate::buffer::Buf;
-use crate::crypto::CryptoProvider;
 use nom::IResult;
 
 /// SupportedGroups extension as defined in RFC 8422
@@ -10,15 +9,6 @@ pub struct SupportedGroupsExtension {
 }
 
 impl SupportedGroupsExtension {
-    /// Create a SupportedGroupsExtension from a crypto provider
-    pub fn from_provider(provider: &CryptoProvider) -> Self {
-        let mut groups = NamedGroupVec::new();
-        for kx_group in provider.supported_dtls12_kx_groups() {
-            groups.push(kx_group.name());
-        }
-        SupportedGroupsExtension { groups }
-    }
-
     pub fn parse(input: &[u8]) -> IResult<&[u8], SupportedGroupsExtension> {
         let (mut input, list_len) = nom::number::complete::be_u16(input)?;
         let mut groups = NamedGroupVec::new();
