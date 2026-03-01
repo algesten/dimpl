@@ -29,6 +29,12 @@ pub enum Error {
     TooManyRecords,
     /// Peer attempted renegotiation (not supported)
     RenegotiationAttempt,
+    /// Application data cannot be sent because the handshake is not yet complete.
+    ///
+    /// For auto-sense instances this means the version has not yet been
+    /// resolved.  Callers should buffer the data and retry once the
+    /// handshake advances.
+    HandshakePending,
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {
@@ -59,6 +65,9 @@ impl std::fmt::Display for Error {
             Error::ConfigError(msg) => write!(f, "config error: {}", msg),
             Error::TooManyRecords => write!(f, "too many records in packet"),
             Error::RenegotiationAttempt => write!(f, "peer attempted renegotiation"),
+            Error::HandshakePending => {
+                write!(f, "handshake pending: cannot send application data yet")
+            }
         }
     }
 }

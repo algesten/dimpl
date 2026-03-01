@@ -174,7 +174,7 @@ impl Client {
         config: std::sync::Arc<crate::Config>,
         certificate: crate::DtlsCertificate,
         now: Instant,
-    ) -> Client {
+    ) -> Result<Client, Error> {
         let mut engine = Engine::new(config, certificate);
         engine.set_client(true);
 
@@ -182,7 +182,7 @@ impl Client {
         // already sent on the wire by ClientPending.
         engine.inject_hybrid_client_hello(&hybrid.transcript_bytes);
 
-        Client {
+        let mut client = Client {
             state: State::AwaitServerHello,
             engine,
             random: Some(hybrid.random),
@@ -204,7 +204,9 @@ impl Client {
             handshake_secret: None,
             client_hs_traffic_secret: None,
             server_hs_traffic_secret: None,
-        }
+        };
+        client.handle_timeout(now)?;
+        Ok(client)
     }
 
     pub fn into_server(self) -> Server {
