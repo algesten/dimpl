@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Bump all deps (possible with the current MSRV) #67
   * DTLS1.3 chacha20poly1305 and x25519 support #64
   * Fix panic in auto DTLS version selection #65
   * Add `Error::HandshakePending` for auto-sense pending state (breaking) #65
