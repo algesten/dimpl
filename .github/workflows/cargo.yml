@@ -22,12 +22,12 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v2
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@v1
         id: toolchain
         with:
           toolchain: ${{ matrix.rust }}
-      - uses: Swatinem/rust-cache@v1
+      - uses: Swatinem/rust-cache@v2
       - name: Install autotools (macOS)
         if: runner.os == 'macOS'
         run: brew install autoconf automake libtool
@@ -40,7 +40,7 @@ jobs:
   snowflake:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Martin's snowflake formatting rules
@@ -52,18 +52,18 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@v1
         id: toolchain
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v1
+      - uses: Swatinem/rust-cache@v2
       - name: fmt
         run: cargo +${{steps.toolchain.outputs.name}} fmt --all -- --check
       - name: clippy
         run: cargo +${{steps.toolchain.outputs.name}} clippy -- -D warnings
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
           components: clippy
@@ -95,7 +95,7 @@ jobs:
 
   #   runs-on: ubuntu-latest
   #   steps:
-  #   - uses: actions/checkout@v3
+  #   - uses: actions/checkout@v6
   #   - uses: EmbarkStudios/cargo-deny-action@v1
   #     with:
   #       command: check
