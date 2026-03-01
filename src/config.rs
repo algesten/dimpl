@@ -205,12 +205,8 @@ impl Config {
     /// Like [`kx_groups`](Self::kx_groups) but additionally restricted to
     /// groups that DTLS 1.2 supports (currently P-256 and P-384).
     pub fn dtls12_kx_groups(&self) -> impl Iterator<Item = &'static dyn SupportedKxGroup> + '_ {
-        self.kx_groups().filter(|kx| {
-            matches!(
-                kx.name(),
-                NamedGroup::Secp256r1 | NamedGroup::Secp384r1
-            )
-        })
+        self.kx_groups()
+            .filter(|kx| matches!(kx.name(), NamedGroup::Secp256r1 | NamedGroup::Secp384r1))
     }
 }
 
