@@ -89,6 +89,14 @@ impl std::fmt::Debug for ChaCha20Poly1305Cipher {
 
 impl ChaCha20Poly1305Cipher {
     fn new(key: &[u8]) -> Result<Self, String> {
+        // The UnboundKey::new call also validates length, but doesnt give us
+        // a reasonable error message. This makes it equivalent to RustCrypto
+        if key.len() != 32 {
+            return Err(format!(
+                "Invalid key size for CHACHA20-POLY1305: {}",
+                key.len()
+            ));
+        }
         let unbound_key = UnboundKey::new(&CHACHA20_POLY1305, key)
             .map_err(|_| "Failed to create ChaCha20-Poly1305 cipher".to_string())?;
 
@@ -327,4 +335,19 @@ fn aes_ecb_encrypt(
     // unwrap: 16-byte input is exactly one AES block
     ecb_key.encrypt(&mut block).unwrap();
     block
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn chacha20_poly1305_key_len_validation() {
+        // incorrect length (should be 32)
+        let result = ChaCha20Poly1305Cipher::new(&[0, 1, 2, 3, 4, 5]);
+        assert_eq!(
+            "Invalid key size for CHACHA20-POLY1305: 6",
+            &result.unwrap_err()
+        );
+    }
 }

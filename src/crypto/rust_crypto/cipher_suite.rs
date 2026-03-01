@@ -135,6 +135,12 @@ impl std::fmt::Debug for ChaCha20Poly1305Cipher {
 impl ChaCha20Poly1305Cipher {
     fn new(key: &[u8]) -> Result<Self, String> {
         use chacha20poly1305::KeyInit;
+        if key.len() != 32 {
+            return Err(format!(
+                "Invalid key size for CHACHA20-POLY1305: {}",
+                key.len()
+            ));
+        }
         let key = chacha20poly1305::Key::from_slice(key);
         Ok(ChaCha20Poly1305Cipher {
             cipher: Box::new(ChaCha20Poly1305Aead::new(key)),
@@ -378,3 +384,18 @@ pub(super) static ALL_DTLS13_CIPHER_SUITES: &[&dyn SupportedDtls13CipherSuite] =
     &TLS13_AES_256_GCM_SHA384,
     &TLS13_CHACHA20_POLY1305_SHA256,
 ];
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn chacha20_poly1305_key_len_validation() {
+        // incorrect length (should be 32)
+        let result = ChaCha20Poly1305Cipher::new(&[0, 1, 2, 3, 4, 5]);
+        assert_eq!(
+            "Invalid key size for CHACHA20-POLY1305: 6",
+            &result.unwrap_err()
+        );
+    }
+}
