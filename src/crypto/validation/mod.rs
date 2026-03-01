@@ -44,6 +44,20 @@ impl CryptoProvider {
         })
     }
 
+    /// Returns an iterator over key exchange groups supported for DTLS 1.2.
+    ///
+    /// DTLS 1.2 only supports ECDHE with NIST curves:
+    /// - P-256 (secp256r1)
+    /// - P-384 (secp384r1)
+    pub fn supported_dtls12_kx_groups(
+        &self,
+    ) -> impl Iterator<Item = &'static dyn SupportedKxGroup> {
+        self.kx_groups
+            .iter()
+            .copied()
+            .filter(|kx| matches!(kx.name(), NamedGroup::Secp256r1 | NamedGroup::Secp384r1))
+    }
+
     /// Returns cipher suites compatible with a specific signature algorithm.
     ///
     /// Combines provider filtering with signature algorithm compatibility.

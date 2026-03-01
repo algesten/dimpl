@@ -13,7 +13,7 @@ impl SupportedGroupsExtension {
     /// Create a SupportedGroupsExtension from a crypto provider
     pub fn from_provider(provider: &CryptoProvider) -> Self {
         let mut groups = NamedGroupVec::new();
-        for kx_group in provider.supported_kx_groups() {
+        for kx_group in provider.supported_dtls12_kx_groups() {
             groups.push(kx_group.name());
         }
         SupportedGroupsExtension { groups }

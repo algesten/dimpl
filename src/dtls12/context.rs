@@ -160,11 +160,10 @@ impl CryptoContext {
         named_group: NamedGroup,
         kx_buf: &mut Buf,
     ) -> Result<&[u8], String> {
-        // Find the matching key exchange group from the provider
+        // Find the matching key exchange group from the provider (DTLS 1.2 groups only)
         let kx_group = self
             .provider()
-            .kx_groups
-            .iter()
+            .supported_dtls12_kx_groups()
             .find(|g| g.name() == named_group)
             .ok_or_else(|| format!("Unsupported ECDHE named group: {:?}", named_group))?;
 
@@ -180,11 +179,10 @@ impl CryptoContext {
         server_public: &[u8],
         kx_buf: &mut Buf,
     ) -> Result<(), String> {
-        // Find the matching key exchange group from the provider
+        // Find the matching key exchange group from the provider (DTLS 1.2 groups only)
         let kx_group = self
             .provider()
-            .kx_groups
-            .iter()
+            .supported_dtls12_kx_groups()
             .find(|g| g.name() == group)
             .ok_or_else(|| format!("Unsupported ECDHE named group: {:?}", group))?;
 
