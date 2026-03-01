@@ -414,16 +414,7 @@ fn dtls13_handshake_aes_256_gcm() {
 
 #[test]
 #[cfg(feature = "rcgen")]
-#[ignore = "CHACHA20_POLY1305_SHA256 is not yet implemented in any crypto provider"]
 fn dtls13_handshake_chacha20_poly1305() {
-    // TLS_CHACHA20_POLY1305_SHA256 is defined in Dtls13CipherSuite but neither the
-    // aws-lc-rs nor the rust-crypto provider includes an implementation of
-    // SupportedDtls13CipherSuite for it. This test is ignored until a provider
-    // adds CHACHA20_POLY1305 support.
-    //
-    // To enable this test, add a CHACHA20_POLY1305 implementation to a crypto
-    // provider, then filter dtls13_cipher_suites to only include it (similar to
-    // dtls13_handshake_aes_256_gcm above) and run the standard handshake loop.
     use dimpl::certificate::generate_self_signed_certificate;
     use dimpl::crypto::aws_lc_rs;
     use dimpl::crypto::Dtls13CipherSuite;
@@ -443,7 +434,7 @@ fn dtls13_handshake_chacha20_poly1305() {
         .collect();
     assert!(
         !chacha_only.is_empty(),
-        "Provider must have CHACHA20_POLY1305 (not yet implemented)"
+        "Provider must have CHACHA20_POLY1305"
     );
 
     let chacha_static: &'static [_] = Box::leak(chacha_only.into_boxed_slice());
@@ -595,6 +586,87 @@ fn dtls13_handshake_secp256r1_key_exchange() {
 
 #[test]
 #[cfg(feature = "rcgen")]
+fn dtls13_handshake_x25519_key_exchange() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::crypto::aws_lc_rs;
+    use dimpl::crypto::NamedGroup;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Build a custom provider that only offers X25519
+    let default = aws_lc_rs::default_provider();
+    let x25519_only: Vec<_> = default
+        .kx_groups
+        .iter()
+        .copied()
+        .filter(|g| g.name() == NamedGroup::X25519)
+        .collect();
+    assert!(!x25519_only.is_empty(), "Provider must have X25519");
+
+    let x25519_static: &'static [_] = Box::leak(x25519_only.into_boxed_slice());
+
+    let provider = dimpl::crypto::CryptoProvider {
+        kx_groups: x25519_static,
+        ..default
+    };
+
+    let config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected,
+        "Client should be connected with X25519 key exchange"
+    );
+    assert!(
+        server_connected,
+        "Server should be connected with X25519 key exchange"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
 fn dtls13_handshake_client_certificate_auth() {
     use dimpl::certificate::generate_self_signed_certificate;
     use dimpl::Config;
@@ -728,12 +800,9 @@ fn dtls13_handshake_timeout_expires() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_hrr_with_p256_then_x25519() {
-    // X25519 is not supported by any current crypto provider, so we cannot test
-    // a scenario where the server truly prefers X25519. Instead, we trigger HRR
-    // by having the client offer only P-256 key_share while the server prefers
-    // P-384 (the server's first kx_group). Since the client's key_share does not
-    // match the server's preferred group, the server sends HelloRetryRequest
-    // asking the client to retry with P-384.
+    // Client offers P-256 key_share but server prefers X25519. Since the
+    // client's key_share does not match the server's preferred group, the
+    // server sends HelloRetryRequest asking the client to retry with X25519.
     use dimpl::certificate::generate_self_signed_certificate;
     use dimpl::crypto::aws_lc_rs;
     use dimpl::crypto::NamedGroup;
@@ -751,7 +820,7 @@ fn dtls13_hrr_with_p256_then_x25519() {
         .kx_groups
         .iter()
         .copied()
-        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::Secp384r1)
+        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::X25519)
         .collect();
     // Ensure P-256 is first
     let mut client_groups_sorted: Vec<_> = client_groups;
@@ -769,21 +838,15 @@ fn dtls13_hrr_with_p256_then_x25519() {
         ..default.clone()
     };
 
-    // Server: prefers P-384 (P-384 is first in kx_groups)
+    // Server: prefers X25519 (X25519 is first in kx_groups)
     let server_groups: Vec<_> = default
         .kx_groups
         .iter()
         .copied()
-        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::Secp384r1)
+        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::X25519)
         .collect();
     let mut server_groups_sorted: Vec<_> = server_groups;
-    server_groups_sorted.sort_by_key(|g| {
-        if g.name() == NamedGroup::Secp384r1 {
-            0
-        } else {
-            1
-        }
-    });
+    server_groups_sorted.sort_by_key(|g| if g.name() == NamedGroup::X25519 { 0 } else { 1 });
     let server_groups_static: &'static [_] = Box::leak(server_groups_sorted.into_boxed_slice());
 
     let server_provider = dimpl::crypto::CryptoProvider {
@@ -859,10 +922,10 @@ fn dtls13_hrr_with_p256_then_x25519() {
         server_connected,
         "Server should be connected after HRR with group mismatch"
     );
-    // The client sent P-256 key_share but server prefers P-384, so HRR should occur
+    // The client sent P-256 key_share but server prefers X25519, so HRR should occur
     assert!(
         saw_hrr || flight_count >= 2,
-        "Should have seen HRR (server prefers P-384 but client offered P-256)"
+        "Should have seen HRR (server prefers X25519 but client offered P-256)"
     );
 }
 
@@ -1180,5 +1243,171 @@ fn dtls13_no_client_auth_retransmit_finished() {
     assert!(
         server_connected,
         "Server should connect via retransmitted Finished"
+    );
+}
+
+#[test]
+#[cfg(all(feature = "rcgen", feature = "rust-crypto"))]
+fn dtls13_handshake_chacha20_poly1305_rust_crypto() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::crypto::rust_crypto;
+    use dimpl::crypto::Dtls13CipherSuite;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let default = rust_crypto::default_provider();
+    let chacha_only: Vec<_> = default
+        .dtls13_cipher_suites
+        .iter()
+        .copied()
+        .filter(|cs| cs.suite() == Dtls13CipherSuite::CHACHA20_POLY1305_SHA256)
+        .collect();
+    assert!(
+        !chacha_only.is_empty(),
+        "rust_crypto provider must have CHACHA20_POLY1305"
+    );
+
+    let chacha_static: &'static [_] = Box::leak(chacha_only.into_boxed_slice());
+
+    let provider = dimpl::crypto::CryptoProvider {
+        dtls13_cipher_suites: chacha_static,
+        ..default
+    };
+
+    let config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected,
+        "Client should be connected with rust_crypto CHACHA20-POLY1305"
+    );
+    assert!(
+        server_connected,
+        "Server should be connected with rust_crypto CHACHA20-POLY1305"
+    );
+}
+
+#[test]
+#[cfg(all(feature = "rcgen", feature = "rust-crypto"))]
+fn dtls13_handshake_x25519_rust_crypto() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::crypto::rust_crypto;
+    use dimpl::crypto::NamedGroup;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let default = rust_crypto::default_provider();
+    let x25519_only: Vec<_> = default
+        .kx_groups
+        .iter()
+        .copied()
+        .filter(|g| g.name() == NamedGroup::X25519)
+        .collect();
+    assert!(
+        !x25519_only.is_empty(),
+        "rust_crypto provider must have X25519"
+    );
+
+    let x25519_static: &'static [_] = Box::leak(x25519_only.into_boxed_slice());
+
+    let provider = dimpl::crypto::CryptoProvider {
+        kx_groups: x25519_static,
+        ..default
+    };
+
+    let config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected,
+        "Client should be connected with rust_crypto X25519"
+    );
+    assert!(
+        server_connected,
+        "Server should be connected with rust_crypto X25519"
     );
 }

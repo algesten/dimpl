@@ -409,10 +409,16 @@ pub trait SupportedDtls13CipherSuite: CryptoSafe {
     /// Create a cipher instance with the given key.
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String>;
 
-    /// Encrypt a single AES block for record number encryption (RFC 9147 Section 4.2.3).
+    /// Compute a mask for record number encryption (RFC 9147 Section 4.2.3).
     ///
-    /// Computes `mask = AES-ECB(sn_key, sample)` where `sample` is the first 16 bytes
-    /// of the ciphertext. The mask is XORed over the sequence number bytes in the header.
+    /// The mask is XORed over the sequence number bytes in the header.
+    /// `sample` is the first 16 bytes of the ciphertext.
+    ///
+    /// For AES-based suites: `mask = AES-ECB(sn_key, sample)`.
+    ///
+    /// For ChaCha20-based suites (RFC 9001 Section 5.4.4):
+    /// `counter = sample[0..4]` (LE u32), `nonce = sample[4..16]`,
+    /// `mask = ChaCha20(sn_key, counter, nonce, <zero bytes>)`.
     fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16];
 }
 

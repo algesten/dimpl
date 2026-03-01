@@ -779,6 +779,7 @@ impl Dtls13CipherSuite {
         &[
             Dtls13CipherSuite::AES_128_GCM_SHA256,
             Dtls13CipherSuite::AES_256_GCM_SHA384,
+            Dtls13CipherSuite::CHACHA20_POLY1305_SHA256,
         ]
     }
 

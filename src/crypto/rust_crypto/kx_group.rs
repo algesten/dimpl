@@ -9,6 +9,10 @@ use crate::types::NamedGroup;
 
 /// ECDHE key exchange implementation.
 enum EcdhKeyExchange {
+    X25519 {
+        secret: x25519_dalek::EphemeralSecret,
+        public_key: Buf,
+    },
     P256 {
         secret: EphemeralSecret,
         public_key: Buf,
@@ -22,6 +26,10 @@ enum EcdhKeyExchange {
 impl std::fmt::Debug for EcdhKeyExchange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            EcdhKeyExchange::X25519 { public_key, .. } => f
+                .debug_struct("EcdhKeyExchange::X25519")
+                .field("public_key_len", &public_key.len())
+                .finish_non_exhaustive(),
             EcdhKeyExchange::P256 { public_key, .. } => f
                 .debug_struct("EcdhKeyExchange::P256")
                 .field("public_key_len", &public_key.len())
@@ -37,6 +45,17 @@ impl std::fmt::Debug for EcdhKeyExchange {
 impl EcdhKeyExchange {
     fn new(group: NamedGroup, mut buf: Buf) -> Result<Self, String> {
         match group {
+            NamedGroup::X25519 => {
+                use rand_core::OsRng;
+                let secret = x25519_dalek::EphemeralSecret::random_from_rng(&mut OsRng);
+                let public_key_obj = x25519_dalek::PublicKey::from(&secret);
+                buf.clear();
+                buf.extend_from_slice(public_key_obj.as_bytes());
+                Ok(EcdhKeyExchange::X25519 {
+                    secret,
+                    public_key: buf,
+                })
+            }
             NamedGroup::Secp256r1 => {
                 use rand_core::OsRng;
                 let secret = EphemeralSecret::random(&mut OsRng);
@@ -69,6 +88,7 @@ impl EcdhKeyExchange {
 impl ActiveKeyExchange for EcdhKeyExchange {
     fn pub_key(&self) -> &[u8] {
         match self {
+            EcdhKeyExchange::X25519 { public_key, .. } => public_key,
             EcdhKeyExchange::P256 { public_key, .. } => public_key,
             EcdhKeyExchange::P384 { public_key, .. } => public_key,
         }
@@ -76,6 +96,20 @@ impl ActiveKeyExchange for EcdhKeyExchange {
 
     fn complete(self: Box<Self>, peer_pub: &[u8], out: &mut Buf) -> Result<(), String> {
         match *self {
+            EcdhKeyExchange::X25519 { secret, .. } => {
+                let peer_bytes: [u8; 32] = peer_pub
+                    .try_into()
+                    .map_err(|_| "Invalid X25519 public key length".to_string())?;
+                let peer_key = x25519_dalek::PublicKey::from(peer_bytes);
+                let shared_secret = secret.diffie_hellman(&peer_key);
+                // RFC 7748 §6.1: check the shared secret is not zero (low-order point)
+                if !shared_secret.was_contributory() {
+                    return Err("X25519 shared secret is zero (non-contributory)".to_string());
+                }
+                out.clear();
+                out.extend_from_slice(shared_secret.as_bytes());
+                Ok(())
+            }
             EcdhKeyExchange::P256 { secret, .. } => {
                 let peer_key = P256PublicKey::from_sec1_bytes(peer_pub)
                     .map_err(|_| "Invalid P-256 public key".to_string())?;
@@ -97,9 +131,24 @@ impl ActiveKeyExchange for EcdhKeyExchange {
 
     fn group(&self) -> NamedGroup {
         match self {
+            EcdhKeyExchange::X25519 { .. } => NamedGroup::X25519,
             EcdhKeyExchange::P256 { .. } => NamedGroup::Secp256r1,
             EcdhKeyExchange::P384 { .. } => NamedGroup::Secp384r1,
         }
+    }
+}
+
+/// X25519 key exchange group.
+#[derive(Debug)]
+struct X25519Kx;
+
+impl SupportedKxGroup for X25519Kx {
+    fn name(&self) -> NamedGroup {
+        NamedGroup::X25519
+    }
+
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String> {
+        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::X25519, buf)?))
     }
 }
 
@@ -132,8 +181,10 @@ impl SupportedKxGroup for P384 {
 }
 
 /// Static instances of supported key exchange groups.
+static KX_GROUP_X25519: X25519Kx = X25519Kx;
 static KX_GROUP_P256: P256 = P256;
 static KX_GROUP_P384: P384 = P384;
 
 /// All supported key exchange groups.
-pub(super) static ALL_KX_GROUPS: &[&dyn SupportedKxGroup] = &[&KX_GROUP_P256, &KX_GROUP_P384];
+pub(super) static ALL_KX_GROUPS: &[&dyn SupportedKxGroup] =
+    &[&KX_GROUP_X25519, &KX_GROUP_P256, &KX_GROUP_P384];

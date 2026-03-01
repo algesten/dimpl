@@ -1,7 +1,7 @@
 //! Key exchange group implementations using aws-lc-rs.
 
 use aws_lc_rs::agreement::{agree_ephemeral, EphemeralPrivateKey};
-use aws_lc_rs::agreement::{UnparsedPublicKey, ECDH_P256, ECDH_P384};
+use aws_lc_rs::agreement::{UnparsedPublicKey, ECDH_P256, ECDH_P384, X25519};
 
 use super::super::{ActiveKeyExchange, SupportedKxGroup};
 use crate::buffer::Buf;
@@ -26,6 +26,7 @@ impl std::fmt::Debug for EcdhKeyExchange {
 impl EcdhKeyExchange {
     fn new(group: NamedGroup, mut buf: Buf) -> Result<Self, String> {
         let algorithm = match group {
+            NamedGroup::X25519 => &X25519,
             NamedGroup::Secp256r1 => &ECDH_P256,
             NamedGroup::Secp384r1 => &ECDH_P384,
             _ => return Err("Unsupported group".to_string()),
@@ -51,6 +52,7 @@ impl EcdhKeyExchange {
 
     fn algorithm(&self) -> &'static aws_lc_rs::agreement::Algorithm {
         match self.group {
+            NamedGroup::X25519 => &X25519,
             NamedGroup::Secp256r1 => &ECDH_P256,
             NamedGroup::Secp384r1 => &ECDH_P384,
             _ => unreachable!("Unsupported group"),
@@ -67,6 +69,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
         let algorithm = self.algorithm();
         let peer_key = UnparsedPublicKey::new(algorithm, peer_pub);
 
+        // RFC 7748 §6.1: agree_ephemeral rejects non-contributory shared secrets internally
         agree_ephemeral(
             self.private_key,
             peer_key,
@@ -82,6 +85,20 @@ impl ActiveKeyExchange for EcdhKeyExchange {
 
     fn group(&self) -> NamedGroup {
         self.group
+    }
+}
+
+/// X25519 key exchange group.
+#[derive(Debug)]
+struct X25519Kx;
+
+impl SupportedKxGroup for X25519Kx {
+    fn name(&self) -> NamedGroup {
+        NamedGroup::X25519
+    }
+
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String> {
+        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::X25519, buf)?))
     }
 }
 
@@ -114,8 +131,10 @@ impl SupportedKxGroup for P384 {
 }
 
 /// Static instances of supported key exchange groups.
+static KX_GROUP_X25519: X25519Kx = X25519Kx;
 static KX_GROUP_P256: P256 = P256;
 static KX_GROUP_P384: P384 = P384;
 
 /// All supported key exchange groups.
-pub(super) static ALL_KX_GROUPS: &[&dyn SupportedKxGroup] = &[&KX_GROUP_P256, &KX_GROUP_P384];
+pub(super) static ALL_KX_GROUPS: &[&dyn SupportedKxGroup] =
+    &[&KX_GROUP_X25519, &KX_GROUP_P256, &KX_GROUP_P384];
