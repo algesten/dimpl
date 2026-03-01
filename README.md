@@ -23,10 +23,11 @@ verification and SRTP key export yourself.
 ### Version selection
 
 Three constructors control which DTLS version is used:
-- [`Dtls::new_12`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_12) — explicit DTLS 1.2
-- [`Dtls::new_13`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_13) — explicit DTLS 1.3
-- [`Dtls::new_auto`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_auto) — auto‑sense: the first incoming ClientHello determines
-  the version (based on the `supported_versions` extension)
+- [`Dtls::new_12`][new_12] — explicit DTLS 1.2
+- [`Dtls::new_13`][new_13] — explicit DTLS 1.3
+- [`Dtls::new_auto`][new_auto] — auto‑sense: the first
+  incoming ClientHello determines the version (based on the
+  `supported_versions` extension)
 
 ## Cryptography surface
 - **Cipher suites (TLS 1.2 over DTLS)**
@@ -44,19 +45,24 @@ Three constructors control which DTLS version is used:
 - Not supported: PSK cipher suites.
 
 ### Certificate model
-During the handshake the engine emits [`Output::PeerCert`](https://docs.rs/dimpl/latest/dimpl/enum.Output.html#variant.PeerCert) with the peer's
-leaf certificate (DER). The crate uses that certificate to verify DTLS
+During the handshake the engine emits
+[`Output::PeerCert`][peer_cert] with the peer's leaf
+certificate (DER). The crate uses that certificate to verify DTLS
 handshake messages, but it does not perform any PKI validation. Your
 application is responsible for validating the peer certificate according to
 your policy (fingerprint, chain building, name/EKU checks, pinning, etc.).
 
 ### Sans‑IO integration model
 Drive the engine with three calls:
-- [`Dtls::handle_packet`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.handle_packet) — feed an entire received UDP datagram.
-- [`Dtls::poll_output`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.poll_output) — drain pending output: DTLS records, timers, events.
-- [`Dtls::handle_timeout`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.handle_timeout) — trigger retransmissions/time‑based progress.
+- [`Dtls::handle_packet`][handle_packet] — feed an entire
+  received UDP datagram.
+- [`Dtls::poll_output`][poll_output] — drain pending output:
+  DTLS records, timers, events.
+- [`Dtls::handle_timeout`][handle_timeout] — trigger
+  retransmissions/time‑based progress.
 
-The output is an [`Output`](https://docs.rs/dimpl/latest/dimpl/enum.Output.html) enum with borrowed references into your provided buffer:
+The output is an [`Output`][output] enum with borrowed
+references into your provided buffer:
 - `Packet(&[u8])`: send on your UDP socket
 - `Timeout(Instant)`: schedule a timer and call `handle_timeout` at/after it
 - `Connected`: handshake complete
@@ -129,6 +135,14 @@ Rust 1.81.0
 - Session resumption is not implemented (WebRTC does a full handshake on ICE restart).
 - Renegotiation is not implemented (WebRTC does full restart).
 
+[new_12]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_12
+[new_13]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_13
+[new_auto]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_auto
+[peer_cert]: https://docs.rs/dimpl/latest/dimpl/enum.Output.html#variant.PeerCert
+[handle_packet]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.handle_packet
+[poll_output]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.poll_output
+[handle_timeout]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.handle_timeout
+[output]: https://docs.rs/dimpl/latest/dimpl/enum.Output.html
 [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
 [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
 [RFC 7627]: https://www.rfc-editor.org/rfc/rfc7627
