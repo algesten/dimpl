@@ -1,5 +1,6 @@
 # Unreleased
 
+  * DTLS1.3 chacha20poly1305 and x25519 support #64
   * Fix panic in auto DTLS version selection #65
   * Add `Error::HandshakePending` for auto-sense pending state (breaking) #65
   * DTLS 1.2 ECDSA determine curve from certificate, not hash algorithm #57
