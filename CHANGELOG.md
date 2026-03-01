@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Add AEAD, encrypt_sn, and key exchange validation to CryptoProvider #68
   * Add #[non_exhaustive] to public API enums likely to grow (breaking) #69
   * feat: Add protocol_version() accessor to Dtls #59
   * Bump all deps (possible with the current MSRV) #67
