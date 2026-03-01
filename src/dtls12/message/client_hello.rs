@@ -57,9 +57,9 @@ impl ClientHello {
 
         // Add supported groups and EC point formats if using ECDH
         if has_ecdh {
-            // Add supported groups extension from config (filtered)
+            // Add supported groups extension from config (DTLS 1.2 filtered)
             let mut groups = super::NamedGroupVec::new();
-            for kx_group in config.kx_groups() {
+            for kx_group in config.dtls12_kx_groups() {
                 groups.push(kx_group.name());
             }
             let supported_groups = SupportedGroupsExtension { groups };

@@ -199,6 +199,19 @@ impl Config {
                 None => true,
             })
     }
+
+    /// Allowed key exchange groups for DTLS 1.2.
+    ///
+    /// Like [`kx_groups`](Self::kx_groups) but additionally restricted to
+    /// groups that DTLS 1.2 supports (currently P-256 and P-384).
+    pub fn dtls12_kx_groups(&self) -> impl Iterator<Item = &'static dyn SupportedKxGroup> + '_ {
+        self.kx_groups().filter(|kx| {
+            matches!(
+                kx.name(),
+                NamedGroup::Secp256r1 | NamedGroup::Secp384r1
+            )
+        })
+    }
 }
 
 /// Builder for [`Config`]. See each setter for defaults.
@@ -429,20 +442,38 @@ impl ConfigBuilder {
             ));
         }
 
-        // Validate kx_groups filter: suites that need key exchange must have groups
-        let kx_count = {
-            let all = crypto_provider.supported_kx_groups();
+        // Validate kx_groups filter: each enabled version needs compatible groups
+        let filtered_kx = |kx: &&'static dyn SupportedKxGroup| -> bool {
             match &self.kx_groups {
-                Some(list) => all.filter(|kx| list.contains(&kx.name())).count(),
-                None => all.count(),
+                Some(list) => list.contains(&kx.name()),
+                None => true,
             }
         };
-        if kx_count == 0 {
-            return Err(Error::ConfigError(
-                "No key exchange groups remain after filtering. \
-                 At least one key exchange group is required."
-                    .to_string(),
-            ));
+        if dtls12_count > 0 {
+            let dtls12_kx_count = crypto_provider
+                .supported_dtls12_kx_groups()
+                .filter(|kx| filtered_kx(kx))
+                .count();
+            if dtls12_kx_count == 0 {
+                return Err(Error::ConfigError(
+                    "DTLS 1.2 cipher suites are enabled but no compatible key exchange \
+                     groups remain after filtering. DTLS 1.2 requires P-256 or P-384."
+                        .to_string(),
+                ));
+            }
+        }
+        if dtls13_count > 0 {
+            let kx_count = crypto_provider
+                .supported_kx_groups()
+                .filter(|kx| filtered_kx(kx))
+                .count();
+            if kx_count == 0 {
+                return Err(Error::ConfigError(
+                    "DTLS 1.3 cipher suites are enabled but no key exchange groups \
+                     remain after filtering."
+                        .to_string(),
+                ));
+            }
         }
 
         Ok(Config {
@@ -606,6 +637,46 @@ mod tests {
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!("expected error for empty kx groups"),
         }
+    }
+
+    #[test]
+    fn x25519_only_rejected_for_dtls12() {
+        // X25519 is not yet supported for DTLS 1.2, so filtering to X25519-only
+        // while DTLS 1.2 suites are enabled should fail.
+        match Config::builder()
+            .dtls13_cipher_suites(&[])
+            .kx_groups(&[NamedGroup::X25519])
+            .build()
+        {
+            Err(Error::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("DTLS 1.2") && msg.contains("P-256 or P-384"),
+                    "error should mention DTLS 1.2 and required groups: {msg}"
+                )
+            }
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!("expected error for X25519-only with DTLS 1.2"),
+        }
+    }
+
+    #[test]
+    fn x25519_only_accepted_for_dtls13_only() {
+        // X25519-only is fine when DTLS 1.2 is disabled.
+        let config = Config::builder()
+            .dtls12_cipher_suites(&[])
+            .kx_groups(&[NamedGroup::X25519])
+            .build()
+            .expect("X25519-only should be accepted for DTLS 1.3-only config");
+        let groups: Vec<_> = config.kx_groups().map(|g| g.name()).collect();
+        assert_eq!(groups, &[NamedGroup::X25519]);
+    }
+
+    #[test]
+    fn dtls12_kx_groups_excludes_x25519() {
+        let config = Config::default();
+        let dtls12_groups: Vec<_> = config.dtls12_kx_groups().map(|g| g.name()).collect();
+        assert!(!dtls12_groups.contains(&NamedGroup::X25519));
+        assert!(dtls12_groups.contains(&NamedGroup::Secp256r1));
     }
 
     #[test]
