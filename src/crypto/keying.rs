@@ -27,6 +27,7 @@ impl std::fmt::Debug for KeyingMaterial {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
+#[non_exhaustive]
 /// Supported SRTP protection profiles (RFC 5764).
 pub enum SrtpProfile {
     /// SRTP_AES128_CM_HMAC_SHA1_80 (RFC 5764)

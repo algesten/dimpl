@@ -82,6 +82,7 @@ impl Random {
 /// Used for Elliptic Curve Diffie-Hellman Ephemeral (ECDHE) key exchange.
 /// The same named groups are used in both DTLS 1.2 and DTLS 1.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NamedGroup {
     /// sect163k1 (deprecated).
     Sect163k1,
@@ -536,6 +537,7 @@ impl PartialOrd for Sequence {
 /// separate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
+#[non_exhaustive]
 pub enum SignatureScheme {
     /// ECDSA with P-256 and SHA-256.
     ECDSA_SECP256R1_SHA256,
@@ -700,6 +702,7 @@ impl SignatureScheme {
 /// and hash function. Key exchange is negotiated separately via key_share.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
+#[non_exhaustive]
 pub enum Dtls13CipherSuite {
     /// TLS_AES_128_GCM_SHA256.
     AES_128_GCM_SHA256,

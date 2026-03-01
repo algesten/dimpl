@@ -114,6 +114,7 @@ fn run_client_server_with_mtu(mtu: usize) -> (usize, usize) {
                 Output::Timeout(_) => {
                     continue_polling = false;
                 }
+                _ => {}
             }
         }
 

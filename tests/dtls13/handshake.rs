@@ -250,6 +250,7 @@ fn dtls13_srtp_keying_material_correct_size() {
         SrtpProfile::AEAD_AES_128_GCM => 2 * (16 + 12), // 2 * (key + salt) for AES-128-GCM
         SrtpProfile::AEAD_AES_256_GCM => 2 * (32 + 12), // 2 * (key + salt) for AES-256-GCM
         SrtpProfile::AES128_CM_SHA1_80 => 2 * (16 + 14), // 2 * (key + salt) for AES-128-CM
+        _ => unreachable!(),
     };
 
     assert_eq!(
