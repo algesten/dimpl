@@ -1,6 +1,7 @@
 # Unreleased
 
   * Fix panic in auto DTLS version selection #65
+  * Add `Error::HandshakePending` for auto-sense pending state (breaking) #65
   * DTLS 1.2 ECDSA determine curve from certificate, not hash algorithm #57
   * DTLS 1.3 enforce SignatureScheme curve matches certificate key #60
 
