@@ -1245,3 +1245,169 @@ fn dtls13_no_client_auth_retransmit_finished() {
         "Server should connect via retransmitted Finished"
     );
 }
+
+#[test]
+#[cfg(all(feature = "rcgen", feature = "rust-crypto"))]
+fn dtls13_handshake_chacha20_poly1305_rust_crypto() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::crypto::rust_crypto;
+    use dimpl::crypto::Dtls13CipherSuite;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let default = rust_crypto::default_provider();
+    let chacha_only: Vec<_> = default
+        .dtls13_cipher_suites
+        .iter()
+        .copied()
+        .filter(|cs| cs.suite() == Dtls13CipherSuite::CHACHA20_POLY1305_SHA256)
+        .collect();
+    assert!(
+        !chacha_only.is_empty(),
+        "rust_crypto provider must have CHACHA20_POLY1305"
+    );
+
+    let chacha_static: &'static [_] = Box::leak(chacha_only.into_boxed_slice());
+
+    let provider = dimpl::crypto::CryptoProvider {
+        dtls13_cipher_suites: chacha_static,
+        ..default
+    };
+
+    let config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected,
+        "Client should be connected with rust_crypto CHACHA20-POLY1305"
+    );
+    assert!(
+        server_connected,
+        "Server should be connected with rust_crypto CHACHA20-POLY1305"
+    );
+}
+
+#[test]
+#[cfg(all(feature = "rcgen", feature = "rust-crypto"))]
+fn dtls13_handshake_x25519_rust_crypto() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::crypto::rust_crypto;
+    use dimpl::crypto::NamedGroup;
+    use dimpl::Config;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let default = rust_crypto::default_provider();
+    let x25519_only: Vec<_> = default
+        .kx_groups
+        .iter()
+        .copied()
+        .filter(|g| g.name() == NamedGroup::X25519)
+        .collect();
+    assert!(
+        !x25519_only.is_empty(),
+        "rust_crypto provider must have X25519"
+    );
+
+    let x25519_static: &'static [_] = Box::leak(x25519_only.into_boxed_slice());
+
+    let provider = dimpl::crypto::CryptoProvider {
+        kx_groups: x25519_static,
+        ..default
+    };
+
+    let config = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected,
+        "Client should be connected with rust_crypto X25519"
+    );
+    assert!(
+        server_connected,
+        "Server should be connected with rust_crypto X25519"
+    );
+}

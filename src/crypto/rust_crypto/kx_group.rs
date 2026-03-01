@@ -102,6 +102,10 @@ impl ActiveKeyExchange for EcdhKeyExchange {
                     .map_err(|_| "Invalid X25519 public key length".to_string())?;
                 let peer_key = x25519_dalek::PublicKey::from(peer_bytes);
                 let shared_secret = secret.diffie_hellman(&peer_key);
+                // RFC 7748 §6.1: check the shared secret is not zero (low-order point)
+                if !shared_secret.was_contributory() {
+                    return Err("X25519 shared secret is zero (non-contributory)".to_string());
+                }
                 out.clear();
                 out.extend_from_slice(shared_secret.as_bytes());
                 Ok(())

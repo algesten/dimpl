@@ -69,6 +69,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
         let algorithm = self.algorithm();
         let peer_key = UnparsedPublicKey::new(algorithm, peer_pub);
 
+        // RFC 7748 §6.1: agree_ephemeral rejects non-contributory shared secrets internally
         agree_ephemeral(
             self.private_key,
             peer_key,
