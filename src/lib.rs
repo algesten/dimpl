@@ -21,9 +21,9 @@
 //! ## Version selection
 //!
 //! Three constructors control which DTLS version is used:
-//! - [`Dtls::new_12`] — explicit DTLS 1.2
-//! - [`Dtls::new_13`] — explicit DTLS 1.3
-//! - [`Dtls::new_auto`] — auto‑sense: the first incoming ClientHello determines
+//! - [`Dtls::new_12`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_12) — explicit DTLS 1.2
+//! - [`Dtls::new_13`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_13) — explicit DTLS 1.3
+//! - [`Dtls::new_auto`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_auto) — auto‑sense: the first incoming ClientHello determines
 //!   the version (based on the `supported_versions` extension)
 //!
 //! # Cryptography surface
@@ -42,7 +42,7 @@
 //! - Not supported: PSK cipher suites.
 //!
 //! ## Certificate model
-//! During the handshake the engine emits [`Output::PeerCert`] with the peer's
+//! During the handshake the engine emits [`Output::PeerCert`](https://docs.rs/dimpl/latest/dimpl/enum.Output.html#variant.PeerCert) with the peer's
 //! leaf certificate (DER). The crate uses that certificate to verify DTLS
 //! handshake messages, but it does not perform any PKI validation. Your
 //! application is responsible for validating the peer certificate according to
@@ -50,11 +50,11 @@
 //!
 //! ## Sans‑IO integration model
 //! Drive the engine with three calls:
-//! - [`Dtls::handle_packet`] — feed an entire received UDP datagram.
-//! - [`Dtls::poll_output`] — drain pending output: DTLS records, timers, events.
-//! - [`Dtls::handle_timeout`] — trigger retransmissions/time‑based progress.
+//! - [`Dtls::handle_packet`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.handle_packet) — feed an entire received UDP datagram.
+//! - [`Dtls::poll_output`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.poll_output) — drain pending output: DTLS records, timers, events.
+//! - [`Dtls::handle_timeout`](https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.handle_timeout) — trigger retransmissions/time‑based progress.
 //!
-//! The output is an [`Output`] enum with borrowed references into your provided buffer:
+//! The output is an [`Output`](https://docs.rs/dimpl/latest/dimpl/enum.Output.html) enum with borrowed references into your provided buffer:
 //! - `Packet(&[u8])`: send on your UDP socket
 //! - `Timeout(Instant)`: schedule a timer and call `handle_timeout` at/after it
 //! - `Connected`: handshake complete
@@ -133,10 +133,6 @@
 //! [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
 //! [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
 //! [RFC 7627]: https://www.rfc-editor.org/rfc/rfc7627
-//!
-//! [`Dtls::handle_packet`]: Dtls::handle_packet
-//! [`Dtls::poll_output`]: Dtls::poll_output
-//! [`Dtls::handle_timeout`]: Dtls::handle_timeout
 //!
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
