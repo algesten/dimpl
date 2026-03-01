@@ -1,8 +1,6 @@
-use std::ops::RangeFrom;
-
 use arrayvec::ArrayVec;
 use nom::error::{make_error, ErrorKind, ParseError};
-use nom::{Err, IResult, InputIter, InputLength, Parser, Slice};
+use nom::{Err, IResult, Input, Parser};
 
 /// A combinator that parses items using the provided parser but only collects
 /// items that pass a filter predicate. Allows zero matches.
@@ -12,8 +10,8 @@ pub fn many0<I, O, E, F, P, const N: usize>(
     predicate: P,
 ) -> impl FnMut(I) -> IResult<I, ArrayVec<O, N>, E>
 where
-    I: Clone + InputLength,
-    F: Parser<I, O, E>,
+    I: Clone + Input,
+    F: Parser<I, Output = O, Error = E>,
     P: Fn(&O) -> bool,
     E: ParseError<I>,
 {
@@ -56,8 +54,8 @@ pub fn many1<I, O, E, F, P, const N: usize>(
     predicate: P,
 ) -> impl FnMut(I) -> IResult<I, ArrayVec<O, N>, E>
 where
-    I: Clone + InputLength,
-    F: Parser<I, O, E>,
+    I: Clone + Input,
+    F: Parser<I, Output = O, Error = E>,
     P: Fn(&O) -> bool,
     E: ParseError<I>,
 {
@@ -103,7 +101,7 @@ where
 
 pub fn be_u48<I, E: ParseError<I>>(input: I) -> IResult<I, u64, E>
 where
-    I: Slice<RangeFrom<usize>> + InputIter<Item = u8> + InputLength,
+    I: Input<Item = u8>,
 {
     let bound: usize = 6;
 
@@ -116,6 +114,6 @@ where
             res = (res << 8) + byte as u64;
         }
 
-        Ok((input.slice(bound..), res))
+        Ok((input.take_from(bound), res))
     }
 }
