@@ -33,6 +33,7 @@ Three constructors control which DTLS version is used:
 - **Cipher suites (TLS 1.2 over DTLS)**
   - `ECDHE_ECDSA_AES256_GCM_SHA384`
   - `ECDHE_ECDSA_AES128_GCM_SHA256`
+  - `ECDHE_ECDSA_CHACHA20_POLY1305_SHA256`
 - **Cipher suites (TLS 1.3 over DTLS)**
   - `TLS_AES_128_GCM_SHA256`
   - `TLS_AES_256_GCM_SHA384`
@@ -105,6 +106,7 @@ fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
                 Output::ApplicationData(_data) => {
                     // Deliver plaintext to application
                 }
+                _ => {}
             }
         }
 
