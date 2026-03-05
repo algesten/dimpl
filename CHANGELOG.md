@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Bump MSRV to 1.85.0 #75
   * Make cipher and kx configurable #73
 
 # 0.4.0
