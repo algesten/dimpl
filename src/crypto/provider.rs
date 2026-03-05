@@ -109,6 +109,14 @@
 //!         (0, 16, 4) // (mac_key_len, enc_key_len, fixed_iv_len)
 //!     }
 //!
+//!     fn explicit_nonce_len(&self) -> usize {
+//!         8 // AES-GCM: 8-byte explicit nonce per record
+//!     }
+//!
+//!     fn tag_len(&self) -> usize {
+//!         16 // 128-bit authentication tag
+//!     }
+//!
 //!     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
 //!         // Create your cipher implementation here
 //!         Ok(Box::new(MyCipher::new(key)?))
@@ -123,8 +131,8 @@
 //!
 //! For DTLS 1.2, implementations must support:
 //!
-//! - **Cipher suites**: ECDHE_ECDSA with AES-128-GCM or AES-256-GCM
-//! - **Key exchange**: ECDHE with P-256 or P-384 curves
+//! - **Cipher suites**: ECDHE_ECDSA with AES-128-GCM, AES-256-GCM, or CHACHA20_POLY1305
+//! - **Key exchange**: ECDHE with X25519, P-256, or P-384 curves
 //! - **Signatures**: ECDSA with P-256/SHA-256 or P-384/SHA-384
 //! - **Hash**: SHA-256 and SHA-384
 //! - **PRF**: TLS 1.2 PRF (using HMAC-SHA256 or HMAC-SHA384)
@@ -230,6 +238,14 @@ pub trait SupportedDtls12CipherSuite: CryptoSafe {
 
     /// Key material lengths: (mac_key_len, enc_key_len, fixed_iv_len).
     fn key_lengths(&self) -> (usize, usize, usize);
+
+    /// Length in bytes of the per-record explicit nonce (carried in the record body).
+    ///
+    /// AES-GCM suites carry an 8-byte explicit nonce; ChaCha20-Poly1305 carries none.
+    fn explicit_nonce_len(&self) -> usize;
+
+    /// AEAD authentication tag length in bytes.
+    fn tag_len(&self) -> usize;
 
     /// Create a cipher instance with the given key.
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String>;

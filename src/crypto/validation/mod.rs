@@ -7,7 +7,6 @@ use arrayvec::ArrayVec;
 
 use super::{Aad, CryptoProvider, Nonce, SupportedDtls12CipherSuite, SupportedKxGroup};
 use crate::buffer::{Buf, TmpBuf};
-use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
 use crate::Error;
 
@@ -17,16 +16,14 @@ impl CryptoProvider {
     /// Only cipher suites documented in lib.rs are returned:
     /// - `TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256`
     /// - `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384`
+    /// - `TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256`
     pub fn supported_cipher_suites(
         &self,
     ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> {
-        self.cipher_suites.iter().copied().filter(|cs| {
-            matches!(
-                cs.suite(),
-                Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-                    | Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-            )
-        })
+        self.cipher_suites
+            .iter()
+            .copied()
+            .filter(|cs| cs.suite().is_supported())
     }
 
     /// Returns an iterator over validated key exchange groups supported by dimpl.
@@ -44,21 +41,6 @@ impl CryptoProvider {
         })
     }
 
-    /// Returns an iterator over key exchange groups supported for DTLS 1.2.
-    ///
-    /// DTLS 1.2 only supports ECDHE with NIST curves:
-    /// - P-256 (secp256r1)
-    /// - P-384 (secp384r1)
-    pub fn supported_dtls12_kx_groups(
-        &self,
-    ) -> impl Iterator<Item = &'static dyn SupportedKxGroup> {
-        self.kx_groups
-            .iter()
-            .copied()
-            .filter(|kx| matches!(kx.name(), NamedGroup::Secp256r1 | NamedGroup::Secp384r1))
-    }
-
-    /// Returns cipher suites compatible with a specific signature algorithm.
     ///
     /// Combines provider filtering with signature algorithm compatibility.
     pub fn supported_cipher_suites_for_signature_algorithm(
@@ -73,13 +55,8 @@ impl CryptoProvider {
     ///
     /// Returns true if any supported cipher suite uses ECDH key exchange.
     pub fn has_ecdh(&self) -> bool {
-        self.supported_cipher_suites().any(|cs| {
-            matches!(
-                cs.suite(),
-                Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-                    | Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-            )
-        })
+        self.supported_cipher_suites()
+            .any(|cs| cs.suite().has_ecc())
     }
 
     /// Validates the provider configuration for use with dimpl.
@@ -703,6 +680,7 @@ const SN_TEST_VECTORS: &[SnTestVector] = &[
 mod tests_aws_lc_rs {
     use super::*;
     use crate::crypto::aws_lc_rs;
+    use crate::dtls12::message::Dtls12CipherSuite;
 
     #[test]
     fn test_default_provider_validates() {
@@ -714,7 +692,7 @@ mod tests_aws_lc_rs {
     fn test_default_provider_has_cipher_suites() {
         let provider = aws_lc_rs::default_provider();
         let count = provider.supported_cipher_suites().count();
-        assert_eq!(count, 2); // AES-128 and AES-256
+        assert_eq!(count, 3); // AES-128, AES-256, and ChaCha20-Poly1305
     }
 
     #[test]
@@ -738,9 +716,10 @@ mod tests_aws_lc_rs {
             .map(|cs| cs.suite())
             .collect();
 
-        assert_eq!(ecdsa_suites.len(), 2);
+        assert_eq!(ecdsa_suites.len(), 3);
         assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256));
         assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384));
+        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256));
     }
 }
 
@@ -749,6 +728,7 @@ mod tests_aws_lc_rs {
 mod tests_rust_crypto {
     use super::*;
     use crate::crypto::rust_crypto;
+    use crate::dtls12::message::Dtls12CipherSuite;
 
     #[test]
     fn test_default_provider_validates() {
@@ -760,7 +740,7 @@ mod tests_rust_crypto {
     fn test_default_provider_has_cipher_suites() {
         let provider = rust_crypto::default_provider();
         let count = provider.supported_cipher_suites().count();
-        assert_eq!(count, 2); // AES-128 and AES-256
+        assert_eq!(count, 3); // AES-128, AES-256, and ChaCha20-Poly1305
     }
 
     #[test]
@@ -784,8 +764,9 @@ mod tests_rust_crypto {
             .map(|cs| cs.suite())
             .collect();
 
-        assert_eq!(ecdsa_suites.len(), 2);
+        assert_eq!(ecdsa_suites.len(), 3);
         assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256));
         assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384));
+        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256));
     }
 }

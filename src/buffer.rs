@@ -38,7 +38,7 @@ impl BufferPool {
 }
 
 impl fmt::Debug for BufferPool {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BufferPool")
             .field("free", &self.free.len())
             .finish()
@@ -118,7 +118,7 @@ impl AsMut<[u8]> for Buf {
 }
 
 impl fmt::Debug for Buf {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Buf").field("len", &self.0.len()).finish()
     }
 }

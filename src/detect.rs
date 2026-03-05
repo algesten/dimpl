@@ -24,7 +24,6 @@ use crate::dtls13::message::SupportedGroupsExtension;
 use crate::dtls13::message::UseSrtpExtension;
 use crate::types::NamedGroup;
 use crate::{Config, DtlsCertificate, Error, Output, SeededRng};
-
 // Extension type constants
 const EXT_SUPPORTED_GROUPS: u16 = 0x000A;
 const EXT_EC_POINT_FORMATS: u16 = 0x000B;

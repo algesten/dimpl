@@ -5,7 +5,7 @@ use arrayvec::ArrayVec;
 use std::fmt;
 
 use crate::buffer::{Buf, TmpBuf};
-use crate::crypto::{Aad, Nonce, DTLS_EXPLICIT_NONCE_LEN};
+use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake, Sequence};
 use crate::Error;
 
@@ -161,14 +161,15 @@ impl Record {
 
         // Extract the buffer for decryption
         let mut buffer = record.buffer;
+        let explicit_nonce_len = decrypt.explicit_nonce_len();
 
         // Local shorthand for where the encrypted ciphertext starts
-        const CIPH: usize = DTLSRecord::HEADER_LEN + DTLS_EXPLICIT_NONCE_LEN;
+        let ciph = DTLSRecord::HEADER_LEN + explicit_nonce_len;
 
-        // The encrypted part is after the DTLS header and explicit nonce.
+        // The encrypted part is after the DTLS header and optional explicit nonce.
         // The entire buffer is only the single record, since we chunk
         // records up in Records::parse()
-        let ciphertext = &mut buffer[CIPH..];
+        let ciphertext = &mut buffer[ciph..];
 
         let new_len = {
             let mut buffer = TmpBuf::new(ciphertext);
@@ -183,7 +184,7 @@ impl Record {
         buffer[11] = (new_len >> 8) as u8;
         buffer[12] = new_len as u8;
 
-        let parsed = ParsedRecord::parse(&buffer, cs, DTLS_EXPLICIT_NONCE_LEN)?;
+        let parsed = ParsedRecord::parse(&buffer, cs, explicit_nonce_len)?;
         let parsed = Box::new(parsed);
 
         Ok(Some(Record { buffer, parsed }))
@@ -264,6 +265,7 @@ pub trait RecordDecrypt {
     fn is_peer_encryption_enabled(&self) -> bool;
     fn replay_check_and_update(&mut self, seq: Sequence) -> bool;
     fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord, buf: &[u8]) -> (Aad, Nonce);
+    fn explicit_nonce_len(&self) -> usize;
     fn decrypt_data(
         &mut self,
         ciphertext: &mut TmpBuf,

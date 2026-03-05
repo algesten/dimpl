@@ -524,7 +524,7 @@ impl State {
                 .find(|g| client_groups.contains(g))
                 .copied();
 
-            if let Some(group) = common_group {
+            return if let Some(group) = common_group {
                 // Need HRR for key exchange
                 if server.hello_retry {
                     return Err(Error::SecurityError(
@@ -560,12 +560,12 @@ impl State {
                 server.engine.reset_for_hello_retry();
                 server.hello_retry = true;
 
-                return Ok(Self::AwaitClientHello);
+                Ok(Self::AwaitClientHello)
             } else {
-                return Err(Error::SecurityError(
+                Err(Error::SecurityError(
                     "No common key exchange group".to_string(),
-                ));
-            }
+                ))
+            };
         };
 
         // Start ECDHE key exchange

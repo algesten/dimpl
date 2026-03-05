@@ -209,6 +209,14 @@ impl SupportedDtls12CipherSuite for Aes128GcmSha256 {
         (0, 16, 4) // (mac_key_len, enc_key_len, fixed_iv_len)
     }
 
+    fn explicit_nonce_len(&self) -> usize {
+        8
+    }
+
+    fn tag_len(&self) -> usize {
+        16
+    }
+
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
         Ok(Box::new(AesGcm::new(key)?))
     }
@@ -231,18 +239,60 @@ impl SupportedDtls12CipherSuite for Aes256GcmSha384 {
         (0, 32, 4) // (mac_key_len, enc_key_len, fixed_iv_len)
     }
 
+    fn explicit_nonce_len(&self) -> usize {
+        8
+    }
+
+    fn tag_len(&self) -> usize {
+        16
+    }
+
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
         Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
+/// TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 cipher suite.
+#[derive(Debug)]
+struct ChaCha20Poly1305Sha256;
+
+impl SupportedDtls12CipherSuite for ChaCha20Poly1305Sha256 {
+    fn suite(&self) -> Dtls12CipherSuite {
+        Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA256
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        (0, 32, 12) // (mac_key_len, enc_key_len, fixed_iv_len)
+    }
+
+    fn explicit_nonce_len(&self) -> usize {
+        0
+    }
+
+    fn tag_len(&self) -> usize {
+        16
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(ChaCha20Poly1305Cipher::new(key)?))
     }
 }
 
 /// Static instances of supported DTLS 1.2 cipher suites.
 static AES_128_GCM_SHA256: Aes128GcmSha256 = Aes128GcmSha256;
 static AES_256_GCM_SHA384: Aes256GcmSha384 = Aes256GcmSha384;
+static CHACHA20_POLY1305_SHA256: ChaCha20Poly1305Sha256 = ChaCha20Poly1305Sha256;
 
 /// All supported DTLS 1.2 cipher suites.
-pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] =
-    &[&AES_128_GCM_SHA256, &AES_256_GCM_SHA384];
+pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] = &[
+    &AES_128_GCM_SHA256,
+    &AES_256_GCM_SHA384,
+    &CHACHA20_POLY1305_SHA256,
+];
 
 // ============================================================================
 // DTLS 1.3 Cipher Suites

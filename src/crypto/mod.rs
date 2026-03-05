@@ -22,7 +22,7 @@ pub use keying::{KeyingMaterial, SrtpProfile};
 pub use dtls_aead::{Aad, Nonce};
 
 // Re-export internal AEAD constants/types for crate-internal use
-pub(crate) use dtls_aead::{Iv, DTLS_AEAD_OVERHEAD, DTLS_EXPLICIT_NONCE_LEN};
+pub(crate) use dtls_aead::Iv;
 
 // Re-export buffer types for provider trait implementations
 pub use crate::buffer::{Buf, TmpBuf};

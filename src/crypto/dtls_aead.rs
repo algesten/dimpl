@@ -10,27 +10,29 @@ use crate::types::{ContentType, Sequence};
 /// Explicit nonce length for DTLS AEAD records.
 ///
 /// The explicit nonce is transmitted with each record.
+#[cfg(test)]
 pub(crate) const DTLS_EXPLICIT_NONCE_LEN: usize = 8;
 
 /// GCM authentication tag length.
 ///
 /// The tag is appended to the ciphertext.
+#[cfg(test)]
 pub(crate) const GCM_TAG_LEN: usize = 16;
 
-/// Overhead per AEAD record (explicit nonce + tag).
+/// Overhead per DTLS 1.2 AES-GCM record (explicit nonce + tag).
 ///
 /// This equals 24 bytes for DTLS AES-GCM.
+#[cfg(test)]
 pub(crate) const DTLS_AEAD_OVERHEAD: usize = DTLS_EXPLICIT_NONCE_LEN + GCM_TAG_LEN; // 24
 
-/// Compute AAD length from plaintext length for AEAD records.
-/// For DTLS AEAD this is the plaintext length.
+/// Compute AAD length from plaintext length for DTLS 1.2 AES-GCM records.
 #[inline]
 #[cfg(test)]
 pub fn aad_len_from_plaintext_len(plaintext_len: u16) -> u16 {
     plaintext_len
 }
 
-/// Compute fragment length from plaintext length for AEAD records.
+/// Compute fragment length from plaintext length for DTLS 1.2 AES-GCM records.
 /// fragment_len = explicit_nonce(8) + ciphertext(plaintext_len + 16 tag)
 #[inline]
 #[cfg(test)]
@@ -38,7 +40,7 @@ pub fn fragment_len_from_plaintext_len(plaintext_len: usize) -> usize {
     DTLS_EXPLICIT_NONCE_LEN + plaintext_len + GCM_TAG_LEN
 }
 
-/// Compute plaintext length from fragment length, if large enough.
+/// Compute plaintext length from fragment length for DTLS 1.2 AES-GCM records.
 /// Returns None if the fragment is smaller than the mandatory AEAD overhead.
 #[inline]
 #[cfg(test)]
@@ -47,13 +49,51 @@ pub fn plaintext_len_from_fragment_len(fragment_len: usize) -> Option<usize> {
 }
 
 /// Fixed IV portion for DTLS AEAD.
+///
+/// DTLS 1.2 uses:
+/// - AES-GCM: 4-byte fixed IV + 8-byte explicit nonce (per record)
+/// - ChaCha20-Poly1305: 12-byte fixed IV + 0-byte explicit nonce
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Iv(pub [u8; 4]);
+pub(crate) struct Iv {
+    bytes: [u8; 12],
+    len: u8,
+}
 
 impl Iv {
     pub(crate) fn new(iv: &[u8]) -> Self {
-        // invariant: the iv is 4 bytes.
-        Self(iv.try_into().unwrap())
+        assert!(
+            iv.len() <= 12,
+            "invalid IV length: expected <= 12, got {}",
+            iv.len()
+        );
+        let mut bytes = [0u8; 12];
+        bytes[..iv.len()].copy_from_slice(iv);
+        Self {
+            bytes,
+            len: iv.len() as u8,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        &self.bytes[..self.len()]
+    }
+
+    /// Returns the full 12-byte backing array.
+    ///
+    /// Only valid for 12-byte IVs (ChaCha20-Poly1305). For 4-byte IVs
+    /// (AES-GCM), use [`as_slice`] instead.
+    pub(crate) fn as_12_bytes(&self) -> &[u8; 12] {
+        debug_assert_eq!(
+            self.len(),
+            12,
+            "as_12_bytes called on {}-byte IV",
+            self.len()
+        );
+        &self.bytes
     }
 }
 
@@ -64,15 +104,25 @@ pub struct Nonce(pub [u8; 12]);
 impl Nonce {
     /// Create a new AEAD nonce by combining fixed IV and explicit nonce (DTLS 1.2).
     pub(crate) fn new(iv: Iv, explicit_nonce: &[u8]) -> Self {
+        assert_eq!(
+            iv.len() + explicit_nonce.len(),
+            12,
+            "invalid DTLS 1.2 nonce parts: iv_len={}, explicit_nonce_len={}",
+            iv.len(),
+            explicit_nonce.len()
+        );
         let mut nonce = [0u8; 12];
-        nonce[..4].copy_from_slice(&iv.0);
-        nonce[4..].copy_from_slice(explicit_nonce);
+        let iv_len = iv.len();
+        nonce[..iv_len].copy_from_slice(iv.as_slice());
+        nonce[iv_len..].copy_from_slice(explicit_nonce);
         Self(nonce)
     }
 
-    /// Create a DTLS 1.3 nonce by XORing the IV with the padded sequence number.
+    /// Create a nonce by XORing the IV with the padded sequence number.
     ///
-    /// Per RFC 8446 Section 5.3: nonce = iv XOR pad_left(seq, iv_len)
+    /// Used by both DTLS 1.2 (ChaCha20-Poly1305) and DTLS 1.3:
+    /// nonce = iv XOR pad_left(sequence_number, 12)
+    /// See RFC 8446 Section 5.3 / RFC 7905.
     pub(crate) fn xor(iv: &[u8; 12], seq: u64) -> Self {
         let mut nonce = *iv;
         let seq_bytes = seq.to_be_bytes(); // 8 bytes

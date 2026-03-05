@@ -2038,7 +2038,7 @@ impl Engine {
         // Append the preserved tail (HRR bytes)
         new_transcript.extend_from_slice(&self.transcript[split_at..]);
 
-        let old = std::mem::replace(&mut self.transcript, new_transcript);
+        let old = mem::replace(&mut self.transcript, new_transcript);
         self.buffers_free.push(old);
     }
 

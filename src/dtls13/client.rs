@@ -1323,7 +1323,7 @@ pub(crate) fn signature_scheme_to_components(
         crate::types::HashAlgorithm,
         crate::types::SignatureAlgorithm,
     ),
-    crate::Error,
+    Error,
 > {
     use crate::types::{HashAlgorithm, SignatureAlgorithm};
     match scheme {
@@ -1366,10 +1366,7 @@ pub(crate) fn signature_scheme_to_components(
 /// RFC 8446 §4.4.3: For ECDSA schemes, verify the curve in the [`SignatureScheme`]
 /// matches the certificate's public key curve.
 #[cfg(feature = "_crypto-common")]
-pub(crate) fn verify_scheme_curve(
-    scheme: SignatureScheme,
-    cert_der: &[u8],
-) -> Result<(), crate::Error> {
+pub(crate) fn verify_scheme_curve(scheme: SignatureScheme, cert_der: &[u8]) -> Result<(), Error> {
     if let Some(expected_group) = scheme.named_group() {
         let cert_group = crate::crypto::cert_named_group(cert_der).map_err(Error::SecurityError)?;
         if expected_group != cert_group {
