@@ -1,8 +1,8 @@
 # Unreleased
 
+  * Add DTLS 1.2 ChaCha20 and X25519 support #77
   * Bump MSRV to 1.85.0 #75
   * Make cipher and kx configurable #73
-  * Add DTLS 1.2 ChaCha20-Poly1305 and X25519 support #71
 
 # 0.4.0
 
