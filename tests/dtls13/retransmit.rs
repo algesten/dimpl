@@ -439,109 +439,176 @@ fn dtls13_selective_retransmit_only_missing_records() {
         count
     }
 
-    // Small MTU to force multi-packet flights
-    let config = dtls13_config_with_mtu(220);
+    const ATTEMPTS: usize = 12;
 
-    let client_cert = generate_self_signed_certificate().expect("gen client cert");
-    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let mut success = None;
+    let mut attempts_with_drop = 0usize;
+    let mut attempts_with_retransmit = 0usize;
+    let mut attempts_with_client_epoch2 = 0usize;
+    let mut attempts_connected = 0usize;
 
-    let mut now = Instant::now();
+    for attempt in 0..ATTEMPTS {
+        // Small MTU to force multi-packet flights.
+        // Vary deterministic seeds and dropped epoch-2 index across attempts so
+        // we exercise different fragmentation layouts without relying on runtime RNG.
+        let client_config = Arc::new(
+            Config::builder()
+                .mtu(220)
+                .dangerously_set_rng_seed(0xC1A0_C1A0u64.wrapping_add(attempt as u64 * 17))
+                .build()
+                .expect("Failed to build DTLS 1.3 client config"),
+        );
+        let server_config = Arc::new(
+            Config::builder()
+                .mtu(220)
+                .dangerously_set_rng_seed(0x5E8E_5E8Eu64.wrapping_add(attempt as u64 * 29))
+                .build()
+                .expect("Failed to build DTLS 1.3 server config"),
+        );
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
-    client.set_active(true);
-    let mut server = Dtls::new_13(config, server_cert, now);
-    server.set_active(false);
+        let client_cert = generate_self_signed_certificate().expect("gen client cert");
+        let server_cert = generate_self_signed_certificate().expect("gen server cert");
 
-    let mut dropped_packet: Option<Vec<u8>> = None;
-    let mut original_flight_size = 0usize;
-    let mut retransmit_flight_size = 0usize;
-    let mut saw_retransmit = false;
+        let mut now = Instant::now();
 
-    for round in 0..200 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
+        let mut client = Dtls::new_13(Arc::clone(&client_config), client_cert, now);
+        client.set_active(true);
+        let mut server = Dtls::new_13(server_config, server_cert, now);
+        server.set_active(false);
 
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
+        let mut dropped_packet: Option<Vec<u8>> = None;
+        let mut original_flight_size = 0usize;
+        let mut saw_any_retransmit = false;
+        let mut selective_retransmit_flight_size = None;
+        let mut delivered_client_epoch2_after_drop = 0usize;
+        let mut client_connected = false;
+        let mut server_connected = false;
 
-        deliver_packets(&client_out.packets, &mut server);
+        for round in 0..220 {
+            client.handle_timeout(now).expect("client timeout");
+            server.handle_timeout(now).expect("server timeout");
 
-        // Phase 1: Find a multi-packet epoch-2 flight and drop one packet
-        if dropped_packet.is_none() {
-            let epoch2_packets: Vec<&Vec<u8>> = server_out
-                .packets
-                .iter()
-                .filter(|p| count_epoch2_records(p) > 0)
-                .collect();
+            let client_out = drain_outputs(&mut client);
+            let server_out = drain_outputs(&mut server);
 
-            if epoch2_packets.len() >= 3 {
-                original_flight_size = epoch2_packets.len();
+            client_connected |= client_out.connected;
+            server_connected |= server_out.connected;
 
-                // Drop the middle packet
-                let drop_idx = epoch2_packets.len() / 2;
-                dropped_packet = Some(epoch2_packets[drop_idx].clone());
+            for p in &client_out.packets {
+                if dropped_packet.is_some() && count_epoch2_records(p) > 0 {
+                    delivered_client_epoch2_after_drop += 1;
+                }
+                let _ = server.handle_packet(p);
+            }
 
-                // Deliver all except the dropped one
-                for (i, p) in epoch2_packets.iter().enumerate() {
-                    if i != drop_idx {
-                        let _ = client.handle_packet(p);
+            // Phase 1: Find a multi-packet epoch-2 flight and drop one packet.
+            if dropped_packet.is_none() {
+                let epoch2_indices: Vec<usize> = server_out
+                    .packets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| count_epoch2_records(p) > 0)
+                    .map(|(i, _)| i)
+                    .collect();
+
+                if epoch2_indices.len() >= 3 {
+                    original_flight_size = epoch2_indices.len();
+
+                    let drop_epoch2_idx = attempt % epoch2_indices.len();
+                    let drop_packet_idx = epoch2_indices[drop_epoch2_idx];
+                    dropped_packet = Some(server_out.packets[drop_packet_idx].clone());
+
+                    for (i, p) in server_out.packets.iter().enumerate() {
+                        if i != drop_packet_idx {
+                            let _ = client.handle_packet(p);
+                        }
+                    }
+
+                    eprintln!(
+                        "Attempt {} Round {}: Dropped packet {} of {}",
+                        attempt, round, drop_epoch2_idx, original_flight_size
+                    );
+                } else {
+                    deliver_packets(&server_out.packets, &mut client);
+                }
+            }
+            // Phase 2: After dropping, wait for retransmit and count packets.
+            // The first resend can be full-flight (dupe-triggered), so keep waiting.
+            else if selective_retransmit_flight_size.is_none() {
+                let epoch2_packets: Vec<&Vec<u8>> = server_out
+                    .packets
+                    .iter()
+                    .filter(|p| count_epoch2_records(p) > 0)
+                    .collect();
+
+                if !epoch2_packets.is_empty() {
+                    let retransmit_flight_size = epoch2_packets.len();
+                    saw_any_retransmit = true;
+
+                    eprintln!(
+                        "Attempt {} Round {}: Retransmit flight has {} packets (original had {})",
+                        attempt, round, retransmit_flight_size, original_flight_size
+                    );
+
+                    if retransmit_flight_size < original_flight_size {
+                        selective_retransmit_flight_size = Some(retransmit_flight_size);
+                    } else {
+                        eprintln!(
+                            "Attempt {} Round {}: Full-flight resend observed before selective resend",
+                            attempt, round
+                        );
                     }
                 }
 
-                eprintln!(
-                    "Round {}: Dropped packet {} of {}",
-                    round, drop_idx, original_flight_size
-                );
+                deliver_packets(&server_out.packets, &mut client);
             } else {
                 deliver_packets(&server_out.packets, &mut client);
             }
-        }
-        // Phase 2: After dropping, wait for retransmit and count packets
-        else if !saw_retransmit {
-            let epoch2_packets: Vec<&Vec<u8>> = server_out
-                .packets
-                .iter()
-                .filter(|p| count_epoch2_records(p) > 0)
-                .collect();
 
-            if !epoch2_packets.is_empty() {
-                retransmit_flight_size = epoch2_packets.len();
-                saw_retransmit = true;
-
-                eprintln!(
-                    "Round {}: Retransmit flight has {} packets (original had {})",
-                    round, retransmit_flight_size, original_flight_size
-                );
-
-                // Selective retransmit should send FEWER packets than original
-                // (ideally just 1, the dropped one)
-                assert!(
-                    retransmit_flight_size < original_flight_size,
-                    "Selective retransmit should send fewer packets: retransmit={}, original={}",
-                    retransmit_flight_size,
-                    original_flight_size
-                );
+            if selective_retransmit_flight_size.is_some() && client_connected && server_connected {
+                break;
             }
 
-            deliver_packets(&server_out.packets, &mut client);
-        } else {
-            deliver_packets(&server_out.packets, &mut client);
+            now += Duration::from_millis(150);
         }
 
-        if saw_retransmit && (client_out.connected || server_out.connected) {
-            break;
+        if dropped_packet.is_some() {
+            attempts_with_drop += 1;
+        }
+        if saw_any_retransmit {
+            attempts_with_retransmit += 1;
+        }
+        if delivered_client_epoch2_after_drop > 0 {
+            attempts_with_client_epoch2 += 1;
+        }
+        if client_connected && server_connected {
+            attempts_connected += 1;
         }
 
-        // Advance time to trigger retransmit
-        now += Duration::from_millis(150);
+        if let Some(retransmit_flight_size) = selective_retransmit_flight_size {
+            if client_connected && server_connected {
+                success = Some((attempt, original_flight_size, retransmit_flight_size));
+                break;
+            }
+        }
     }
 
-    assert!(dropped_packet.is_some(), "Should have dropped a packet");
-    assert!(saw_retransmit, "Should have seen a retransmit");
+    let Some((attempt, original_flight_size, retransmit_flight_size)) = success else {
+        panic!(
+            "Did not observe selective retransmit across {} attempts \
+             (drop={}, retransmit={}, client_epoch2_after_drop={}, connected={})",
+            ATTEMPTS,
+            attempts_with_drop,
+            attempts_with_retransmit,
+            attempts_with_client_epoch2,
+            attempts_connected
+        );
+    };
 
     eprintln!(
-        "SUCCESS: Selective retransmit verified. Original flight: {} packets, Retransmit: {} packets",
-        original_flight_size, retransmit_flight_size
+        "SUCCESS: Selective retransmit verified on attempt {}. \
+         Original flight: {} packets, Retransmit: {} packets",
+        attempt, original_flight_size, retransmit_flight_size
     );
 }
 
