@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Make cipher and kx configurable #73
+
 # 0.4.0
 
   * Restrict DTLS 1.2 key exchange to P-256/P-384 (for now) #70
