@@ -414,9 +414,12 @@ impl State {
 
         // Pre-compute whether we also need a key_share group selection, so
         // we can piggyback it on a cookie HRR (avoiding two sequential HRRs).
-        let provider = server.engine.config().crypto_provider();
-        let our_groups: ArrayVec<NamedGroup, 4> =
-            provider.kx_groups.iter().map(|g| g.name()).collect();
+        let our_groups: ArrayVec<NamedGroup, 4> = server
+            .engine
+            .config()
+            .kx_groups()
+            .map(|g| g.name())
+            .collect();
         let key_shares = client_key_shares
             .as_ref()
             .map(|v| v.as_slice())

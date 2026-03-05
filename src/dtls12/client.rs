@@ -1079,10 +1079,10 @@ fn handshake_create_client_hello(
 ) -> Result<(), Error> {
     let client_version = ProtocolVersion::DTLS1_2;
 
-    // Get cipher suites from provider that are compatible with our key
-    let provider = engine.crypto_context().provider();
-    let cipher_suites: CipherSuiteVec = provider
-        .supported_cipher_suites()
+    // Get cipher suites from config that are compatible with our key
+    let cipher_suites: CipherSuiteVec = engine
+        .config()
+        .dtls12_cipher_suites()
         .map(|cs| cs.suite())
         .filter(|suite| engine.crypto_context().is_cipher_suite_compatible(*suite))
         .take(Dtls12CipherSuite::supported().len())
@@ -1107,7 +1107,7 @@ fn handshake_create_client_hello(
         cipher_suites,
         compression_methods,
     )
-    .with_extensions(extension_data, provider);
+    .with_extensions(extension_data, engine.config());
 
     client_hello.serialize(extension_data, body);
     Ok(())

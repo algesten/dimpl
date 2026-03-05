@@ -589,7 +589,6 @@ fn dtls13_handshake_secp256r1_key_exchange() {
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_x25519_key_exchange() {
     use dimpl::certificate::generate_self_signed_certificate;
-    use dimpl::crypto::aws_lc_rs;
     use dimpl::crypto::NamedGroup;
     use dimpl::Config;
 
@@ -598,26 +597,12 @@ fn dtls13_handshake_x25519_key_exchange() {
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
 
-    // Build a custom provider that only offers X25519
-    let default = aws_lc_rs::default_provider();
-    let x25519_only: Vec<_> = default
-        .kx_groups
-        .iter()
-        .copied()
-        .filter(|g| g.name() == NamedGroup::X25519)
-        .collect();
-    assert!(!x25519_only.is_empty(), "Provider must have X25519");
-
-    let x25519_static: &'static [_] = Box::leak(x25519_only.into_boxed_slice());
-
-    let provider = dimpl::crypto::CryptoProvider {
-        kx_groups: x25519_static,
-        ..default
-    };
-
+    // Use config filter to select only X25519 and disable DTLS 1.2
+    // (X25519 is not yet supported for DTLS 1.2)
     let config = Arc::new(
         Config::builder()
-            .with_crypto_provider(provider)
+            .kx_groups(&[NamedGroup::X25519])
+            .dtls12_cipher_suites(&[])
             .build()
             .expect("build config"),
     );

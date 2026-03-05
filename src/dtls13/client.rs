@@ -343,11 +343,12 @@ impl State {
         let group = if let Some(hrr_group) = client.hrr_selected_group {
             hrr_group
         } else {
-            // Use the first supported group from the provider
-            let provider = client.engine.config().crypto_provider();
-            provider
-                .kx_groups
-                .first()
+            // Use the first supported group from config (filtered)
+            client
+                .engine
+                .config()
+                .kx_groups()
+                .next()
                 .map(|g| g.name())
                 .ok_or_else(|| Error::CryptoError("No supported key exchange groups".to_string()))?
         };
@@ -1099,11 +1100,10 @@ fn handshake_create_client_hello(
     // DTLS 1.3: legacy_cookie MUST be zero length
     let legacy_cookie = Cookie::empty();
 
-    // Cipher suites from provider
-    let provider = engine.config().crypto_provider();
-    let cipher_suites: ArrayVec<Dtls13CipherSuite, 3> = provider
-        .dtls13_cipher_suites
-        .iter()
+    // Cipher suites from config (filtered)
+    let cipher_suites: ArrayVec<Dtls13CipherSuite, 3> = engine
+        .config()
+        .dtls13_cipher_suites()
         .map(|cs| cs.suite())
         .take(3)
         .collect();
@@ -1134,7 +1134,7 @@ fn handshake_create_client_hello(
 
     // 2. supported_groups extension
     let sg_start = ext_buf.len();
-    let groups: ArrayVec<NamedGroup, 4> = provider.kx_groups.iter().map(|g| g.name()).collect();
+    let groups: ArrayVec<NamedGroup, 4> = engine.config().kx_groups().map(|g| g.name()).collect();
     let sg = SupportedGroupsExtension { groups };
     sg.serialize(&mut ext_buf);
     let sg_end = ext_buf.len();

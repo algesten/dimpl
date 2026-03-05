@@ -10,8 +10,8 @@ use nom::{Err, IResult};
 
 use super::extension::ExtensionVec;
 use crate::buffer::Buf;
-use crate::crypto::CryptoProvider;
 use crate::util::many1;
+use crate::Config;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ClientHello {
@@ -45,7 +45,7 @@ impl ClientHello {
     }
 
     /// Add all required extensions for DTLS handshake
-    pub fn with_extensions(mut self, buf: &mut Buf, provider: &CryptoProvider) -> Self {
+    pub fn with_extensions(mut self, buf: &mut Buf, config: &Config) -> Self {
         // Clear the extension data buffer
         buf.clear();
 
@@ -53,12 +53,16 @@ impl ClientHello {
         let mut ranges = ArrayVec::<(ExtensionType, usize, usize), 8>::new();
 
         // Check if provider has ECDH support
-        let has_ecdh = provider.has_ecdh();
+        let has_ecdh = config.crypto_provider().has_ecdh();
 
         // Add supported groups and EC point formats if using ECDH
         if has_ecdh {
-            // Add supported groups extension from provider
-            let supported_groups = SupportedGroupsExtension::from_provider(provider);
+            // Add supported groups extension from config (DTLS 1.2 filtered)
+            let mut groups = super::NamedGroupVec::new();
+            for kx_group in config.dtls12_kx_groups() {
+                groups.push(kx_group.name());
+            }
+            let supported_groups = SupportedGroupsExtension { groups };
             let start_pos = buf.len();
             supported_groups.serialize(buf);
             ranges.push((ExtensionType::SupportedGroups, start_pos, buf.len()));

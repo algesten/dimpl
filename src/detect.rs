@@ -25,14 +25,6 @@ use crate::dtls13::message::UseSrtpExtension;
 use crate::types::NamedGroup;
 use crate::{Config, DtlsCertificate, Error, Output, SeededRng};
 
-// DTLS 1.2 cipher suite values (IANA)
-const ECDHE_ECDSA_AES128_GCM_SHA256: u16 = 0xC02B;
-const ECDHE_ECDSA_AES256_GCM_SHA384: u16 = 0xC02C;
-
-// DTLS 1.3 cipher suite values (IANA)
-const TLS_AES_128_GCM_SHA256: u16 = 0x1301;
-const TLS_AES_256_GCM_SHA384: u16 = 0x1302;
-
 // Extension type constants
 const EXT_SUPPORTED_GROUPS: u16 = 0x000A;
 const EXT_EC_POINT_FORMATS: u16 = 0x000B;
@@ -81,12 +73,11 @@ impl HybridClientHello {
     pub fn new(config: &Arc<Config>) -> Result<Self, Error> {
         let mut rng = SeededRng::new(config.rng_seed());
         let random = Random::new(&mut rng);
-        let provider = config.crypto_provider();
 
-        // Start ECDHE key exchange with the first supported group
-        let group = provider
-            .kx_groups
-            .first()
+        // Start ECDHE key exchange with the first supported group (filtered)
+        let group = config
+            .kx_groups()
+            .next()
             .ok_or_else(|| Error::CryptoError("No supported key exchange groups".into()))?;
         let kx_buf = Buf::new();
         let key_exchange = group
@@ -108,15 +99,16 @@ impl HybridClientHello {
         // legacy_cookie: empty (DTLS 1.3 requires zero-length)
         ch_body.push(0);
 
-        // cipher_suites: 1.3 suites first, then 1.2 suites
-        let suites: &[u16] = &[
-            TLS_AES_128_GCM_SHA256,
-            TLS_AES_256_GCM_SHA384,
-            ECDHE_ECDSA_AES128_GCM_SHA256,
-            ECDHE_ECDSA_AES256_GCM_SHA384,
-        ];
+        // cipher_suites: 1.3 suites first, then 1.2 suites (filtered by config)
+        let mut suites: ArrayVec<u16, 8> = ArrayVec::new();
+        for cs in config.dtls13_cipher_suites() {
+            suites.push(cs.suite().as_u16());
+        }
+        for cs in config.dtls12_cipher_suites() {
+            suites.push(cs.suite().as_u16());
+        }
         ch_body.extend_from_slice(&((suites.len() * 2) as u16).to_be_bytes());
-        for &suite in suites {
+        for &suite in &suites {
             ch_body.extend_from_slice(&suite.to_be_bytes());
         }
 
@@ -137,9 +129,9 @@ impl HybridClientHello {
         ext_buf.extend_from_slice(&0xFEFDu16.to_be_bytes()); // DTLS 1.2
         ext_entries.push((EXT_SUPPORTED_VERSIONS, start, ext_buf.len()));
 
-        // 2. supported_groups
+        // 2. supported_groups (filtered by config)
         let start = ext_buf.len();
-        let groups: ArrayVec<NamedGroup, 4> = provider.kx_groups.iter().map(|g| g.name()).collect();
+        let groups: ArrayVec<NamedGroup, 4> = config.kx_groups().map(|g| g.name()).collect();
         let sg = SupportedGroupsExtension { groups };
         sg.serialize(&mut ext_buf);
         ext_entries.push((EXT_SUPPORTED_GROUPS, start, ext_buf.len()));

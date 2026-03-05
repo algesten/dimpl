@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use crate::crypto::CryptoProvider;
+use crate::crypto::{CryptoProvider, SupportedDtls12CipherSuite};
+use crate::crypto::{SupportedDtls13CipherSuite, SupportedKxGroup};
+use crate::dtls12::message::Dtls12CipherSuite;
+use crate::types::{Dtls13CipherSuite, NamedGroup};
 use crate::Error;
 
 #[cfg(feature = "aws-lc-rs")]
@@ -25,6 +28,9 @@ pub struct Config {
     crypto_provider: CryptoProvider,
     rng_seed: Option<u64>,
     aead_encryption_limit: u64,
+    dtls12_cipher_suites: Option<Vec<Dtls12CipherSuite>>,
+    dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
+    kx_groups: Option<Vec<NamedGroup>>,
 }
 
 impl Config {
@@ -42,6 +48,9 @@ impl Config {
             crypto_provider: None,
             rng_seed: None,
             aead_encryption_limit: 1 << 23,
+            dtls12_cipher_suites: None,
+            dtls13_cipher_suites: None,
+            kx_groups: None,
         }
     }
 
@@ -138,6 +147,66 @@ impl Config {
     pub fn aead_encryption_limit(&self) -> u64 {
         self.aead_encryption_limit
     }
+
+    /// Allowed DTLS 1.2 cipher suites, filtered by the config's allow-list.
+    ///
+    /// Returns all provider-supported DTLS 1.2 cipher suites when no filter
+    /// is set. When a filter is set via the builder's `dtls12_cipher_suites`
+    /// method, only suites in both the provider and the filter are returned.
+    pub fn dtls12_cipher_suites(
+        &self,
+    ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> + '_ {
+        let filter = self.dtls12_cipher_suites.as_ref();
+        self.crypto_provider
+            .supported_cipher_suites()
+            .filter(move |cs| match filter {
+                Some(list) => list.contains(&cs.suite()),
+                None => true,
+            })
+    }
+
+    /// Allowed DTLS 1.3 cipher suites, filtered by the config's allow-list.
+    ///
+    /// Returns all provider DTLS 1.3 cipher suites when no filter is set.
+    /// When a filter is set via the builder's `dtls13_cipher_suites` method,
+    /// only suites in both the provider and the filter are returned.
+    pub fn dtls13_cipher_suites(
+        &self,
+    ) -> impl Iterator<Item = &'static dyn SupportedDtls13CipherSuite> + '_ {
+        let filter = self.dtls13_cipher_suites.as_ref();
+        self.crypto_provider
+            .dtls13_cipher_suites
+            .iter()
+            .copied()
+            .filter(move |cs| match filter {
+                Some(list) => list.contains(&cs.suite()),
+                None => true,
+            })
+    }
+
+    /// Allowed key exchange groups, filtered by the config's allow-list.
+    ///
+    /// Returns all provider-supported key exchange groups when no filter
+    /// is set. When a filter is set via the builder's `kx_groups` method,
+    /// only groups in both the provider and the filter are returned.
+    pub fn kx_groups(&self) -> impl Iterator<Item = &'static dyn SupportedKxGroup> + '_ {
+        let filter = self.kx_groups.as_ref();
+        self.crypto_provider
+            .supported_kx_groups()
+            .filter(move |kx| match filter {
+                Some(list) => list.contains(&kx.name()),
+                None => true,
+            })
+    }
+
+    /// Allowed key exchange groups for DTLS 1.2.
+    ///
+    /// Like [`kx_groups`](Self::kx_groups) but additionally restricted to
+    /// groups that DTLS 1.2 supports (currently P-256 and P-384).
+    pub fn dtls12_kx_groups(&self) -> impl Iterator<Item = &'static dyn SupportedKxGroup> + '_ {
+        self.kx_groups()
+            .filter(|kx| matches!(kx.name(), NamedGroup::Secp256r1 | NamedGroup::Secp384r1))
+    }
 }
 
 /// Builder for [`Config`]. See each setter for defaults.
@@ -153,6 +222,9 @@ pub struct ConfigBuilder {
     crypto_provider: Option<CryptoProvider>,
     rng_seed: Option<u64>,
     aead_encryption_limit: u64,
+    dtls12_cipher_suites: Option<Vec<Dtls12CipherSuite>>,
+    dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
+    kx_groups: Option<Vec<NamedGroup>>,
 }
 
 impl ConfigBuilder {
@@ -261,6 +333,41 @@ impl ConfigBuilder {
         self
     }
 
+    /// Restrict which DTLS 1.2 cipher suites are offered and accepted.
+    ///
+    /// Only cipher suites present in both this list and the provider will
+    /// be used. Passing an empty slice disables DTLS 1.2 (as long as
+    /// DTLS 1.3 suites remain).
+    ///
+    /// By default all provider-supported DTLS 1.2 cipher suites are used.
+    pub fn dtls12_cipher_suites(mut self, suites: &[Dtls12CipherSuite]) -> Self {
+        self.dtls12_cipher_suites = Some(suites.to_vec());
+        self
+    }
+
+    /// Restrict which DTLS 1.3 cipher suites are offered and accepted.
+    ///
+    /// Only cipher suites present in both this list and the provider will
+    /// be used. Passing an empty slice disables DTLS 1.3 (as long as
+    /// DTLS 1.2 suites remain).
+    ///
+    /// By default all provider DTLS 1.3 cipher suites are used.
+    pub fn dtls13_cipher_suites(mut self, suites: &[Dtls13CipherSuite]) -> Self {
+        self.dtls13_cipher_suites = Some(suites.to_vec());
+        self
+    }
+
+    /// Restrict which key exchange groups are offered and accepted.
+    ///
+    /// Only groups present in both this list and the provider will be
+    /// used. Order determines preference (first = most preferred).
+    ///
+    /// By default all provider-supported key exchange groups are used.
+    pub fn kx_groups(mut self, groups: &[NamedGroup]) -> Self {
+        self.kx_groups = Some(groups.to_vec());
+        self
+    }
+
     /// Build the configuration.
     ///
     /// This validates the crypto provider before returning the configuration.
@@ -307,6 +414,63 @@ impl ConfigBuilder {
             ));
         }
 
+        // Validate cipher suite filters: at least one version must have suites
+        let dtls12_count = {
+            let all = crypto_provider.supported_cipher_suites();
+            match &self.dtls12_cipher_suites {
+                Some(list) => all.filter(|cs| list.contains(&cs.suite())).count(),
+                None => all.count(),
+            }
+        };
+        let dtls13_count = {
+            let all = crypto_provider.dtls13_cipher_suites.iter();
+            match &self.dtls13_cipher_suites {
+                Some(list) => all.filter(|cs| list.contains(&cs.suite())).count(),
+                None => all.count(),
+            }
+        };
+        if dtls12_count + dtls13_count == 0 {
+            return Err(Error::ConfigError(
+                "No cipher suites remain after filtering. \
+                 At least one DTLS 1.2 or DTLS 1.3 cipher suite must be available."
+                    .to_string(),
+            ));
+        }
+
+        // Validate kx_groups filter: each enabled version needs compatible groups
+        let filtered_kx = |kx: &&'static dyn SupportedKxGroup| -> bool {
+            match &self.kx_groups {
+                Some(list) => list.contains(&kx.name()),
+                None => true,
+            }
+        };
+        if dtls12_count > 0 {
+            let dtls12_kx_count = crypto_provider
+                .supported_dtls12_kx_groups()
+                .filter(|kx| filtered_kx(kx))
+                .count();
+            if dtls12_kx_count == 0 {
+                return Err(Error::ConfigError(
+                    "DTLS 1.2 cipher suites are enabled but no compatible key exchange \
+                     groups remain after filtering. DTLS 1.2 requires P-256 or P-384."
+                        .to_string(),
+                ));
+            }
+        }
+        if dtls13_count > 0 {
+            let kx_count = crypto_provider
+                .supported_kx_groups()
+                .filter(|kx| filtered_kx(kx))
+                .count();
+            if kx_count == 0 {
+                return Err(Error::ConfigError(
+                    "DTLS 1.3 cipher suites are enabled but no key exchange groups \
+                     remain after filtering."
+                        .to_string(),
+                ));
+            }
+        }
+
         Ok(Config {
             mtu: self.mtu,
             max_queue_rx: self.max_queue_rx,
@@ -319,6 +483,9 @@ impl ConfigBuilder {
             crypto_provider,
             rng_seed: self.rng_seed,
             aead_encryption_limit: self.aead_encryption_limit,
+            dtls12_cipher_suites: self.dtls12_cipher_suites,
+            dtls13_cipher_suites: self.dtls13_cipher_suites,
+            kx_groups: self.kx_groups,
         })
     }
 }
@@ -383,5 +550,159 @@ mod tests {
             .aead_encryption_limit(1)
             .build()
             .expect("aead_encryption_limit 1 should be accepted");
+    }
+
+    #[test]
+    fn filter_dtls12_cipher_suite() {
+        let config = Config::builder()
+            .dtls12_cipher_suites(&[Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256])
+            .build()
+            .expect("should accept single DTLS 1.2 suite");
+        let suites: Vec<_> = config.dtls12_cipher_suites().map(|cs| cs.suite()).collect();
+        assert_eq!(suites, &[Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256]);
+    }
+
+    #[test]
+    fn filter_dtls13_cipher_suite() {
+        let config = Config::builder()
+            .dtls13_cipher_suites(&[Dtls13CipherSuite::AES_256_GCM_SHA384])
+            .build()
+            .expect("should accept single DTLS 1.3 suite");
+        let suites: Vec<_> = config.dtls13_cipher_suites().map(|cs| cs.suite()).collect();
+        assert_eq!(suites, &[Dtls13CipherSuite::AES_256_GCM_SHA384]);
+    }
+
+    #[test]
+    fn filter_kx_groups() {
+        let config = Config::builder()
+            .kx_groups(&[NamedGroup::Secp256r1])
+            .build()
+            .expect("should accept single kx group");
+        let groups: Vec<_> = config.kx_groups().map(|g| g.name()).collect();
+        assert_eq!(groups, &[NamedGroup::Secp256r1]);
+    }
+
+    #[test]
+    fn empty_dtls12_filter_disables_version() {
+        let config = Config::builder()
+            .dtls12_cipher_suites(&[])
+            .build()
+            .expect("should accept empty DTLS 1.2 when 1.3 has suites");
+        assert_eq!(config.dtls12_cipher_suites().count(), 0);
+        assert!(config.dtls13_cipher_suites().count() > 0);
+    }
+
+    #[test]
+    fn empty_dtls13_filter_disables_version() {
+        let config = Config::builder()
+            .dtls13_cipher_suites(&[])
+            .build()
+            .expect("should accept empty DTLS 1.3 when 1.2 has suites");
+        assert!(config.dtls12_cipher_suites().count() > 0);
+        assert_eq!(config.dtls13_cipher_suites().count(), 0);
+    }
+
+    #[test]
+    fn both_empty_filters_rejected() {
+        match Config::builder()
+            .dtls12_cipher_suites(&[])
+            .dtls13_cipher_suites(&[])
+            .build()
+        {
+            Err(Error::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("No cipher suites"),
+                    "error should mention cipher suites: {msg}"
+                )
+            }
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!("expected error when both versions are empty"),
+        }
+    }
+
+    #[test]
+    fn empty_kx_groups_filter_rejected() {
+        match Config::builder().kx_groups(&[]).build() {
+            Err(Error::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("key exchange"),
+                    "error should mention key exchange: {msg}"
+                )
+            }
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!("expected error for empty kx groups"),
+        }
+    }
+
+    #[test]
+    fn x25519_only_rejected_for_dtls12() {
+        // X25519 is not yet supported for DTLS 1.2, so filtering to X25519-only
+        // while DTLS 1.2 suites are enabled should fail.
+        match Config::builder()
+            .dtls13_cipher_suites(&[])
+            .kx_groups(&[NamedGroup::X25519])
+            .build()
+        {
+            Err(Error::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("DTLS 1.2") && msg.contains("P-256 or P-384"),
+                    "error should mention DTLS 1.2 and required groups: {msg}"
+                )
+            }
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!("expected error for X25519-only with DTLS 1.2"),
+        }
+    }
+
+    #[test]
+    fn x25519_only_accepted_for_dtls13_only() {
+        // X25519-only is fine when DTLS 1.2 is disabled.
+        let config = Config::builder()
+            .dtls12_cipher_suites(&[])
+            .kx_groups(&[NamedGroup::X25519])
+            .build()
+            .expect("X25519-only should be accepted for DTLS 1.3-only config");
+        let groups: Vec<_> = config.kx_groups().map(|g| g.name()).collect();
+        assert_eq!(groups, &[NamedGroup::X25519]);
+    }
+
+    #[test]
+    fn dtls12_kx_groups_excludes_x25519() {
+        let config = Config::default();
+        let dtls12_groups: Vec<_> = config.dtls12_kx_groups().map(|g| g.name()).collect();
+        assert!(!dtls12_groups.contains(&NamedGroup::X25519));
+        assert!(dtls12_groups.contains(&NamedGroup::Secp256r1));
+    }
+
+    #[test]
+    fn no_filter_returns_all() {
+        let config = Config::default();
+        // Default provider should have at least 2 DTLS 1.2 and 2 DTLS 1.3 suites
+        assert!(config.dtls12_cipher_suites().count() >= 2);
+        assert!(config.dtls13_cipher_suites().count() >= 2);
+        assert!(config.kx_groups().count() >= 2);
+    }
+
+    #[test]
+    fn filter_with_explicit_provider() {
+        #[cfg(feature = "aws-lc-rs")]
+        {
+            let config = Config::builder()
+                .with_crypto_provider(aws_lc_rs::default_provider())
+                .dtls12_cipher_suites(&[Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384])
+                .dtls13_cipher_suites(&[Dtls13CipherSuite::AES_128_GCM_SHA256])
+                .kx_groups(&[NamedGroup::X25519, NamedGroup::Secp256r1])
+                .build()
+                .expect("should accept filtered config with explicit provider");
+            let suites12: Vec<_> = config.dtls12_cipher_suites().map(|cs| cs.suite()).collect();
+            assert_eq!(
+                suites12,
+                &[Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384]
+            );
+            let suites13: Vec<_> = config.dtls13_cipher_suites().map(|cs| cs.suite()).collect();
+            assert_eq!(suites13, &[Dtls13CipherSuite::AES_128_GCM_SHA256]);
+            let groups: Vec<_> = config.kx_groups().map(|g| g.name()).collect();
+            assert_eq!(groups, &[NamedGroup::X25519, NamedGroup::Secp256r1]);
+        }
     }
 }
