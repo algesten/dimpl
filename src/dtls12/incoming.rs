@@ -150,9 +150,10 @@ impl Record {
 
         // We need to decrypt the record and redo the parsing.
         let dtls = record.record();
+        let sequence = dtls.sequence;
 
-        // Anti-replay check
-        if !decrypt.replay_check_and_update(dtls.sequence) {
+        // Anti-replay check (read-only, does not update window)
+        if !decrypt.replay_check(sequence) {
             return Ok(None);
         }
 
@@ -179,6 +180,11 @@ impl Record {
 
             buffer.len()
         };
+
+        // Decryption succeeded — now commit the replay window update.
+        // RFC 6347 §4.1.2.6: "The receive window is updated only if the
+        // MAC verification succeeds."
+        decrypt.replay_update(sequence);
 
         // Update the length of the record.
         buffer[11] = (new_len >> 8) as u8;
@@ -263,7 +269,8 @@ impl ParsedRecord {
 /// parsing to depend only on the cryptographic operations it actually uses.
 pub trait RecordDecrypt {
     fn is_peer_encryption_enabled(&self) -> bool;
-    fn replay_check_and_update(&mut self, seq: Sequence) -> bool;
+    fn replay_check(&self, seq: Sequence) -> bool;
+    fn replay_update(&mut self, seq: Sequence);
     fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord, buf: &[u8]) -> (Aad, Nonce);
     fn explicit_nonce_len(&self) -> usize;
     fn decrypt_data(

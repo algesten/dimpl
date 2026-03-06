@@ -2273,19 +2273,26 @@ impl RecordDecrypt for Engine {
         reconstruct_sequence(seq_bits, expected, bits)
     }
 
-    fn replay_check_and_update(&mut self, seq: Sequence) -> bool {
+    fn replay_check(&self, seq: Sequence) -> bool {
         // Route to the correct per-epoch replay window
-        let accepted = if seq.epoch == 2 {
-            self.hs_replay.check_and_update(seq.sequence_number)
+        if seq.epoch == 2 {
+            self.hs_replay.check(seq.sequence_number)
         } else {
-            match self.app_recv_keys.iter_mut().find(|e| e.epoch == seq.epoch) {
-                Some(entry) => entry.replay.check_and_update(seq.sequence_number),
-                None => return false, // no keys for this epoch
+            match self.app_recv_keys.iter().find(|e| e.epoch == seq.epoch) {
+                Some(entry) => entry.replay.check(seq.sequence_number),
+                None => false, // no keys for this epoch
             }
-        };
+        }
+    }
 
-        if !accepted {
-            return false;
+    fn replay_update(&mut self, seq: Sequence) {
+        // Update the replay window for this epoch
+        if seq.epoch == 2 {
+            self.hs_replay.update(seq.sequence_number);
+        } else {
+            if let Some(entry) = self.app_recv_keys.iter_mut().find(|e| e.epoch == seq.epoch) {
+                entry.replay.update(seq.sequence_number);
+            }
         }
 
         // Advance expected receive sequence for this epoch
@@ -2304,8 +2311,6 @@ impl RecordDecrypt for Engine {
                 }
             }
         }
-
-        true
     }
 
     fn decrypt_record(

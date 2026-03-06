@@ -245,8 +245,8 @@ impl Record {
             sequence_number: full_seq,
         };
 
-        // Anti-replay check
-        if !decrypt.replay_check_and_update(full_sequence) {
+        // Anti-replay check (read-only, does not update window)
+        if !decrypt.replay_check(full_sequence) {
             return Ok(None);
         }
 
@@ -277,6 +277,11 @@ impl Record {
 
             buffer.len()
         };
+
+        // Decryption succeeded — now commit the replay window update.
+        // RFC 9147 §4.5.1: "The window MUST NOT be updated due to a received
+        // record until that record has been deprotected successfully."
+        decrypt.replay_update(full_sequence);
 
         // Recover inner content type from DTLSInnerPlaintext
         let decrypted = &buffer[header_end..header_end + new_len];
@@ -395,7 +400,8 @@ pub trait RecordDecrypt {
     fn is_peer_encryption_enabled(&self) -> bool;
     fn resolve_epoch(&self, epoch_bits: u8) -> u16;
     fn resolve_sequence(&self, epoch: u16, seq_bits: u64, s_flag: bool) -> u64;
-    fn replay_check_and_update(&mut self, seq: Sequence) -> bool;
+    fn replay_check(&self, seq: Sequence) -> bool;
+    fn replay_update(&mut self, seq: Sequence);
     fn decrypt_record(
         &mut self,
         header: &[u8],
