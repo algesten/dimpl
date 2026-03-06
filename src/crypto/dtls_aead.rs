@@ -87,7 +87,7 @@ impl Iv {
     /// Only valid for 12-byte IVs (ChaCha20-Poly1305). For 4-byte IVs
     /// (AES-GCM), use [`as_slice`] instead.
     pub(crate) fn as_12_bytes(&self) -> &[u8; 12] {
-        debug_assert_eq!(
+        assert_eq!(
             self.len(),
             12,
             "as_12_bytes called on {}-byte IV",
