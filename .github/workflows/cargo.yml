@@ -31,6 +31,9 @@ jobs:
       - name: Install autotools (macOS)
         if: runner.os == 'macOS'
         run: brew install autoconf automake libtool
+      - name: Set MACOSX_DEPLOYMENT_TARGET
+        if: runner.os == 'macOS'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion | cut -d. -f1)" >> $GITHUB_ENV
       - name: Build
         run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features "${{ matrix.feature }}"
       - name: Test
