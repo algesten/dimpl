@@ -2289,10 +2289,8 @@ impl RecordDecrypt for Engine {
         // Update the replay window for this epoch
         if seq.epoch == 2 {
             self.hs_replay.update(seq.sequence_number);
-        } else {
-            if let Some(entry) = self.app_recv_keys.iter_mut().find(|e| e.epoch == seq.epoch) {
-                entry.replay.update(seq.sequence_number);
-            }
+        } else if let Some(entry) = self.app_recv_keys.iter_mut().find(|e| e.epoch == seq.epoch) {
+            entry.replay.update(seq.sequence_number);
         }
 
         // Advance expected receive sequence for this epoch
