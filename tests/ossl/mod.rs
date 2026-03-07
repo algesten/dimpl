@@ -34,7 +34,7 @@ mod stream;
 
 mod dtls;
 use dimpl::SrtpProfile;
-pub use dtls::{dtls_ssl_create, OsslDtlsImpl};
+pub use dtls::{OsslDtlsImpl, dtls_ssl_create};
 
 pub use io_buf::DatagramSend;
 use std::collections::VecDeque;

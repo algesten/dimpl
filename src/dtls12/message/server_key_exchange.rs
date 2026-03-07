@@ -1,9 +1,9 @@
 use super::{CurveType, DigitallySigned, KeyExchangeAlgorithm, NamedGroup};
 use crate::buffer::Buf;
+use nom::Err;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
-use nom::Err;
-use nom::{bytes::complete::take, IResult};
+use nom::{IResult, bytes::complete::take};
 use std::ops::Range;
 
 #[derive(Debug, PartialEq, Eq)]

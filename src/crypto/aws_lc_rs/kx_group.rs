@@ -1,7 +1,7 @@
 //! Key exchange group implementations using aws-lc-rs.
 
-use aws_lc_rs::agreement::{agree_ephemeral, EphemeralPrivateKey};
-use aws_lc_rs::agreement::{UnparsedPublicKey, ECDH_P256, ECDH_P384, X25519};
+use aws_lc_rs::agreement::{ECDH_P256, ECDH_P384, UnparsedPublicKey, X25519};
+use aws_lc_rs::agreement::{EphemeralPrivateKey, agree_ephemeral};
 
 use super::super::{ActiveKeyExchange, SupportedKxGroup};
 use crate::buffer::Buf;

@@ -6,9 +6,9 @@
 use arrayvec::ArrayVec;
 
 use super::{Aad, CryptoProvider, Nonce, SupportedDtls12CipherSuite, SupportedKxGroup};
+use crate::Error;
 use crate::buffer::{Buf, TmpBuf};
 use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
-use crate::Error;
 
 impl CryptoProvider {
     /// Returns an iterator over validated cipher suites supported by dimpl.
@@ -234,7 +234,7 @@ impl CryptoProvider {
                     return Err(Error::ConfigError(format!(
                         "No validation test vectors for {:?} + {:?}",
                         hash_alg, sig_alg
-                    )))
+                    )));
                 }
             };
 

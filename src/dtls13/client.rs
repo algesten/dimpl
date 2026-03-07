@@ -28,6 +28,7 @@ use subtle::ConstantTimeEq;
 use crate::buffer::Buf;
 use crate::buffer::ToBuf;
 use crate::crypto::{ActiveKeyExchange, SrtpProfile};
+use crate::dtls13::Server;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::Asn1Cert;
 use crate::dtls13::message::Body;
@@ -57,7 +58,6 @@ use crate::dtls13::message::SupportedGroupsExtension;
 use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
-use crate::dtls13::Server;
 use crate::{Error, KeyingMaterial, Output};
 
 /// DTLS 1.3 client
@@ -1302,7 +1302,7 @@ pub(crate) fn handshake_create_certificate_verify(
             return Err(Error::CryptoError(format!(
                 "Unsupported signature algorithm: {:?}/{:?}",
                 sig_alg, hash_alg
-            )))
+            )));
         }
     };
 

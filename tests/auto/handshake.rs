@@ -73,8 +73,8 @@ fn auto_client_to_dtls13_server() {
 fn auto_client_to_dtls13_server_keying_material() {
     //! Verify that an auto-client and DTLS 1.3 server derive identical
     //! SRTP keying material.
-    use dimpl::certificate::generate_self_signed_certificate;
     use dimpl::SrtpProfile;
+    use dimpl::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -257,8 +257,8 @@ fn auto_client_to_dtls12_server() {
 fn auto_client_to_dtls12_server_keying_material() {
     //! Verify that an auto-client and DTLS 1.2 server derive identical
     //! SRTP keying material after HVR-based version negotiation.
-    use dimpl::certificate::generate_self_signed_certificate;
     use dimpl::SrtpProfile;
+    use dimpl::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -604,8 +604,8 @@ fn auto_client_rejects_unknown_version_response() {
 fn auto_client_protocol_version_after_negotiating_dtls13() {
     //! After completing a handshake against a DTLS 1.3 server, the
     //! auto-sense client should report `Some(ProtocolVersion::DTLS1_3)`.
-    use dimpl::certificate::generate_self_signed_certificate;
     use dimpl::ProtocolVersion;
+    use dimpl::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -662,8 +662,8 @@ fn auto_client_protocol_version_after_negotiating_dtls13() {
 fn auto_client_protocol_version_after_negotiating_dtls12() {
     //! After completing a handshake against a DTLS 1.2 server, the
     //! auto-sense client should report `Some(ProtocolVersion::DTLS1_2)`.
-    use dimpl::certificate::generate_self_signed_certificate;
     use dimpl::ProtocolVersion;
+    use dimpl::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

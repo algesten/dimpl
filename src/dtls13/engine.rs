@@ -1,6 +1,6 @@
 use std::mem;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use arrayvec::ArrayVec;
@@ -1862,7 +1862,7 @@ impl Engine {
             fragment.extend_from_slice(&msg_seq.to_be_bytes()); // message_seq
             fragment.extend_from_slice(&0u32.to_be_bytes()[1..]); // fragment_offset = 0
             fragment.extend_from_slice(&1u32.to_be_bytes()[1..]); // fragment_length = 1
-                                                                  // Body: 1 byte
+            // Body: 1 byte
             fragment.push(request.as_u8());
         })?;
 

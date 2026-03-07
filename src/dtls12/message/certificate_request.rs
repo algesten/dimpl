@@ -3,10 +3,10 @@ use super::{SignatureAndHashAlgorithm, SignatureAndHashAlgorithmVec};
 use crate::buffer::Buf;
 use crate::util::{many0, many1};
 use arrayvec::ArrayVec;
-use nom::error::{Error, ErrorKind};
-use nom::number::complete::{be_u16, be_u8};
 use nom::Err;
-use nom::{bytes::complete::take, IResult};
+use nom::error::{Error, ErrorKind};
+use nom::number::complete::{be_u8, be_u16};
+use nom::{IResult, bytes::complete::take};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct CertificateRequest {

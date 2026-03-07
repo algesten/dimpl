@@ -10,7 +10,7 @@ use crate::buffer::Buf;
 use crate::types::{ContentType, ProtocolVersion, Sequence};
 use crate::util::be_u48;
 use nom::bytes::complete::take;
-use nom::number::complete::{be_u16, be_u8};
+use nom::number::complete::{be_u8, be_u16};
 use nom::{Err, IResult};
 
 /// DTLS 1.3 record structure.

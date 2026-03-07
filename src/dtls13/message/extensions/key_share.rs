@@ -1,9 +1,9 @@
 use crate::buffer::Buf;
 use crate::types::NamedGroup;
 use arrayvec::ArrayVec;
+use nom::IResult;
 use nom::bytes::complete::take;
 use nom::number::complete::be_u16;
-use nom::IResult;
 use std::ops::Range;
 
 /// A single KeyShareEntry (RFC 8446 Section 4.2.8).

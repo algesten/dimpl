@@ -126,7 +126,7 @@ impl Nonce {
     pub(crate) fn xor(iv: &[u8; 12], seq: u64) -> Self {
         let mut nonce = *iv;
         let seq_bytes = seq.to_be_bytes(); // 8 bytes
-                                           // XOR the last 8 bytes of the 12-byte IV with the sequence number
+        // XOR the last 8 bytes of the 12-byte IV with the sequence number
         for i in 0..8 {
             nonce[4 + i] ^= seq_bytes[i];
         }

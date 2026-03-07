@@ -1,9 +1,9 @@
 use crate::buffer::Buf;
 use crate::types::ProtocolVersion;
 use arrayvec::ArrayVec;
+use nom::IResult;
 use nom::bytes::complete::take;
 use nom::number::complete::be_u8;
-use nom::IResult;
 
 /// SupportedVersions extension in ClientHello (RFC 8446 Section 4.2.1).
 #[derive(Debug, Clone, PartialEq, Eq)]

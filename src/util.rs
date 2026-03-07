@@ -1,5 +1,5 @@
 use arrayvec::ArrayVec;
-use nom::error::{make_error, ErrorKind, ParseError};
+use nom::error::{ErrorKind, ParseError, make_error};
 use nom::{Err, IResult, Input, Parser};
 
 /// A combinator that parses items using the provided parser but only collects

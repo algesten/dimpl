@@ -21,6 +21,7 @@ use subtle::ConstantTimeEq;
 
 use crate::buffer::{Buf, ToBuf};
 use crate::crypto::SrtpProfile;
+use crate::dtls12::Client;
 use crate::dtls12::client::LocalEvent;
 use crate::dtls12::engine::Engine;
 use crate::dtls12::message::{Body, CertificateRequest, CertificateTypeVec, Dtls12CipherSuite};
@@ -32,7 +33,6 @@ use crate::dtls12::message::{ServerHello, SessionId, SignatureAlgorithm};
 use crate::dtls12::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm};
 use crate::dtls12::message::{SignatureAndHashAlgorithmVec, SrtpProfileId};
 use crate::dtls12::message::{SrtpProfileVec, SupportedGroupsExtension, UseSrtpExtension};
-use crate::dtls12::Client;
 use crate::{Config, Error, Output};
 
 /// DTLS server

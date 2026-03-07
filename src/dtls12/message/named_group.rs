@@ -3,8 +3,8 @@
 //! NamedGroup is now in crate::types as it's shared between DTLS versions.
 //! CurveType is DTLS 1.2 specific (used in ServerKeyExchange).
 
-use nom::number::complete::be_u8;
 use nom::IResult;
+use nom::number::complete::be_u8;
 
 /// Curve type for ECDH parameters in DTLS 1.2.
 ///

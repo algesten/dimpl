@@ -3,15 +3,15 @@
 use std::str;
 
 use aws_lc_rs::signature::ECDSA_P384_SHA384_ASN1_SIGNING;
-use aws_lc_rs::signature::{EcdsaKeyPair, EcdsaSigningAlgorithm, EcdsaVerificationAlgorithm};
-use aws_lc_rs::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_ASN1_SIGNING};
 use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA384_ASN1};
+use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, UnparsedPublicKey};
 use aws_lc_rs::signature::{ECDSA_P384_SHA256_ASN1, ECDSA_P384_SHA384_ASN1};
+use aws_lc_rs::signature::{EcdsaKeyPair, EcdsaSigningAlgorithm, EcdsaVerificationAlgorithm};
 use der::{Decode, Encode};
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
-use super::super::{check_verify_scheme, KeyProvider, SignatureVerifier, SigningKey};
+use super::super::{KeyProvider, SignatureVerifier, SigningKey, check_verify_scheme};
 use super::super::{OID_P256, OID_P384};
 use crate::buffer::Buf;
 use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};

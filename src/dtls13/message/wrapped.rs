@@ -1,8 +1,8 @@
+use nom::Err;
+use nom::IResult;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u16, be_u24};
-use nom::Err;
-use nom::IResult;
 use std::ops::Range;
 
 macro_rules! wrapped_slice {

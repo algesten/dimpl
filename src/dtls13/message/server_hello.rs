@@ -2,9 +2,9 @@ use super::{CompressionMethod, Dtls13CipherSuite, Extension};
 use super::{ProtocolVersion, Random, SessionId};
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
-use nom::error::{Error, ErrorKind};
 use nom::Err;
-use nom::{bytes::complete::take, number::complete::be_u16, IResult};
+use nom::error::{Error, ErrorKind};
+use nom::{IResult, bytes::complete::take, number::complete::be_u16};
 
 /// Magic random value indicating HelloRetryRequest (RFC 8446 Section 4.1.3).
 const HRR_RANDOM: [u8; 32] = [

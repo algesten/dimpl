@@ -1,7 +1,7 @@
 //! Key exchange group implementations using RustCrypto.
 
-use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey};
-use p384::{ecdh::EphemeralSecret as P384EphemeralSecret, PublicKey as P384PublicKey};
+use p256::{PublicKey as P256PublicKey, ecdh::EphemeralSecret};
+use p384::{PublicKey as P384PublicKey, ecdh::EphemeralSecret as P384EphemeralSecret};
 
 use super::super::{ActiveKeyExchange, SupportedKxGroup};
 use crate::buffer::Buf;

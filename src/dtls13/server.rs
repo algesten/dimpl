@@ -34,12 +34,13 @@ use subtle::ConstantTimeEq;
 use crate::buffer::Buf;
 use crate::buffer::ToBuf;
 use crate::crypto::{ActiveKeyExchange, SrtpProfile};
+use crate::dtls13::Client;
+use crate::dtls13::client::LocalEvent;
 use crate::dtls13::client::handshake_create_certificate;
 use crate::dtls13::client::handshake_create_certificate_verify;
 use crate::dtls13::client::signature_scheme_to_components;
 #[cfg(feature = "_crypto-common")]
 use crate::dtls13::client::verify_scheme_curve;
-use crate::dtls13::client::LocalEvent;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::Body;
 use crate::dtls13::message::CompressionMethod;
@@ -65,7 +66,6 @@ use crate::dtls13::message::SupportedGroupsExtension;
 use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
-use crate::dtls13::Client;
 use crate::{Config, DtlsCertificate, Error, Output};
 
 /// Magic random value indicating HelloRetryRequest (RFC 8446 Section 4.1.3).

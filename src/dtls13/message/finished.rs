@@ -1,7 +1,7 @@
 use crate::buffer::Buf;
 use crate::types::Dtls13CipherSuite;
-use nom::bytes::complete::take;
 use nom::IResult;
+use nom::bytes::complete::take;
 use std::ops::Range;
 
 #[derive(Debug, PartialEq, Eq)]

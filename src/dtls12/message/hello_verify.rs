@@ -1,8 +1,8 @@
-use super::id::Cookie;
 use super::ProtocolVersion;
+use super::id::Cookie;
 use crate::buffer::Buf;
-use nom::error::{Error, ErrorKind};
 use nom::IResult;
+use nom::error::{Error, ErrorKind};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct HelloVerifyRequest {
