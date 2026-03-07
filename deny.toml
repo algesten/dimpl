@@ -8,6 +8,7 @@
 
 # Note: running just `cargo deny check` without a `--target` can result in
 # false positives due to https://github.com/EmbarkStudios/cargo-deny/issues/324
+[graph]
 targets = [
   { triple = "aarch64-apple-darwin" },
   { triple = "i686-pc-windows-gnu" },
@@ -26,7 +27,14 @@ exclude = ["rand_core"]
 
 [advisories]
 yanked = "deny"
-ignore = []
+ignore = [
+  # DoS via stack exhaustion in time RFC 2822 parsing.
+  # Fix (>=0.3.47) requires Rust 1.88.0, our MSRV is 1.85.0.
+  # dimpl only uses OffsetDateTime::now_utc() and Duration::days() for
+  # certificate generation — no RFC 2822 parsing. A clippy disallowed-types
+  # rule prevents accidental introduction of Rfc2822.
+  "RUSTSEC-2026-0009",
+]
 
 [bans]
 multiple-versions = "deny"
