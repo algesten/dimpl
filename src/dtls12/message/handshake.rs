@@ -12,12 +12,12 @@ use super::HelloVerifyRequest;
 use super::ServerHello;
 use super::ServerKeyExchange;
 use crate::buffer::Buf;
+use nom::Err;
+use nom::IResult;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
 use nom::number::complete::{be_u16, be_u24};
-use nom::Err;
-use nom::IResult;
 
 #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
 pub struct Header {

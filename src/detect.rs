@@ -597,7 +597,7 @@ mod tests {
         pkt.extend_from_slice(&[0xFE, 0xFD]); // DTLS 1.2
         pkt.extend_from_slice(&[0x00, 0x00]); // epoch 0
         pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // seq 0
-                                                                      // length placeholder (will fill)
+        // length placeholder (will fill)
         let len_pos = pkt.len();
         pkt.extend_from_slice(&[0x00, 0x00]);
 

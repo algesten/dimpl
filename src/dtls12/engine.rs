@@ -1,6 +1,6 @@
 use std::mem;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use super::queue::{QueueRx, QueueTx};

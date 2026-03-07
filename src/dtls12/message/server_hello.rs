@@ -4,9 +4,9 @@ use super::{CompressionMethod, Dtls12CipherSuite, Extension, ExtensionType};
 use super::{ProtocolVersion, Random, SessionId};
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
-use nom::error::{Error, ErrorKind};
 use nom::Err;
-use nom::{bytes::complete::take, number::complete::be_u16, IResult};
+use nom::error::{Error, ErrorKind};
+use nom::{IResult, bytes::complete::take, number::complete::be_u16};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ServerHello {

@@ -1,9 +1,9 @@
 use super::Extension;
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
+use nom::IResult;
 use nom::bytes::complete::take;
 use nom::number::complete::be_u16;
-use nom::IResult;
 
 /// EncryptedExtensions message (RFC 8446 Section 4.3.1).
 #[derive(Debug, PartialEq, Eq)]

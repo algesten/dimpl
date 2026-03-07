@@ -8,13 +8,13 @@ use std::fmt;
 use std::time::Instant;
 
 use arrayvec::ArrayVec;
-use nom::bytes::complete::take;
-use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
+use nom::bytes::complete::take;
+use nom::number::complete::{be_u8, be_u16};
 
+use crate::SeededRng;
 use crate::buffer::Buf;
 use crate::time_tricks::InstantExt;
-use crate::SeededRng;
 
 pub type NamedGroupVec = ArrayVec<NamedGroup, { NamedGroup::supported().len() }>;
 

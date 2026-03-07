@@ -8,7 +8,7 @@ use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
 use openssl::pkey::{PKey, Private};
 use openssl::rsa::Rsa;
-use openssl::x509::{X509Name, X509};
+use openssl::x509::{X509, X509Name};
 
 use super::CryptoError;
 use super::OsslDtlsImpl;

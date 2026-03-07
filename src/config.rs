@@ -1,10 +1,10 @@
 use std::time::Duration;
 
+use crate::Error;
 use crate::crypto::{CryptoProvider, SupportedDtls12CipherSuite};
 use crate::crypto::{SupportedDtls13CipherSuite, SupportedKxGroup};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, NamedGroup};
-use crate::Error;
 
 #[cfg(feature = "aws-lc-rs")]
 use crate::crypto::aws_lc_rs;

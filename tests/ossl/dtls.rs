@@ -9,7 +9,7 @@ use openssl::ssl::{Ssl, SslContext, SslContextBuilder, SslMethod, SslOptions, Ss
 use super::cert::OsslDtlsCert;
 use super::io_buf::IoBuffer;
 use super::stream::TlsStream;
-use super::{CryptoError, DtlsEvent, DATAGRAM_MTU, DATAGRAM_MTU_WARN};
+use super::{CryptoError, DATAGRAM_MTU, DATAGRAM_MTU_WARN, DtlsEvent};
 
 // We restrict cipher suites to those that include ephemeral Diffie-Hellman or
 // ephemeral Elliptic Curve Diffie-Hellman and modern AEAD ciphers.

@@ -1,9 +1,9 @@
-use crate::buffer::Buf;
 use crate::SrtpProfile;
+use crate::buffer::Buf;
 use arrayvec::ArrayVec;
-use nom::bytes::complete::take;
-use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
+use nom::bytes::complete::take;
+use nom::number::complete::{be_u8, be_u16};
 
 pub type SrtpProfileVec = ArrayVec<SrtpProfileId, { SrtpProfileId::supported().len() }>;
 
@@ -29,7 +29,7 @@ impl SrtpProfileId {
                 return Err(nom::Err::Error(nom::error::Error::new(
                     input,
                     nom::error::ErrorKind::Switch,
-                )))
+                )));
             }
         };
         Ok((input, profile))

@@ -1,6 +1,6 @@
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
-use nom::{number::complete::be_u8, IResult};
+use nom::{IResult, number::complete::be_u8};
 
 /// EC Point Format as defined in RFC 4492 Section 5.1.2
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -24,7 +24,7 @@ impl ECPointFormat {
                 return Err(nom::Err::Error(nom::error::Error::new(
                     input,
                     nom::error::ErrorKind::Switch,
-                )))
+                )));
             }
         };
         Ok((input, format))

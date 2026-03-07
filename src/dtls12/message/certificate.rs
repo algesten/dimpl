@@ -2,7 +2,7 @@ use super::Asn1Cert;
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
-use nom::{number::complete::be_u24, IResult};
+use nom::{IResult, number::complete::be_u24};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Certificate {

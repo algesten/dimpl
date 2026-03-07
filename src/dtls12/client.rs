@@ -20,12 +20,12 @@ use subtle::ConstantTimeEq;
 
 use crate::buffer::{Buf, ToBuf};
 use crate::crypto::SrtpProfile;
+use crate::dtls12::Server;
 use crate::dtls12::engine::Engine;
 use crate::dtls12::message::{Body, CipherSuiteVec, ClientHello, ClientKeyExchange};
 use crate::dtls12::message::{CompressionMethod, ContentType, Cookie, Dtls12CipherSuite};
 use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
-use crate::dtls12::Server;
 use crate::{Error, KeyingMaterial, Output};
 
 /// DTLS client
@@ -1155,8 +1155,7 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
 
             trace!(
                 "Using ECDHE group info: {:?}, {:?}",
-                curve_type,
-                named_group
+                curve_type, named_group
             );
         }
         _ => {

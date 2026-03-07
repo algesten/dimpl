@@ -743,8 +743,8 @@ fn dtls13_large_application_data() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_data_after_key_update() {
-    use dimpl::certificate::generate_self_signed_certificate;
     use dimpl::Config;
+    use dimpl::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -837,8 +837,8 @@ fn dtls13_data_after_key_update() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_queue_overflow_tx() {
-    use dimpl::certificate::generate_self_signed_certificate;
     use dimpl::Config;
+    use dimpl::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -915,8 +915,8 @@ fn dtls13_queue_overflow_tx() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_queue_overflow_rx() {
-    use dimpl::certificate::generate_self_signed_certificate;
     use dimpl::Config;
+    use dimpl::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

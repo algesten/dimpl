@@ -1,6 +1,6 @@
 //! HKDF implementation using aws-lc-rs for TLS 1.3 key derivation.
 
-use aws_lc_rs::hkdf::{KeyType, Prk, HKDF_SHA256, HKDF_SHA384};
+use aws_lc_rs::hkdf::{HKDF_SHA256, HKDF_SHA384, KeyType, Prk};
 use aws_lc_rs::hmac;
 
 use super::super::HkdfProvider;

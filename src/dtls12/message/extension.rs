@@ -1,6 +1,6 @@
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
-use nom::{bytes::complete::take, number::complete::be_u16, IResult};
+use nom::{IResult, bytes::complete::take, number::complete::be_u16};
 use std::ops::Range;
 
 pub type ExtensionVec = ArrayVec<Extension, { ExtensionType::supported().len() }>;

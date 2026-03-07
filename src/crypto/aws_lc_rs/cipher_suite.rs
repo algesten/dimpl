@@ -1,9 +1,9 @@
 //! Cipher suite implementations using aws-lc-rs.
 
 use aws_lc_rs::aead::quic::{self as aws_quic, HeaderProtectionKey};
+use aws_lc_rs::aead::{AES_128_GCM, AES_256_GCM, CHACHA20_POLY1305, UnboundKey};
 use aws_lc_rs::aead::{Aad as AwsAad, LessSafeKey, Nonce as AwsNonce};
-use aws_lc_rs::aead::{UnboundKey, AES_128_GCM, AES_256_GCM, CHACHA20_POLY1305};
-use aws_lc_rs::cipher::{self as aws_cipher, EncryptingKey, UnboundCipherKey, AES_128, AES_256};
+use aws_lc_rs::cipher::{self as aws_cipher, AES_128, AES_256, EncryptingKey, UnboundCipherKey};
 
 use super::super::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuite};
 use crate::buffer::{Buf, TmpBuf};

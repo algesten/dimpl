@@ -3,7 +3,7 @@ use crate::buffer::Buf;
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
 use nom::number::complete::{be_u16, be_u24};
-use nom::{number::complete::be_u8, IResult};
+use nom::{IResult, number::complete::be_u8};
 use std::ops::Range;
 
 /// TLS 1.3 CertificateEntry (RFC 8446 Section 4.4.2).

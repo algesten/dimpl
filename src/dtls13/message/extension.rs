@@ -1,5 +1,5 @@
 use crate::buffer::Buf;
-use nom::{bytes::complete::take, number::complete::be_u16, IResult};
+use nom::{IResult, bytes::complete::take, number::complete::be_u16};
 use std::ops::Range;
 
 #[derive(Debug, PartialEq, Eq, Default)]

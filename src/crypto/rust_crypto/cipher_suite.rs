@@ -59,7 +59,7 @@ impl Cipher for AesGcm {
         match self {
             AesGcm::Aes128(cipher) => {
                 // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{typenum::U12, GenericArray};
+                use generic_array::{GenericArray, typenum::U12};
                 let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
                 cipher
                     .encrypt_in_place(&aes_nonce, &aad, data)
@@ -67,7 +67,7 @@ impl Cipher for AesGcm {
             }
             AesGcm::Aes256(cipher) => {
                 // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{typenum::U12, GenericArray};
+                use generic_array::{GenericArray, typenum::U12};
                 let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
                 cipher
                     .encrypt_in_place(&aes_nonce, &aad, data)
@@ -97,7 +97,7 @@ impl Cipher for AesGcm {
         match self {
             AesGcm::Aes128(cipher) => {
                 // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{typenum::U12, GenericArray};
+                use generic_array::{GenericArray, typenum::U12};
                 let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
                 cipher
                     .decrypt_in_place(&aes_nonce, &aad, ciphertext)
@@ -105,7 +105,7 @@ impl Cipher for AesGcm {
             }
             AesGcm::Aes256(cipher) => {
                 // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{typenum::U12, GenericArray};
+                use generic_array::{GenericArray, typenum::U12};
                 let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
                 cipher
                     .decrypt_in_place(&aes_nonce, &aad, ciphertext)
@@ -159,7 +159,7 @@ impl Cipher for ChaCha20Poly1305Cipher {
 
         let nonce_array: [u8; 12] = nonce[..12].try_into().map_err(|_| "Invalid nonce")?;
 
-        use generic_array::{typenum::U12, GenericArray};
+        use generic_array::{GenericArray, typenum::U12};
         let chacha_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
         self.cipher
             .encrypt_in_place(&chacha_nonce, &aad, data)
@@ -182,7 +182,7 @@ impl Cipher for ChaCha20Poly1305Cipher {
 
         let nonce_array: [u8; 12] = nonce[..12].try_into().map_err(|_| "Invalid nonce")?;
 
-        use generic_array::{typenum::U12, GenericArray};
+        use generic_array::{GenericArray, typenum::U12};
         let chacha_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
         self.cipher
             .decrypt_in_place(&chacha_nonce, &aad, ciphertext)

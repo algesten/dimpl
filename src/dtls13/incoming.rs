@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use arrayvec::ArrayVec;
 use std::fmt;
 
+use crate::Error;
 use crate::buffer::{Buf, TmpBuf};
 use crate::dtls13::message::{ContentType, Dtls13CipherSuite, Dtls13Record, Handshake, Sequence};
-use crate::Error;
 
 /// Holds both the UDP packet and the parsed result of that packet.
 pub struct Incoming {

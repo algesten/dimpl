@@ -49,8 +49,8 @@ pub use server_hello::ServerHello;
 pub use server_key_exchange::{ServerKeyExchange, ServerKeyExchangeParams};
 pub use wrapped::{Asn1Cert, DistinguishedName};
 
-use nom::number::complete::{be_u16, be_u8};
 use nom::IResult;
+use nom::number::complete::{be_u8, be_u16};
 
 pub type CipherSuiteVec = ArrayVec<Dtls12CipherSuite, { Dtls12CipherSuite::supported().len() }>;
 
