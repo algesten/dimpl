@@ -26,7 +26,7 @@ use libfuzzer_sys::fuzz_target;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{certificate, Config, Dtls};
+use dimpl::{Config, Dtls, certificate};
 
 /// DTLSPlaintext header length
 const PLAINTEXT_HEADER_LEN: usize = 13;
@@ -70,7 +70,7 @@ fuzz_target!(|data: &[u8]| {
         let flags: u8 = 0b0010_0000 // fixed bits
             | 0b0000_1000           // S=1 (2-byte sequence)
             | 0b0000_0100           // L=1 (length present)
-            | 0b0000_0010;          // epoch low bits = 2
+            | 0b0000_0010; // epoch low bits = 2
         record.push(flags);
         record.extend_from_slice(&[0, 1]); // sequence number 1
         record.extend_from_slice(&(frag_len as u16).to_be_bytes());
