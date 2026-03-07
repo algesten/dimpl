@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.4.1
+
   * Edition 2024 and bump deps (big cargo fmt) #83
   * Add DTLS 1.2 ChaCha20 and X25519 support #77
   * Bump MSRV to 1.85.0 #75
