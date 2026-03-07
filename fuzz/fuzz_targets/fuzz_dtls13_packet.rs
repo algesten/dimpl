@@ -10,7 +10,7 @@ use libfuzzer_sys::fuzz_target;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{certificate, Config, Dtls, Output};
+use dimpl::{Config, Dtls, Output, certificate};
 
 fuzz_target!(|data: &[u8]| {
     // Generate a certificate once for the test instance

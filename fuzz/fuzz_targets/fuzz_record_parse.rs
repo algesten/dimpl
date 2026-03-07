@@ -18,7 +18,7 @@ use libfuzzer_sys::fuzz_target;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{certificate, Config, Dtls};
+use dimpl::{Config, Dtls, certificate};
 
 /// DTLS record header length
 const DTLS_HEADER_LEN: usize = 13;
