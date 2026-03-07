@@ -38,23 +38,23 @@ _crypto-common = ["dep:der", "dep:pkcs8", "dep:sec1", "dep:signature", "dep:spki
 rcgen = ["dep:rcgen", "aws-lc-rs"]
 
 [dependencies]
-log = "0.4"
+log = "0.4.29"
 nom = { version = "8", default-features = false, features = ["std"] }
-once_cell = "1"
+once_cell = "1.21.3"
 rand = "0.9"
 time = { version = "0.3", features = ["formatting"] }
-arrayvec = "0.7"
-subtle = "2"
+arrayvec = "0.7.6"
+subtle = "2.6"
 
 der = { version = "0.7", optional = true }
 pkcs8 = { version = "0.10", features = ["pem"], optional = true }
 sec1 = { version = "0.7", optional = true }
-signature = { version = "2", optional = true }
+signature = { version = "2.2", optional = true }
 spki = { version = "0.7", optional = true }
 x509-cert = { version = "0.2", default-features = false, optional = true }
 
 # aws-lc-rs backend
-aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"], optional = true }
+aws-lc-rs = { version = "^1.16", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"], optional = true }
 
 # RustCrypto backend
 aes-gcm = { version = "0.10", optional = true }
@@ -71,15 +71,15 @@ chacha20 = { version = "0.9", optional = true }
 x25519-dalek = { version = "2", optional = true, features = ["static_secrets"] }
 
 # certificate generation
-rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"], optional = true }
+rcgen = { version = "0.14.7", default-features = false, features = ["aws_lc_rs"], optional = true }
 
 [dev-dependencies]
-openssl = { version = "0.10", features = ["vendored"] }
+openssl = { version = "0.10.75", features = ["vendored"] }
 libc = "0.2"
-env_logger = "0.11"
+env_logger = "0.11.9"
 x509-parser = "0.18"
 bytes = "1"
 
 # wolfssl doesn't build on Windows
 [target.'cfg(not(windows))'.dev-dependencies]
-wolfssl = "3"
+wolfssl = "3.0.0"
