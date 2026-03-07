@@ -461,9 +461,31 @@ impl State {
         // unwrap: is ok because we set the random in handle_timeout
         let server_random = server.random.unwrap();
 
-        // Select ECDHE group from client offers (prefer P-256, then P-384).
-        // If none present, default to P-256.
-        let selected_named_group = select_named_group(server.client_supported_groups.as_ref());
+        // Select ECDHE group from the intersection of:
+        // - client offers, and
+        // - server-allowed DTLS 1.2 groups (provider + config filter)
+        // Preference follows Config::kx_groups() order.
+        let allowed_named_groups: Vec<NamedGroup> = server
+            .engine
+            .config()
+            .kx_groups()
+            .map(|g| g.name())
+            .collect();
+        let selected_named_group = select_named_group(
+            server.client_supported_groups.as_ref(),
+            &allowed_named_groups,
+        )
+        .ok_or_else(|| {
+            if server.client_supported_groups.is_some() {
+                Error::SecurityError(
+                    "No common DTLS 1.2 key exchange group between client supported_groups \
+                     and server configuration"
+                        .into(),
+                )
+            } else {
+                Error::CryptoError("No DTLS 1.2 key exchange groups configured".into())
+            }
+        })?;
 
         // Select signature/hash for SKE by intersecting client's list
         // with our key type (prefer SHA256, then SHA384)
@@ -1081,18 +1103,80 @@ fn handshake_serialize_certificate_request(
     Ok(())
 }
 
-fn select_named_group(client_groups: Option<&NamedGroupVec>) -> NamedGroup {
-    // Server preference order
-    let preferred = [NamedGroup::Secp256r1, NamedGroup::Secp384r1];
+fn select_named_group(
+    client_groups: Option<&NamedGroupVec>,
+    server_groups: &[NamedGroup],
+) -> Option<NamedGroup> {
     if let Some(groups) = client_groups {
-        for p in preferred.iter() {
-            if groups.iter().any(|g| g == p) {
-                return *p;
+        // Server preference order from Config::kx_groups()
+        for sg in server_groups {
+            if groups.iter().any(|g| g == sg) {
+                return Some(*sg);
             }
         }
+        // Client advertised supported_groups, but there is no overlap.
+        return None;
     }
-    // Fallback if client did not advertise groups or only unsupported ones
-    NamedGroup::Secp256r1
+
+    // Fallback only when client did not advertise supported_groups:
+    // pick the first server-configured group.
+    server_groups.first().copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn named_group_vec(groups: &[NamedGroup]) -> NamedGroupVec {
+        let mut out = NamedGroupVec::new();
+        for g in groups {
+            out.push(*g);
+        }
+        out
+    }
+
+    #[test]
+    fn select_named_group_prefers_x25519_when_available() {
+        let client = named_group_vec(&[
+            NamedGroup::Secp256r1,
+            NamedGroup::X25519,
+            NamedGroup::Secp384r1,
+        ]);
+        let provider = [NamedGroup::X25519, NamedGroup::Secp256r1];
+
+        let selected = select_named_group(Some(&client), &provider);
+
+        assert_eq!(selected, Some(NamedGroup::X25519));
+    }
+
+    #[test]
+    fn select_named_group_respects_provider_capabilities() {
+        let client = named_group_vec(&[NamedGroup::X25519, NamedGroup::Secp256r1]);
+        let provider = [NamedGroup::Secp256r1];
+
+        let selected = select_named_group(Some(&client), &provider);
+
+        assert_eq!(selected, Some(NamedGroup::Secp256r1));
+    }
+
+    #[test]
+    fn select_named_group_falls_back_to_provider_when_client_missing() {
+        let provider = [NamedGroup::Secp384r1];
+
+        let selected = select_named_group(None, &provider);
+
+        assert_eq!(selected, Some(NamedGroup::Secp384r1));
+    }
+
+    #[test]
+    fn select_named_group_rejects_when_client_has_no_overlap() {
+        let client = named_group_vec(&[NamedGroup::X25519]);
+        let provider = [NamedGroup::Secp256r1];
+
+        let selected = select_named_group(Some(&client), &provider);
+
+        assert_eq!(selected, None);
+    }
 }
 
 fn select_ske_signature_algorithm(

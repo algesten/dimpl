@@ -59,9 +59,11 @@ use super::CryptoProvider;
 ///
 /// - `TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256` (0xC02B)
 /// - `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384` (0xC02C)
+/// - `TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256` (0xCCA9)
 ///
 /// # Supported Key Exchange Groups
 ///
+/// - `x25519` (X25519 / Curve25519)
 /// - `secp256r1` (P-256, NIST Curve)
 /// - `secp384r1` (P-384, NIST Curve)
 ///

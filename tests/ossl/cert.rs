@@ -61,7 +61,7 @@ impl OsslDtlsCert {
     // The libWebRTC code we try to match is at:
     // https://webrtc.googlesource.com/src/+/1568f1b1330f94494197696fe235094e6293b258/rtc_base/openssl_certificate.cc#58
     fn self_signed(options: DtlsCertOptions) -> Result<Self, CryptoError> {
-        let f4 = BigNum::from_u32(RSA_F4).unwrap();
+        let f4 = BigNum::from_u32(RSA_F4)?;
         let pkey = match options.pkey_type {
             DtlsPKeyType::Rsa2048 => {
                 let key = Rsa::generate_with_e(2048, &f4)?;
@@ -136,6 +136,13 @@ impl OsslDtlsCert {
 
     pub fn new_dtls_impl(&self) -> Result<OsslDtlsImpl, CryptoError> {
         OsslDtlsImpl::new(self.clone())
+    }
+
+    pub fn new_dtls_impl_with_groups(
+        &self,
+        groups_list: &str,
+    ) -> Result<OsslDtlsImpl, CryptoError> {
+        OsslDtlsImpl::new_with_groups(self.clone(), Some(groups_list))
     }
 }
 

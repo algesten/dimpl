@@ -1973,21 +1973,17 @@ fn dtls13_wolfssl_server_bidirectional_data() {
     );
 }
 
-// NOTE: HRR (HelloRetryRequest) test is skipped because dimpl only supports P-256 and
-// P-384 key exchange groups, and WolfSSL DTLS 1.3 accepts both of these groups. There is
-// no way to configure the dimpl client to offer a key share that WolfSSL would reject
-// (triggering HRR for a different group) while still being able to complete the handshake.
-// The CryptoProvider's kx_groups list determines which group is offered first, but both
-// groups are acceptable to WolfSSL. HRR is tested separately in the dimpl-only tests.
+// NOTE: HRR (HelloRetryRequest) test is skipped because in the current WolfSSL interop
+// setup, WolfSSL accepts all key-share groups dimpl offers. There is no way to configure
+// the dimpl client to offer an initial key share that WolfSSL rejects (to trigger HRR)
+// while still being able to complete the handshake. HRR is tested separately in the
+// dimpl-only tests.
 #[test]
 #[ignore = "cannot trigger HRR: WolfSSL accepts all groups dimpl offers"]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_hrr_flow() {
-    // Cannot trigger HRR with the current WolfSSL + dimpl configuration.
-    // dimpl offers P-256 or P-384, and WolfSSL accepts both without requesting
-    // a HelloRetryRequest. To trigger HRR, dimpl would need to offer a group
-    // that WolfSSL doesn't accept (e.g. X25519 only), but dimpl currently does
-    // not support X25519.
+    // Cannot trigger HRR with the current WolfSSL + dimpl configuration:
+    // WolfSSL accepts the groups dimpl offers in this test setup.
 }
 
 #[test]

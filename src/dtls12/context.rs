@@ -32,10 +32,10 @@ pub struct CryptoContext {
     /// Server write key
     server_write_key: Option<Buf>,
 
-    /// Client write IV (for AES-GCM)
+    /// Client write IV (4 bytes for AES-GCM, 12 bytes for ChaCha20-Poly1305)
     client_write_iv: Option<Iv>,
 
-    /// Server write IV (for AES-GCM)
+    /// Server write IV (4 bytes for AES-GCM, 12 bytes for ChaCha20-Poly1305)
     server_write_iv: Option<Iv>,
 
     /// Client MAC key (not used for AEAD ciphers)
@@ -160,10 +160,10 @@ impl CryptoContext {
         named_group: NamedGroup,
         kx_buf: &mut Buf,
     ) -> Result<&[u8], String> {
-        // Find the matching key exchange group from the provider (DTLS 1.2 groups only)
+        // Find the matching key exchange group from the provider
         let kx_group = self
             .provider()
-            .supported_dtls12_kx_groups()
+            .supported_kx_groups()
             .find(|g| g.name() == named_group)
             .ok_or_else(|| format!("Unsupported ECDHE named group: {:?}", named_group))?;
 
@@ -179,10 +179,10 @@ impl CryptoContext {
         server_public: &[u8],
         kx_buf: &mut Buf,
     ) -> Result<(), String> {
-        // Find the matching key exchange group from the provider (DTLS 1.2 groups only)
+        // Find the matching key exchange group from the provider
         let kx_group = self
             .provider()
-            .supported_dtls12_kx_groups()
+            .supported_kx_groups()
             .find(|g| g.name() == group)
             .ok_or_else(|| format!("Unsupported ECDHE named group: {:?}", group))?;
 

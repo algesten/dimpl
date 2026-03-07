@@ -841,7 +841,7 @@ impl ProtocolVersion {
     }
 
     /// Serialize this `ProtocolVersion` to wire format.
-    pub fn serialize(&self, output: &mut crate::buffer::Buf) {
+    pub fn serialize(&self, output: &mut Buf) {
         output.extend_from_slice(&self.as_u16().to_be_bytes());
     }
 }

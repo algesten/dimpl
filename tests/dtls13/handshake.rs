@@ -598,7 +598,7 @@ fn dtls13_handshake_x25519_key_exchange() {
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
 
     // Use config filter to select only X25519 and disable DTLS 1.2
-    // (X25519 is not yet supported for DTLS 1.2)
+    // to keep this test focused on DTLS 1.3 behavior.
     let config = Arc::new(
         Config::builder()
             .kx_groups(&[NamedGroup::X25519])

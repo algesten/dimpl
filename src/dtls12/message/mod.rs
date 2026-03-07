@@ -63,6 +63,8 @@ pub enum Dtls12CipherSuite {
     ECDHE_ECDSA_AES256_GCM_SHA384, // 0xC02C
     /// ECDHE with ECDSA authentication, AES-128-GCM, SHA-256
     ECDHE_ECDSA_AES128_GCM_SHA256, // 0xC02B
+    /// ECDHE with ECDSA authentication, ChaCha20-Poly1305, SHA-256
+    ECDHE_ECDSA_CHACHA20_POLY1305_SHA256, // 0xCCA9
 
     /// Unknown or unsupported cipher suite by its IANA value
     Unknown(u16),
@@ -81,6 +83,7 @@ impl Dtls12CipherSuite {
             // ECDHE with AES-GCM
             0xC02C => Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
             0xC02B => Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+            0xCCA9 => Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256,
 
             _ => Dtls12CipherSuite::Unknown(value),
         }
@@ -92,6 +95,7 @@ impl Dtls12CipherSuite {
             // ECDHE with AES-GCM
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => 0xC02C,
             Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 0xC02B,
+            Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256 => 0xCCA9,
 
             Dtls12CipherSuite::Unknown(value) => *value,
         }
@@ -108,7 +112,8 @@ impl Dtls12CipherSuite {
         match self {
             // AES-GCM suites
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-            | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 12,
+            | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256 => 12,
 
             Dtls12CipherSuite::Unknown(_) => 12, // Default length for unknown cipher suites
         }
@@ -119,7 +124,10 @@ impl Dtls12CipherSuite {
         match self {
             // All ECDHE ciphers
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-            | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => KeyExchangeAlgorithm::EECDH,
+            | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256 => {
+                KeyExchangeAlgorithm::EECDH
+            }
 
             Dtls12CipherSuite::Unknown(_) => KeyExchangeAlgorithm::Unknown,
         }
@@ -131,25 +139,28 @@ impl Dtls12CipherSuite {
             self,
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
                 | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+                | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256
         )
     }
 
     /// All supported cipher suites in server preference order.
-    pub const fn all() -> &'static [Dtls12CipherSuite; 2] {
+    pub const fn all() -> &'static [Dtls12CipherSuite; 3] {
         &[
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
             Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+            Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256,
         ]
     }
 
     /// Cipher suites compatible with a given certificate's signature algorithm.
     pub fn compatible_with_certificate(
         cert_type: SignatureAlgorithm,
-    ) -> &'static [Dtls12CipherSuite; 2] {
+    ) -> &'static [Dtls12CipherSuite; 3] {
         match cert_type {
             SignatureAlgorithm::ECDSA => &[
                 Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
                 Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+                Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256,
             ],
             _ => panic!("Need either RSA or ECDSA certificate"),
         }
@@ -167,7 +178,8 @@ impl Dtls12CipherSuite {
     pub fn hash_algorithm(&self) -> HashAlgorithm {
         match self {
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
-            Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
+            Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256 => HashAlgorithm::SHA256,
             Dtls12CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
         }
     }
@@ -175,8 +187,9 @@ impl Dtls12CipherSuite {
     /// The signature algorithm associated with the suite's key exchange.
     pub fn signature_algorithm(&self) -> SignatureAlgorithm {
         match self {
-            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => SignatureAlgorithm::ECDSA,
-            Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => SignatureAlgorithm::ECDSA,
+            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+            | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+            | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256 => SignatureAlgorithm::ECDSA,
             Dtls12CipherSuite::Unknown(_) => SignatureAlgorithm::Unknown(0),
         }
     }
@@ -187,7 +200,7 @@ impl Dtls12CipherSuite {
     }
 
     /// Supported DTLS 1.2 cipher suites in server preference order.
-    pub const fn supported() -> &'static [Dtls12CipherSuite; 2] {
+    pub const fn supported() -> &'static [Dtls12CipherSuite; 3] {
         Self::all()
     }
 }

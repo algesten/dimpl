@@ -11,9 +11,10 @@ use super::io_buf::IoBuffer;
 use super::stream::TlsStream;
 use super::{CryptoError, DtlsEvent, DATAGRAM_MTU, DATAGRAM_MTU_WARN};
 
-// We restrict cipher suites to those that include ephermeral Diffie-Hellman or ephemeral
-// Elliptical Curve Diffie-Hellman AND AES-256 or AES-GCM.
-const DTLS_CIPHERS: &str = "ECDHE+AESGCM:DHE+AESGCM:ECDHE+AES256:DHE+AES256";
+// We restrict cipher suites to those that include ephemeral Diffie-Hellman or
+// ephemeral Elliptic Curve Diffie-Hellman and modern AEAD ciphers.
+const DTLS_CIPHERS: &str =
+    "ECDHE+CHACHA20:DHE+CHACHA20:ECDHE+AESGCM:DHE+AESGCM:ECDHE+AES256:DHE+AES256";
 
 pub struct OsslDtlsImpl {
     /// Certificate for the DTLS session.
@@ -30,8 +31,15 @@ pub struct OsslDtlsImpl {
 }
 
 impl OsslDtlsImpl {
-    pub fn new(cert: OsslDtlsCert) -> Result<Self, super::CryptoError> {
-        let context = dtls_create_ctx(&cert)?;
+    pub fn new(cert: OsslDtlsCert) -> Result<Self, CryptoError> {
+        Self::new_with_groups(cert, None)
+    }
+
+    pub fn new_with_groups(
+        cert: OsslDtlsCert,
+        groups_list: Option<&str>,
+    ) -> Result<Self, CryptoError> {
+        let context = dtls_create_ctx_with_groups(&cert, groups_list)?;
         let ssl = dtls_ssl_create(&context)?;
         Ok(OsslDtlsImpl {
             _cert: cert,
@@ -133,6 +141,13 @@ impl OsslDtlsImpl {
 }
 
 pub fn dtls_create_ctx(cert: &OsslDtlsCert) -> Result<SslContext, CryptoError> {
+    dtls_create_ctx_with_groups(cert, None)
+}
+
+pub fn dtls_create_ctx_with_groups(
+    cert: &OsslDtlsCert,
+    groups_list: Option<&str>,
+) -> Result<SslContext, CryptoError> {
     // TODO: Technically we want to disallow DTLS < 1.2, but that requires
     // us to use this commented out unsafe. We depend on browsers disallowing
     // it instead.
@@ -140,6 +155,9 @@ pub fn dtls_create_ctx(cert: &OsslDtlsCert) -> Result<SslContext, CryptoError> {
     let mut ctx = SslContextBuilder::new(SslMethod::dtls())?;
 
     ctx.set_cipher_list(DTLS_CIPHERS)?;
+    if let Some(groups) = groups_list {
+        ctx.set_groups_list(groups)?;
+    }
     let srtp_profiles = {
         // Rust can't join directly to a string, need to allocate a vec first :(
         // This happens very rarely so the extra allocations don't matter

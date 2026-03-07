@@ -31,6 +31,7 @@
 //! - **Cipher suites (TLS 1.2 over DTLS)**
 //!   - `ECDHE_ECDSA_AES256_GCM_SHA384`
 //!   - `ECDHE_ECDSA_AES128_GCM_SHA256`
+//!   - `ECDHE_ECDSA_CHACHA20_POLY1305_SHA256`
 //! - **Cipher suites (TLS 1.3 over DTLS)**
 //!   - `TLS_AES_128_GCM_SHA256`
 //!   - `TLS_AES_256_GCM_SHA384`
@@ -105,6 +106,7 @@
 //!                 Output::ApplicationData(_data) => {
 //!                     // Deliver plaintext to application
 //!                 }
+//!                 _ => {}
 //!             }
 //!         }
 //!
@@ -212,8 +214,8 @@ pub struct DtlsCertificate {
     pub private_key: Vec<u8>,
 }
 
-impl std::fmt::Debug for DtlsCertificate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for DtlsCertificate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DtlsCertificate")
             .field("certificate", &self.certificate.len())
             .field("private_key", &self.private_key.len())

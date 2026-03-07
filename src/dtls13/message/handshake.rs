@@ -91,7 +91,7 @@ impl Handshake {
         let is_fragment = header.fragment_offset > 0 || header.fragment_length < header.length;
 
         if !as_fragment && is_fragment {
-            return Err(nom::Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
         }
 
         let (input, body) = if as_fragment {

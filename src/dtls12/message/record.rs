@@ -32,7 +32,7 @@ impl DTLSRecord {
     /// DTLS record header length: content_type(1) + version(2) + epoch(2) + seq(6) + length(2)
     pub const HEADER_LEN: usize = 13;
 
-    /// Length of the explicit nonce prefix in AEAD ciphers (e.g., AES-GCM)
+    /// Length of the explicit nonce prefix in DTLS 1.2 AES-GCM records.
     pub const EXPLICIT_NONCE_LEN: usize = 8;
 
     /// Byte offset in the record header where the 2-byte length field is
@@ -111,10 +111,15 @@ impl DTLSRecord {
         output.extend_from_slice(self.fragment(buf));
     }
 
-    /// Get the explicit nonce from the fragment.
-    pub fn nonce<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
+    /// Get the explicit nonce from the fragment using the requested length.
+    pub fn nonce_with_len<'a>(&self, buf: &'a [u8], len: usize) -> &'a [u8] {
         let fragment = self.fragment(buf);
-        &fragment[..Self::EXPLICIT_NONCE_LEN]
+        &fragment[..len]
+    }
+
+    /// Get the explicit nonce from the fragment (AES-GCM default).
+    pub fn nonce<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
+        self.nonce_with_len(buf, Self::EXPLICIT_NONCE_LEN)
     }
 }
 
