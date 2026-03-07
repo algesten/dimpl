@@ -1,6 +1,10 @@
 # Unreleased
 
-# 0.4.1
+# 0.4.2
+
+  * Downgrade rand to 0.9 to avoid double chacha20 dep #84
+
+# 0.4.1 (yanked)
 
   * Edition 2024 and bump deps (big cargo fmt) #83
   * Add DTLS 1.2 ChaCha20 and X25519 support #77

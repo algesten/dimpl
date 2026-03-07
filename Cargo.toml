@@ -2,7 +2,7 @@
 name = "dimpl"
 authors = ["Martin Algesten <martin@algesten.se>"]
 description = "DTLS 1.2/1.3 implementation (Sans‑IO, Sync)"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/algesten/dimpl"
