@@ -5,7 +5,7 @@
 
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
+use rand::{Rng, SeedableRng};
 
 /// A random number generator that can be seeded for deterministic behavior.
 ///
