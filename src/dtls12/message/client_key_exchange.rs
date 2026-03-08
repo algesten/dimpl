@@ -15,6 +15,7 @@ pub struct ClientKeyExchange {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ExchangeKeys {
     Ecdh(ClientEcdhKeys),
+    Psk(ClientPskKeys),
 }
 
 /// ECDHE key exchange parameters
@@ -72,6 +73,10 @@ impl ClientKeyExchange {
                 let (input, ecdh_keys) = ClientEcdhKeys::parse(input, base_offset)?;
                 (input, ExchangeKeys::Ecdh(ecdh_keys))
             }
+            KeyExchangeAlgorithm::PSK => {
+                let (input, psk_keys) = ClientPskKeys::parse(input, base_offset)?;
+                (input, ExchangeKeys::Psk(psk_keys))
+            }
             _ => return Err(Err::Failure(Error::new(input, nom::error::ErrorKind::Tag))),
         };
 
@@ -81,6 +86,7 @@ impl ClientKeyExchange {
     pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
         match &self.exchange_keys {
             ExchangeKeys::Ecdh(ecdh_keys) => ecdh_keys.serialize(buf, output),
+            ExchangeKeys::Psk(psk_keys) => psk_keys.serialize(buf, output),
         }
     }
 
@@ -88,6 +94,45 @@ impl ClientKeyExchange {
     pub fn serialize_from_bytes(public_key: &[u8], output: &mut Buf) {
         output.push(public_key.len() as u8);
         output.extend_from_slice(public_key);
+    }
+}
+
+/// PSK identity sent by the client (RFC 4279 §2).
+///
+/// Wire format: `uint16 identity_length + identity`
+#[derive(Debug, PartialEq, Eq)]
+pub struct ClientPskKeys {
+    pub identity_range: Range<usize>,
+}
+
+impl ClientPskKeys {
+    pub fn identity<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
+        &buf[self.identity_range.clone()]
+    }
+
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], ClientPskKeys> {
+        let original_input = input;
+        let (input, identity_len) = nom::number::complete::be_u16(input)?;
+        let (input, identity_slice) = take(identity_len as usize)(input)?;
+
+        let relative_offset =
+            identity_slice.as_ptr() as usize - original_input.as_ptr() as usize;
+        let start = base_offset + relative_offset;
+        let end = start + identity_slice.len();
+
+        Ok((input, ClientPskKeys { identity_range: start..end }))
+    }
+
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
+        let identity = self.identity(buf);
+        output.extend_from_slice(&(identity.len() as u16).to_be_bytes());
+        output.extend_from_slice(identity);
+    }
+
+    /// Serialize directly from identity bytes (for sending).
+    pub fn serialize_from_bytes(identity: &[u8], output: &mut Buf) {
+        output.extend_from_slice(&(identity.len() as u16).to_be_bytes());
+        output.extend_from_slice(identity);
     }
 }
 

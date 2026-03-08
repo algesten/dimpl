@@ -26,7 +26,7 @@ use crate::dtls12::client::LocalEvent;
 use crate::dtls12::engine::Engine;
 use crate::dtls12::message::{Body, CertificateRequest, CertificateTypeVec, Dtls12CipherSuite};
 use crate::dtls12::message::{ClientCertificateType, CompressionMethod, ContentType};
-use crate::dtls12::message::{Cookie, CurveType, DistinguishedName, ExchangeKeys, ExtensionType};
+use crate::dtls12::message::{Cookie, CurveType, DistinguishedName, ExchangeKeys, ExtensionType, PskParams};
 use crate::dtls12::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
 use crate::dtls12::message::{MessageType, NamedGroup, NamedGroupVec, ProtocolVersion, Random};
 use crate::dtls12::message::{ServerHello, SessionId, SignatureAlgorithm};
@@ -109,6 +109,12 @@ impl Server {
     /// Create a new DTLS server
     pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate, now: Instant) -> Server {
         let engine = Engine::new(config, certificate);
+        Self::new_with_engine(engine, now)
+    }
+
+    /// Create a new PSK-only DTLS server (no certificate).
+    pub fn new_psk(config: Arc<Config>, now: Instant) -> Server {
+        let engine = Engine::new_psk(config);
         Self::new_with_engine(engine, now)
     }
 
@@ -439,7 +445,17 @@ impl State {
                 )
             })?;
 
-        Ok(Self::SendCertificate)
+        let cs = server
+            .engine
+            .cipher_suite()
+            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+
+        // PSK suites skip Certificate
+        if cs.is_psk() {
+            Ok(Self::SendServerKeyExchange)
+        } else {
+            Ok(Self::SendCertificate)
+        }
     }
 
     fn send_certificate(self, server: &mut Server) -> Result<Self, Error> {
@@ -454,6 +470,15 @@ impl State {
 
     fn send_server_key_exchange(self, server: &mut Server) -> Result<Self, Error> {
         trace!("Sending ServerKeyExchange");
+
+        let cs = server
+            .engine
+            .cipher_suite()
+            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+
+        if cs.is_psk() {
+            return self.send_server_key_exchange_psk(server);
+        }
 
         let client_random = server
             .client_random
@@ -489,9 +514,10 @@ impl State {
 
         // Select signature/hash for SKE by intersecting client's list
         // with our key type (prefer SHA256, then SHA384)
+        // unwrap: ServerKeyExchange signature only needed for certificate-based suites
         let selected_signature = select_ske_signature_algorithm(
             server.client_signature_algorithms.as_ref(),
-            server.engine.crypto_context().signature_algorithm(),
+            server.engine.crypto_context().signature_algorithm().unwrap(),
         );
 
         debug!(
@@ -519,6 +545,26 @@ impl State {
         }
     }
 
+    /// PSK ServerKeyExchange: send identity hint only (no ECDHE, no signature).
+    fn send_server_key_exchange_psk(self, server: &mut Server) -> Result<Self, Error> {
+        let hint = server
+            .engine
+            .config()
+            .psk_identity_hint()
+            .unwrap_or(&[])
+            .to_vec();
+
+        server
+            .engine
+            .create_handshake(MessageType::ServerKeyExchange, move |body, _engine| {
+                PskParams::serialize_from_bytes(&hint, body);
+                Ok(())
+            })?;
+
+        // PSK never sends CertificateRequest
+        Ok(Self::SendServerHelloDone)
+    }
+
     fn send_certificate_request(self, server: &mut Server) -> Result<Self, Error> {
         debug!("Sending CertificateRequest");
         // Select CertificateRequest.signature_algorithms as intersection of client's list and our supported
@@ -544,6 +590,16 @@ impl State {
         server
             .engine
             .create_handshake(MessageType::ServerHelloDone, |_, _| Ok(()))?;
+
+        let cs = server
+            .engine
+            .cipher_suite()
+            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+
+        // PSK: no client certificates
+        if cs.is_psk() {
+            return Ok(Self::AwaitClientKeyExchange);
+        }
 
         if server.engine.config().require_client_certificate() {
             Ok(Self::AwaitCertificate)
@@ -619,31 +675,73 @@ impl State {
             .cipher_suite()
             .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
 
-        // Extract client's public key range before dropping handshake
-        let public_key_range = match &ckx.exchange_keys {
-            ExchangeKeys::Ecdh(keys) => keys.public_key_range.clone(),
-        };
+        if suite.is_psk() {
+            // Extract PSK identity range before dropping handshake
+            let identity_range = match &ckx.exchange_keys {
+                ExchangeKeys::Psk(keys) => keys.identity_range.clone(),
+                _ => {
+                    return Err(Error::UnexpectedMessage(
+                        "ECDHE ClientKeyExchange in PSK path".to_string(),
+                    ));
+                }
+            };
 
-        drop(maybe);
+            drop(maybe);
 
-        // Get the actual public key data from defragment_buffer
-        let client_pub = &server.defragment_buffer[public_key_range];
+            let identity = &server.defragment_buffer[identity_range];
+            trace!("PSK identity ({} bytes)", identity.len());
 
-        // Compute shared secret
-        let mut buf = server.engine.pop_buffer();
-        server
-            .engine
-            .crypto_context_mut()
-            .compute_shared_secret(client_pub, &mut buf)
-            .map_err(|e| Error::CryptoError(format!("Failed to compute shared secret: {}", e)))?;
+            // Resolve PSK via the configured resolver
+            let psk = server
+                .engine
+                .config()
+                .psk_resolver()
+                .ok_or_else(|| Error::SecurityError("No PSK resolver configured".to_string()))?
+                .resolve(identity)
+                .ok_or_else(|| {
+                    Error::SecurityError("PSK resolver returned no key for identity".to_string())
+                })?;
+
+            let crypto = server.engine.crypto_context_mut();
+            crypto.set_psk(psk);
+            crypto.compute_psk_pre_master_secret().map_err(|e| {
+                Error::CryptoError(format!("Failed to compute PSK PMS: {}", e))
+            })?;
+        } else {
+            // Extract client's public key range before dropping handshake
+            let public_key_range = match &ckx.exchange_keys {
+                ExchangeKeys::Ecdh(keys) => keys.public_key_range.clone(),
+                ExchangeKeys::Psk(_) => {
+                    return Err(Error::UnexpectedMessage(
+                        "PSK ClientKeyExchange in ECDHE path".to_string(),
+                    ));
+                }
+            };
+
+            drop(maybe);
+
+            // Get the actual public key data from defragment_buffer
+            let client_pub = &server.defragment_buffer[public_key_range];
+
+            // Compute shared secret
+            let mut buf = server.engine.pop_buffer();
+            server
+                .engine
+                .crypto_context_mut()
+                .compute_shared_secret(client_pub, &mut buf)
+                .map_err(|e| {
+                    Error::CryptoError(format!("Failed to compute shared secret: {}", e))
+                })?;
+            server.engine.push_buffer(buf);
+        }
 
         // Capture session hash for EMS now (up to ClientKeyExchange)
         let suite_hash = suite.hash_algorithm();
+        let mut buf = server.engine.pop_buffer();
         server.engine.transcript_hash(suite_hash, &mut buf);
         server.captured_session_hash = Some(buf);
 
         // Derive master secret and keys (needed to decrypt client's Finished)
-        let suite_hash = suite.hash_algorithm();
         let client_random_buf = {
             let mut b = Buf::new();
             server.client_random.unwrap().serialize(&mut b);

@@ -192,7 +192,7 @@ mod error;
 pub use error::Error;
 
 mod config;
-pub use config::Config;
+pub use config::{Config, PskResolver};
 
 #[cfg(feature = "rcgen")]
 pub mod certificate;
@@ -257,6 +257,17 @@ impl Dtls {
     /// certificate according to its security policy.
     pub fn new_12(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
         let inner = Inner::Server12(Server12::new(config, certificate, now));
+        Dtls { inner: Some(inner) }
+    }
+
+    /// Create a new DTLS 1.2 PSK-only instance (no certificate).
+    ///
+    /// Call [`set_active(true)`](Self::set_active) to switch to client
+    /// before the handshake begins. The `config` must have a
+    /// [`PskResolver`] configured, and for clients a PSK identity
+    /// via [`Config::psk_identity`](Config).
+    pub fn new_12_psk(config: Arc<Config>, now: Instant) -> Self {
+        let inner = Inner::Server12(Server12::new_psk(config, now));
         Dtls { inner: Some(inner) }
     }
 

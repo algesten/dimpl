@@ -143,6 +143,41 @@ impl Engine {
         }
     }
 
+    /// Create a new engine for PSK-only sessions (no certificate).
+    pub fn new_psk(config: Arc<Config>) -> Self {
+        let mut rng = SeededRng::new(config.rng_seed());
+
+        let flight_backoff =
+            ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries(), &mut rng);
+
+        let crypto_context = CryptoContext::new_psk(Arc::clone(&config));
+
+        Self {
+            config,
+            rng,
+            buffers_free: BufferPool::default(),
+            sequence_epoch_0: Sequence::new(0),
+            sequence_epoch_n: Sequence::new(1),
+            queue_rx: QueueRx::new(),
+            queue_tx: QueueTx::new(),
+            cipher_suite: None,
+            explicit_nonce_len: 0,
+            tag_len: 0,
+            crypto_context,
+            peer_encryption_enabled: false,
+            is_client: false,
+            peer_handshake_seq_no: 0,
+            next_handshake_seq_no: 0,
+            transcript: Buf::new(),
+            replay: ReplayWindow::new(),
+            flight_saved_records: Vec::new(),
+            flight_backoff,
+            flight_timeout: Timeout::Unarmed,
+            connect_timeout: Timeout::Unarmed,
+            release_app_data: false,
+        }
+    }
+
     pub fn set_client(&mut self, is_client: bool) {
         self.is_client = is_client;
     }

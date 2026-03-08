@@ -56,11 +56,14 @@ pub struct CryptoContext {
     /// Server cipher
     server_cipher: Option<Box<dyn crypto::Cipher>>,
 
-    /// Certificate (DER format)
-    certificate: Vec<u8>,
+    /// Certificate (DER format) — None for PSK-only sessions
+    certificate: Option<Vec<u8>>,
 
-    /// Parsed private key for the certificate with signature algorithm
-    private_key: Box<dyn crypto::SigningKey>,
+    /// Parsed private key for the certificate — None for PSK-only sessions
+    private_key: Option<Box<dyn crypto::SigningKey>>,
+
+    /// Resolved PSK value (set during handshake after identity exchange)
+    psk: Option<Vec<u8>>,
 
     /// Client random (needed for SRTP key export per RFC 5705)
     client_random: Option<ArrayVec<u8, 32>>,
@@ -70,7 +73,7 @@ pub struct CryptoContext {
 }
 
 impl CryptoContext {
-    /// Create a new crypto context
+    /// Create a new crypto context with certificate-based authentication
     pub fn new(
         certificate: Vec<u8>,
         private_key_bytes: Vec<u8>,
@@ -107,8 +110,34 @@ impl CryptoContext {
             pre_master_secret: None,
             client_cipher: None,
             server_cipher: None,
-            certificate,
-            private_key,
+            certificate: Some(certificate),
+            private_key: Some(private_key),
+            psk: None,
+            client_random: None,
+            server_random: None,
+        }
+    }
+
+    /// Create a new crypto context for PSK-only sessions (no certificate)
+    pub fn new_psk(config: Arc<crate::Config>) -> Self {
+        CryptoContext {
+            config,
+            key_exchange: None,
+            key_exchange_public_key: None,
+            key_exchange_group: None,
+            client_write_key: None,
+            server_write_key: None,
+            client_write_iv: None,
+            server_write_iv: None,
+            client_mac_key: None,
+            server_mac_key: None,
+            master_secret: None,
+            pre_master_secret: None,
+            client_cipher: None,
+            server_cipher: None,
+            certificate: None,
+            private_key: None,
+            psk: None,
             client_random: None,
             server_random: None,
         }
@@ -151,6 +180,28 @@ impl CryptoContext {
         ke.complete(peer_public_key, buf)?;
         self.pre_master_secret = Some(core::mem::take(buf));
         // Note: we keep key_exchange_public_key since it may be needed later
+        Ok(())
+    }
+
+    /// Set the resolved PSK value for this session.
+    pub fn set_psk(&mut self, psk: Vec<u8>) {
+        self.psk = Some(psk);
+    }
+
+    /// Compute PSK pre-master secret per RFC 4279 §2.
+    ///
+    /// Format: `uint16(N) || zeros(N) || uint16(N) || PSK(N)`
+    /// where N is the PSK length.
+    pub fn compute_psk_pre_master_secret(&mut self) -> Result<(), String> {
+        let psk = self.psk.as_ref().ok_or("PSK not set")?;
+        let n = psk.len();
+        // Total: 2 + N + 2 + N = 2N + 4
+        let mut pms = Buf::new();
+        pms.extend_from_slice(&(n as u16).to_be_bytes());
+        pms.extend_from_slice(&vec![0u8; n]);
+        pms.extend_from_slice(&(n as u16).to_be_bytes());
+        pms.extend_from_slice(psk);
+        self.pre_master_secret = Some(pms);
         Ok(())
     }
 
@@ -370,31 +421,38 @@ impl CryptoContext {
         }
     }
 
-    /// Get client certificate for authentication
+    /// Get client certificate for authentication.
+    /// Panics if no certificate is configured (PSK-only mode).
     pub fn get_client_certificate(&self) -> Certificate {
-        // We validate in constructor, so we can assume we have a certificate
-        // Create an Asn1Cert with a range covering the entire certificate
-        let cert = Asn1Cert(0..self.certificate.len());
+        // unwrap: only called for certificate-based suites, validated at construction
+        let certificate = self.certificate.as_ref().unwrap();
+        let cert = Asn1Cert(0..certificate.len());
         let mut certs = ArrayVec::new();
         certs.push(cert);
         Certificate::new(certs)
     }
 
-    /// Serialize client certificate for authentication
+    /// Serialize client certificate for authentication.
+    /// Panics if no certificate is configured (PSK-only mode).
     pub fn serialize_client_certificate(&self, output: &mut Buf) {
         let cert = self.get_client_certificate();
-        cert.serialize(&self.certificate, output);
+        // unwrap: same guard as get_client_certificate
+        cert.serialize(self.certificate.as_ref().unwrap(), output);
     }
 
-    /// Sign the provided data using the client's private key
-    /// Returns the signature or an error if signing fails
+    /// Sign the provided data using the client's private key.
+    /// Returns an error if no private key is configured (PSK-only mode).
     pub fn sign_data(
         &mut self,
         data: &[u8],
         _hash_alg: HashAlgorithm,
         out: &mut Buf,
     ) -> Result<(), String> {
-        self.private_key.sign(data, out)
+        let private_key = self
+            .private_key
+            .as_mut()
+            .ok_or("No private key configured (PSK mode)")?;
+        private_key.sign(data, out)
     }
 
     /// Generate verify data for a Finished message using PRF
@@ -499,14 +557,16 @@ impl CryptoContext {
         Some((CurveType::NamedCurve, ke.group()))
     }
 
-    /// Signature algorithm for the configured private key
-    pub fn signature_algorithm(&self) -> SignatureAlgorithm {
-        self.private_key.algorithm()
+    /// Signature algorithm for the configured private key.
+    /// Returns None in PSK-only mode.
+    pub fn signature_algorithm(&self) -> Option<SignatureAlgorithm> {
+        self.private_key.as_ref().map(|pk| pk.algorithm())
     }
 
-    /// Default hash algorithm for the configured private key
-    pub fn private_key_default_hash_algorithm(&self) -> HashAlgorithm {
-        self.private_key.hash_algorithm()
+    /// Default hash algorithm for the configured private key.
+    /// Returns None in PSK-only mode.
+    pub fn private_key_default_hash_algorithm(&self) -> Option<HashAlgorithm> {
+        self.private_key.as_ref().map(|pk| pk.hash_algorithm())
     }
 
     /// Create a hash context for the given algorithm
@@ -516,7 +576,15 @@ impl CryptoContext {
 
     /// Check if the client's private key is compatible with a given cipher suite.
     pub fn is_cipher_suite_compatible(&self, cipher_suite: Dtls12CipherSuite) -> bool {
-        cipher_suite.signature_algorithm() == self.private_key.algorithm()
+        match cipher_suite.signature_algorithm() {
+            // Certificate-based suite: need a matching private key
+            Some(sig_alg) => self
+                .private_key
+                .as_ref()
+                .is_some_and(|pk| sig_alg == pk.algorithm()),
+            // PSK suite: no certificate needed
+            None => true,
+        }
     }
 
     /// Get the client write IV if derived.

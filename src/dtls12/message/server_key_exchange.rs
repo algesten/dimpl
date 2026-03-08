@@ -14,6 +14,7 @@ pub struct ServerKeyExchange {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ServerKeyExchangeParams {
     Ecdh(EcdhParams),
+    Psk(PskParams),
 }
 
 impl ServerKeyExchange {
@@ -27,6 +28,10 @@ impl ServerKeyExchange {
                 let (input, ecdh_params) = EcdhParams::parse(input, base_offset)?;
                 (input, ServerKeyExchangeParams::Ecdh(ecdh_params))
             }
+            KeyExchangeAlgorithm::PSK => {
+                let (input, psk_params) = PskParams::parse(input, base_offset)?;
+                (input, ServerKeyExchangeParams::Psk(psk_params))
+            }
             _ => return Err(Err::Failure(Error::new(input, ErrorKind::Tag))),
         };
 
@@ -38,12 +43,16 @@ impl ServerKeyExchange {
             ServerKeyExchangeParams::Ecdh(ecdh_params) => {
                 ecdh_params.serialize(buf, output, with_signature)
             }
+            ServerKeyExchangeParams::Psk(psk_params) => {
+                psk_params.serialize(buf, output)
+            }
         }
     }
 
     pub fn signature(&self) -> Option<&DigitallySigned> {
         match &self.params {
             ServerKeyExchangeParams::Ecdh(ecdh_params) => ecdh_params.signature.as_ref(),
+            ServerKeyExchangeParams::Psk(_) => None,
         }
     }
 }
@@ -110,6 +119,45 @@ impl EcdhParams {
                 signed.serialize(buf, output);
             }
         }
+    }
+}
+
+/// PSK identity hint (RFC 4279 §2).
+///
+/// Wire format: `uint16 hint_length + hint`
+#[derive(Debug, PartialEq, Eq)]
+pub struct PskParams {
+    pub hint_range: Range<usize>,
+}
+
+impl PskParams {
+    pub fn hint<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
+        &buf[self.hint_range.clone()]
+    }
+
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], PskParams> {
+        let original_input = input;
+        let (input, hint_len) = nom::number::complete::be_u16(input)?;
+        let (input, hint_slice) = take(hint_len as usize)(input)?;
+
+        let relative_offset =
+            hint_slice.as_ptr() as usize - original_input.as_ptr() as usize;
+        let start = base_offset + relative_offset;
+        let end = start + hint_slice.len();
+
+        Ok((input, PskParams { hint_range: start..end }))
+    }
+
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
+        let hint = self.hint(buf);
+        output.extend_from_slice(&(hint.len() as u16).to_be_bytes());
+        output.extend_from_slice(hint);
+    }
+
+    /// Serialize directly from hint bytes (for sending).
+    pub fn serialize_from_bytes(hint: &[u8], output: &mut Buf) {
+        output.extend_from_slice(&(hint.len() as u16).to_be_bytes());
+        output.extend_from_slice(hint);
     }
 }
 

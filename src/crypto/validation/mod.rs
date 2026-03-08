@@ -48,7 +48,7 @@ impl CryptoProvider {
         sig_alg: SignatureAlgorithm,
     ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> {
         self.supported_cipher_suites()
-            .filter(move |cs| cs.suite().signature_algorithm() == sig_alg)
+            .filter(move |cs| cs.suite().signature_algorithm() == Some(sig_alg))
     }
 
     /// Check if provider supports ECDH-based cipher suites.
@@ -217,7 +217,11 @@ impl CryptoProvider {
         // Test signature verification for each supported cipher suite
         for cs in self.supported_cipher_suites() {
             let hash_alg = cs.suite().hash_algorithm();
-            let sig_alg = cs.suite().signature_algorithm();
+            let sig_alg = match cs.suite().signature_algorithm() {
+                Some(alg) => alg,
+                // PSK suites have no signature — skip validation
+                None => continue,
+            };
 
             let (cert_der, signature, test_data) = match (hash_alg, sig_alg) {
                 (HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA) => (
@@ -692,7 +696,7 @@ mod tests_aws_lc_rs {
     fn test_default_provider_has_cipher_suites() {
         let provider = aws_lc_rs::default_provider();
         let count = provider.supported_cipher_suites().count();
-        assert_eq!(count, 3); // AES-128, AES-256, and ChaCha20-Poly1305
+        assert_eq!(count, 4); // AES-128, AES-256, ChaCha20-Poly1305, PSK-AES-128-CCM-8
     }
 
     #[test]
@@ -740,7 +744,7 @@ mod tests_rust_crypto {
     fn test_default_provider_has_cipher_suites() {
         let provider = rust_crypto::default_provider();
         let count = provider.supported_cipher_suites().count();
-        assert_eq!(count, 3); // AES-128, AES-256, and ChaCha20-Poly1305
+        assert_eq!(count, 4); // AES-128, AES-256, ChaCha20-Poly1305, PSK-AES-128-CCM-8
     }
 
     #[test]
