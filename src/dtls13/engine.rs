@@ -27,7 +27,7 @@ use crate::dtls13::message::Sequence;
 use crate::timer::ExponentialBackoff;
 use crate::types::{HashAlgorithm, Random};
 use crate::window::ReplayWindow;
-use crate::{Config, Error, Output, SeededRng};
+use crate::{Config, DtlsCertificate, Error, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
@@ -38,6 +38,9 @@ const MAX_SEQUENCE_NUMBER: u64 = (1u64 << 48) - 1;
 pub struct Engine {
     /// Configuration options.
     config: Arc<Config>,
+
+    /// Saved certificate
+    certificate: DtlsCertificate,
 
     /// Seedable random number generator for deterministic testing
     rng: SeededRng,
@@ -92,9 +95,6 @@ pub struct Engine {
 
     /// Whether the remote peer has enabled encryption
     peer_encryption_enabled: bool,
-
-    /// Certificate in DER format
-    certificate_der: Vec<u8>,
 
     /// Signing key for CertificateVerify
     signing_key: Box<dyn SigningKey>,
@@ -189,7 +189,7 @@ struct Entry {
 }
 
 impl Engine {
-    pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate) -> Self {
+    pub fn new(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
         let mut rng = SeededRng::new(config.rng_seed());
 
         let flight_backoff =
@@ -206,6 +206,7 @@ impl Engine {
 
         Self {
             config,
+            certificate,
             rng,
             buffers_free: BufferPool::default(),
             sequence_epoch_0: Sequence::new(0),
@@ -224,7 +225,6 @@ impl Engine {
             prev_app_send_seq: 0,
             app_recv_keys: ArrayVec::new(),
             peer_encryption_enabled: false,
-            certificate_der: certificate.certificate,
             signing_key,
             is_client: false,
             peer_handshake_seq_no: 0,
@@ -244,6 +244,10 @@ impl Engine {
             aead_encryption_threshold,
             needs_key_update: false,
         }
+    }
+
+    pub fn into_fallback(self) -> (Arc<Config>, DtlsCertificate) {
+        (self.config, self.certificate)
     }
 
     pub fn set_client(&mut self, is_client: bool) {
@@ -307,7 +311,7 @@ impl Engine {
     }
 
     pub fn certificate_der(&self) -> &[u8] {
-        &self.certificate_der
+        &self.certificate.certificate
     }
 
     pub fn signing_key(&mut self) -> &mut dyn SigningKey {

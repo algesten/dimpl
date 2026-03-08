@@ -74,6 +74,8 @@ const HRR_RANDOM: [u8; 32] = [
     0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
 ];
 
+const MAX_RETAINED_CLIENT_HELLO: usize = 64;
+
 /// DTLS 1.3 server
 pub struct Server {
     /// Current server state.
@@ -143,7 +145,7 @@ pub struct Server {
 
     /// Raw packets buffered during auto-sense so they can be replayed
     /// to a DTLS 1.2 server on fallback.
-    auto_packets: Vec<Vec<u8>>,
+    retained_hello: VecDeque<Buf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,7 +181,7 @@ impl Server {
         Self::new_with_engine(engine, now, true)
     }
 
-    pub(crate) fn new_with_engine(mut engine: Engine, now: Instant, auto_mode: bool) -> Server {
+    pub fn new_with_engine(mut engine: Engine, now: Instant, auto_mode: bool) -> Server {
         let cookie_secret = engine.random_arr();
 
         Server {
@@ -204,7 +206,7 @@ impl Server {
             cookie_secret,
             pending_key_update_response: false,
             auto_mode,
-            auto_packets: Vec::new(),
+            retained_hello: VecDeque::with_capacity(10),
         }
     }
 
@@ -217,9 +219,15 @@ impl Server {
         self.auto_mode
     }
 
-    /// The last time instant seen by this server.
-    pub fn last_now(&self) -> Instant {
-        self.last_now
+    /// Take all relevant config from this server instance.
+    ///
+    /// This is used in two cases:
+    ///
+    /// 1. Switching a server pending (auto-mode) to dtls12 server
+    /// 2. set_active(true), turning a server pending (auto-mode) to a ClientPending
+    pub fn into_parts(self) -> (Arc<Config>, DtlsCertificate, Instant, VecDeque<Buf>) {
+        let (config, cert) = self.engine.into_fallback();
+        (config, cert, self.last_now, self.retained_hello)
     }
 
     pub(crate) fn state_name(&self) -> &'static str {
@@ -231,12 +239,10 @@ impl Server {
         // the ClientHello so they can be replayed to Server12 on fallback.
         if self.auto_mode && self.state == State::AwaitClientHello {
             // Cap buffered fragments to prevent unbounded growth from malicious traffic
-            if self.auto_packets.len() >= 64 {
-                return Err(Error::SecurityError(
-                    "too many fragmented packets during auto-sense".to_string(),
-                ));
+            if self.retained_hello.len() >= MAX_RETAINED_CLIENT_HELLO {
+                return Err(Error::TooManyClientHelloFragments);
             }
-            self.auto_packets.push(packet.to_vec());
+            self.retained_hello.push_back(packet.to_buf());
         }
 
         self.engine.parse_packet(packet)?;
@@ -244,21 +250,11 @@ impl Server {
 
         // Once past AwaitClientHello, DTLS 1.3 is committed — free the buffer.
         if self.auto_mode && self.state != State::AwaitClientHello {
-            self.auto_packets.clear();
+            self.retained_hello.clear();
             self.auto_mode = false;
         }
 
         Ok(())
-    }
-
-    /// Take the buffered raw packets for DTLS 1.2 fallback replay.
-    pub fn take_auto_packets(&mut self) -> Vec<Vec<u8>> {
-        std::mem::take(&mut self.auto_packets)
-    }
-
-    /// Number of buffered auto-sense packets.
-    pub fn auto_packet_count(&self) -> usize {
-        self.auto_packets.len()
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {

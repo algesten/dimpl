@@ -36,10 +36,17 @@ pub enum Error {
     /// resolved.  Callers should buffer the data and retry once the
     /// handshake advances.
     HandshakePending,
+    /// If we are in auto-sense mode for a server and we received too
+    /// many client hello fragments that haven't made a packet.
+    TooManyClientHelloFragments,
     /// The DTLS 1.3 server received a ClientHello that does not offer
     /// DTLS 1.3 in `supported_versions`. In auto-sense mode the caller
     /// should fall back to a DTLS 1.2 server and replay the buffered
     /// packets.
+    ///
+    /// This value should never be seen outside dimpl. It's an internal
+    /// value to communicate from dtls13/server.rs to lib.rs
+    #[doc(hidden)]
     Dtls12Fallback,
 }
 
@@ -74,11 +81,9 @@ impl std::fmt::Display for Error {
             Error::HandshakePending => {
                 write!(f, "handshake pending: cannot send application data yet")
             }
+            Error::TooManyClientHelloFragments => write!(f, "too many client hello fragments"),
             Error::Dtls12Fallback => {
-                write!(
-                    f,
-                    "dtls 1.2 fallback required: ClientHello does not offer DTLS 1.3"
-                )
+                write!(f, "dtls 1.2 fallback (internal)")
             }
         }
     }
