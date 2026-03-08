@@ -36,6 +36,11 @@ pub enum Error {
     /// resolved.  Callers should buffer the data and retry once the
     /// handshake advances.
     HandshakePending,
+    /// The DTLS 1.3 server received a ClientHello that does not offer
+    /// DTLS 1.3 in `supported_versions`. In auto-sense mode the caller
+    /// should fall back to a DTLS 1.2 server and replay the buffered
+    /// packets.
+    Dtls12Fallback,
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {
@@ -68,6 +73,12 @@ impl std::fmt::Display for Error {
             Error::RenegotiationAttempt => write!(f, "peer attempted renegotiation"),
             Error::HandshakePending => {
                 write!(f, "handshake pending: cannot send application data yet")
+            }
+            Error::Dtls12Fallback => {
+                write!(
+                    f,
+                    "dtls 1.2 fallback required: ClientHello does not offer DTLS 1.3"
+                )
             }
         }
     }

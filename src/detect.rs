@@ -1,14 +1,20 @@
 /// Version detection and hybrid ClientHello for auto-sensing DTLS endpoints.
 ///
-/// Both `client_hello_version` and `server_hello_version` do lightweight
-/// parsing of the first record in a datagram, looking for the
-/// `supported_versions` extension to decide between DTLS 1.2 and 1.3.
+/// `server_hello_version` does lightweight parsing of the first record in a
+/// datagram. It looks for a `HelloVerifyRequest` or a `ServerHello` with the
+/// `supported_versions` extension to decide between DTLS 1.2 and 1.3 for the
+/// client auto-sense path.
 ///
 /// [`HybridClientHello`] constructs a ClientHello compatible with both
-/// DTLS 1.2 and 1.3 servers: it offers both version's cipher suites and
+/// DTLS 1.2 and 1.3 servers: it offers both versions cipher suites and
 /// includes `supported_versions` with both versions. Once the server
 /// responds, the caller inspects the reply with `server_hello_version`
 /// and forks into the appropriate handshake path.
+///
+/// Server-side auto-sense does not use lightweight detection. Instead,
+/// it starts a DTLS 1.3 server which handles fragment reassembly natively
+/// and falls back to DTLS 1.2 via [`Error::Dtls12Fallback`] if the
+/// reassembled ClientHello does not offer DTLS 1.3.
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -245,35 +251,6 @@ impl HybridClientHello {
     }
 }
 
-/// Auto-sense server waiting for the first ClientHello to determine the DTLS version.
-pub(crate) struct ServerPending {
-    config: Arc<Config>,
-    certificate: DtlsCertificate,
-    last_now: Instant,
-}
-
-impl ServerPending {
-    pub fn new(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
-        ServerPending {
-            config,
-            certificate,
-            last_now: now,
-        }
-    }
-
-    pub fn handle_timeout(&mut self, now: Instant) {
-        self.last_now = now;
-    }
-
-    pub fn poll_output<'a>(&self, _buf: &'a mut [u8]) -> Output<'a> {
-        Output::Timeout(self.last_now + Duration::from_secs(86400))
-    }
-
-    pub fn into_parts(self) -> (Arc<Config>, DtlsCertificate, Instant) {
-        (self.config, self.certificate, self.last_now)
-    }
-}
-
 /// Auto-sense client that sends a hybrid ClientHello and waits for the server's response
 /// to determine the DTLS version.
 pub(crate) struct ClientPending {
@@ -371,117 +348,6 @@ pub(crate) enum DetectedVersion {
     Dtls12,
     Dtls13,
     Unknown,
-}
-
-/// Detect DTLS version from a ClientHello packet.
-///
-/// Returns `Dtls13` if the `supported_versions` extension contains
-/// DTLS 1.3 (0xFEFC), otherwise `Dtls12`.
-pub(crate) fn client_hello_version(packet: &[u8]) -> DetectedVersion {
-    match client_hello_version_inner(packet) {
-        Some(true) => DetectedVersion::Dtls13,
-        _ => DetectedVersion::Dtls12,
-    }
-}
-
-fn client_hello_version_inner(packet: &[u8]) -> Option<bool> {
-    // Record header: content_type(1) + version(2) + epoch(2) + seq(6) + length(2) = 13
-    if packet.len() < 13 {
-        return Some(false);
-    }
-
-    // content_type must be 0x16 (Handshake)
-    if packet[0] != 0x16 {
-        return Some(false);
-    }
-
-    let record_len = u16::from_be_bytes([packet[11], packet[12]]) as usize;
-    let record_body = packet.get(13..13 + record_len)?;
-
-    // Handshake header: msg_type(1) + length(3) + message_seq(2) +
-    //   fragment_offset(3) + fragment_length(3) = 12
-    if record_body.len() < 12 {
-        return Some(false);
-    }
-
-    // msg_type must be 1 (ClientHello)
-    if record_body[0] != 1 {
-        return Some(false);
-    }
-
-    let fragment_len = ((record_body[9] as usize) << 16)
-        | ((record_body[10] as usize) << 8)
-        | (record_body[11] as usize);
-    let body = record_body.get(12..12 + fragment_len)?;
-
-    // ClientHello body:
-    //   client_version(2) + random(32) = 34 minimum before session_id
-    if body.len() < 34 {
-        return Some(false);
-    }
-    let mut pos = 34;
-
-    // session_id: 1-byte length + data
-    let sid_len = *body.get(pos)? as usize;
-    pos += 1 + sid_len;
-
-    // cookie: 1-byte length + data
-    let cookie_len = *body.get(pos)? as usize;
-    pos += 1 + cookie_len;
-
-    // cipher_suites: 2-byte length + data
-    if pos + 2 > body.len() {
-        return Some(false);
-    }
-    let cs_len = u16::from_be_bytes([body[pos], body[pos + 1]]) as usize;
-    pos += 2 + cs_len;
-
-    // compression_methods: 1-byte length + data
-    let cm_len = *body.get(pos)? as usize;
-    pos += 1 + cm_len;
-
-    // extensions: 2-byte total length
-    if pos + 2 > body.len() {
-        return Some(false);
-    }
-    let ext_total_len = u16::from_be_bytes([body[pos], body[pos + 1]]) as usize;
-    pos += 2;
-    let ext_end = pos + ext_total_len;
-    if ext_end > body.len() {
-        return Some(false);
-    }
-
-    // Walk extensions looking for supported_versions (0x002B)
-    while pos + 4 <= ext_end {
-        let ext_type = u16::from_be_bytes([body[pos], body[pos + 1]]);
-        let ext_len = u16::from_be_bytes([body[pos + 2], body[pos + 3]]) as usize;
-        pos += 4;
-
-        if ext_type == 0x002B {
-            // supported_versions client format: 1-byte list length, then 2-byte versions
-            if ext_len < 1 {
-                return Some(false);
-            }
-            let list_len = body[pos] as usize;
-            let list_start = pos + 1;
-            if list_start + list_len > pos + ext_len {
-                return Some(false);
-            }
-            let mut i = list_start;
-            while i + 2 <= list_start + list_len {
-                let version = u16::from_be_bytes([body[i], body[i + 1]]);
-                if version == 0xFEFC {
-                    return Some(true);
-                }
-                i += 2;
-            }
-            return Some(false);
-        }
-
-        pos += ext_len;
-    }
-
-    Some(false)
 }
 
 /// Detect DTLS version from a server response (ServerHello or HelloVerifyRequest).

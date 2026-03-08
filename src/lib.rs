@@ -178,7 +178,7 @@ mod dtls13;
 use dtls12::{Client as Client12, Server as Server12};
 use dtls13::{Client as Client13, Server as Server13};
 
-use detect::{ClientPending, ServerPending};
+use detect::ClientPending;
 
 mod detect;
 mod time_tricks;
@@ -235,6 +235,9 @@ impl fmt::Debug for DtlsCertificate {
 /// [`handle_timeout`](Self::handle_timeout).
 pub struct Dtls {
     inner: Option<Inner>,
+
+    /// Config and certificate stashed by `new_auto` for DTLS 1.2 fallback.
+    auto_fallback: Option<(Arc<Config>, DtlsCertificate)>,
 }
 
 enum Inner {
@@ -242,7 +245,6 @@ enum Inner {
     Server12(Server12),
     Client13(Client13),
     Server13(Server13),
-    ServerPending(ServerPending),
     ClientPending(ClientPending),
 }
 
@@ -258,7 +260,10 @@ impl Dtls {
     /// certificate according to its security policy.
     pub fn new_12(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
         let inner = Inner::Server12(Server12::new(config, certificate, now));
-        Dtls { inner: Some(inner) }
+        Dtls {
+            inner: Some(inner),
+            auto_fallback: None,
+        }
     }
 
     /// Create a new DTLS 1.3 instance in the server role.
@@ -271,23 +276,40 @@ impl Dtls {
     /// certificate according to its security policy.
     pub fn new_13(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
         let inner = Inner::Server13(Server13::new(config, certificate, now));
-        Dtls { inner: Some(inner) }
+        Dtls {
+            inner: Some(inner),
+            auto_fallback: None,
+        }
     }
 
     /// Create a new DTLS instance that auto‑senses the version.
     ///
-    /// **Server role** (default): the instance stays in a pending state.
-    /// When the first ClientHello arrives it inspects the
-    /// `supported_versions` extension and creates either a DTLS 1.2 or
-    /// 1.3 server.
+    /// **Server role** (default): starts as a DTLS 1.3 server. If the
+    /// peer's ClientHello does not offer DTLS 1.3 in `supported_versions`,
+    /// the server automatically falls back to DTLS 1.2.  This handles
+    /// fragmented ClientHellos (e.g. with post-quantum key shares)
+    /// correctly because the DTLS 1.3 engine performs full reassembly
+    /// before inspecting extensions.
     ///
     /// **Client role** ([`set_active(true)`](Self::set_active)): the
     /// instance sends a hybrid ClientHello compatible with both DTLS 1.2
     /// and 1.3 servers and forks into the correct handshake once the
     /// server responds.
     pub fn new_auto(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
-        let inner = Inner::ServerPending(ServerPending::new(config, certificate, now));
-        Dtls { inner: Some(inner) }
+        let fallback = (Arc::clone(&config), certificate.clone());
+        let inner = Inner::Server13(Server13::new_auto(config, certificate, now));
+        Dtls {
+            inner: Some(inner),
+            auto_fallback: Some(fallback),
+        }
+    }
+
+    fn is_auto_server_pending(&self) -> bool {
+        self.auto_fallback.is_some()
+            && matches!(
+                self.inner.as_ref(),
+                Some(Inner::Server13(server)) if server.is_auto_mode()
+            )
     }
 
     /// Returns the negotiated DTLS protocol version.
@@ -295,10 +317,14 @@ impl Dtls {
     /// Returns `None` for auto-sense instances that have not yet completed
     /// version negotiation (i.e. still in a `Pending` state).
     pub fn protocol_version(&self) -> Option<ProtocolVersion> {
+        if self.is_auto_server_pending() {
+            return None;
+        }
+
         match self.inner.as_ref()? {
             Inner::Client12(_) | Inner::Server12(_) => Some(ProtocolVersion::DTLS1_2),
             Inner::Client13(_) | Inner::Server13(_) => Some(ProtocolVersion::DTLS1_3),
-            Inner::ServerPending(_) | Inner::ClientPending(_) => None,
+            Inner::ClientPending(_) => None,
         }
     }
 
@@ -342,14 +368,17 @@ impl Dtls {
                         self.inner = Some(Inner::Client12(s.into_client()));
                     }
                     Inner::Server13(s) => {
-                        self.inner = Some(Inner::Client13(s.into_client()));
-                    }
-                    Inner::ServerPending(sp) => {
-                        let (config, certificate, now) = sp.into_parts();
-                        // unwrap: ClientPending::new only fails on missing kx groups
-                        let cp = ClientPending::new(config, certificate, now)
-                            .expect("failed to build hybrid ClientHello");
-                        self.inner = Some(Inner::ClientPending(cp));
+                        if s.is_auto_mode() && self.auto_fallback.is_some() {
+                            // Auto-sense server switching to client: create hybrid ClientPending
+                            let (config, certificate) = self.auto_fallback.take().unwrap();
+                            let now = s.last_now();
+                            let cp = ClientPending::new(config, certificate, now)
+                                .expect("failed to build hybrid ClientHello");
+                            self.inner = Some(Inner::ClientPending(cp));
+                        } else {
+                            // Not auto mode, or already consumed — just convert
+                            self.inner = Some(Inner::Client13(s.into_client()));
+                        }
                     }
                     _ => unreachable!(),
                 }
@@ -360,29 +389,6 @@ impl Dtls {
 
     /// Process an incoming DTLS datagram.
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        // Auto-sense server: resolve version on first ClientHello
-        if matches!(self.inner, Some(Inner::ServerPending(_))) {
-            let inner = self.inner.take().unwrap();
-            let Inner::ServerPending(sp) = inner else {
-                unreachable!()
-            };
-            let (config, certificate, now) = sp.into_parts();
-
-            let is_13 = matches!(
-                detect::client_hello_version(packet),
-                detect::DetectedVersion::Dtls13
-            );
-            self.inner = if is_13 {
-                Some(Inner::Server13(Server13::new(config, certificate, now)))
-            } else {
-                Some(Inner::Server12(Server12::new(config, certificate, now)))
-            };
-
-            // Arm the server's random + retransmit timers.
-            // inner is already set, so errors won't leave it as None.
-            self.handle_timeout(now)?;
-        }
-
         // Auto-sense client: resolve version on first server response
         if matches!(self.inner, Some(Inner::ClientPending(_))) {
             let version = detect::server_hello_version(packet);
@@ -432,13 +438,68 @@ impl Dtls {
             }
         }
 
+        // Auto-sense server: catch Dtls12Fallback from Server13.
+        // Server13 buffers raw packets internally when in auto_mode.
+        if self.auto_fallback.is_some() {
+            match self.inner.as_mut().unwrap() {
+                Inner::Server13(server) => {
+                    match server.handle_packet(packet) {
+                        Ok(()) => {
+                            // Once Server13 commits to 1.3, free the fallback state.
+                            if !server.is_auto_mode() {
+                                self.auto_fallback = None;
+                            }
+                            return Ok(());
+                        }
+                        Err(Error::Dtls12Fallback) => {
+                            return self.do_dtls12_fallback();
+                        }
+                        Err(Error::ParseError(_) | Error::ParseIncomplete)
+                            if server.auto_packet_count() <= 1 =>
+                        {
+                            // The very first packet failed to parse in the
+                            // DTLS 1.3 message parser (e.g. a pure DTLS 1.2
+                            // ClientHello with no 1.3 cipher suites). Fall
+                            // back to 1.2. Later parse errors (corrupted
+                            // fragments of a 1.3 CH) are not caught here.
+                            return self.do_dtls12_fallback();
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                _ => unreachable!("auto_fallback set but inner is not Server13"),
+            }
+        }
+
         match self.inner.as_mut().unwrap() {
             Inner::Client12(client) => client.handle_packet(packet),
             Inner::Server12(server) => server.handle_packet(packet),
             Inner::Client13(client) => client.handle_packet(packet),
             Inner::Server13(server) => server.handle_packet(packet),
-            Inner::ServerPending(_) | Inner::ClientPending(_) => unreachable!(),
+            Inner::ClientPending(_) => unreachable!(),
         }
+    }
+
+    /// Fall back from DTLS 1.3 auto-sense to a DTLS 1.2 server, replaying
+    /// all buffered packets from the Server13.
+    fn do_dtls12_fallback(&mut self) -> Result<(), Error> {
+        let (config, certificate) = self.auto_fallback.take().unwrap();
+
+        // Take buffered packets and last_now from the Server13 before replacing it.
+        let (buffered, now) = match self.inner.as_mut().unwrap() {
+            Inner::Server13(server) => (server.take_auto_packets(), server.last_now()),
+            _ => unreachable!(),
+        };
+
+        let mut server12 = Server12::new(config, certificate, now);
+        server12.handle_timeout(now)?;
+
+        self.inner = Some(Inner::Server12(server12));
+
+        for p in &buffered {
+            self.handle_packet(p)?;
+        }
+        Ok(())
     }
 
     /// Poll for pending output from the DTLS engine.
@@ -448,7 +509,6 @@ impl Dtls {
             Inner::Server12(server) => server.poll_output(buf),
             Inner::Client13(client) => client.poll_output(buf),
             Inner::Server13(server) => server.poll_output(buf),
-            Inner::ServerPending(sp) => sp.poll_output(buf),
             Inner::ClientPending(cp) => cp.poll_output(buf),
         }
     }
@@ -460,10 +520,6 @@ impl Dtls {
             Inner::Server12(server) => server.handle_timeout(now),
             Inner::Client13(client) => client.handle_timeout(now),
             Inner::Server13(server) => server.handle_timeout(now),
-            Inner::ServerPending(sp) => {
-                sp.handle_timeout(now);
-                Ok(())
-            }
             Inner::ClientPending(cp) => cp.handle_timeout(now),
         }
     }
@@ -474,12 +530,16 @@ impl Dtls {
     /// yet been resolved (auto-sense pending).  Callers should buffer
     /// the data externally and retry after the handshake progresses.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
+        if self.is_auto_server_pending() {
+            return Err(Error::HandshakePending);
+        }
+
         match self.inner.as_mut().unwrap() {
             Inner::Client12(client) => client.send_application_data(data),
             Inner::Server12(server) => server.send_application_data(data),
             Inner::Client13(client) => client.send_application_data(data),
             Inner::Server13(server) => server.send_application_data(data),
-            Inner::ServerPending(_) | Inner::ClientPending(_) => Err(Error::HandshakePending),
+            Inner::ClientPending(_) => Err(Error::HandshakePending),
         }
     }
 }
@@ -491,7 +551,6 @@ impl fmt::Debug for Dtls {
             Some(Inner::Server12(s)) => ("Server12", s.state_name()),
             Some(Inner::Client13(c)) => ("Client13", c.state_name()),
             Some(Inner::Server13(s)) => ("Server13", s.state_name()),
-            Some(Inner::ServerPending(_)) => ("ServerPending", ""),
             Some(Inner::ClientPending(_)) => ("ClientPending", ""),
             None => ("None", ""),
         };
@@ -671,7 +730,13 @@ mod test {
     #[test]
     fn test_protocol_version_auto_pending() {
         let dtls = new_instance_auto();
-        // Auto-sense instance before negotiation should return None
         assert_eq!(dtls.protocol_version(), None);
+    }
+
+    #[test]
+    fn test_auto_server_send_application_data_pending() {
+        let mut dtls = new_instance_auto();
+        let err = dtls.send_application_data(b"early data").unwrap_err();
+        assert!(matches!(err, Error::HandshakePending));
     }
 }

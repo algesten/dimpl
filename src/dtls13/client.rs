@@ -210,7 +210,7 @@ impl Client {
     }
 
     pub fn into_server(self) -> Server {
-        Server::new_with_engine(self.engine, self.last_now)
+        Server::new_with_engine(self.engine, self.last_now, false)
     }
 
     pub(crate) fn state_name(&self) -> &'static str {

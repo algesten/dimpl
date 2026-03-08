@@ -135,6 +135,15 @@ pub struct Server {
 
     /// Whether we need to respond with our own KeyUpdate.
     pending_key_update_response: bool,
+
+    /// When true, a ClientHello without DTLS 1.3 in `supported_versions`
+    /// returns [`Error::Dtls12Fallback`] instead of a security error.
+    /// Used by the auto-sense server path.
+    auto_mode: bool,
+
+    /// Raw packets buffered during auto-sense so they can be replayed
+    /// to a DTLS 1.2 server on fallback.
+    auto_packets: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,10 +165,21 @@ impl Server {
     /// Create a new DTLS 1.3 server.
     pub fn new(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Server {
         let engine = Engine::new(config, certificate);
-        Self::new_with_engine(engine, now)
+        Self::new_with_engine(engine, now, false)
     }
 
-    pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Server {
+    /// Create a new DTLS 1.3 server in auto-sense mode.
+    ///
+    /// In auto-sense mode, if the ClientHello does not offer DTLS 1.3
+    /// in `supported_versions`, the server returns [`Error::Dtls12Fallback`]
+    /// instead of a fatal security error, allowing the caller to switch
+    /// to a DTLS 1.2 server.
+    pub fn new_auto(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Server {
+        let engine = Engine::new(config, certificate);
+        Self::new_with_engine(engine, now, true)
+    }
+
+    pub(crate) fn new_with_engine(mut engine: Engine, now: Instant, auto_mode: bool) -> Server {
         let cookie_secret = engine.random_arr();
 
         Server {
@@ -183,6 +203,8 @@ impl Server {
             hello_retry: false,
             cookie_secret,
             pending_key_update_response: false,
+            auto_mode,
+            auto_packets: Vec::new(),
         }
     }
 
@@ -190,14 +212,53 @@ impl Server {
         Client::new_with_engine(self.engine, self.last_now)
     }
 
+    /// Whether this server is in auto-sense mode.
+    pub fn is_auto_mode(&self) -> bool {
+        self.auto_mode
+    }
+
+    /// The last time instant seen by this server.
+    pub fn last_now(&self) -> Instant {
+        self.last_now
+    }
+
     pub(crate) fn state_name(&self) -> &'static str {
         self.state.name()
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+        // In auto-sense mode, buffer raw packets while still waiting for
+        // the ClientHello so they can be replayed to Server12 on fallback.
+        if self.auto_mode && self.state == State::AwaitClientHello {
+            // Cap buffered fragments to prevent unbounded growth from malicious traffic
+            if self.auto_packets.len() >= 64 {
+                return Err(Error::SecurityError(
+                    "too many fragmented packets during auto-sense".to_string(),
+                ));
+            }
+            self.auto_packets.push(packet.to_vec());
+        }
+
         self.engine.parse_packet(packet)?;
         self.make_progress()?;
+
+        // Once past AwaitClientHello, DTLS 1.3 is committed — free the buffer.
+        if self.auto_mode && self.state != State::AwaitClientHello {
+            self.auto_packets.clear();
+            self.auto_mode = false;
+        }
+
         Ok(())
+    }
+
+    /// Take the buffered raw packets for DTLS 1.2 fallback replay.
+    pub fn take_auto_packets(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.auto_packets)
+    }
+
+    /// Number of buffered auto-sense packets.
+    pub fn auto_packet_count(&self) -> usize {
+        self.auto_packets.len()
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
@@ -392,6 +453,9 @@ impl State {
         }
 
         if !supported_versions_ok {
+            if server.auto_mode {
+                return Err(Error::Dtls12Fallback);
+            }
             return Err(Error::SecurityError(
                 "ClientHello must include DTLS 1.3 in supported_versions".to_string(),
             ));
