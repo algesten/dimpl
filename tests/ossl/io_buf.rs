@@ -14,7 +14,7 @@ impl Deref for DatagramSend {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct IoBuffer {
     pub incoming: Vec<u8>,
     pub outgoing: VecDeque<DatagramSend>,

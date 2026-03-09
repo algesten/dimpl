@@ -20,8 +20,9 @@
 //!
 //! ## Version selection
 //!
-//! Three constructors control which DTLS version is used:
-//! - [`Dtls::new_12`][new_12] — explicit DTLS 1.2
+//! Four constructors control which DTLS version is used:
+//! - [`Dtls::new_12`][new_12] — explicit DTLS 1.2 (certificate‑based)
+//! - [`Dtls::new_12_psk`][new_12_psk] — explicit DTLS 1.2 (PSK, no certificates)
 //! - [`Dtls::new_13`][new_13] — explicit DTLS 1.3
 //! - [`Dtls::new_auto`][new_auto] — auto‑sense: the first
 //!   incoming ClientHello determines the version (based on the
@@ -32,6 +33,11 @@
 //!   - `ECDHE_ECDSA_AES256_GCM_SHA384`
 //!   - `ECDHE_ECDSA_AES128_GCM_SHA256`
 //!   - `ECDHE_ECDSA_CHACHA20_POLY1305_SHA256`
+//! - **PSK cipher suites (TLS 1.2 over DTLS)**
+//!   - `PSK_AES128_CCM_8`
+//!   - `PSK_AES128_GCM_SHA256`
+//!   - `PSK_AES256_GCM_SHA384`
+//!   - `PSK_CHACHA20_POLY1305_SHA256`
 //! - **Cipher suites (TLS 1.3 over DTLS)**
 //!   - `TLS_AES_128_GCM_SHA256`
 //!   - `TLS_AES_256_GCM_SHA384`
@@ -42,7 +48,6 @@
 //! - **DTLS‑SRTP**: Exports keying material for `SRTP_AEAD_AES_256_GCM`,
 //!   `SRTP_AEAD_AES_128_GCM`, and `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
 //! - **Extended Master Secret** ([RFC 7627]) is negotiated and enforced (DTLS 1.2).
-//! - Not supported: PSK cipher suites.
 //!
 //! ## Certificate model
 //! During the handshake the engine emits
@@ -140,6 +145,7 @@
 //! - Renegotiation is not implemented (WebRTC does full restart).
 //!
 //! [new_12]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_12
+//! [new_12_psk]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_12_psk
 //! [new_13]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_13
 //! [new_auto]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_auto
 //! [peer_cert]: https://docs.rs/dimpl/latest/dimpl/enum.Output.html#variant.PeerCert

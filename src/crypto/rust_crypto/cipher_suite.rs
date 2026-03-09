@@ -342,12 +342,74 @@ impl SupportedDtls12CipherSuite for PskAes128GcmSha256 {
     }
 }
 
+/// TLS_PSK_WITH_AES_256_GCM_SHA384 cipher suite.
+#[derive(Debug)]
+struct PskAes256GcmSha384;
+
+impl SupportedDtls12CipherSuite for PskAes256GcmSha384 {
+    fn suite(&self) -> Dtls12CipherSuite {
+        Dtls12CipherSuite::PSK_AES256_GCM_SHA384
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA384
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        (0, 32, 4) // (mac_key_len, enc_key_len, fixed_iv_len)
+    }
+
+    fn explicit_nonce_len(&self) -> usize {
+        8
+    }
+
+    fn tag_len(&self) -> usize {
+        16
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
+/// TLS_PSK_WITH_CHACHA20_POLY1305_SHA256 cipher suite.
+#[derive(Debug)]
+struct PskChaCha20Poly1305Sha256;
+
+impl SupportedDtls12CipherSuite for PskChaCha20Poly1305Sha256 {
+    fn suite(&self) -> Dtls12CipherSuite {
+        Dtls12CipherSuite::PSK_CHACHA20_POLY1305_SHA256
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA256
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        (0, 32, 12) // (mac_key_len, enc_key_len, fixed_iv_len)
+    }
+
+    fn explicit_nonce_len(&self) -> usize {
+        0
+    }
+
+    fn tag_len(&self) -> usize {
+        16
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(ChaCha20Poly1305Cipher::new(key)?))
+    }
+}
+
 /// Static instances of supported DTLS 1.2 cipher suites.
 static AES_128_GCM_SHA256: Aes128GcmSha256 = Aes128GcmSha256;
 static AES_256_GCM_SHA384: Aes256GcmSha384 = Aes256GcmSha384;
 static CHACHA20_POLY1305_SHA256: ChaCha20Poly1305Sha256 = ChaCha20Poly1305Sha256;
 static PSK_AES_128_CCM_8: PskAes128Ccm8 = PskAes128Ccm8;
 static PSK_AES_128_GCM_SHA256: PskAes128GcmSha256 = PskAes128GcmSha256;
+static PSK_AES_256_GCM_SHA384: PskAes256GcmSha384 = PskAes256GcmSha384;
+static PSK_CHACHA20_POLY1305_SHA256: PskChaCha20Poly1305Sha256 = PskChaCha20Poly1305Sha256;
 
 /// All supported DTLS 1.2 cipher suites.
 pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] = &[
@@ -356,6 +418,8 @@ pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] = &[
     &CHACHA20_POLY1305_SHA256,
     &PSK_AES_128_CCM_8,
     &PSK_AES_128_GCM_SHA256,
+    &PSK_AES_256_GCM_SHA384,
+    &PSK_CHACHA20_POLY1305_SHA256,
 ];
 
 // ============================================================================

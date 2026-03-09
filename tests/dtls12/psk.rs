@@ -279,3 +279,68 @@ fn dtls12_psk_gcm_application_data_roundtrip() {
         "Client should receive server's application data"
     );
 }
+
+/// Helper: run a PSK handshake + app data roundtrip for any suite.
+fn psk_handshake_and_roundtrip(suite: Dtls12CipherSuite) {
+    let _ = env_logger::try_init();
+
+    let config = psk_config_for_suite(suite);
+    let now = Instant::now();
+
+    let mut client = Dtls::new_12_psk(config.clone(), now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12_psk(config, now);
+    server.set_active(false);
+
+    // Complete handshake
+    let mut connected = false;
+    for _ in 0..60 {
+        client.handle_timeout(Instant::now()).unwrap();
+        server.handle_timeout(Instant::now()).unwrap();
+
+        let co = drain_outputs(&mut client);
+        deliver_packets(&co.packets, &mut server);
+
+        let so = drain_outputs(&mut server);
+        deliver_packets(&so.packets, &mut client);
+
+        if co.connected || so.connected {
+            client.handle_timeout(Instant::now()).unwrap();
+            server.handle_timeout(Instant::now()).unwrap();
+
+            let co2 = drain_outputs(&mut client);
+            deliver_packets(&co2.packets, &mut server);
+
+            let so2 = drain_outputs(&mut server);
+            deliver_packets(&so2.packets, &mut client);
+            connected = true;
+            break;
+        }
+    }
+    assert!(connected, "{:?} handshake should complete", suite);
+
+    // App data roundtrip
+    let payload = b"Hello from PSK client!";
+    client.send_application_data(payload).expect("send");
+
+    let co = drain_outputs(&mut client);
+    deliver_packets(&co.packets, &mut server);
+
+    let so = drain_outputs(&mut server);
+    assert!(
+        so.app_data.iter().any(|d| d == payload),
+        "{:?}: server should receive client data",
+        suite
+    );
+}
+
+#[test]
+fn dtls12_psk_aes256_gcm_sha384() {
+    psk_handshake_and_roundtrip(Dtls12CipherSuite::PSK_AES256_GCM_SHA384);
+}
+
+#[test]
+fn dtls12_psk_chacha20_poly1305() {
+    psk_handshake_and_roundtrip(Dtls12CipherSuite::PSK_CHACHA20_POLY1305_SHA256);
+}

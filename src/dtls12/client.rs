@@ -690,7 +690,16 @@ impl State {
     }
 
     /// PSK ServerKeyExchange carries only an optional identity hint (no signature).
+    /// Per RFC 4279 §2, ServerKeyExchange is omitted when the server has no hint.
     fn await_server_key_exchange_psk(self, client: &mut Client) -> Result<Self, Error> {
+        // If the server skipped ServerKeyExchange (no hint), go straight to ServerHelloDone
+        let has_done = client
+            .engine
+            .has_complete_handshake(MessageType::ServerHelloDone);
+        if has_done {
+            return Ok(Self::AwaitServerHelloDone);
+        }
+
         let maybe = client.engine.next_handshake(
             MessageType::ServerKeyExchange,
             &mut client.defragment_buffer,

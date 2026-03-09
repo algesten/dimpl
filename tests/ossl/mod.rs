@@ -29,7 +29,7 @@ use std::io;
 
 pub use cert::{DtlsCertOptions, DtlsPKeyType, Fingerprint, OsslDtlsCert};
 
-mod io_buf;
+pub mod io_buf;
 mod stream;
 
 mod dtls;
