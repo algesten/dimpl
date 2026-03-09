@@ -155,6 +155,7 @@
 #![warn(clippy::all)]
 #![allow(unknown_lints)]
 #![deny(missing_docs)]
+#![deny(missing_debug_implementations)]
 
 #[macro_use]
 extern crate log;

@@ -15,7 +15,7 @@ use crate::crypto::rust_crypto;
 /// DTLS configuration shared by all connections.
 ///
 /// Build with [`Config::builder()`] or use [`Config::default()`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     mtu: usize,
     max_queue_rx: usize,
@@ -201,6 +201,7 @@ impl Config {
 }
 
 /// Builder for [`Config`]. See each setter for defaults.
+#[derive(Debug)]
 pub struct ConfigBuilder {
     mtu: usize,
     max_queue_rx: usize,
