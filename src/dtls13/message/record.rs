@@ -72,6 +72,18 @@ impl Dtls13Record {
         let (input, content_type) = ContentType::parse(input)?; // u8
         let (input, version) = ProtocolVersion::parse(input)?; // u16
 
+        // RFC 9147 §4.1: Only alert(21), handshake(22), and ack(26) are valid
+        // plaintext content types in DTLS 1.3. Reject all others.
+        match content_type {
+            ContentType::Alert | ContentType::Handshake | ContentType::Ack => {}
+            _ => {
+                return Err(Err::Failure(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Tag,
+                )));
+            }
+        }
+
         // Accept DTLS 1.0 or 1.2 in record layer per RFC 9147 §5.1
         // (same legacy version handling as DTLS 1.2)
         match version {
@@ -85,6 +97,16 @@ impl Dtls13Record {
         }
 
         let (input, epoch) = be_u16(input)?; // u16
+
+        // RFC 9147 §4.1: DTLSPlaintext records must use epoch 0.
+        // Epoch values other than 0 in plaintext format are invalid.
+        if epoch != 0 {
+            return Err(Err::Failure(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+
         let (input, sequence_number) = be_u48(input)?; // u48
         let (input, length) = be_u16(input)?; // u16
         let (rest, fragment_slice) = take(length as usize)(input)?;
@@ -220,5 +242,113 @@ impl fmt::Debug for Dtls13Record {
             .field("length", &self.length)
             .field("fragment_range", &self.fragment_range)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plaintext_content_type_whitelist() {
+        // RFC 9147 §4.1: Only alert(21), handshake(22), and ack(26) are valid
+        // plaintext content types in DTLS 1.3. Plaintext records must use epoch 0.
+        // ApplicationData and other invalid types are rejected at parse time.
+
+        fn build_plaintext_record(content_type: u8) -> Vec<u8> {
+            vec![
+                content_type, // ContentType
+                0xFE,
+                0xFD, // version: DTLS 1.2
+                0x00,
+                0x00, // epoch: 0 (plaintext)
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x01, // sequence_number
+                0x00,
+                0x02, // length: 2
+                0xAA,
+                0xBB, // fragment payload
+            ]
+        }
+
+        fn build_plaintext_record_with_epoch(content_type: u8, epoch: u16) -> Vec<u8> {
+            vec![
+                content_type, // ContentType
+                0xFE,
+                0xFD, // version: DTLS 1.2
+                (epoch >> 8) as u8,
+                (epoch & 0xFF) as u8, // epoch
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x01, // sequence_number
+                0x00,
+                0x02, // length: 2
+                0xAA,
+                0xBB, // fragment payload
+            ]
+        }
+
+        // ALLOWED: Alert (21) with epoch 0
+        let alert = build_plaintext_record(0x15);
+        assert!(
+            Dtls13Record::parse(&alert, 0).is_ok(),
+            "Alert should be allowed in plaintext DTLS 1.3"
+        );
+
+        // ALLOWED: Handshake (22) with epoch 0
+        let handshake = build_plaintext_record(0x16);
+        assert!(
+            Dtls13Record::parse(&handshake, 0).is_ok(),
+            "Handshake should be allowed in plaintext DTLS 1.3"
+        );
+
+        // ALLOWED: Ack (26) with epoch 0
+        let ack = build_plaintext_record(0x1A);
+        assert!(
+            Dtls13Record::parse(&ack, 0).is_ok(),
+            "Ack should be allowed in plaintext DTLS 1.3"
+        );
+
+        // REJECTED: ApplicationData (23)
+        let app_data = build_plaintext_record(0x17);
+        assert!(
+            Dtls13Record::parse(&app_data, 0).is_err(),
+            "ApplicationData must be rejected in plaintext DTLS 1.3"
+        );
+
+        // REJECTED: ChangeCipherSpec (20) - valid in DTLS 1.2 but not DTLS 1.3
+        let ccs = build_plaintext_record(0x14);
+        assert!(
+            Dtls13Record::parse(&ccs, 0).is_err(),
+            "ChangeCipherSpec must be rejected in DTLS 1.3"
+        );
+
+        // REJECTED: Unknown ContentType (0xFF)
+        let unknown = build_plaintext_record(0xFF);
+        assert!(
+            Dtls13Record::parse(&unknown, 0).is_err(),
+            "Unknown ContentType must be rejected in plaintext DTLS 1.3"
+        );
+
+        // REJECTED: Plaintext format with epoch 1 (invalid per RFC 9147 §4.1)
+        let epoch_1_handshake = build_plaintext_record_with_epoch(0x16, 1);
+        assert!(
+            Dtls13Record::parse(&epoch_1_handshake, 0).is_err(),
+            "Plaintext format with epoch 1 must be rejected"
+        );
+
+        // REJECTED: Plaintext format with epoch 2 (should use unified header)
+        let epoch_2_handshake = build_plaintext_record_with_epoch(0x16, 2);
+        assert!(
+            Dtls13Record::parse(&epoch_2_handshake, 0).is_err(),
+            "Plaintext format with epoch 2 must be rejected"
+        );
     }
 }

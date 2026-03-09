@@ -136,7 +136,15 @@ impl Record {
         // ONLY COPY: UDP packet slice -> pooled buffer
         let mut buffer = Buf::new();
         buffer.extend_from_slice(record_slice);
-        let parsed = ParsedRecord::parse(&buffer, cs, 0)?;
+        let parsed = match ParsedRecord::parse(&buffer, cs, 0) {
+            Ok(p) => p,
+            Err(e) => {
+                // RFC 6347 §4.1.2.7: Invalid records SHOULD be silently discarded.
+                // This includes epoch 0 records with invalid ContentType.
+                trace!("Discarding record: parse failed: {}", e);
+                return Ok(None);
+            }
+        };
         let parsed = Box::new(parsed);
         let record = Record { buffer, parsed };
 
