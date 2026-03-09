@@ -312,11 +312,42 @@ impl SupportedDtls12CipherSuite for PskAes128Ccm8 {
     }
 }
 
+/// TLS_PSK_WITH_AES_128_GCM_SHA256 cipher suite.
+#[derive(Debug)]
+struct PskAes128GcmSha256;
+
+impl SupportedDtls12CipherSuite for PskAes128GcmSha256 {
+    fn suite(&self) -> Dtls12CipherSuite {
+        Dtls12CipherSuite::PSK_AES128_GCM_SHA256
+    }
+
+    fn hash_algorithm(&self) -> HashAlgorithm {
+        HashAlgorithm::SHA256
+    }
+
+    fn key_lengths(&self) -> (usize, usize, usize) {
+        (0, 16, 4) // (mac_key_len, enc_key_len, fixed_iv_len)
+    }
+
+    fn explicit_nonce_len(&self) -> usize {
+        8
+    }
+
+    fn tag_len(&self) -> usize {
+        16
+    }
+
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+        Ok(Box::new(AesGcm::new(key)?))
+    }
+}
+
 /// Static instances of supported DTLS 1.2 cipher suites.
 static AES_128_GCM_SHA256: Aes128GcmSha256 = Aes128GcmSha256;
 static AES_256_GCM_SHA384: Aes256GcmSha384 = Aes256GcmSha384;
 static CHACHA20_POLY1305_SHA256: ChaCha20Poly1305Sha256 = ChaCha20Poly1305Sha256;
 static PSK_AES_128_CCM_8: PskAes128Ccm8 = PskAes128Ccm8;
+static PSK_AES_128_GCM_SHA256: PskAes128GcmSha256 = PskAes128GcmSha256;
 
 /// All supported DTLS 1.2 cipher suites.
 pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] = &[
@@ -324,6 +355,7 @@ pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] = &[
     &AES_256_GCM_SHA384,
     &CHACHA20_POLY1305_SHA256,
     &PSK_AES_128_CCM_8,
+    &PSK_AES_128_GCM_SHA256,
 ];
 
 // ============================================================================
