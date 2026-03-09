@@ -1,5 +1,9 @@
 # Unreleased
 
+  * DTLS 1.2 DTLS 1.3, parser reject ApplicationData in epoch 0/plaintext #90
+  * DTLS 1.3 reject plaintext records with non-zero epoch #90
+  * Silently discard invalid records and process subsequent valid records #90
+
 # 0.4.2
 
   * Downgrade rand to 0.9 to avoid double chacha20 dep #84
