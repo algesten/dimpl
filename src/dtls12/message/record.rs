@@ -64,6 +64,21 @@ impl DTLSRecord {
         }
 
         let (input, epoch) = be_u16(input)?; // u16
+
+        // Epoch 0 records are plaintext in DTLS 1.2. Reject plaintext
+        // ApplicationData before record protection is active, and only accept
+        // the epoch-0 content types this implementation supports.
+        if epoch == 0 {
+            match content_type {
+                ContentType::ChangeCipherSpec | ContentType::Alert | ContentType::Handshake => {}
+                _ => {
+                    return Err(Err::Failure(nom::error::Error::new(
+                        input,
+                        nom::error::ErrorKind::Tag,
+                    )));
+                }
+            }
+        }
         let (input, sequence_number) = be_u48(input)?; // u48
         let (input, length) = be_u16(input)?; // u16
 
@@ -161,5 +176,83 @@ mod tests {
         let mut serialized = Buf::new();
         parsed.serialize(RECORD, &mut serialized);
         assert_eq!(&*serialized, RECORD);
+    }
+
+    #[test]
+    fn epoch_0_content_type_whitelist() {
+        // Epoch 0 is plaintext (RFC 6347 §4.1: epoch starts at 0, incremented by each CCS).
+        // Only ChangeCipherSpec(20), Alert(21), and Handshake(22) can legitimately
+        // appear unencrypted. ApplicationData in epoch 0 is rejected at parse time.
+
+        fn build_epoch_0_record(content_type: u8) -> Vec<u8> {
+            vec![
+                content_type, // ContentType
+                0xFE,
+                0xFD, // version: DTLS 1.2
+                0x00,
+                0x00, // epoch: 0 (plaintext)
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x01, // sequence_number
+                0x00,
+                0x02, // length: 2
+                0xAA,
+                0xBB, // fragment payload
+            ]
+        }
+
+        // ALLOWED: ChangeCipherSpec (20)
+        let ccs = build_epoch_0_record(0x14);
+        assert!(
+            DTLSRecord::parse(&ccs, 0, 0).is_ok(),
+            "ChangeCipherSpec should be allowed in epoch 0"
+        );
+
+        // ALLOWED: Alert (21)
+        let alert = build_epoch_0_record(0x15);
+        assert!(
+            DTLSRecord::parse(&alert, 0, 0).is_ok(),
+            "Alert should be allowed in epoch 0"
+        );
+
+        // ALLOWED: Handshake (22)
+        let handshake = build_epoch_0_record(0x16);
+        assert!(
+            DTLSRecord::parse(&handshake, 0, 0).is_ok(),
+            "Handshake should be allowed in epoch 0"
+        );
+
+        // REJECTED: ApplicationData (23)
+        let app_data = build_epoch_0_record(0x17);
+        assert!(
+            DTLSRecord::parse(&app_data, 0, 0).is_err(),
+            "ApplicationData must be rejected in epoch 0"
+        );
+
+        // REJECTED: Ack (26) - valid in DTLS 1.3 but not DTLS 1.2
+        let ack = build_epoch_0_record(0x1A);
+        assert!(
+            DTLSRecord::parse(&ack, 0, 0).is_err(),
+            "Ack must be rejected in DTLS 1.2 epoch 0"
+        );
+
+        // REJECTED: Unknown ContentType (0x99)
+        let unknown = build_epoch_0_record(0x99);
+        assert!(
+            DTLSRecord::parse(&unknown, 0, 0).is_err(),
+            "Unknown ContentType must be rejected in epoch 0"
+        );
+
+        // Verify that epoch 1+ allows ApplicationData (no whitelist restriction)
+        let mut epoch_1_app_data = build_epoch_0_record(0x17);
+        epoch_1_app_data[3] = 0x00; // epoch high byte
+        epoch_1_app_data[4] = 0x01; // epoch low byte = 1
+        assert!(
+            DTLSRecord::parse(&epoch_1_app_data, 0, 0).is_ok(),
+            "ApplicationData should be allowed in epoch 1+"
+        );
     }
 }

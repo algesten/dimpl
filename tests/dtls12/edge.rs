@@ -512,3 +512,158 @@ fn dtls12_rejects_renegotiation() {
         "Server should still receive app data after renegotiation attempt was rejected"
     );
 }
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_mixed_datagram_plaintext_first_then_valid() {
+    //! Test that a UDP datagram with bogus plaintext ApplicationData FIRST
+    //! followed by a valid encrypted record is handled correctly: the bogus
+    //! record is silently discarded and the valid one is still processed.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls12_config();
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+
+    now = complete_dtls12_handshake(&mut client, &mut server, now);
+
+    // Send valid application data from client and capture the encrypted packet.
+    client
+        .send_application_data(b"valid-data")
+        .expect("send valid data");
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    assert!(!client_out.packets.is_empty(), "Should have valid packet");
+    let valid_packet = &client_out.packets[0];
+
+    // Craft a plaintext ApplicationData record (epoch 0).
+    let bogus_record = vec![
+        0x17, // content_type: ApplicationData
+        0xFE, 0xFD, // version: DTLS 1.2
+        0x00, 0x00, // epoch: 0 (plaintext)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x88, // sequence_number
+        0x00, 0x06, // length: 6
+        0x62, 0x6F, 0x67, 0x75, 0x73, 0x21, // "bogus!"
+    ];
+
+    // Construct a mixed datagram: bogus plaintext record FIRST, then valid record.
+    let mut mixed_datagram = bogus_record;
+    mixed_datagram.extend_from_slice(valid_packet);
+
+    // Deliver the mixed datagram to server.
+    server
+        .handle_packet(&mixed_datagram)
+        .expect("mixed datagram should not error");
+
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+
+    // The valid record should still be processed despite the bogus first record.
+    assert!(
+        server_out
+            .app_data
+            .iter()
+            .any(|d| d.as_slice() == b"valid-data"),
+        "Server should receive the valid encrypted ApplicationData even when bogus record comes first"
+    );
+
+    // The bogus plaintext record should NOT produce any output.
+    assert_eq!(
+        server_out.app_data.len(),
+        1,
+        "Should receive exactly 1 app data (the valid one), not the bogus plaintext"
+    );
+    assert!(
+        !server_out
+            .app_data
+            .iter()
+            .any(|d| d.as_slice() == b"bogus!"),
+        "Bogus plaintext ApplicationData must not be delivered"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_mixed_datagram_valid_first_then_bogus() {
+    //! Test that a UDP datagram with a valid encrypted record FIRST followed
+    //! by bogus plaintext ApplicationData is handled correctly: the valid
+    //! record is processed and the trailing bogus record is discarded.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls12_config();
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+
+    now = complete_dtls12_handshake(&mut client, &mut server, now);
+
+    // Send valid application data from client and capture the encrypted packet.
+    client
+        .send_application_data(b"valid-data")
+        .expect("send valid data");
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    assert!(!client_out.packets.is_empty(), "Should have valid packet");
+    let valid_packet = &client_out.packets[0];
+
+    // Craft a plaintext ApplicationData record (epoch 0).
+    let bogus_record = vec![
+        0x17, // content_type: ApplicationData
+        0xFE, 0xFD, // version: DTLS 1.2
+        0x00, 0x00, // epoch: 0 (plaintext)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x99, // sequence_number
+        0x00, 0x06, // length: 6
+        0x62, 0x6F, 0x67, 0x75, 0x73, 0x21, // "bogus!"
+    ];
+
+    // Construct a mixed datagram: valid record FIRST, then bogus plaintext.
+    let mut mixed_datagram = valid_packet.clone();
+    mixed_datagram.extend_from_slice(&bogus_record);
+
+    // Deliver the mixed datagram to server.
+    server
+        .handle_packet(&mixed_datagram)
+        .expect("mixed datagram should not error");
+
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+
+    // The valid record should be processed.
+    assert!(
+        server_out
+            .app_data
+            .iter()
+            .any(|d| d.as_slice() == b"valid-data"),
+        "Server should receive the valid encrypted ApplicationData even when bogus record follows"
+    );
+
+    // The bogus trailing record should NOT produce any output.
+    assert_eq!(
+        server_out.app_data.len(),
+        1,
+        "Should receive exactly 1 app data (the valid one), not the bogus plaintext"
+    );
+}
