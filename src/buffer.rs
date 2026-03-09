@@ -148,6 +148,12 @@ impl ToBuf for &[u8] {
 #[allow(clippy::len_without_is_empty)]
 pub struct TmpBuf<'a>(&'a mut [u8], usize);
 
+impl core::fmt::Debug for TmpBuf<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TmpBuf").field("data_len", &self.1).finish()
+    }
+}
+
 impl<'a> TmpBuf<'a> {
     /// Create a new temporary buffer from a mutable slice.
     pub fn new(buf: &'a mut [u8]) -> Self {
