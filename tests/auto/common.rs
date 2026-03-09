@@ -76,3 +76,13 @@ pub fn no_cookie_config() -> Arc<Config> {
             .expect("Failed to build config"),
     )
 }
+
+/// Create a config with a small MTU to force ClientHello fragmentation.
+pub fn small_mtu_config(mtu: usize) -> Arc<Config> {
+    Arc::new(
+        Config::builder()
+            .mtu(mtu)
+            .build()
+            .expect("Failed to build config"),
+    )
+}

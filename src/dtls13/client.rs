@@ -170,7 +170,7 @@ impl Client {
     /// already sent on the wire by `ClientPending`, so no record is
     /// enqueued for output.
     pub(crate) fn new_from_hybrid(
-        hybrid: crate::detect::HybridClientHello,
+        hybrid: crate::auto::HybridClientHello,
         config: std::sync::Arc<crate::Config>,
         certificate: crate::DtlsCertificate,
         now: Instant,
@@ -210,7 +210,7 @@ impl Client {
     }
 
     pub fn into_server(self) -> Server {
-        Server::new_with_engine(self.engine, self.last_now)
+        Server::new_with_engine(self.engine, self.last_now, false)
     }
 
     pub(crate) fn state_name(&self) -> &'static str {

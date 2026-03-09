@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Fix server auto-sensing DTLS version with fragmented ClientHello #87
   * DTLS 1.2 DTLS 1.3, parser reject ApplicationData in epoch 0/plaintext #90
   * DTLS 1.3 reject plaintext records with non-zero epoch #90
   * Silently discard invalid records and process subsequent valid records #90

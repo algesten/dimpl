@@ -74,6 +74,8 @@ const HRR_RANDOM: [u8; 32] = [
     0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
 ];
 
+const MAX_RETAINED_CLIENT_HELLO: usize = 64;
+
 /// DTLS 1.3 server
 pub struct Server {
     /// Current server state.
@@ -135,6 +137,15 @@ pub struct Server {
 
     /// Whether we need to respond with our own KeyUpdate.
     pending_key_update_response: bool,
+
+    /// When true, a ClientHello without DTLS 1.3 in `supported_versions`
+    /// returns [`Error::Dtls12Fallback`] instead of a security error.
+    /// Used by the auto-sense server path.
+    auto_mode: bool,
+
+    /// Raw packets buffered during auto-sense so they can be replayed
+    /// to a DTLS 1.2 server on fallback.
+    retained_hello: VecDeque<Buf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,10 +167,21 @@ impl Server {
     /// Create a new DTLS 1.3 server.
     pub fn new(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Server {
         let engine = Engine::new(config, certificate);
-        Self::new_with_engine(engine, now)
+        Self::new_with_engine(engine, now, false)
     }
 
-    pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Server {
+    /// Create a new DTLS 1.3 server in auto-sense mode.
+    ///
+    /// In auto-sense mode, if the ClientHello does not offer DTLS 1.3
+    /// in `supported_versions`, the server returns [`Error::Dtls12Fallback`]
+    /// instead of a fatal security error, allowing the caller to switch
+    /// to a DTLS 1.2 server.
+    pub fn new_auto(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Server {
+        let engine = Engine::new(config, certificate);
+        Self::new_with_engine(engine, now, true)
+    }
+
+    pub fn new_with_engine(mut engine: Engine, now: Instant, auto_mode: bool) -> Server {
         let cookie_secret = engine.random_arr();
 
         Server {
@@ -183,6 +205,8 @@ impl Server {
             hello_retry: false,
             cookie_secret,
             pending_key_update_response: false,
+            auto_mode,
+            retained_hello: VecDeque::with_capacity(10),
         }
     }
 
@@ -190,13 +214,46 @@ impl Server {
         Client::new_with_engine(self.engine, self.last_now)
     }
 
+    /// Whether this server is in auto-sense mode.
+    pub fn is_auto_mode(&self) -> bool {
+        self.auto_mode
+    }
+
+    /// Take all relevant config from this server instance.
+    ///
+    /// This is used in two cases:
+    ///
+    /// 1. Switching a server pending (auto-mode) to dtls12 server
+    /// 2. set_active(true), turning a server pending (auto-mode) to a ClientPending
+    pub fn into_parts(self) -> (Arc<Config>, DtlsCertificate, Instant, VecDeque<Buf>) {
+        let (config, cert) = self.engine.into_fallback();
+        (config, cert, self.last_now, self.retained_hello)
+    }
+
     pub(crate) fn state_name(&self) -> &'static str {
         self.state.name()
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+        // In auto-sense mode, buffer raw packets while still waiting for
+        // the ClientHello so they can be replayed to Server12 on fallback.
+        if self.auto_mode && self.state == State::AwaitClientHello {
+            // Cap buffered fragments to prevent unbounded growth from malicious traffic
+            if self.retained_hello.len() >= MAX_RETAINED_CLIENT_HELLO {
+                return Err(Error::TooManyClientHelloFragments);
+            }
+            self.retained_hello.push_back(packet.to_buf());
+        }
+
         self.engine.parse_packet(packet)?;
         self.make_progress()?;
+
+        // Once past AwaitClientHello, DTLS 1.3 is committed — free the buffer.
+        if self.auto_mode && self.state != State::AwaitClientHello {
+            self.retained_hello.clear();
+            self.auto_mode = false;
+        }
+
         Ok(())
     }
 
@@ -392,6 +449,9 @@ impl State {
         }
 
         if !supported_versions_ok {
+            if server.auto_mode {
+                return Err(Error::Dtls12Fallback);
+            }
             return Err(Error::SecurityError(
                 "ClientHello must include DTLS 1.3 in supported_versions".to_string(),
             ));
