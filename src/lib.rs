@@ -137,6 +137,38 @@
 //! # }
 //! ```
 //!
+//! ## Example (PSK client)
+//!
+//! ```rust,no_run
+//! use std::sync::Arc;
+//! use std::time::Instant;
+//!
+//! use dimpl::{Config, Dtls, PskResolver};
+//!
+//! struct MyPsk;
+//!
+//! impl PskResolver for MyPsk {
+//!     fn resolve(&self, identity: &[u8]) -> Option<Vec<u8>> {
+//!         if identity == b"device-01" {
+//!             Some(b"shared-secret-key".to_vec())
+//!         } else {
+//!             None
+//!         }
+//!     }
+//! }
+//!
+//! let config = Arc::new(
+//!     Config::builder()
+//!         .with_psk_identity(b"device-01".to_vec())
+//!         .with_psk_resolver(Arc::new(MyPsk))
+//!         .build()
+//!         .unwrap(),
+//! );
+//!
+//! let mut dtls = Dtls::new_12_psk(config, Instant::now());
+//! dtls.set_active(true); // client role
+//! ```
+//!
 //! ### MSRV
 //! Rust 1.85.0
 //!

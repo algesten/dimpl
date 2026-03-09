@@ -7,7 +7,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/algesten/dimpl"
 readme = "README.md"
-keywords = ["dtls", "tls", "webrtc"]
+keywords = ["dtls", "tls", "webrtc", "psk"]
 categories = ["network-programming", "cryptography", "security"]
 
 # MSRV
