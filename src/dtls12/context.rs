@@ -582,8 +582,8 @@ impl CryptoContext {
                 .private_key
                 .as_ref()
                 .is_some_and(|pk| sig_alg == pk.algorithm()),
-            // PSK suite: no certificate needed
-            None => true,
+            // PSK suite: only compatible in PSK mode (no private key)
+            None => self.private_key.is_none(),
         }
     }
 
@@ -612,5 +612,74 @@ impl CryptoContext {
             signature.algorithm.hash,
             signature.algorithm.signature,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Config;
+
+    #[test]
+    fn certificate_mode_rejects_psk_suites() {
+        let cert = crate::certificate::generate_self_signed_certificate().expect("generate cert");
+        let config = Arc::new(Config::default());
+        let ctx = CryptoContext::new(cert.certificate, cert.private_key, config);
+
+        for suite in Dtls12CipherSuite::supported() {
+            if suite.is_psk() {
+                assert!(
+                    !ctx.is_cipher_suite_compatible(*suite),
+                    "Certificate-mode context must reject PSK suite {:?}",
+                    suite
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn certificate_mode_accepts_ecdhe_suites() {
+        let cert = crate::certificate::generate_self_signed_certificate().expect("generate cert");
+        let config = Arc::new(Config::default());
+        let ctx = CryptoContext::new(cert.certificate, cert.private_key, config);
+
+        // At least one ECDHE_ECDSA suite should be compatible
+        assert!(
+            Dtls12CipherSuite::supported()
+                .iter()
+                .filter(|s| !s.is_psk())
+                .any(|s| ctx.is_cipher_suite_compatible(*s)),
+            "Certificate-mode context must accept at least one ECDHE suite"
+        );
+    }
+
+    #[test]
+    fn psk_mode_rejects_certificate_suites() {
+        let config = Arc::new(Config::default());
+        let ctx = CryptoContext::new_psk(config);
+
+        for suite in Dtls12CipherSuite::supported() {
+            if !suite.is_psk() {
+                assert!(
+                    !ctx.is_cipher_suite_compatible(*suite),
+                    "PSK-mode context must reject certificate suite {:?}",
+                    suite
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn psk_mode_accepts_psk_suites() {
+        let config = Arc::new(Config::default());
+        let ctx = CryptoContext::new_psk(config);
+
+        assert!(
+            Dtls12CipherSuite::supported()
+                .iter()
+                .filter(|s| s.is_psk())
+                .any(|s| ctx.is_cipher_suite_compatible(*s)),
+            "PSK-mode context must accept at least one PSK suite"
+        );
     }
 }

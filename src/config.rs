@@ -212,16 +212,22 @@ impl Config {
     /// Returns all provider-supported DTLS 1.2 cipher suites when no filter
     /// is set. When a filter is set via the builder's `dtls12_cipher_suites`
     /// method, only suites in both the provider and the filter are returned.
+    ///
+    /// PSK cipher suites are excluded when no [`PskResolver`] is configured,
+    /// preventing a certificate-mode endpoint from negotiating a PSK suite
+    /// and inadvertently skipping certificate authentication.
     pub fn dtls12_cipher_suites(
         &self,
     ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> + '_ {
         let filter = self.dtls12_cipher_suites.as_ref();
+        let has_psk = self.psk_resolver.is_some();
         self.crypto_provider
             .supported_cipher_suites()
             .filter(move |cs| match filter {
                 Some(list) => list.contains(&cs.suite()),
                 None => true,
             })
+            .filter(move |cs| has_psk || !cs.suite().is_psk())
     }
 
     /// Allowed DTLS 1.3 cipher suites, filtered by the config's allow-list.
@@ -786,9 +792,38 @@ mod tests {
     fn no_filter_returns_all() {
         let config = Config::default();
         // Default provider should have at least 2 DTLS 1.2 and 2 DTLS 1.3 suites
+        // (PSK suites are excluded without a resolver, so only non-PSK count)
         assert!(config.dtls12_cipher_suites().count() >= 2);
         assert!(config.dtls13_cipher_suites().count() >= 2);
         assert!(config.kx_groups().count() >= 2);
+    }
+
+    #[test]
+    fn psk_suites_excluded_without_resolver() {
+        let config = Config::default();
+        assert!(
+            config.dtls12_cipher_suites().all(|cs| !cs.suite().is_psk()),
+            "PSK suites should be excluded when no PskResolver is configured"
+        );
+    }
+
+    #[test]
+    fn psk_suites_included_with_resolver() {
+        struct DummyResolver;
+        impl PskResolver for DummyResolver {
+            fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+                None
+            }
+        }
+
+        let config = Config::builder()
+            .with_psk_resolver(Arc::new(DummyResolver))
+            .build()
+            .expect("config with PSK resolver should build");
+        assert!(
+            config.dtls12_cipher_suites().any(|cs| cs.suite().is_psk()),
+            "PSK suites should be included when a PskResolver is configured"
+        );
     }
 
     #[test]
