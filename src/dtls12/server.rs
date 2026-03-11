@@ -76,6 +76,10 @@ pub struct Server {
     /// Captured session hash for Extended Master Secret (RFC 7627)
     captured_session_hash: Option<Buf>,
 
+    /// Whether the PSK identity resolved to a real key.
+    /// Defaults to `true` so non-PSK paths are unaffected.
+    psk_valid: bool,
+
     /// The last now we seen
     last_now: Instant,
 
@@ -137,6 +141,7 @@ impl Server {
             client_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
             captured_session_hash: None,
+            psk_valid: true,
             last_now: now,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
@@ -692,21 +697,31 @@ impl State {
             trace!("PSK identity ({} bytes)", identity.len());
 
             // Resolve PSK via the configured resolver
-            let psk = server
-                .engine
-                .config()
-                .psk_resolver()
-                .ok_or_else(|| Error::SecurityError("No PSK resolver configured".to_string()))?
-                .resolve(identity)
-                .ok_or_else(|| {
-                    Error::SecurityError("PSK resolver returned no key for identity".to_string())
+            let (psk, psk_valid) = {
+                let resolver = server.engine.config().psk_resolver().ok_or_else(|| {
+                    Error::SecurityError("No PSK resolver configured".to_string())
                 })?;
+
+                match resolver.resolve(identity) {
+                    Some(key) => (key, true),
+                    None => {
+                        // Use a dummy PSK so the handshake proceeds identically
+                        // to a valid-identity flow. It will fail at Finished
+                        // verification, making the two cases indistinguishable.
+                        let dummy = vec![0u8; 32]; // length should match your typical PSK size
+                        (dummy, false)
+                    }
+                }
+            };
+
+            // Saving to server struct
+            server.psk_valid = psk_valid;
 
             let crypto = server.engine.crypto_context_mut();
             crypto.set_psk(psk);
-            crypto.compute_psk_pre_master_secret().map_err(|e| {
-                Error::CryptoError(format!("Failed to compute PSK PMS: {}", e))
-            })?;
+            crypto
+                .compute_psk_pre_master_secret()
+                .map_err(|e| Error::CryptoError(format!("Failed to compute PSK PMS: {}", e)))?;
         } else {
             // Extract client's public key range before dropping handshake
             let public_key_range = match &ckx.exchange_keys {
@@ -913,6 +928,14 @@ impl State {
         // Use constant-time comparison to prevent timing attacks
         let is_eq: bool = verify_data.ct_eq(expected.as_slice()).into();
         if !is_eq {
+            return Err(Error::SecurityError(
+                "Client Finished verification failed".to_string(),
+            ));
+        }
+
+        // Defense-in-depth: dummy PSK should always fail above,
+        // but reject explicitly in case it accidentally passes.
+        if !server.psk_valid {
             return Err(Error::SecurityError(
                 "Client Finished verification failed".to_string(),
             ));

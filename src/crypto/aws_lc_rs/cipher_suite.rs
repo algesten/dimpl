@@ -366,10 +366,10 @@ pub(super) static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] = &[
     &AES_128_GCM_SHA256,
     &AES_256_GCM_SHA384,
     &CHACHA20_POLY1305_SHA256,
-    &PSK_AES_128_CCM_8,
     &PSK_AES_128_GCM_SHA256,
     &PSK_AES_256_GCM_SHA384,
     &PSK_CHACHA20_POLY1305_SHA256,
+    &PSK_AES_128_CCM_8,
 ];
 
 // ============================================================================
