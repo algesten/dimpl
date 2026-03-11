@@ -152,13 +152,10 @@ impl Server {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
-        let last_now = self.last_now;
-
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.client_certificates);
         }
-
-        self.engine.poll_output(buf, last_now)
+        self.engine.poll_output(buf, self.last_now)
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
@@ -1123,6 +1120,58 @@ fn select_named_group(
     server_groups.first().copied()
 }
 
+fn select_ske_signature_algorithm(
+    client_algs: Option<&SignatureAndHashAlgorithmVec>,
+    our_sig: SignatureAlgorithm,
+) -> SignatureAndHashAlgorithm {
+    // Our hash preference order
+    let hash_pref = [HashAlgorithm::SHA256, HashAlgorithm::SHA384];
+
+    if let Some(list) = client_algs {
+        for h in hash_pref.iter() {
+            if let Some(chosen) = list
+                .iter()
+                .find(|alg| alg.signature == our_sig && alg.hash == *h)
+            {
+                return *chosen;
+            }
+        }
+    }
+
+    // Fallback to our default hash for our key type
+    let hash = engine_default_hash_for_sig(our_sig);
+    SignatureAndHashAlgorithm::new(hash, our_sig)
+}
+
+fn engine_default_hash_for_sig(sig: SignatureAlgorithm) -> HashAlgorithm {
+    match sig {
+        SignatureAlgorithm::RSA => HashAlgorithm::SHA256,
+        SignatureAlgorithm::ECDSA => HashAlgorithm::SHA256,
+        _ => HashAlgorithm::SHA256,
+    }
+}
+
+fn select_certificate_request_sig_algs(
+    client_algs: Option<&SignatureAndHashAlgorithmVec>,
+) -> SignatureAndHashAlgorithmVec {
+    // Our supported set (RSA/ECDSA with SHA256/384)
+    let ours = SignatureAndHashAlgorithm::supported();
+
+    // Build intersection preserving client preference order
+    let mut out = ArrayVec::new();
+    if let Some(list) = client_algs {
+        for alg in list.iter() {
+            if ours
+                .iter()
+                .any(|a| a.hash == alg.hash && a.signature == alg.signature)
+            {
+                out.push(*alg);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1177,56 +1226,4 @@ mod tests {
 
         assert_eq!(selected, None);
     }
-}
-
-fn select_ske_signature_algorithm(
-    client_algs: Option<&SignatureAndHashAlgorithmVec>,
-    our_sig: SignatureAlgorithm,
-) -> SignatureAndHashAlgorithm {
-    // Our hash preference order
-    let hash_pref = [HashAlgorithm::SHA256, HashAlgorithm::SHA384];
-
-    if let Some(list) = client_algs {
-        for h in hash_pref.iter() {
-            if let Some(chosen) = list
-                .iter()
-                .find(|alg| alg.signature == our_sig && alg.hash == *h)
-            {
-                return *chosen;
-            }
-        }
-    }
-
-    // Fallback to our default hash for our key type
-    let hash = engine_default_hash_for_sig(our_sig);
-    SignatureAndHashAlgorithm::new(hash, our_sig)
-}
-
-fn engine_default_hash_for_sig(sig: SignatureAlgorithm) -> HashAlgorithm {
-    match sig {
-        SignatureAlgorithm::RSA => HashAlgorithm::SHA256,
-        SignatureAlgorithm::ECDSA => HashAlgorithm::SHA256,
-        _ => HashAlgorithm::SHA256,
-    }
-}
-
-fn select_certificate_request_sig_algs(
-    client_algs: Option<&SignatureAndHashAlgorithmVec>,
-) -> SignatureAndHashAlgorithmVec {
-    // Our supported set (RSA/ECDSA with SHA256/384)
-    let ours = SignatureAndHashAlgorithm::supported();
-
-    // Build intersection preserving client preference order
-    let mut out = ArrayVec::new();
-    if let Some(list) = client_algs {
-        for alg in list.iter() {
-            if ours
-                .iter()
-                .any(|a| a.hash == alg.hash && a.signature == alg.signature)
-            {
-                out.push(*alg);
-            }
-        }
-    }
-    out
 }
