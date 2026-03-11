@@ -189,13 +189,10 @@ impl Server {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
-        let last_now = self.last_now;
-
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.client_certificates);
         }
-
-        self.engine.poll_output(buf, last_now)
+        self.engine.poll_output(buf, self.last_now)
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
@@ -1305,6 +1302,58 @@ fn select_named_group(
     server_groups.first().copied()
 }
 
+fn select_ske_signature_algorithm(
+    client_algs: Option<&SignatureAndHashAlgorithmVec>,
+    our_sig: SignatureAlgorithm,
+    our_hash: HashAlgorithm,
+    supported_hashes: &[HashAlgorithm],
+) -> SignatureAndHashAlgorithm {
+    // Prefer the key's native hash first, then fall back to the other
+    let hash_pref = match our_hash {
+        HashAlgorithm::SHA384 => [HashAlgorithm::SHA384, HashAlgorithm::SHA256],
+        _ => [HashAlgorithm::SHA256, HashAlgorithm::SHA384],
+    };
+
+    if let Some(list) = client_algs {
+        for h in hash_pref.iter() {
+            // Only consider hash algorithms the backend can actually sign with
+            if !supported_hashes.contains(h) {
+                continue;
+            }
+            if let Some(chosen) = list
+                .iter()
+                .find(|alg| alg.signature == our_sig && alg.hash == *h)
+            {
+                return *chosen;
+            }
+        }
+    }
+
+    // Fallback: use the key's native hash
+    SignatureAndHashAlgorithm::new(our_hash, our_sig)
+}
+
+fn select_certificate_request_sig_algs(
+    client_algs: Option<&SignatureAndHashAlgorithmVec>,
+) -> SignatureAndHashAlgorithmVec {
+    // Our supported set (RSA/ECDSA with SHA256/384)
+    let ours = SignatureAndHashAlgorithm::supported();
+
+    // Build intersection preserving client preference order
+    let mut out = ArrayVec::new();
+    if let Some(list) = client_algs {
+        for alg in list.iter() {
+            if ours
+                .iter()
+                .any(|a| a.hash == alg.hash && a.signature == alg.signature)
+            {
+                out.push(*alg);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1359,56 +1408,4 @@ mod tests {
 
         assert_eq!(selected, None);
     }
-}
-
-fn select_ske_signature_algorithm(
-    client_algs: Option<&SignatureAndHashAlgorithmVec>,
-    our_sig: SignatureAlgorithm,
-    our_hash: HashAlgorithm,
-    supported_hashes: &[HashAlgorithm],
-) -> SignatureAndHashAlgorithm {
-    // Prefer the key's native hash first, then fall back to the other
-    let hash_pref = match our_hash {
-        HashAlgorithm::SHA384 => [HashAlgorithm::SHA384, HashAlgorithm::SHA256],
-        _ => [HashAlgorithm::SHA256, HashAlgorithm::SHA384],
-    };
-
-    if let Some(list) = client_algs {
-        for h in hash_pref.iter() {
-            // Only consider hash algorithms the backend can actually sign with
-            if !supported_hashes.contains(h) {
-                continue;
-            }
-            if let Some(chosen) = list
-                .iter()
-                .find(|alg| alg.signature == our_sig && alg.hash == *h)
-            {
-                return *chosen;
-            }
-        }
-    }
-
-    // Fallback: use the key's native hash
-    SignatureAndHashAlgorithm::new(our_hash, our_sig)
-}
-
-fn select_certificate_request_sig_algs(
-    client_algs: Option<&SignatureAndHashAlgorithmVec>,
-) -> SignatureAndHashAlgorithmVec {
-    // Our supported set (RSA/ECDSA with SHA256/384)
-    let ours = SignatureAndHashAlgorithm::supported();
-
-    // Build intersection preserving client preference order
-    let mut out = ArrayVec::new();
-    if let Some(list) = client_algs {
-        for alg in list.iter() {
-            if ours
-                .iter()
-                .any(|a| a.hash == alg.hash && a.signature == alg.signature)
-            {
-                out.push(*alg);
-            }
-        }
-    }
-    out
 }
