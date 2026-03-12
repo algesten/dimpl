@@ -13,6 +13,7 @@ pub mod aws_lc_rs;
 pub mod rust_crypto;
 
 mod dtls_aead;
+pub mod prf_hkdf;
 mod provider;
 mod validation;
 
@@ -30,9 +31,9 @@ pub use crate::buffer::{Buf, TmpBuf};
 // Re-export all provider traits and types (similar to rustls structure)
 // This allows users to do: use dimpl::crypto::{CryptoProvider, SupportedDtls12CipherSuite, ...};
 pub use provider::{
-    ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext, HashProvider, HkdfProvider,
-    HmacProvider, KeyProvider, PrfProvider, SecureRandom, SignatureVerifier, SigningKey,
-    SupportedDtls12CipherSuite, SupportedDtls13CipherSuite, SupportedKxGroup, check_verify_scheme,
+    ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext, HashProvider, HmacProvider,
+    KeyProvider, SecureRandom, SignatureVerifier, SigningKey, SupportedDtls12CipherSuite,
+    SupportedDtls13CipherSuite, SupportedKxGroup, check_verify_scheme,
 };
 #[cfg(feature = "_crypto-common")]
 pub use provider::{OID_P256, OID_P384, cert_named_group};

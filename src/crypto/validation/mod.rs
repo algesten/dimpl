@@ -72,7 +72,7 @@ impl CryptoProvider {
         self.validate_cipher_suites()?;
         self.validate_kx_groups()?;
         let validated_hashes = self.validate_hash_providers()?;
-        self.validate_prf_provider(&validated_hashes)?;
+        self.validate_prf(&validated_hashes)?;
         self.validate_signature_verifier(&validated_hashes)?;
         self.validate_hmac_provider()?;
         self.validate_dtls13_cipher_suites()?;
@@ -149,43 +149,37 @@ impl CryptoProvider {
         Ok(required_hashes)
     }
 
-    /// Validate that PRF provider works for every supported hash algorithm.
-    fn validate_prf_provider(&self, validated_hashes: &[HashAlgorithm]) -> Result<(), Error> {
-        // Test PRF with known test vector (RFC 5246 test vector)
-        // PRF(secret, label, seed) should be deterministic
+    /// Validate that PRF (via HMAC) works for every supported hash algorithm.
+    fn validate_prf(&self, validated_hashes: &[HashAlgorithm]) -> Result<(), Error> {
         let secret = b"test_secret";
         let label = "test label";
         let seed = b"test_seed";
         let output_len = 32;
 
-        // Test PRF for each validated hash algorithm
         for &hash_alg in validated_hashes {
             let mut result = Buf::new();
             let mut scratch = Buf::new();
-            self.prf_provider
-                .prf_tls12(
-                    secret,
-                    label,
-                    seed,
-                    &mut result,
-                    output_len,
-                    &mut scratch,
-                    hash_alg,
-                )
-                .map_err(|e| {
-                    Error::ConfigError(format!("PRF provider failed for {:?}: {}", hash_alg, e))
-                })?;
+            super::prf_hkdf::prf_tls12(
+                self.hmac_provider,
+                secret,
+                label,
+                seed,
+                &mut result,
+                output_len,
+                &mut scratch,
+                hash_alg,
+            )
+            .map_err(|e| Error::ConfigError(format!("PRF failed for {:?}: {}", hash_alg, e)))?;
 
             if result.len() != output_len {
                 return Err(Error::ConfigError(format!(
-                    "PRF provider {:?} returned wrong length: expected {}, got {}",
+                    "PRF {:?} returned wrong length: expected {}, got {}",
                     hash_alg,
                     output_len,
                     result.len()
                 )));
             }
 
-            // Verify the exact output matches expected test vector
             let maybe_expected = PRF_TEST_VECTORS
                 .iter()
                 .find(|(h, _)| *h == hash_alg)
@@ -200,7 +194,7 @@ impl CryptoProvider {
 
             if result.as_ref() != *expected {
                 return Err(Error::ConfigError(format!(
-                    "PRF provider {:?} produced incorrect result",
+                    "PRF {:?} produced incorrect result",
                     hash_alg
                 )));
             }
@@ -260,25 +254,24 @@ impl CryptoProvider {
             ));
         }
 
-        // Verify HKDF works for each DTLS 1.3 cipher suite's hash algorithm
+        // Verify HKDF (via HMAC) works for each DTLS 1.3 cipher suite's hash algorithm
         for cs in self.dtls13_cipher_suites {
             let hash = cs.suite().hash_algorithm();
             let hash_len = hash.output_len();
             let zeros = [0u8; 48];
             let zeros = &zeros[..hash_len];
             let mut out = Buf::new();
-            self.hkdf_provider
-                .hkdf_extract(hash, zeros, zeros, &mut out)
+            super::prf_hkdf::hkdf_extract(self.hmac_provider, hash, zeros, zeros, &mut out)
                 .map_err(|e| {
                     Error::ConfigError(format!(
-                        "HKDF provider failed for DTLS 1.3 suite {:?}: {}",
+                        "HKDF failed for DTLS 1.3 suite {:?}: {}",
                         cs.suite(),
                         e
                     ))
                 })?;
             if out.is_empty() {
                 return Err(Error::ConfigError(format!(
-                    "HKDF provider returned empty output for {:?}",
+                    "HKDF returned empty output for {:?}",
                     cs.suite()
                 )));
             }

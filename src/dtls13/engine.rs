@@ -9,11 +9,12 @@ use super::queue::{QueueRx, QueueTx};
 use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::Aad;
 use crate::crypto::Cipher;
-use crate::crypto::HkdfProvider;
+use crate::crypto::HmacProvider;
 use crate::crypto::Nonce;
 use crate::crypto::SigningKey;
 use crate::crypto::SupportedDtls13CipherSuite;
 use crate::crypto::SupportedKxGroup;
+use crate::crypto::prf_hkdf;
 use crate::dtls13::incoming::{Incoming, RecordDecrypt};
 use crate::dtls13::message::Body;
 use crate::dtls13::message::ContentType;
@@ -1542,8 +1543,8 @@ impl Engine {
     // Key Schedule
     // =========================================================================
 
-    fn hkdf(&self) -> &dyn HkdfProvider {
-        self.config.crypto_provider().hkdf_provider
+    fn hmac(&self) -> &dyn HmacProvider {
+        self.config.crypto_provider().hmac_provider
     }
 
     fn hash_algorithm(&self) -> HashAlgorithm {
@@ -1569,8 +1570,7 @@ impl Engine {
         let zeros = [0u8; 48];
         let zeros = &zeros[..hash_len];
         let mut early_secret = self.buffers_free.pop();
-        self.hkdf()
-            .hkdf_extract(hash, zeros, zeros, &mut early_secret)
+        prf_hkdf::hkdf_extract(self.hmac(), hash, zeros, zeros, &mut early_secret)
             .map_err(|e| Error::CryptoError(format!("Failed to derive early secret: {}", e)))?;
         Ok(early_secret)
     }
@@ -1582,17 +1582,18 @@ impl Engine {
         &mut self,
         shared_secret: &[u8],
     ) -> Result<(Buf, Buf, Buf), Error> {
-        // Call derive_early_secret first (needs &mut self) before borrowing hkdf
+        // Call derive_early_secret first (needs &mut self) before borrowing hmac
         let early_secret = self.derive_early_secret()?;
 
         let hash = self.hash_algorithm();
         let hash_len = hash.output_len();
-        let hkdf = self.hkdf();
+        let hmac = self.hmac();
 
         // Derive-Secret(early_secret, "derived", "")
         let empty_hash = self.transcript_hash_of(b"");
         let mut derived = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             &early_secret,
             b"derived",
@@ -1604,7 +1605,7 @@ impl Engine {
 
         // handshake_secret = HKDF-Extract(derived, shared_secret)
         let mut handshake_secret = Buf::new();
-        hkdf.hkdf_extract(hash, &derived, shared_secret, &mut handshake_secret)
+        prf_hkdf::hkdf_extract(hmac, hash, &derived, shared_secret, &mut handshake_secret)
             .map_err(|e| Error::CryptoError(format!("Failed to derive handshake secret: {}", e)))?;
 
         // Get transcript hash up to and including ServerHello
@@ -1613,7 +1614,8 @@ impl Engine {
 
         // client_handshake_traffic_secret
         let mut c_hs_traffic = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             &handshake_secret,
             b"c hs traffic",
@@ -1625,7 +1627,8 @@ impl Engine {
 
         // server_handshake_traffic_secret
         let mut s_hs_traffic = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             &handshake_secret,
             b"s hs traffic",
@@ -1668,12 +1671,13 @@ impl Engine {
     ) -> Result<(Buf, Buf), Error> {
         let hash = self.hash_algorithm();
         let hash_len = hash.output_len();
-        let hkdf = self.hkdf();
+        let hmac = self.hmac();
 
         // Derive-Secret(handshake_secret, "derived", "")
         let empty_hash = self.transcript_hash_of(b"");
         let mut derived = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             handshake_secret,
             b"derived",
@@ -1687,7 +1691,7 @@ impl Engine {
         let zeros = [0u8; 48];
         let zeros = &zeros[..hash_len];
         let mut master_secret = Buf::new();
-        hkdf.hkdf_extract(hash, &derived, zeros, &mut master_secret)
+        prf_hkdf::hkdf_extract(hmac, hash, &derived, zeros, &mut master_secret)
             .map_err(|e| Error::CryptoError(format!("Failed to derive master secret: {}", e)))?;
 
         // Get transcript hash up to and including server Finished
@@ -1696,7 +1700,8 @@ impl Engine {
 
         // exporter_master_secret = Derive-Secret(master_secret, "exp master", transcript_hash)
         let mut exp_master = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             &master_secret,
             b"exp master",
@@ -1710,7 +1715,8 @@ impl Engine {
 
         // client_application_traffic_secret_0
         let mut c_ap_traffic = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             &master_secret,
             b"c ap traffic",
@@ -1722,7 +1728,8 @@ impl Engine {
 
         // server_application_traffic_secret_0
         let mut s_ap_traffic = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             &master_secret,
             b"s ap traffic",
@@ -1732,7 +1739,7 @@ impl Engine {
         )
         .map_err(|e| Error::CryptoError(format!("Failed to derive s_ap_traffic: {}", e)))?;
 
-        // Store exporter master secret (deferred to avoid borrow conflict with hkdf)
+        // Store exporter master secret (deferred to avoid borrow conflict with hmac)
         self.exporter_master_secret = Some(exp_master);
 
         Ok((c_ap_traffic, s_ap_traffic))
@@ -1772,13 +1779,19 @@ impl Engine {
     fn derive_next_traffic_secret(&self, current: &Buf) -> Result<Buf, Error> {
         let hash = self.hash_algorithm();
         let hash_len = hash.output_len();
-        let hkdf = self.hkdf();
+        let hmac = self.hmac();
 
         let mut next = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(hash, current, b"traffic upd", &[], &mut next, hash_len)
-            .map_err(|e| {
-                Error::CryptoError(format!("Failed to derive next traffic secret: {}", e))
-            })?;
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
+            hash,
+            current,
+            b"traffic upd",
+            &[],
+            &mut next,
+            hash_len,
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive next traffic secret: {}", e)))?;
 
         Ok(next)
     }
@@ -1898,16 +1911,25 @@ impl Engine {
     fn derive_epoch_keys(&self, traffic_secret: &Buf) -> Result<EpochKeys, Error> {
         let hash = self.hash_algorithm();
         let suite = self.suite_provider();
-        let hkdf = self.hkdf();
+        let hmac = self.hmac();
 
         // key = HKDF-Expand-Label(secret, "key", "", key_length)
         let mut key = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(hash, traffic_secret, b"key", &[], &mut key, suite.key_len())
-            .map_err(|e| Error::CryptoError(format!("Failed to derive key: {}", e)))?;
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
+            hash,
+            traffic_secret,
+            b"key",
+            &[],
+            &mut key,
+            suite.key_len(),
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to derive key: {}", e)))?;
 
         // iv = HKDF-Expand-Label(secret, "iv", "", iv_length)
         let mut iv_buf = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             traffic_secret,
             b"iv",
@@ -1919,7 +1941,8 @@ impl Engine {
 
         // sn_key = HKDF-Expand-Label(secret, "sn", "", key_length)
         let mut sn_key = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             traffic_secret,
             b"sn",
@@ -1959,11 +1982,12 @@ impl Engine {
     pub fn compute_verify_data(&self, traffic_secret: &[u8]) -> Result<Buf, Error> {
         let hash = self.hash_algorithm();
         let hash_len = hash.output_len();
-        let hkdf = self.hkdf();
+        let hmac = self.hmac();
 
         // finished_key = HKDF-Expand-Label(secret, "finished", "", Hash.len)
         let mut finished_key = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             traffic_secret,
             b"finished",
@@ -1978,8 +2002,14 @@ impl Engine {
 
         // HMAC(finished_key, transcript_hash) via HKDF-Extract(salt=key, IKM=data)
         let mut verify_data = Buf::new();
-        hkdf.hkdf_extract(hash, &finished_key, &transcript_hash, &mut verify_data)
-            .map_err(|e| Error::CryptoError(format!("Failed to compute verify data: {}", e)))?;
+        prf_hkdf::hkdf_extract(
+            hmac,
+            hash,
+            &finished_key,
+            &transcript_hash,
+            &mut verify_data,
+        )
+        .map_err(|e| Error::CryptoError(format!("Failed to compute verify data: {}", e)))?;
 
         Ok(verify_data)
     }
@@ -2119,7 +2149,7 @@ impl Engine {
     ) -> Result<(ArrayVec<u8, 88>, crate::crypto::SrtpProfile), Error> {
         let hash = self.hash_algorithm();
         let hash_len = hash.output_len();
-        let hkdf = self.hkdf();
+        let hmac = self.hmac();
 
         let exp_master = self.exporter_master_secret.as_ref().ok_or_else(|| {
             Error::CryptoError("Exporter master secret not yet derived".to_string())
@@ -2131,7 +2161,8 @@ impl Engine {
         // 1. derived_secret = Derive-Secret(exporter_master_secret, label, "")
         let empty_hash = self.transcript_hash_of(b"");
         let mut derived = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             exp_master,
             b"EXTRACTOR-dtls_srtp",
@@ -2144,7 +2175,8 @@ impl Engine {
         // 2. result = HKDF-Expand-Label(derived_secret, "exporter", Hash(context), length)
         let context_hash = self.transcript_hash_of(b"");
         let mut keying_material_buf = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             &derived,
             b"exporter",
@@ -2439,13 +2471,14 @@ mod tests {
         // Verify the handshake_secret can reproduce the same c_hs_traffic
         let hash = engine.hash_algorithm();
         let hash_len = hash.output_len();
-        let hkdf = engine.hkdf();
+        let hmac = engine.hmac();
 
         let mut transcript_hash = Buf::new();
         engine.transcript_hash(&mut transcript_hash);
 
         let mut c_hs_manual = Buf::new();
-        hkdf.hkdf_expand_label_dtls13(
+        prf_hkdf::hkdf_expand_label_dtls13(
+            hmac,
             hash,
             &handshake_secret,
             b"c hs traffic",
