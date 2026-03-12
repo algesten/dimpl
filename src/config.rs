@@ -11,7 +11,7 @@ use crate::types::{Dtls13CipherSuite, NamedGroup};
 
 /// Callback for resolving PSK identities to shared secrets.
 ///
-/// Implement this trait and provide it via [`ConfigBuilder::with_psk_resolver`]
+/// Implement this trait and provide it via `ConfigBuilder::with_psk_resolver`
 /// to enable PSK cipher suites.
 pub trait PskResolver: Send + Sync + UnwindSafe + RefUnwindSafe {
     /// Look up a pre-shared key by the peer's identity.
@@ -56,7 +56,10 @@ impl fmt::Debug for Config {
             .field("mtu", &self.mtu)
             .field("max_queue_rx", &self.max_queue_rx)
             .field("max_queue_tx", &self.max_queue_tx)
-            .field("require_client_certificate", &self.require_client_certificate)
+            .field(
+                "require_client_certificate",
+                &self.require_client_certificate,
+            )
             .field("use_server_cookie", &self.use_server_cookie)
             .field("flight_start_rto", &self.flight_start_rto)
             .field("flight_retries", &self.flight_retries)
@@ -292,7 +295,10 @@ impl fmt::Debug for ConfigBuilder {
             .field("mtu", &self.mtu)
             .field("max_queue_rx", &self.max_queue_rx)
             .field("max_queue_tx", &self.max_queue_tx)
-            .field("require_client_certificate", &self.require_client_certificate)
+            .field(
+                "require_client_certificate",
+                &self.require_client_certificate,
+            )
             .field("use_server_cookie", &self.use_server_cookie)
             .field("flight_start_rto", &self.flight_start_rto)
             .field("flight_retries", &self.flight_retries)

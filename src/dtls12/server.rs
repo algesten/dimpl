@@ -26,7 +26,8 @@ use crate::dtls12::client::LocalEvent;
 use crate::dtls12::engine::Engine;
 use crate::dtls12::message::{Body, CertificateRequest, CertificateTypeVec, Dtls12CipherSuite};
 use crate::dtls12::message::{ClientCertificateType, CompressionMethod, ContentType};
-use crate::dtls12::message::{Cookie, CurveType, DistinguishedName, ExchangeKeys, ExtensionType, PskParams};
+use crate::dtls12::message::{Cookie, CurveType, DistinguishedName, ExchangeKeys, ExtensionType};
+use crate::dtls12::message::PskParams;
 use crate::dtls12::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
 use crate::dtls12::message::{MessageType, NamedGroup, NamedGroupVec, ProtocolVersion, Random};
 use crate::dtls12::message::{ServerHello, SessionId, SignatureAlgorithm};
@@ -522,7 +523,11 @@ impl State {
         // unwrap: ServerKeyExchange signature only needed for certificate-based suites
         let selected_signature = select_ske_signature_algorithm(
             server.client_signature_algorithms.as_ref(),
-            server.engine.crypto_context().signature_algorithm().unwrap(),
+            server
+                .engine
+                .crypto_context()
+                .signature_algorithm()
+                .unwrap(),
         );
 
         debug!(

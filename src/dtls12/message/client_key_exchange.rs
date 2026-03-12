@@ -115,12 +115,16 @@ impl ClientPskKeys {
         let (input, identity_len) = nom::number::complete::be_u16(input)?;
         let (input, identity_slice) = take(identity_len as usize)(input)?;
 
-        let relative_offset =
-            identity_slice.as_ptr() as usize - original_input.as_ptr() as usize;
+        let relative_offset = identity_slice.as_ptr() as usize - original_input.as_ptr() as usize;
         let start = base_offset + relative_offset;
         let end = start + identity_slice.len();
 
-        Ok((input, ClientPskKeys { identity_range: start..end }))
+        Ok((
+            input,
+            ClientPskKeys {
+                identity_range: start..end,
+            },
+        ))
     }
 
     pub fn serialize(&self, buf: &[u8], output: &mut Buf) {

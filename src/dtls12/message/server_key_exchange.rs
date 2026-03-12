@@ -43,9 +43,7 @@ impl ServerKeyExchange {
             ServerKeyExchangeParams::Ecdh(ecdh_params) => {
                 ecdh_params.serialize(buf, output, with_signature)
             }
-            ServerKeyExchangeParams::Psk(psk_params) => {
-                psk_params.serialize(buf, output)
-            }
+            ServerKeyExchangeParams::Psk(psk_params) => psk_params.serialize(buf, output),
         }
     }
 
@@ -140,12 +138,16 @@ impl PskParams {
         let (input, hint_len) = nom::number::complete::be_u16(input)?;
         let (input, hint_slice) = take(hint_len as usize)(input)?;
 
-        let relative_offset =
-            hint_slice.as_ptr() as usize - original_input.as_ptr() as usize;
+        let relative_offset = hint_slice.as_ptr() as usize - original_input.as_ptr() as usize;
         let start = base_offset + relative_offset;
         let end = start + hint_slice.len();
 
-        Ok((input, PskParams { hint_range: start..end }))
+        Ok((
+            input,
+            PskParams {
+                hint_range: start..end,
+            },
+        ))
     }
 
     pub fn serialize(&self, buf: &[u8], output: &mut Buf) {

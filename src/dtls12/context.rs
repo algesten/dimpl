@@ -621,6 +621,7 @@ mod tests {
     use crate::Config;
 
     #[test]
+    #[cfg(feature = "rcgen")]
     fn certificate_mode_rejects_psk_suites() {
         let cert = crate::certificate::generate_self_signed_certificate().expect("generate cert");
         let config = Arc::new(Config::default());
@@ -638,6 +639,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "rcgen")]
     fn certificate_mode_accepts_ecdhe_suites() {
         let cert = crate::certificate::generate_self_signed_certificate().expect("generate cert");
         let config = Arc::new(Config::default());

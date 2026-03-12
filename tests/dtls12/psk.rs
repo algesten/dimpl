@@ -157,9 +157,7 @@ fn dtls12_psk_application_data_roundtrip() {
 
     // Send data server → client
     let reply = b"Hello from PSK server!";
-    server
-        .send_application_data(reply)
-        .expect("send app data");
+    server.send_application_data(reply).expect("send app data");
 
     let so = drain_outputs(&mut server);
     deliver_packets(&so.packets, &mut client);
@@ -266,9 +264,7 @@ fn dtls12_psk_gcm_application_data_roundtrip() {
 
     // Send data server → client
     let reply = b"Hello from PSK-GCM server!";
-    server
-        .send_application_data(reply)
-        .expect("send app data");
+    server.send_application_data(reply).expect("send app data");
 
     let so = drain_outputs(&mut server);
     deliver_packets(&so.packets, &mut client);
@@ -381,14 +377,20 @@ fn psk_invalid_identity_fails_at_finished() {
     let mut error_found = false;
     for _ in 0..60 {
         if let Err(e) = client.handle_timeout(Instant::now()) {
-            assert!(matches!(e, Error::SecurityError(_)), "unexpected error: {e:?}");
+            assert!(
+                matches!(e, Error::SecurityError(_)),
+                "unexpected error: {e:?}"
+            );
             error_found = true;
             break;
         }
         let co = drain_outputs(&mut client);
         for p in &co.packets {
             if let Err(e) = server.handle_packet(p) {
-                assert!(matches!(e, Error::SecurityError(_)), "unexpected error: {e:?}");
+                assert!(
+                    matches!(e, Error::SecurityError(_)),
+                    "unexpected error: {e:?}"
+                );
                 error_found = true;
                 break;
             }
@@ -396,17 +398,26 @@ fn psk_invalid_identity_fails_at_finished() {
         if error_found {
             break;
         }
-        assert!(!co.connected, "client should not connect with mismatched PSK");
+        assert!(
+            !co.connected,
+            "client should not connect with mismatched PSK"
+        );
 
         if let Err(e) = server.handle_timeout(Instant::now()) {
-            assert!(matches!(e, Error::SecurityError(_)), "unexpected error: {e:?}");
+            assert!(
+                matches!(e, Error::SecurityError(_)),
+                "unexpected error: {e:?}"
+            );
             error_found = true;
             break;
         }
         let so = drain_outputs(&mut server);
         for p in &so.packets {
             if let Err(e) = client.handle_packet(p) {
-                assert!(matches!(e, Error::SecurityError(_)), "unexpected error: {e:?}");
+                assert!(
+                    matches!(e, Error::SecurityError(_)),
+                    "unexpected error: {e:?}"
+                );
                 error_found = true;
                 break;
             }
@@ -414,10 +425,16 @@ fn psk_invalid_identity_fails_at_finished() {
         if error_found {
             break;
         }
-        assert!(!so.connected, "server should not connect with mismatched PSK");
+        assert!(
+            !so.connected,
+            "server should not connect with mismatched PSK"
+        );
     }
 
-    assert!(error_found, "Expected SecurityError from PSK verification failure");
+    assert!(
+        error_found,
+        "Expected SecurityError from PSK verification failure"
+    );
 }
 
 #[test]

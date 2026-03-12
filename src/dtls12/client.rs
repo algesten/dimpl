@@ -714,9 +714,7 @@ impl State {
         };
 
         let hint_range = match &ske.params {
-            crate::dtls12::message::ServerKeyExchangeParams::Psk(psk) => {
-                psk.hint_range.clone()
-            }
+            crate::dtls12::message::ServerKeyExchangeParams::Psk(psk) => psk.hint_range.clone(),
             _ => {
                 return Err(Error::UnexpectedMessage(
                     "ECDHE ServerKeyExchange in PSK path".to_string(),
@@ -1238,9 +1236,7 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
                 .psk_resolver()
                 .ok_or_else(|| Error::SecurityError("No PSK resolver configured".to_string()))?
                 .resolve(&identity)
-                .ok_or_else(|| {
-                    Error::SecurityError("PSK resolver returned no key".to_string())
-                })?;
+                .ok_or_else(|| Error::SecurityError("PSK resolver returned no key".to_string()))?;
 
             // Set the PSK and compute pre-master secret
             let crypto = engine.crypto_context_mut();

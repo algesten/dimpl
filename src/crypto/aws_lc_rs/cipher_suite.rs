@@ -258,7 +258,9 @@ impl SupportedDtls12CipherSuite for PskAes128Ccm8 {
     }
 
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
-        Ok(Box::new(crate::crypto::ccm_cipher::AesCcm8Cipher::new(key)?))
+        Ok(Box::new(crate::crypto::ccm_cipher::AesCcm8Cipher::new(
+            key,
+        )?))
     }
 }
 
