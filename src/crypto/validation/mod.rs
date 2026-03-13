@@ -697,8 +697,8 @@ mod tests_aws_lc_rs {
         let provider = aws_lc_rs::default_provider();
         let count = provider.supported_cipher_suites().count();
         // ECDHE: AES-128, AES-256, ChaCha20
-        // PSK: CCM-8, AES-128-GCM, AES-256-GCM, ChaCha20
-        assert_eq!(count, 7);
+        // PSK: CCM-8
+        assert_eq!(count, 4);
     }
 
     #[test]
@@ -747,8 +747,8 @@ mod tests_rust_crypto {
         let provider = rust_crypto::default_provider();
         let count = provider.supported_cipher_suites().count();
         // ECDHE: AES-128, AES-256, ChaCha20
-        // PSK: CCM-8, AES-128-GCM, AES-256-GCM, ChaCha20
-        assert_eq!(count, 7);
+        // PSK: CCM-8
+        assert_eq!(count, 4);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use super::queue::{QueueRx, QueueTx};
 use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::{Aad, Iv, Nonce};
-use crate::dtls12::context::CryptoContext;
+use crate::dtls12::context::{AuthMode, CryptoContext};
 use crate::dtls12::incoming::{Incoming, Record, RecordDecrypt};
 use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
@@ -105,52 +105,13 @@ struct Entry {
 }
 
 impl Engine {
-    pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate) -> Self {
+    pub fn new(config: Arc<Config>, auth: AuthMode) -> Self {
         let mut rng = SeededRng::new(config.rng_seed());
 
         let flight_backoff =
             ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries(), &mut rng);
 
-        let crypto_context = CryptoContext::new(
-            certificate.certificate,
-            certificate.private_key,
-            Arc::clone(&config),
-        );
-
-        Self {
-            config,
-            rng,
-            buffers_free: BufferPool::default(),
-            sequence_epoch_0: Sequence::new(0),
-            sequence_epoch_n: Sequence::new(1),
-            queue_rx: QueueRx::new(),
-            queue_tx: QueueTx::new(),
-            cipher_suite: None,
-            explicit_nonce_len: 0,
-            tag_len: 0,
-            crypto_context,
-            peer_encryption_enabled: false,
-            is_client: false,
-            peer_handshake_seq_no: 0,
-            next_handshake_seq_no: 0,
-            transcript: Buf::new(),
-            replay: ReplayWindow::new(),
-            flight_saved_records: Vec::new(),
-            flight_backoff,
-            flight_timeout: Timeout::Unarmed,
-            connect_timeout: Timeout::Unarmed,
-            release_app_data: false,
-        }
-    }
-
-    /// Create a new engine for PSK-only sessions (no certificate).
-    pub fn new_psk(config: Arc<Config>) -> Self {
-        let mut rng = SeededRng::new(config.rng_seed());
-
-        let flight_backoff =
-            ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries(), &mut rng);
-
-        let crypto_context = CryptoContext::new_psk(Arc::clone(&config));
+        let crypto_context = CryptoContext::new(auth, Arc::clone(&config));
 
         Self {
             config,

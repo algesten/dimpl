@@ -21,12 +21,17 @@ use subtle::ConstantTimeEq;
 use crate::buffer::{Buf, ToBuf};
 use crate::crypto::SrtpProfile;
 use crate::dtls12::Server;
+use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
-use crate::dtls12::message::{Body, CipherSuiteVec, ClientHello, ClientKeyExchange, ClientPskKeys};
-use crate::dtls12::message::{CompressionMethod, ContentType, Cookie, Dtls12CipherSuite};
+use crate::dtls12::message::{
+    Body, CipherSuiteVec, ClientHello, ClientKeyExchange, ClientPskKeys, ServerKeyExchangeParams,
+};
+use crate::dtls12::message::{
+    CompressionMethod, ContentType, Cookie, DigitallySigned, Dtls12CipherSuite,
+};
 use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
-use crate::{Error, KeyingMaterial, Output};
+use crate::{Config, DtlsCertificate, Error, KeyingMaterial, Output};
 
 /// DTLS client
 pub struct Client {
@@ -121,11 +126,20 @@ impl Client {
     pub(crate) fn new_from_hybrid(
         random: Random,
         handshake_fragment: &[u8],
-        config: std::sync::Arc<crate::Config>,
-        certificate: crate::DtlsCertificate,
+        config: std::sync::Arc<Config>,
+        certificate: DtlsCertificate,
         now: Instant,
     ) -> Result<Client, Error> {
-        let mut engine = Engine::new(config, certificate);
+        let private_key = config
+            .crypto_provider()
+            .key_provider
+            .load_private_key(&certificate.private_key)
+            .expect("Failed to parse client private key");
+        let auth = AuthMode::Certificate {
+            certificate: certificate.certificate,
+            private_key,
+        };
+        let mut engine = Engine::new(config, auth);
         engine.set_client(true);
         // The hybrid ClientHello was sent with message_seq=0 outside this
         // engine. Advance the counter so the with-cookie CH gets message_seq=1
@@ -548,10 +562,55 @@ impl State {
             .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
 
         if cipher_suite.is_psk() {
-            return self.await_server_key_exchange_psk(client);
+            self.await_server_key_exchange_psk(client)
+        } else {
+            self.await_server_key_exchange_ecdhe(client)
+        }
+    }
+
+    /// PSK ServerKeyExchange carries only an optional identity hint (no signature).
+    /// Per RFC 4279 §2, ServerKeyExchange is omitted when the server has no hint.
+    fn await_server_key_exchange_psk(self, client: &mut Client) -> Result<Self, Error> {
+        // If the server skipped ServerKeyExchange (no hint), go straight to ServerHelloDone
+        let has_done = client
+            .engine
+            .has_complete_handshake(MessageType::ServerHelloDone);
+        if has_done {
+            return Ok(Self::AwaitServerHelloDone);
         }
 
-        self.await_server_key_exchange_ecdhe(client)
+        let maybe = client.engine.next_handshake(
+            MessageType::ServerKeyExchange,
+            &mut client.defragment_buffer,
+        )?;
+
+        let Some(handshake) = maybe else {
+            return Ok(self);
+        };
+
+        let Body::ServerKeyExchange(ske) = &handshake.body else {
+            unreachable!()
+        };
+
+        // PSK ServerKeyExchange contains only an identity hint per RFC 4279 §2
+        // (no curve_type or named_group — those are ECDHE-only parameters).
+        let hint_range = match &ske.params {
+            ServerKeyExchangeParams::Psk(psk) => psk.hint_range.clone(),
+            _ => {
+                return Err(Error::UnexpectedMessage(
+                    "ECDHE ServerKeyExchange in PSK path".to_string(),
+                ));
+            }
+        };
+
+        drop(handshake);
+
+        let hint = &client.defragment_buffer[hint_range];
+        trace!("PSK identity hint ({} bytes)", hint.len());
+        // Hint is informational only; we don't use it for PSK lookup currently
+
+        // PSK has no CertificateRequest
+        Ok(Self::AwaitServerHelloDone)
     }
 
     fn await_server_key_exchange_ecdhe(self, client: &mut Client) -> Result<Self, Error> {
@@ -584,12 +643,12 @@ impl State {
 
             // Extract ECDH params ranges
             let (curve_type, named_group, public_key_range) = match &server_key_exchange.params {
-                crate::dtls12::message::ServerKeyExchangeParams::Ecdh(ecdh) => (
+                ServerKeyExchangeParams::Ecdh(ecdh) => (
                     ecdh.curve_type,
                     ecdh.named_group,
                     ecdh.public_key_range.clone(),
                 ),
-                crate::dtls12::message::ServerKeyExchangeParams::Psk(_) => {
+                ServerKeyExchangeParams::Psk(_) => {
                     return Err(Error::UnexpectedMessage(
                         "PSK ServerKeyExchange in ECDHE path".to_string(),
                     ));
@@ -653,7 +712,7 @@ impl State {
         let cert_der = client.server_certificates.first().unwrap();
 
         // Create a temporary DigitallySigned for verification (we only need the algorithm)
-        let temp_signed = crate::dtls12::message::DigitallySigned {
+        let temp_signed = DigitallySigned {
             algorithm: signature_algorithm,
             signature_range: 0..signature_bytes.len(),
         };
@@ -687,49 +746,6 @@ impl State {
         client.engine.push_buffer(kx_buf);
 
         Ok(Self::AwaitCertificateRequest)
-    }
-
-    /// PSK ServerKeyExchange carries only an optional identity hint (no signature).
-    /// Per RFC 4279 §2, ServerKeyExchange is omitted when the server has no hint.
-    fn await_server_key_exchange_psk(self, client: &mut Client) -> Result<Self, Error> {
-        // If the server skipped ServerKeyExchange (no hint), go straight to ServerHelloDone
-        let has_done = client
-            .engine
-            .has_complete_handshake(MessageType::ServerHelloDone);
-        if has_done {
-            return Ok(Self::AwaitServerHelloDone);
-        }
-
-        let maybe = client.engine.next_handshake(
-            MessageType::ServerKeyExchange,
-            &mut client.defragment_buffer,
-        )?;
-
-        let Some(handshake) = maybe else {
-            return Ok(self);
-        };
-
-        let Body::ServerKeyExchange(ske) = &handshake.body else {
-            unreachable!()
-        };
-
-        let hint_range = match &ske.params {
-            crate::dtls12::message::ServerKeyExchangeParams::Psk(psk) => psk.hint_range.clone(),
-            _ => {
-                return Err(Error::UnexpectedMessage(
-                    "ECDHE ServerKeyExchange in PSK path".to_string(),
-                ));
-            }
-        };
-
-        drop(handshake);
-
-        let hint = &client.defragment_buffer[hint_range];
-        trace!("PSK identity hint ({} bytes)", hint.len());
-        // Hint is informational only; we don't use it for PSK lookup currently
-
-        // PSK has no CertificateRequest
-        Ok(Self::AwaitServerHelloDone)
     }
 
     fn await_certificate_request(self, client: &mut Client) -> Result<Self, Error> {
@@ -1199,6 +1215,7 @@ fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(
 }
 
 fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
+    // Just check that a cipher suite exists without binding to unused variable
     let Some(cipher_suite) = engine.cipher_suite() else {
         return Err(Error::UnexpectedMessage(
             "No cipher suite selected".to_string(),
@@ -1211,7 +1228,17 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
     match key_exchange_algorithm {
         KeyExchangeAlgorithm::EECDH => {
             // Get group info before the mutable borrow
-            let _group_info = engine.crypto_context().get_key_exchange_group_info();
+            let group_info = engine.crypto_context().get_key_exchange_group_info();
+
+            // For ECDHE, use the group information we retrieved earlier
+            let Some((curve_type, named_group)) = group_info else {
+                unreachable!("No group info available for ECDHE");
+            };
+
+            trace!(
+                "Using ECDHE group info: {:?}, {:?}",
+                curve_type, named_group
+            );
 
             let public_key = engine
                 .crypto_context_mut()
@@ -1227,16 +1254,16 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
             let identity = engine
                 .config()
                 .psk_identity()
-                .ok_or_else(|| Error::SecurityError("No PSK identity configured".to_string()))?
+                .ok_or_else(|| Error::PskError("No PSK identity configured".to_string()))?
                 .to_vec();
 
             // Resolve the PSK via the configured resolver
             let psk = engine
                 .config()
                 .psk_resolver()
-                .ok_or_else(|| Error::SecurityError("No PSK resolver configured".to_string()))?
+                .ok_or_else(|| Error::PskError("No PSK resolver configured".to_string()))?
                 .resolve(&identity)
-                .ok_or_else(|| Error::SecurityError("PSK resolver returned no key".to_string()))?;
+                .ok_or_else(|| Error::PskError("PSK resolver returned no key".to_string()))?;
 
             // Set the PSK and compute pre-master secret
             let crypto = engine.crypto_context_mut();

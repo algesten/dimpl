@@ -35,9 +35,6 @@
 //!   - `ECDHE_ECDSA_CHACHA20_POLY1305_SHA256`
 //! - **PSK cipher suites (TLS 1.2 over DTLS)**
 //!   - `PSK_AES128_CCM_8`
-//!   - `PSK_AES128_GCM_SHA256`
-//!   - `PSK_AES256_GCM_SHA384`
-//!   - `PSK_CHACHA20_POLY1305_SHA256`
 //! - **Cipher suites (TLS 1.3 over DTLS)**
 //!   - `TLS_AES_128_GCM_SHA256`
 //!   - `TLS_AES_256_GCM_SHA384`
@@ -159,8 +156,7 @@
 //!
 //! let config = Arc::new(
 //!     Config::builder()
-//!         .with_psk_identity(b"device-01".to_vec())
-//!         .with_psk_resolver(Arc::new(MyPsk))
+//!         .with_psk_client(b"device-01".to_vec(), Arc::new(MyPsk))
 //!         .build()
 //!         .unwrap(),
 //! );
@@ -230,7 +226,7 @@ mod error;
 pub use error::Error;
 
 mod config;
-pub use config::{Config, PskResolver};
+pub use config::{Config, ConfigBuilder, Psk, PskResolver};
 
 #[cfg(feature = "rcgen")]
 pub mod certificate;
@@ -303,7 +299,7 @@ impl Dtls {
     /// Call [`set_active(true)`](Self::set_active) to switch to client
     /// before the handshake begins. The `config` must have a
     /// [`PskResolver`] configured, and for clients a PSK identity
-    /// via [`Config::psk_identity`](Config).
+    /// via [`ConfigBuilder::with_psk_client`](ConfigBuilder).
     pub fn new_12_psk(config: Arc<Config>, now: Instant) -> Self {
         let inner = Inner::Server12(Server12::new_psk(config, now));
         Dtls { inner: Some(inner) }

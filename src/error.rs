@@ -16,6 +16,8 @@ pub enum Error {
     CertificateError(String),
     /// Security policy violation
     SecurityError(String),
+    /// PSK (Pre-Shared Key) error
+    PskError(String),
     /// Incoming queue exceeded capacity
     ReceiveQueueFull,
     /// Outgoing queue exceeded capacity
@@ -71,6 +73,7 @@ impl std::fmt::Display for Error {
             Error::CryptoError(msg) => write!(f, "crypto error: {}", msg),
             Error::CertificateError(msg) => write!(f, "certificate error: {}", msg),
             Error::SecurityError(msg) => write!(f, "security error: {}", msg),
+            Error::PskError(msg) => write!(f, "psk error: {}", msg),
             Error::ReceiveQueueFull => write!(f, "receive queue full"),
             Error::TransmitQueueFull => write!(f, "transmit queue full"),
             Error::IncompleteServerHello => write!(f, "incomplete ServerHello"),

@@ -11,13 +11,37 @@ use crate::types::{Dtls13CipherSuite, NamedGroup};
 
 /// Callback for resolving PSK identities to shared secrets.
 ///
-/// Implement this trait and provide it via `ConfigBuilder::with_psk_resolver`
-/// to enable PSK cipher suites.
+/// Implement this trait and provide it via [`ConfigBuilder::with_psk_client`]
+/// or [`ConfigBuilder::with_psk_server`] to enable PSK cipher suites.
 pub trait PskResolver: Send + Sync + UnwindSafe + RefUnwindSafe {
     /// Look up a pre-shared key by the peer's identity.
     ///
     /// Returns the shared secret bytes, or `None` if the identity is unknown.
     fn resolve(&self, identity: &[u8]) -> Option<Vec<u8>>;
+}
+
+/// PSK configuration for a DTLS endpoint.
+///
+/// Use [`Psk::Client`] for endpoints that initiate PSK handshakes (send identity),
+/// and [`Psk::Server`] for endpoints that resolve incoming identities.
+#[derive(Clone)]
+pub enum Psk {
+    /// Client-side PSK: sends `identity` during handshake, uses `resolver`
+    /// to look up the shared secret.
+    Client {
+        /// The identity to send to the server.
+        identity: Vec<u8>,
+        /// Resolver for looking up shared secrets.
+        resolver: Arc<dyn PskResolver>,
+    },
+    /// Server-side PSK: optionally sends a `hint` to help the client choose
+    /// an identity, uses `resolver` to look up secrets by client identity.
+    Server {
+        /// Optional hint sent to the client in ServerKeyExchange.
+        hint: Option<Vec<u8>>,
+        /// Resolver for looking up shared secrets.
+        resolver: Arc<dyn PskResolver>,
+    },
 }
 
 #[cfg(feature = "aws-lc-rs")]
@@ -45,36 +69,7 @@ pub struct Config {
     dtls12_cipher_suites: Option<Vec<Dtls12CipherSuite>>,
     dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
     kx_groups: Option<Vec<NamedGroup>>,
-    psk_identity: Option<Vec<u8>>,
-    psk_identity_hint: Option<Vec<u8>>,
-    psk_resolver: Option<Arc<dyn PskResolver>>,
-}
-
-impl fmt::Debug for Config {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Config")
-            .field("mtu", &self.mtu)
-            .field("max_queue_rx", &self.max_queue_rx)
-            .field("max_queue_tx", &self.max_queue_tx)
-            .field(
-                "require_client_certificate",
-                &self.require_client_certificate,
-            )
-            .field("use_server_cookie", &self.use_server_cookie)
-            .field("flight_start_rto", &self.flight_start_rto)
-            .field("flight_retries", &self.flight_retries)
-            .field("handshake_timeout", &self.handshake_timeout)
-            .field("crypto_provider", &self.crypto_provider)
-            .field("rng_seed", &self.rng_seed)
-            .field("aead_encryption_limit", &self.aead_encryption_limit)
-            .field("dtls12_cipher_suites", &self.dtls12_cipher_suites)
-            .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
-            .field("kx_groups", &self.kx_groups)
-            .field("psk_identity", &self.psk_identity)
-            .field("psk_identity_hint", &self.psk_identity_hint)
-            .field("psk_resolver", &self.psk_resolver.as_ref().map(|_| "..."))
-            .finish()
-    }
+    psk: Option<Psk>,
 }
 
 impl Config {
@@ -95,9 +90,7 @@ impl Config {
             dtls12_cipher_suites: None,
             dtls13_cipher_suites: None,
             kx_groups: None,
-            psk_identity: None,
-            psk_identity_hint: None,
-            psk_resolver: None,
+            psk: None,
         }
     }
 
@@ -195,19 +188,35 @@ impl Config {
         self.aead_encryption_limit
     }
 
+    /// PSK configuration, if any.
+    pub fn psk(&self) -> Option<&Psk> {
+        self.psk.as_ref()
+    }
+
     /// PSK identity for the client to send during handshake.
     pub fn psk_identity(&self) -> Option<&[u8]> {
-        self.psk_identity.as_deref()
+        match &self.psk {
+            Some(Psk::Client { identity, .. }) => Some(identity),
+            _ => None,
+        }
     }
 
     /// PSK identity hint for the server to send during handshake.
     pub fn psk_identity_hint(&self) -> Option<&[u8]> {
-        self.psk_identity_hint.as_deref()
+        match &self.psk {
+            Some(Psk::Server { hint, .. }) => hint.as_deref(),
+            _ => None,
+        }
     }
 
     /// PSK resolver for looking up shared secrets by identity.
     pub fn psk_resolver(&self) -> Option<&dyn PskResolver> {
-        self.psk_resolver.as_deref()
+        match &self.psk {
+            Some(Psk::Client { resolver, .. } | Psk::Server { resolver, .. }) => {
+                Some(resolver.as_ref())
+            }
+            None => None,
+        }
     }
 
     /// Allowed DTLS 1.2 cipher suites, filtered by the config's allow-list.
@@ -223,7 +232,7 @@ impl Config {
         &self,
     ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> + '_ {
         let filter = self.dtls12_cipher_suites.as_ref();
-        let has_psk = self.psk_resolver.is_some();
+        let has_psk = self.psk.is_some();
         self.crypto_provider
             .supported_cipher_suites()
             .filter(move |cs| match filter {
@@ -284,36 +293,7 @@ pub struct ConfigBuilder {
     dtls12_cipher_suites: Option<Vec<Dtls12CipherSuite>>,
     dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
     kx_groups: Option<Vec<NamedGroup>>,
-    psk_identity: Option<Vec<u8>>,
-    psk_identity_hint: Option<Vec<u8>>,
-    psk_resolver: Option<Arc<dyn PskResolver>>,
-}
-
-impl fmt::Debug for ConfigBuilder {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ConfigBuilder")
-            .field("mtu", &self.mtu)
-            .field("max_queue_rx", &self.max_queue_rx)
-            .field("max_queue_tx", &self.max_queue_tx)
-            .field(
-                "require_client_certificate",
-                &self.require_client_certificate,
-            )
-            .field("use_server_cookie", &self.use_server_cookie)
-            .field("flight_start_rto", &self.flight_start_rto)
-            .field("flight_retries", &self.flight_retries)
-            .field("handshake_timeout", &self.handshake_timeout)
-            .field("crypto_provider", &self.crypto_provider)
-            .field("rng_seed", &self.rng_seed)
-            .field("aead_encryption_limit", &self.aead_encryption_limit)
-            .field("dtls12_cipher_suites", &self.dtls12_cipher_suites)
-            .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
-            .field("kx_groups", &self.kx_groups)
-            .field("psk_identity", &self.psk_identity)
-            .field("psk_identity_hint", &self.psk_identity_hint)
-            .field("psk_resolver", &self.psk_resolver.as_ref().map(|_| "..."))
-            .finish()
-    }
+    psk: Option<Psk>,
 }
 
 impl ConfigBuilder {
@@ -457,21 +437,25 @@ impl ConfigBuilder {
         self
     }
 
-    /// Set the PSK identity for the client to send during handshake.
-    pub fn with_psk_identity(mut self, identity: Vec<u8>) -> Self {
-        self.psk_identity = Some(identity);
+    /// Configure PSK for a client endpoint.
+    ///
+    /// The `identity` is sent to the server during the handshake.
+    /// The `resolver` looks up the shared secret by identity.
+    pub fn with_psk_client(mut self, identity: Vec<u8>, resolver: Arc<dyn PskResolver>) -> Self {
+        self.psk = Some(Psk::Client { identity, resolver });
         self
     }
 
-    /// Set the PSK identity hint for the server to send during handshake.
-    pub fn with_psk_identity_hint(mut self, hint: Vec<u8>) -> Self {
-        self.psk_identity_hint = Some(hint);
-        self
-    }
-
-    /// Set the PSK resolver for looking up shared secrets by identity.
-    pub fn with_psk_resolver(mut self, resolver: Arc<dyn PskResolver>) -> Self {
-        self.psk_resolver = Some(resolver);
+    /// Configure PSK for a server endpoint.
+    ///
+    /// The optional `hint` is sent to the client in ServerKeyExchange.
+    /// The `resolver` looks up the shared secret by client identity.
+    pub fn with_psk_server(
+        mut self,
+        hint: Option<Vec<u8>>,
+        resolver: Arc<dyn PskResolver>,
+    ) -> Self {
+        self.psk = Some(Psk::Server { hint, resolver });
         self
     }
 
@@ -607,9 +591,7 @@ impl ConfigBuilder {
             dtls12_cipher_suites: self.dtls12_cipher_suites,
             dtls13_cipher_suites: self.dtls13_cipher_suites,
             kx_groups: self.kx_groups,
-            psk_identity: self.psk_identity,
-            psk_identity_hint: self.psk_identity_hint,
-            psk_resolver: self.psk_resolver,
+            psk: self.psk,
         })
     }
 }
@@ -619,6 +601,73 @@ impl Default for Config {
         Config::builder()
             .build()
             .expect("Default config should always validate")
+    }
+}
+
+impl fmt::Debug for Psk {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Psk::Client { identity, .. } => f
+                .debug_struct("Psk::Client")
+                .field("identity", &identity)
+                .field("resolver", &"...")
+                .finish(),
+            Psk::Server { hint, .. } => f
+                .debug_struct("Psk::Server")
+                .field("hint", &hint)
+                .field("resolver", &"...")
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("mtu", &self.mtu)
+            .field("max_queue_rx", &self.max_queue_rx)
+            .field("max_queue_tx", &self.max_queue_tx)
+            .field(
+                "require_client_certificate",
+                &self.require_client_certificate,
+            )
+            .field("use_server_cookie", &self.use_server_cookie)
+            .field("flight_start_rto", &self.flight_start_rto)
+            .field("flight_retries", &self.flight_retries)
+            .field("handshake_timeout", &self.handshake_timeout)
+            .field("crypto_provider", &self.crypto_provider)
+            .field("rng_seed", &self.rng_seed)
+            .field("aead_encryption_limit", &self.aead_encryption_limit)
+            .field("dtls12_cipher_suites", &self.dtls12_cipher_suites)
+            .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
+            .field("kx_groups", &self.kx_groups)
+            .field("psk", &self.psk)
+            .finish()
+    }
+}
+
+impl fmt::Debug for ConfigBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConfigBuilder")
+            .field("mtu", &self.mtu)
+            .field("max_queue_rx", &self.max_queue_rx)
+            .field("max_queue_tx", &self.max_queue_tx)
+            .field(
+                "require_client_certificate",
+                &self.require_client_certificate,
+            )
+            .field("use_server_cookie", &self.use_server_cookie)
+            .field("flight_start_rto", &self.flight_start_rto)
+            .field("flight_retries", &self.flight_retries)
+            .field("handshake_timeout", &self.handshake_timeout)
+            .field("crypto_provider", &self.crypto_provider)
+            .field("rng_seed", &self.rng_seed)
+            .field("aead_encryption_limit", &self.aead_encryption_limit)
+            .field("dtls12_cipher_suites", &self.dtls12_cipher_suites)
+            .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
+            .field("kx_groups", &self.kx_groups)
+            .field("psk", &self.psk)
+            .finish()
     }
 }
 
@@ -823,7 +872,7 @@ mod tests {
         }
 
         let config = Config::builder()
-            .with_psk_resolver(Arc::new(DummyResolver))
+            .with_psk_server(None, Arc::new(DummyResolver))
             .build()
             .expect("config with PSK resolver should build");
         assert!(

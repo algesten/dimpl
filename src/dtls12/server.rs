@@ -23,11 +23,12 @@ use crate::buffer::{Buf, ToBuf};
 use crate::crypto::SrtpProfile;
 use crate::dtls12::Client;
 use crate::dtls12::client::LocalEvent;
+use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
+use crate::dtls12::message::PskParams;
 use crate::dtls12::message::{Body, CertificateRequest, CertificateTypeVec, Dtls12CipherSuite};
 use crate::dtls12::message::{ClientCertificateType, CompressionMethod, ContentType};
 use crate::dtls12::message::{Cookie, CurveType, DistinguishedName, ExchangeKeys, ExtensionType};
-use crate::dtls12::message::PskParams;
 use crate::dtls12::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
 use crate::dtls12::message::{MessageType, NamedGroup, NamedGroupVec, ProtocolVersion, Random};
 use crate::dtls12::message::{ServerHello, SessionId, SignatureAlgorithm};
@@ -113,13 +114,22 @@ enum State {
 impl Server {
     /// Create a new DTLS server
     pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate, now: Instant) -> Server {
-        let engine = Engine::new(config, certificate);
+        let private_key = config
+            .crypto_provider()
+            .key_provider
+            .load_private_key(&certificate.private_key)
+            .expect("Failed to parse server private key");
+        let auth = AuthMode::Certificate {
+            certificate: certificate.certificate,
+            private_key,
+        };
+        let engine = Engine::new(config, auth);
         Self::new_with_engine(engine, now)
     }
 
     /// Create a new PSK-only DTLS server (no certificate).
     pub fn new_psk(config: Arc<Config>, now: Instant) -> Server {
-        let engine = Engine::new_psk(config);
+        let engine = Engine::new(config, AuthMode::Psk);
         Self::new_with_engine(engine, now)
     }
 
@@ -703,9 +713,11 @@ impl State {
 
             // Resolve PSK via the configured resolver
             let (psk, psk_valid) = {
-                let resolver = server.engine.config().psk_resolver().ok_or_else(|| {
-                    Error::SecurityError("No PSK resolver configured".to_string())
-                })?;
+                let resolver = server
+                    .engine
+                    .config()
+                    .psk_resolver()
+                    .ok_or_else(|| Error::PskError("No PSK resolver configured".to_string()))?;
 
                 match resolver.resolve(identity) {
                     Some(key) => (key, true),

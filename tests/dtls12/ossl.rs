@@ -914,26 +914,37 @@ impl PskResolver for FixedPsk {
     }
 }
 
-fn psk_dimpl_config() -> Arc<Config> {
+fn psk_provider() -> dimpl::crypto::CryptoProvider {
     let mut provider = Config::default().crypto_provider().clone();
     let psk_suite = provider
         .cipher_suites
         .iter()
         .copied()
-        .find(|cs| cs.suite() == Dtls12CipherSuite::PSK_AES128_GCM_SHA256)
-        .expect("PSK_AES128_GCM_SHA256 not in provider");
+        .find(|cs| cs.suite() == Dtls12CipherSuite::PSK_AES128_CCM_8)
+        .expect("PSK_AES128_CCM_8 not in provider");
 
     let suites = Box::leak(Box::new([psk_suite]));
     provider.cipher_suites = suites;
+    provider
+}
 
+fn psk_dimpl_client_config() -> Arc<Config> {
     Arc::new(
         Config::builder()
-            .with_crypto_provider(provider)
-            .with_psk_identity(PSK_IDENTITY.to_vec())
-            .with_psk_identity_hint(b"hint".to_vec())
-            .with_psk_resolver(Arc::new(FixedPsk))
+            .with_crypto_provider(psk_provider())
+            .with_psk_client(PSK_IDENTITY.to_vec(), Arc::new(FixedPsk))
             .build()
-            .expect("build PSK config"),
+            .expect("build PSK client config"),
+    )
+}
+
+fn psk_dimpl_server_config() -> Arc<Config> {
+    Arc::new(
+        Config::builder()
+            .with_crypto_provider(psk_provider())
+            .with_psk_server(Some(b"hint".to_vec()), Arc::new(FixedPsk))
+            .build()
+            .expect("build PSK server config"),
     )
 }
 
@@ -942,7 +953,7 @@ fn ossl_psk_server() -> openssl::ssl::Ssl {
     use openssl::ssl::{SslContextBuilder, SslMethod, SslOptions, SslVerifyMode};
 
     let mut ctx = SslContextBuilder::new(SslMethod::dtls()).unwrap();
-    ctx.set_cipher_list("PSK-AES128-GCM-SHA256").unwrap();
+    ctx.set_cipher_list("PSK-AES128-CCM8").unwrap();
 
     // No peer cert verification for PSK
     ctx.set_verify(SslVerifyMode::NONE);
@@ -972,7 +983,7 @@ fn ossl_psk_client() -> openssl::ssl::Ssl {
     use openssl::ssl::{SslContextBuilder, SslMethod, SslOptions, SslVerifyMode};
 
     let mut ctx = SslContextBuilder::new(SslMethod::dtls()).unwrap();
-    ctx.set_cipher_list("PSK-AES128-GCM-SHA256").unwrap();
+    ctx.set_cipher_list("PSK-AES128-CCM8").unwrap();
 
     ctx.set_verify(SslVerifyMode::NONE);
 
@@ -1090,10 +1101,11 @@ impl OsslPskEndpoint {
 }
 
 #[test]
+#[ignore = "OpenSSL does not support PSK-AES128-CCM8 over DTLS (only TLS)"]
 fn dtls12_ossl_psk_dimpl_client_ossl_server() {
     env_logger::try_init().ok();
 
-    let config = psk_dimpl_config();
+    let config = psk_dimpl_client_config();
     let now = Instant::now();
 
     let mut client = Dtls::new_12_psk(config, now);
@@ -1194,10 +1206,11 @@ fn dtls12_ossl_psk_dimpl_client_ossl_server() {
 }
 
 #[test]
+#[ignore = "OpenSSL does not support PSK-AES128-CCM8 over DTLS (only TLS)"]
 fn dtls12_ossl_psk_ossl_client_dimpl_server() {
     env_logger::try_init().ok();
 
-    let config = psk_dimpl_config();
+    let config = psk_dimpl_server_config();
     let now = Instant::now();
 
     let mut server = Dtls::new_12_psk(config, now);
