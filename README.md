@@ -71,6 +71,7 @@ references into your provided buffer:
 - `PeerCert(&[u8])`: peer leaf certificate (DER) — validate in your app
 - `KeyingMaterial(KeyingMaterial, SrtpProfile)`: DTLS‑SRTP export
 - `ApplicationData(&[u8])`: plaintext received from peer
+- `CloseNotify`: peer sent a `close_notify` alert (graceful shutdown)
 
 ## Example (Sans‑IO loop)
 
@@ -105,6 +106,10 @@ fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
                 }
                 Output::ApplicationData(_data) => {
                     // Deliver plaintext to application
+                }
+                Output::CloseNotify => {
+                    // Peer initiated graceful shutdown
+                    break;
                 }
                 _ => {}
             }

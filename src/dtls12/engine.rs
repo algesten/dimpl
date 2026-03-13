@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
+use arrayvec::ArrayVec;
+
 use super::queue::{QueueRx, QueueTx};
 use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::{Aad, Iv, Nonce};
@@ -88,6 +90,9 @@ pub struct Engine {
 
     /// Whether we are ready to release application data from poll_output.
     release_app_data: bool,
+
+    /// Whether a close_notify alert has been received from the peer.
+    close_notify_received: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +145,7 @@ impl Engine {
             flight_timeout: Timeout::Unarmed,
             connect_timeout: Timeout::Unarmed,
             release_app_data: false,
+            close_notify_received: false,
         }
     }
 
@@ -206,11 +212,12 @@ impl Engine {
 
     /// Insert the Incoming using the logic:
     ///
-    /// 1. If it is a handshake, sort by the message_seq
-    /// 2. If it is not a handshake, sort by sequence_number
+    /// 1. Extract alert records for immediate processing.
+    /// 2. If it is a handshake, sort by the message_seq
+    /// 3. If it is not a handshake, sort by sequence_number
     ///
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
-        // Capacity guard
+        // Capacity guard before iterating records.
         if self.queue_rx.len() >= self.config.max_queue_rx() {
             warn!(
                 "Receive queue full (max {}): {:?}",
@@ -220,12 +227,93 @@ impl Engine {
             return Err(Error::ReceiveQueueFull);
         }
 
+        let Some(incoming) = self.extract_alerts(incoming)? else {
+            return Ok(());
+        };
+
         // Dispatch to specialized handlers
         if incoming.first().first_handshake().is_some() {
             self.insert_incoming_handshake(incoming)
         } else {
             self.insert_incoming_non_handshake(incoming)
         }
+    }
+
+    /// Process alert records from the incoming datagram, returning the
+    /// remaining non-alert records for queuing.
+    ///
+    /// A single UDP datagram can contain mixed record types, so each
+    /// record is inspected individually. Alert records are handled
+    /// per-epoch for authentication, and after receiving close_notify,
+    /// any further ApplicationData is discarded.
+    fn extract_alerts(&mut self, incoming: Incoming) -> Result<Option<Incoming>, Error> {
+        let mut remaining = ArrayVec::new();
+        for record in incoming.into_records() {
+            if record.record().content_type == ContentType::Alert {
+                let epoch = record.record().sequence.epoch;
+                if epoch == 0 {
+                    if self.peer_encryption_enabled {
+                        // Post-handshake: epoch 0 alerts are unauthenticated, discard
+                        self.buffers_free.push(record.into_buffer());
+                        continue;
+                    }
+                    // During handshake: accept fatal alerts (level==2)
+                    let fragment = record.record().fragment(record.buffer());
+                    if fragment.len() >= 2 && fragment[0] == 2 {
+                        let description = fragment[1];
+                        self.buffers_free.push(record.into_buffer());
+                        return Err(Error::SecurityError(format!(
+                            "Received fatal alert: level=2, description={}",
+                            description
+                        )));
+                    }
+                    // Non-fatal epoch 0 alert during handshake: discard
+                    self.buffers_free.push(record.into_buffer());
+                    continue;
+                }
+                if !self.peer_encryption_enabled {
+                    // Epoch ≥ 1 but peer encryption not yet enabled: keep for
+                    // re-parsing after enable_peer_encryption (ciphertext record).
+                    remaining.try_push(record).ok();
+                    continue;
+                }
+                // Authenticated alert (epoch ≥ 1, peer encryption enabled)
+                let fragment = record.record().fragment(record.buffer());
+                if fragment.len() >= 2 {
+                    let level = fragment[0];
+                    let description = fragment[1];
+                    if description == 0 {
+                        // close_notify: signal graceful shutdown
+                        self.close_notify_received = true;
+                        self.buffers_free.push(record.into_buffer());
+                        continue;
+                    } else if level == 2 {
+                        // Fatal alert (non close_notify)
+                        self.buffers_free.push(record.into_buffer());
+                        return Err(Error::SecurityError(format!(
+                            "Received fatal alert: level={}, description={}",
+                            level, description
+                        )));
+                    }
+                }
+                // Warning alerts with non-zero description: discard
+                self.buffers_free.push(record.into_buffer());
+                continue;
+            }
+
+            // After close_notify (from this or a prior datagram), discard
+            // any further ApplicationData — the read half is closed.
+            if self.close_notify_received
+                && record.record().content_type == ContentType::ApplicationData
+            {
+                self.buffers_free.push(record.into_buffer());
+                continue;
+            }
+
+            remaining.try_push(record).ok();
+        }
+
+        Ok(Incoming::from_records(remaining))
     }
 
     fn insert_incoming_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
@@ -897,6 +985,27 @@ impl Engine {
     /// Release application data from the incoming queue
     pub fn release_application_data(&mut self) {
         self.release_app_data = true;
+    }
+
+    /// Whether a close_notify alert has been received from the peer.
+    pub fn close_notify_received(&self) -> bool {
+        self.close_notify_received
+    }
+
+    /// Discard all pending outgoing data.
+    ///
+    /// RFC 5246 §7.2.1: on receiving close_notify, discard any pending writes.
+    pub fn discard_pending_writes(&mut self) {
+        self.queue_tx.clear();
+    }
+
+    /// Abort the connection: flush all queued output, retransmission state, and
+    /// disable timers so that no further packets are emitted.
+    pub fn abort(&mut self) {
+        self.queue_tx.clear();
+        self.flight_saved_records.clear();
+        self.flight_timeout = Timeout::Disabled;
+        self.connect_timeout = Timeout::Disabled;
     }
 
     /// Pop a buffer from the buffer pool for temporary use

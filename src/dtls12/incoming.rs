@@ -30,6 +30,17 @@ impl Incoming {
     pub fn into_records(self) -> impl Iterator<Item = Record> {
         self.records.records.into_iter()
     }
+
+    /// Create an Incoming from pre-filtered records.
+    /// Returns None if records is empty (same invariant as parse_packet).
+    pub fn from_records(records: ArrayVec<Record, 8>) -> Option<Self> {
+        if records.is_empty() {
+            return None;
+        }
+        Some(Incoming {
+            records: Box::new(Records { records }),
+        })
+    }
 }
 
 impl Incoming {

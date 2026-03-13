@@ -69,6 +69,7 @@
 //! - `PeerCert(&[u8])`: peer leaf certificate (DER) — validate in your app
 //! - `KeyingMaterial(KeyingMaterial, SrtpProfile)`: DTLS‑SRTP export
 //! - `ApplicationData(&[u8])`: plaintext received from peer
+//! - `CloseNotify`: peer sent a graceful shutdown alert
 //!
 //! # Example (Sans‑IO loop)
 //!
@@ -105,6 +106,9 @@
 //!                 }
 //!                 Output::ApplicationData(_data) => {
 //!                     // Deliver plaintext to application
+//!                 }
+//!                 Output::CloseNotify => {
+//!                     // Peer initiated graceful shutdown
 //!                 }
 //!                 _ => {}
 //!             }
@@ -528,6 +532,38 @@ impl Dtls {
             Inner::ClientPending(_) => Err(Error::HandshakePending),
         }
     }
+
+    /// Initiate graceful shutdown by sending a `close_notify` alert.
+    ///
+    /// **Connected** (`AwaitApplicationData`): queues a `close_notify` alert;
+    /// the next [`poll_output`](Self::poll_output) cycle yields it as
+    /// [`Output::Packet`].
+    ///
+    /// **Handshake in progress**: aborts immediately without sending an
+    /// alert (no authenticated channel exists). Subsequent calls to
+    /// [`send_application_data`](Self::send_application_data) will return
+    /// an error.
+    ///
+    /// **Pending** (version not yet resolved): returns
+    /// [`Error::HandshakePending`]. Callers who want to discard a pending
+    /// connection can simply drop the [`Dtls`] value.
+    ///
+    /// The alert is not retransmitted (per RFC 6347 §4.2.7 / RFC 9147 §5.10).
+    pub fn close(&mut self) -> Result<(), Error> {
+        let inner = self.inner.as_mut().unwrap();
+
+        if inner.is_pending() {
+            return Err(Error::HandshakePending);
+        }
+
+        match inner {
+            Inner::Client12(client) => client.close(),
+            Inner::Server12(server) => server.close(),
+            Inner::Client13(client) => client.close(),
+            Inner::Server13(server) => server.close(),
+            Inner::ClientPending(_) => Err(Error::HandshakePending),
+        }
+    }
 }
 
 impl Inner {
@@ -578,6 +614,8 @@ pub enum Output<'a> {
     KeyingMaterial(KeyingMaterial, SrtpProfile),
     /// Received application data plaintext.
     ApplicationData(&'a [u8]),
+    /// The peer sent a `close_notify` alert, indicating graceful connection closure.
+    CloseNotify,
 }
 
 impl fmt::Debug for Output<'_> {
@@ -589,6 +627,7 @@ impl fmt::Debug for Output<'_> {
             Self::PeerCert(v) => write!(f, "PeerCert({})", v.len()),
             Self::KeyingMaterial(v, p) => write!(f, "KeyingMaterial({}, {:?})", v.len(), p),
             Self::ApplicationData(v) => write!(f, "ApplicationData({})", v.len()),
+            Self::CloseNotify => write!(f, "CloseNotify"),
         }
     }
 }
@@ -733,6 +772,13 @@ mod test {
     fn test_auto_server_send_application_data_pending() {
         let mut dtls = new_instance_auto();
         let err = dtls.send_application_data(b"early data").unwrap_err();
+        assert!(matches!(err, Error::HandshakePending));
+    }
+
+    #[test]
+    fn test_auto_close_pending() {
+        let mut dtls = new_instance_auto();
+        let err = dtls.close().unwrap_err();
         assert!(matches!(err, Error::HandshakePending));
     }
 }

@@ -63,10 +63,10 @@ fn try_handshake(
     let mut sc = false;
 
     for _ in 0..80 {
-        if let Err(_) = client.handle_timeout(now) {
+        if client.handle_timeout(now).is_err() {
             return None;
         }
-        if let Err(_) = server.handle_timeout(now) {
+        if server.handle_timeout(now).is_err() {
             return None;
         }
 
