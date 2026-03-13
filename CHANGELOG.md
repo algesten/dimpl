@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Remove PrfProvider/HkdfProvider, derive from HmacProvider (breaking) #94
+
 # 0.4.3
 
   * Fix server auto-sensing DTLS version with fragmented ClientHello #87
