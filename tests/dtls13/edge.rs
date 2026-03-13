@@ -3,15 +3,15 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls};
+#[cfg(feature = "rcgen")]
+use dimpl::certificate::generate_self_signed_certificate;
+use dimpl::{Config, Dtls, Output};
 
 use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_discards_too_short_ciphertext_record() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -27,30 +27,7 @@ fn dtls13_discards_too_short_ciphertext_record() {
     let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
 
-    // Complete handshake
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-
-    assert!(client_connected, "Client should be connected");
-    assert!(server_connected, "Server should be connected");
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
 
     // Craft a DTLS 1.3 ciphertext record with length < 16 bytes.
     // Header: fixed bits 001, C=0, S=1 (16-bit seq), L=1 (length), epoch_bits=3
@@ -84,8 +61,6 @@ fn dtls13_discards_too_short_ciphertext_record() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_discards_cid_bit_records() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -101,30 +76,7 @@ fn dtls13_discards_cid_bit_records() {
     let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
 
-    // Complete handshake
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-
-    assert!(client_connected, "Client should be connected");
-    assert!(server_connected, "Server should be connected");
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
 
     // Unified header with CID bit set: 001CSLEE with C=1, S=1, L=1, epoch_bits=3 => 0x3F.
     // We don't support CID, so this should be silently discarded.
@@ -151,8 +103,6 @@ fn dtls13_discards_cid_bit_records() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_discards_unauthenticated_ciphertext_without_length_field() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -168,30 +118,7 @@ fn dtls13_discards_unauthenticated_ciphertext_without_length_field() {
     let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
 
-    // Complete handshake
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-
-    assert!(client_connected, "Client should be connected");
-    assert!(server_connected, "Server should be connected");
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
 
     // Craft a DTLS 1.3 ciphertext record with L=0 (no explicit length).
     // Header: 001CSLEE with C=0, S=1, L=0, epoch_bits=3 => 0x2B.
@@ -222,8 +149,6 @@ fn dtls13_discards_unauthenticated_ciphertext_without_length_field() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_recovers_from_corrupted_packet() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -295,84 +220,34 @@ fn dtls13_recovers_from_corrupted_packet() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_close_notify_graceful_shutdown() {
-    // NOTE: dimpl does not currently expose a close() or shutdown() method on the
-    // Dtls API. The public API consists of handle_packet, poll_output,
-    // handle_timeout, and send_application_data. There is no way for the
-    // application to initiate a close_notify alert or graceful shutdown.
-    //
-    // This test documents the gap: a close_notify mechanism should be added so
-    // that an endpoint can signal graceful connection closure to its peer.
-    //
-    // When a close() or shutdown() method is added, this test should be updated
-    // to: (1) complete a handshake, (2) exchange some data, (3) call close() on
-    // the client, (4) poll for the resulting alert packet, (5) deliver it to the
-    // server, and (6) verify the server recognizes the connection as closed.
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
-
-    let client_cert = generate_self_signed_certificate().expect("gen client cert");
-    let server_cert = generate_self_signed_certificate().expect("gen server cert");
-
-    let config = dtls13_config();
-
     let mut now = Instant::now();
+    let (mut client, mut server, now_hs) = setup_connected_13_pair(now);
+    now = now_hs;
 
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
-    client.set_active(true);
-
-    let mut server = Dtls::new_13(config, server_cert, now);
-    server.set_active(false);
-
-    // Complete handshake
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-
-    assert!(client_connected, "Client should be connected");
-    assert!(server_connected, "Server should be connected");
-
-    // Exchange data to confirm the connection is fully operational.
-    client
-        .send_application_data(b"hello")
-        .expect("send app data");
+    // Client initiates graceful shutdown.
+    client.close().expect("client close");
+    now += Duration::from_millis(10);
     client.handle_timeout(now).expect("client timeout");
     let client_out = drain_outputs(&mut client);
-    deliver_packets(&client_out.packets, &mut server);
+    assert!(
+        !client_out.packets.is_empty(),
+        "Client should emit close_notify packet"
+    );
 
+    // Deliver the close_notify alert to the server.
+    deliver_packets(&client_out.packets, &mut server);
     server.handle_timeout(now).expect("server timeout");
     let server_out = drain_outputs(&mut server);
     assert!(
-        server_out.app_data.iter().any(|d| d.as_slice() == b"hello"),
-        "Server should receive application data"
+        server_out.close_notify,
+        "Server should observe CloseNotify from client"
     );
-
-    // Gap: no close()/shutdown() method exists on Dtls.
-    // When added, the test should call client.close() here and verify the alert.
 }
 
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_discards_unknown_epoch_record() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -388,30 +263,7 @@ fn dtls13_discards_unknown_epoch_record() {
     let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
 
-    // Complete handshake
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-
-    assert!(client_connected, "Client should be connected");
-    assert!(server_connected, "Server should be connected");
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
 
     // After handshake, application data uses epoch 3 (epoch_bits = 3 & 0x03 = 3).
     // Craft a ciphertext record with epoch_bits=1, which would map to epoch 1 if
@@ -448,8 +300,6 @@ fn dtls13_discards_unknown_epoch_record() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_discards_truncated_unified_header() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -465,30 +315,7 @@ fn dtls13_discards_truncated_unified_header() {
     let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
 
-    // Complete handshake
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-
-    assert!(client_connected, "Client should be connected");
-    assert!(server_connected, "Server should be connected");
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
 
     // Deliver a 1-byte packet that looks like a unified header but is truncated.
     // 0x2F = 001CSLEE with C=0, S=1, L=1, EE=11 -- expects at least 5 header
@@ -517,8 +344,6 @@ fn dtls13_discards_truncated_unified_header() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_discards_plaintext_after_handshake() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -534,30 +359,7 @@ fn dtls13_discards_plaintext_after_handshake() {
     let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
 
-    // Complete handshake
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-
-    assert!(client_connected, "Client should be connected");
-    assert!(server_connected, "Server should be connected");
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
 
     // Craft a DTLS 1.2-style plaintext record (13-byte header).
     // content_type=22 (Handshake), version=0xFEFD (DTLS 1.2), epoch=0, seq=0,
@@ -613,7 +415,6 @@ fn dtls13_alert_bad_certificate() {
     // unconditionally, we verify that the handshake completes and the peer
     // certificates are surfaced via Output::PeerCert. The application would
     // then inspect the certificate and decide whether to continue.
-    use dimpl::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -696,8 +497,6 @@ fn dtls13_alert_bad_certificate() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_only_functional_signature_schemes_advertised() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -777,8 +576,6 @@ fn dtls13_only_functional_signature_schemes_advertised() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_bad_record_does_not_kill_datagram() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -794,30 +591,7 @@ fn dtls13_bad_record_does_not_kill_datagram() {
     let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
 
-    // Complete handshake
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-
-    assert!(client_connected, "Client should be connected");
-    assert!(server_connected, "Server should be connected");
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
 
     // Send application data from server and capture the ciphertext packet.
     server
@@ -868,8 +642,6 @@ fn dtls13_bad_record_does_not_kill_datagram() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_old_epoch_record_accepted_after_key_update() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -891,29 +663,7 @@ fn dtls13_old_epoch_record_accepted_after_key_update() {
     let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
 
-    // Complete handshake.
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..30 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(50);
-    }
-    assert!(client_connected, "Client should connect");
-    assert!(server_connected, "Server should connect");
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
 
     // Send one message and capture its packet WITHOUT delivering to server.
     // This packet is encrypted on the initial application epoch (epoch 3).
@@ -984,8 +734,6 @@ fn dtls13_old_epoch_record_accepted_after_key_update() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_client_hello_padded_to_mtu() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -1028,8 +776,6 @@ fn dtls13_mixed_datagram_during_handshake_bogus_first() {
     //! ApplicationData first and valid handshake record second is handled
     //! correctly: bogus is discarded, valid handshake proceeds.
 
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -1037,7 +783,7 @@ fn dtls13_mixed_datagram_during_handshake_bogus_first() {
 
     let config = dtls13_config();
 
-    let mut now = Instant::now();
+    let now = Instant::now();
 
     let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
     client.set_active(true);
@@ -1080,33 +826,7 @@ fn dtls13_mixed_datagram_during_handshake_bogus_first() {
 
     // Continue handshake normally.
     deliver_packets(&server_out.packets, &mut client);
-
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-
-    assert!(
-        client_connected,
-        "Handshake should complete despite bogus record in ClientHello datagram"
-    );
-    assert!(server_connected, "Server should connect");
+    complete_dtls13_handshake(&mut client, &mut server, now);
 }
 
 #[test]
@@ -1115,8 +835,6 @@ fn dtls13_mixed_datagram_plaintext_first_then_valid() {
     //! Post-handshake: a UDP datagram with bogus plaintext ApplicationData FIRST
     //! followed by a valid encrypted record is handled correctly: the bogus
     //! record is silently discarded and the valid one is still processed.
-
-    use dimpl::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1133,30 +851,7 @@ fn dtls13_mixed_datagram_plaintext_first_then_valid() {
     let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
 
-    // Complete handshake.
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-
-    assert!(client_connected, "Client should be connected");
-    assert!(server_connected, "Server should be connected");
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
 
     // Send valid application data from client and capture the encrypted packet.
     client
@@ -1220,8 +915,6 @@ fn dtls13_mixed_datagram_valid_first_then_bogus() {
     //! followed by bogus plaintext ApplicationData is handled correctly: the
     //! valid record is processed and the trailing bogus record is discarded.
 
-    use dimpl::certificate::generate_self_signed_certificate;
-
     let _ = env_logger::try_init();
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -1237,30 +930,7 @@ fn dtls13_mixed_datagram_valid_first_then_bogus() {
     let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
 
-    // Complete handshake.
-    let mut client_connected = false;
-    let mut server_connected = false;
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        server.handle_timeout(now).expect("server timeout");
-
-        let client_out = drain_outputs(&mut client);
-        let server_out = drain_outputs(&mut server);
-
-        client_connected |= client_out.connected;
-        server_connected |= server_out.connected;
-
-        deliver_packets(&client_out.packets, &mut server);
-        deliver_packets(&server_out.packets, &mut client);
-
-        if client_connected && server_connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-
-    assert!(client_connected, "Client should be connected");
-    assert!(server_connected, "Server should be connected");
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
 
     // Send valid application data from client and capture the encrypted packet.
     client
@@ -1307,5 +977,475 @@ fn dtls13_mixed_datagram_valid_first_then_bogus() {
         server_out.app_data.len(),
         1,
         "Should receive exactly 1 app data (the valid one), not the bogus plaintext"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_half_close_send_then_close() {
+    //! After receiving close_notify, the write half remains open per RFC 8446 §6.1.
+    //! The local side can send application data (half-close), and the data must
+    //! be delivered to the peer. Then close() shuts down the write half.
+
+    let _ = env_logger::try_init();
+    let mut now = Instant::now();
+    let (mut client, mut server, now_hs) = setup_connected_13_pair(now);
+    now = now_hs;
+
+    // Client sends close_notify
+    client.close().unwrap();
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    deliver_packets(&client_out.packets, &mut server);
+
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+    assert!(server_out.close_notify, "Server should emit CloseNotify");
+
+    // Half-close: server can still send after receiving close_notify
+    server
+        .send_application_data(b"half-close-data")
+        .expect("send after close_notify should work");
+
+    now += Duration::from_millis(10);
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+    deliver_packets(&server_out.packets, &mut client);
+
+    // Client receives the data sent during half-close
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    assert!(
+        client_out
+            .app_data
+            .iter()
+            .any(|d| d.as_slice() == b"half-close-data"),
+        "Client should receive data sent during half-close"
+    );
+
+    // Server closes its write half
+    server.close().unwrap();
+
+    // After local close(), sends must fail
+    assert!(
+        server.send_application_data(b"after-own-close").is_err(),
+        "Server should not accept sends after its own close()"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_close_during_handshake_emits_no_packets() {
+    //! Call close() on the client while the handshake is in progress.
+    //! Per `Dtls::close` API contract, close() during handshake silently
+    //! discards state without sending any packets.
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls13_config();
+
+    let now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    // Start handshake — client sends ClientHello
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    assert!(
+        !client_out.packets.is_empty(),
+        "Client should emit ClientHello"
+    );
+
+    // Deliver to server, server responds
+    deliver_packets(&client_out.packets, &mut server);
+    server.handle_timeout(now).expect("server timeout");
+    let _server_out = drain_outputs(&mut server);
+
+    // Now abort the client mid-handshake
+    client.close().unwrap();
+
+    // After close(), polling must not emit any more packets (library policy, not RFC mandate).
+    let client_out = drain_outputs(&mut client);
+    assert!(
+        client_out.packets.is_empty(),
+        "Client should not emit packets after close() during handshake"
+    );
+
+    // Even after a timeout, no packets should appear.
+    let later = now + Duration::from_secs(5);
+    let _ = client.handle_timeout(later);
+    let client_out = drain_outputs(&mut client);
+    assert!(
+        client_out.packets.is_empty(),
+        "Client should not emit packets after timeout post-close()"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_app_data_delivered_before_close_notify() {
+    //! When app data and close_notify arrive in the same batch, the app data
+    //! must be delivered before CloseNotify.
+
+    let _ = env_logger::try_init();
+    let mut now = Instant::now();
+    let (mut client, mut server, now_hs) = setup_connected_13_pair(now);
+    now = now_hs;
+
+    // Send app data then immediately close (both queued)
+    client
+        .send_application_data(b"before-close")
+        .expect("send app data");
+    client.close().unwrap();
+
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+
+    deliver_packets(&client_out.packets, &mut server);
+
+    // Poll server outputs and verify ordering: ApplicationData before CloseNotify
+    server.handle_timeout(now).expect("server timeout");
+    let mut saw_app_data = false;
+    let mut saw_close_notify = false;
+    let mut close_after_data = false;
+    let mut buf = vec![0u8; 2048];
+    loop {
+        match server.poll_output(&mut buf) {
+            Output::ApplicationData(data) => {
+                assert!(
+                    !saw_close_notify,
+                    "ApplicationData must not appear after CloseNotify"
+                );
+                if data == b"before-close" {
+                    saw_app_data = true;
+                }
+            }
+            Output::CloseNotify => {
+                saw_close_notify = true;
+                if saw_app_data {
+                    close_after_data = true;
+                }
+            }
+            Output::Timeout(_) => break,
+            _ => {}
+        }
+    }
+    assert!(saw_app_data, "Server should receive the app data");
+    assert!(saw_close_notify, "Server should see CloseNotify");
+    assert!(
+        close_after_data,
+        "CloseNotify must come after ApplicationData"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_close_notify_out_of_order_app_data_accepted() {
+    //! Out-of-order app data packets (sequence < close_notify sequence) that
+    //! arrive after close_notify must still be accepted and delivered.
+
+    let _ = env_logger::try_init();
+    let mut now = Instant::now();
+    let (mut client, mut server, now_hs) = setup_connected_13_pair(now);
+    now = now_hs;
+
+    // Server sends app data (seq N), then closes (close_notify at seq N+1)
+    server
+        .send_application_data(b"before-close-data")
+        .expect("send app data");
+    now += Duration::from_millis(10);
+    server.handle_timeout(now).expect("server timeout");
+    let app_data_packets = drain_outputs(&mut server).packets;
+
+    server.close().unwrap();
+    now += Duration::from_millis(10);
+    server.handle_timeout(now).expect("server timeout");
+    let close_packets = drain_outputs(&mut server).packets;
+
+    // Deliver close_notify FIRST (out of order), then app data
+    deliver_packets(&close_packets, &mut client);
+    deliver_packets(&app_data_packets, &mut client);
+
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+
+    // Client should still deliver the app data (its sequence < close_notify sequence)
+    assert!(
+        client_out
+            .app_data
+            .iter()
+            .any(|d| d.as_slice() == b"before-close-data"),
+        "Out-of-order app data with earlier sequence should be accepted"
+    );
+
+    // Client should also see CloseNotify
+    assert!(client_out.close_notify, "Client should emit CloseNotify");
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_half_closed_local_no_retransmit() {
+    //! After close(), in-flight retransmissions (e.g. a pending KeyUpdate
+    //! awaiting ACK) must be cancelled. Advancing time past retransmit
+    //! timeouts should produce no packets.
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Low AEAD limit so we can trigger a KeyUpdate after a few app-data records.
+    let config = Arc::new(
+        Config::builder()
+            .aead_encryption_limit(3)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
+
+    // Send enough app data from client to trigger needs_key_update.
+    // aead_encryption_limit(3) → threshold is 3 (quarter=0, no jitter).
+    for i in 0..3 {
+        client
+            .send_application_data(format!("msg{}", i).as_bytes())
+            .expect("send app data");
+    }
+
+    // handle_timeout → make_progress → creates KeyUpdate, arms flight timer.
+    // This puts KeyUpdate records into flight_saved_records for retransmission.
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+
+    // Deliver app data to server but NOT the KeyUpdate ACK back to client,
+    // so the client has an in-flight KeyUpdate awaiting acknowledgement.
+    deliver_packets(&client_out.packets, &mut server);
+    now += Duration::from_millis(10);
+    server.handle_timeout(now).expect("server timeout");
+    // Intentionally do NOT deliver server's ACK/response back to client.
+    let _ = drain_outputs(&mut server);
+
+    // Now close() — should cancel the in-flight KeyUpdate retransmission.
+    client.close().unwrap();
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    // Drain the close_notify packet
+    let _ = drain_outputs(&mut client);
+
+    // Advance time well past flight retransmit timeouts — should emit no packets.
+    for _ in 0..5 {
+        now += Duration::from_secs(5);
+        client.handle_timeout(now).expect("client timeout");
+        let client_out = drain_outputs(&mut client);
+        assert!(
+            client_out.packets.is_empty(),
+            "No retransmission packets should be emitted after close()"
+        );
+    }
+
+    // send_application_data must fail
+    let result = client.send_application_data(b"should-fail");
+    assert!(
+        result.is_err(),
+        "send_application_data should fail in HalfClosedLocal"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_half_closed_local_transitions_to_closed() {
+    //! After client calls close() (HalfClosedLocal), receiving the peer's
+    //! close_notify should transition to Closed and emit CloseNotify.
+
+    let _ = env_logger::try_init();
+    let mut now = Instant::now();
+    let (mut client, mut server, now_hs) = setup_connected_13_pair(now);
+    now = now_hs;
+
+    // Client calls close() → HalfClosedLocal
+    client.close().unwrap();
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+
+    // Deliver client's close_notify to server
+    deliver_packets(&client_out.packets, &mut server);
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+    assert!(server_out.close_notify, "Server should see CloseNotify");
+
+    // Server calls close() → sends its own close_notify
+    server.close().unwrap();
+    now += Duration::from_millis(10);
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+
+    // Deliver server's close_notify to client
+    deliver_packets(&server_out.packets, &mut client);
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+
+    // Client should emit CloseNotify (peer's close_notify received)
+    assert!(
+        client_out.close_notify,
+        "Client should emit CloseNotify after receiving peer's close_notify"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_close_prohibits_further_sends() {
+    //! After close(), the sender enters HalfClosedLocal and
+    //! send_application_data() must return an error.
+    //!
+    //! Note: the receiver-side sequence-threshold discard (RFC 9147 §5.10) is
+    //! exercised by `dtls13_close_notify_out_of_order_app_data_accepted` (accept
+    //! path). The discard path (seq > close_notify seq) cannot be tested at the
+    //! integration level because DTLS 1.3 records are AEAD-encrypted and
+    //! close_notify is always the highest-sequence record from a given sender.
+
+    let _ = env_logger::try_init();
+    let mut now = Instant::now();
+    let (mut client, mut server, now_hs) = setup_connected_13_pair(now);
+    now = now_hs;
+
+    // Server sends close_notify
+    server.close().unwrap();
+    now += Duration::from_millis(10);
+    server.handle_timeout(now).expect("server timeout");
+    let close_packets = drain_outputs(&mut server).packets;
+
+    // Deliver close_notify to client
+    deliver_packets(&close_packets, &mut client);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    assert!(client_out.close_notify, "Client should see CloseNotify");
+
+    // Now try to send application data from server (after close_notify)
+    // This should fail because server is in HalfClosedLocal
+    let result = server.send_application_data(b"after-close");
+    assert!(
+        result.is_err(),
+        "send_application_data should fail after close()"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_half_closed_local_no_ack() {
+    //! Per RFC 9147 §5.10 / RFC 8446 §6.1, after sending close_notify, no
+    //! further messages (including ACKs) should be sent. This test verifies
+    //! that in HalfClosedLocal state, the implementation does not send ACKs.
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    // Use low AEAD limit to trigger automatic KeyUpdate
+    let config = Arc::new(
+        Config::builder()
+            .aead_encryption_limit(5)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
+
+    // Client calls close() → HalfClosedLocal
+    client.close().unwrap();
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let close_packets = drain_outputs(&mut client).packets;
+
+    // Send 5 messages to trigger needs_key_update (limit=5, threshold 4..=5).
+    for i in 0..5 {
+        server
+            .send_application_data(format!("msg{}", i).as_bytes())
+            .expect("send app data");
+    }
+
+    // handle_timeout → make_progress → creates KeyUpdate, rotates send keys
+    // to a new epoch. The KeyUpdate handshake record is saved for retransmission.
+    now += Duration::from_millis(10);
+    server.handle_timeout(now).expect("server timeout");
+
+    // Batch 1: 5 app-data records + KeyUpdate (all on old epoch).
+    let batch1 = drain_outputs(&mut server).packets;
+
+    // Send one more message on the NEW epoch (post-KeyUpdate).
+    // The client must process the KeyUpdate to install recv keys for this epoch;
+    // otherwise decryption fails and app_data count will be < 6.
+    server
+        .send_application_data(b"msg5")
+        .expect("send app data on new epoch");
+    now += Duration::from_millis(10);
+    server.handle_timeout(now).expect("server timeout");
+
+    // Batch 2: 1 app-data record on new epoch.
+    let batch2 = drain_outputs(&mut server).packets;
+
+    // Deliver close_notify to server
+    deliver_packets(&close_packets, &mut server);
+    now += Duration::from_millis(10);
+    server.handle_timeout(now).expect("server timeout");
+    let _ = drain_outputs(&mut server);
+
+    // Deliver batch 1 (includes KeyUpdate) to client.
+    // Client is in HalfClosedLocal — it should process the KeyUpdate
+    // (install recv keys for the new epoch) but NOT send ACK.
+    deliver_packets(&batch1, &mut client);
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out1 = drain_outputs(&mut client);
+
+    assert!(
+        client_out1.packets.is_empty(),
+        "Client in HalfClosedLocal should not send ACK for KeyUpdate"
+    );
+
+    // Deliver batch 2 (new-epoch app data) to client.
+    // This will only succeed if KeyUpdate was actually processed above.
+    deliver_packets(&batch2, &mut client);
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out2 = drain_outputs(&mut client);
+
+    let total = client_out1.app_data.len() + client_out2.app_data.len();
+    assert_eq!(
+        total, 6,
+        "Client must receive all 6 messages (6th on new epoch proves KeyUpdate was processed)"
+    );
+    assert!(
+        client_out2.packets.is_empty(),
+        "Client in HalfClosedLocal should not send any packets"
     );
 }

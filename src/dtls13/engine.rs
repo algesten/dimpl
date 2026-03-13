@@ -156,6 +156,11 @@ pub struct Engine {
 
     /// Set when app_send_record_count reaches aead_encryption_threshold.
     needs_key_update: bool,
+
+    /// Sequence number of the received close_notify alert, if any.
+    /// Per RFC 9147 §5.10, any data with an epoch/sequence number pair
+    /// after this must be discarded; earlier records are still valid.
+    close_notify_sequence: Option<Sequence>,
 }
 
 struct EpochKeys {
@@ -243,6 +248,7 @@ impl Engine {
             app_send_record_count: 0,
             aead_encryption_threshold,
             needs_key_update: false,
+            close_notify_sequence: None,
         }
     }
 
@@ -338,11 +344,35 @@ impl Engine {
             return Err(Error::ReceiveQueueFull);
         }
 
-        // Handle ACK, Alert, and CCS records immediately; collect the rest for queuing.
-        // A single UDP datagram can contain mixed record types, so we process
-        // each record individually without discarding siblings.
-        let mut non_ack_records = ArrayVec::new();
+        let Some(incoming) = self.extract_control_records(incoming)? else {
+            return Ok(());
+        };
+
+        if incoming.first().first_handshake().is_some() {
+            self.insert_incoming_handshake(incoming)
+        } else {
+            self.insert_incoming_non_handshake(incoming)
+        }
+    }
+
+    /// Process ACK, Alert, and CCS records from the incoming datagram,
+    /// returning the remaining records for queuing.
+    ///
+    /// A single UDP datagram can contain mixed record types, so each
+    /// record is inspected individually. Per RFC 9147 §5.10, any record
+    /// whose epoch/sequence is after a received close_notify is discarded.
+    fn extract_control_records(&mut self, incoming: Incoming) -> Result<Option<Incoming>, Error> {
+        let mut remaining = ArrayVec::new();
         for record in incoming.into_records() {
+            // Per RFC 9147 §5.10: discard any record whose epoch/sequence
+            // is after the received close_notify, regardless of content type.
+            // When cn_seq is None the guard does not match, so the first
+            // close_notify alert itself passes through to set the threshold.
+            if let Some(cn_seq) = self.close_notify_sequence {
+                if record.record().sequence > cn_seq {
+                    continue;
+                }
+            }
             match record.record().content_type {
                 ContentType::Ack => {
                     let fragment = record.record().fragment(record.buffer());
@@ -351,22 +381,19 @@ impl Engine {
                 ContentType::Alert => {
                     let fragment = record.record().fragment(record.buffer());
                     if fragment.len() >= 2 {
-                        let level = fragment[0];
                         let description = fragment[1];
-                        // RFC 8446 §6 / RFC 9147 §6: fatal alerts (level 2) and
-                        // close_notify (description 0) must close the connection.
-                        if level == 2 || description == 0 {
+                        if description == 0 {
+                            // close_notify: signal graceful shutdown
+                            self.close_notify_sequence
+                                .get_or_insert(record.record().sequence);
+                        } else {
+                            // In DTLS 1.3 the level field is legacy; all alerts except
+                            // close_notify are fatal (RFC 9147 inherits RFC 8446 §6.2).
                             return Err(Error::SecurityError(format!(
-                                "Received fatal alert: level={}, description={}",
-                                level, description
+                                "Received fatal alert: description={}",
+                                description
                             )));
                         }
-                        // Warning alerts (level 1) with non-zero description are
-                        // discarded per RFC 8446 §6.
-                        debug!(
-                            "Discarding warning alert: level={}, description={}",
-                            level, description
-                        );
                     }
                 }
                 // RFC 9147 §5: CCS records must be discarded in DTLS 1.3.
@@ -374,21 +401,12 @@ impl Engine {
                     trace!("Discarding CCS record");
                 }
                 _ => {
-                    non_ack_records.try_push(record).ok();
+                    remaining.try_push(record).ok();
                 }
             }
         }
 
-        let incoming = match Incoming::from_records(non_ack_records) {
-            Some(incoming) => incoming,
-            None => return Ok(()),
-        };
-
-        if incoming.first().first_handshake().is_some() {
-            self.insert_incoming_handshake(incoming)
-        } else {
-            self.insert_incoming_non_handshake(incoming)
-        }
+        Ok(Incoming::from_records(remaining))
     }
 
     fn insert_incoming_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
@@ -1249,6 +1267,31 @@ impl Engine {
     pub fn release_application_data(&mut self) {
         self.release_app_data = true;
         self.hs_recv_keys = None;
+    }
+
+    /// Whether a close_notify alert has been received from the peer.
+    pub fn close_notify_received(&self) -> bool {
+        self.close_notify_sequence.is_some()
+    }
+
+    /// Cancel in-flight retransmissions without clearing the transmit queue.
+    /// Used by close() to stop retransmitting control records while still
+    /// allowing the queued close_notify alert to be sent.
+    pub fn cancel_flights(&mut self) {
+        self.flight_saved_records.clear();
+        self.flight_timeout = Timeout::Disabled;
+        self.connect_timeout = Timeout::Disabled;
+        self.handshake_ack_deadline = None;
+    }
+
+    /// Abort the connection: flush all queued output, retransmission state, and
+    /// disable timers so that no further packets are emitted.
+    pub fn abort(&mut self) {
+        self.queue_tx.clear();
+        self.flight_saved_records.clear();
+        self.flight_timeout = Timeout::Disabled;
+        self.connect_timeout = Timeout::Disabled;
+        self.handshake_ack_deadline = None;
     }
 
     /// Send an ACK record listing received handshake record numbers.

@@ -36,6 +36,8 @@ pub enum Error {
     /// resolved.  Callers should buffer the data and retry once the
     /// handshake advances.
     HandshakePending,
+    /// The connection has been closed (close_notify sent or received).
+    ConnectionClosed,
     /// If we are in auto-sense mode for a server and we received too
     /// many client hello fragments that haven't made a packet.
     TooManyClientHelloFragments,
@@ -82,6 +84,7 @@ impl std::fmt::Display for Error {
                 write!(f, "handshake pending: cannot send application data yet")
             }
             Error::TooManyClientHelloFragments => write!(f, "too many client hello fragments"),
+            Error::ConnectionClosed => write!(f, "connection closed"),
             Error::Dtls12Fallback => {
                 write!(f, "dtls 1.2 fallback (internal)")
             }

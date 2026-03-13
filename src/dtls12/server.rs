@@ -84,6 +84,9 @@ pub struct Server {
 
     /// Data that is sent before we are connected.
     queued_data: Vec<Buf>,
+
+    /// Whether we have already emitted a CloseNotify output event.
+    close_notify_reported: bool,
 }
 
 /// Current state of the server.
@@ -103,6 +106,7 @@ enum State {
     SendChangeCipherSpec,
     SendFinished,
     AwaitApplicationData,
+    Closed,
 }
 
 impl Server {
@@ -134,6 +138,7 @@ impl Server {
             last_now: now,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
+            close_notify_reported: false,
         }
     }
 
@@ -155,7 +160,15 @@ impl Server {
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.client_certificates);
         }
-        self.engine.poll_output(buf, self.last_now)
+        let output = self.engine.poll_output(buf, self.last_now);
+        if matches!(output, Output::Timeout(_))
+            && self.engine.close_notify_received()
+            && !self.close_notify_reported
+        {
+            self.close_notify_reported = true;
+            return Output::CloseNotify;
+        }
+        output
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
@@ -170,6 +183,10 @@ impl Server {
 
     /// Send application data when the server is in the Running state
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
+        if self.state == State::Closed {
+            return Err(Error::ConnectionClosed);
+        }
+
         if self.state != State::AwaitApplicationData {
             self.queued_data.push(data.to_buf());
             return Ok(());
@@ -182,6 +199,25 @@ impl Server {
                 body.extend_from_slice(data);
             })?;
 
+        Ok(())
+    }
+
+    /// Initiate graceful shutdown by sending a `close_notify` alert.
+    pub fn close(&mut self) -> Result<(), Error> {
+        if self.state == State::Closed {
+            return Ok(());
+        }
+        if self.state != State::AwaitApplicationData {
+            self.engine.abort();
+            self.state = State::Closed;
+            return Ok(());
+        }
+        self.engine
+            .create_record(ContentType::Alert, 1, false, |body| {
+                body.push(1); // level: warning
+                body.push(0); // description: close_notify
+            })?;
+        self.state = State::Closed;
         Ok(())
     }
 
@@ -218,6 +254,7 @@ impl State {
             State::SendChangeCipherSpec => "SendChangeCipherSpec",
             State::SendFinished => "SendFinished",
             State::AwaitApplicationData => "AwaitApplicationData",
+            State::Closed => "Closed",
         }
     }
 
@@ -237,6 +274,7 @@ impl State {
             State::SendChangeCipherSpec => self.send_change_cipher_spec(server),
             State::SendFinished => self.send_finished(server),
             State::AwaitApplicationData => self.await_application_data(server),
+            State::Closed => Ok(self),
         }
     }
 
@@ -895,6 +933,19 @@ impl State {
     }
 
     fn await_application_data(self, server: &mut Server) -> Result<Self, Error> {
+        if server.engine.close_notify_received() {
+            // RFC 5246 §7.2.1: respond with a reciprocal close_notify and
+            // close down immediately, discarding any pending writes.
+            server.engine.discard_pending_writes();
+            server
+                .engine
+                .create_record(ContentType::Alert, 1, false, |body| {
+                    body.push(1); // level: warning
+                    body.push(0); // description: close_notify
+                })?;
+            return Ok(State::Closed);
+        }
+
         // Now send any application data that was queued before we were connected.
         if !server.queued_data.is_empty() {
             debug!(
