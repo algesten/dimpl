@@ -19,8 +19,7 @@
 //! - **Key Provider** ([`KeyProvider`]): Parse and load private keys
 //! - **Secure Random** ([`SecureRandom`]): Cryptographically secure RNG
 //! - **Hash Provider** ([`HashProvider`]): Factory for hash contexts
-//! - **PRF Provider** ([`PrfProvider`]): TLS 1.2 PRF for key derivation
-//! - **HMAC Provider** ([`HmacProvider`]): Compute HMAC signatures
+//! - **HMAC Provider** ([`HmacProvider`]): Compute HMAC signatures (also drives PRF and HKDF)
 //!
 //! # Using a Custom Provider
 //!
@@ -135,7 +134,7 @@
 //! - **Key exchange**: ECDHE with X25519, P-256, or P-384 curves
 //! - **Signatures**: ECDSA with P-256/SHA-256 or P-384/SHA-384
 //! - **Hash**: SHA-256 and SHA-384
-//! - **PRF**: TLS 1.2 PRF (using HMAC-SHA256 or HMAC-SHA384)
+//! - **HMAC**: HMAC-SHA256 and HMAC-SHA384 (used for PRF, HKDF, and cookies)
 //!
 //! # Thread Safety
 //!
@@ -375,27 +374,25 @@ pub trait HashProvider: CryptoSafe {
     fn create_hash(&self, algorithm: HashAlgorithm) -> Box<dyn HashContext>;
 }
 
-/// PRF (Pseudo-Random Function) for TLS 1.2 key derivation.
-pub trait PrfProvider: CryptoSafe {
-    /// TLS 1.2 PRF: PRF(secret, label, seed) writing output to `out`.
-    /// Uses `scratch` for temporary concatenation of label+seed.
-    #[allow(clippy::too_many_arguments)]
-    fn prf_tls12(
-        &self,
-        secret: &[u8],
-        label: &str,
-        seed: &[u8],
-        out: &mut Buf,
-        output_len: usize,
-        scratch: &mut Buf,
-        hash: HashAlgorithm,
-    ) -> Result<(), String>;
-}
-
 /// HMAC provider for computing HMAC signatures.
 pub trait HmacProvider: CryptoSafe {
     /// Compute HMAC-SHA256(key, data) and return the result.
-    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String>;
+    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String> {
+        let mut out = [0u8; 32];
+        self.hmac(HashAlgorithm::SHA256, key, data, &mut out)?;
+        Ok(out)
+    }
+
+    /// Compute HMAC for the given hash algorithm, writing the result to `out`.
+    ///
+    /// Returns the number of bytes written.
+    fn hmac(
+        &self,
+        hash: HashAlgorithm,
+        key: &[u8],
+        data: &[u8],
+        out: &mut [u8],
+    ) -> Result<usize, String>;
 }
 
 // ============================================================================
@@ -438,70 +435,6 @@ pub trait SupportedDtls13CipherSuite: CryptoSafe {
     fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16];
 }
 
-/// HKDF provider for TLS 1.3 key derivation (RFC 5869).
-///
-/// TLS 1.3 uses HKDF instead of the TLS 1.2 PRF for all key derivation.
-pub trait HkdfProvider: CryptoSafe {
-    /// HKDF-Extract: Extract a pseudorandom key from input keying material.
-    /// PRK = HKDF-Extract(salt, IKM)
-    fn hkdf_extract(
-        &self,
-        hash: HashAlgorithm,
-        salt: &[u8],
-        ikm: &[u8],
-        out: &mut Buf,
-    ) -> Result<(), String>;
-
-    /// HKDF-Expand: Expand a pseudorandom key to the desired length.
-    /// OKM = HKDF-Expand(PRK, info, L)
-    fn hkdf_expand(
-        &self,
-        hash: HashAlgorithm,
-        prk: &[u8],
-        info: &[u8],
-        out: &mut Buf,
-        output_len: usize,
-    ) -> Result<(), String>;
-
-    /// HKDF-Expand-Label for TLS 1.3 (RFC 8446 Section 7.1).
-    /// Derives key material using the TLS 1.3 label format with "tls13 " prefix.
-    ///
-    /// HkdfLabel = struct {
-    ///     uint16 length;
-    ///     opaque label<7..255> = "tls13 " + Label;
-    ///     opaque context<0..255> = Context;
-    /// }
-    /// OKM = HKDF-Expand(Secret, HkdfLabel, Length)
-    fn hkdf_expand_label(
-        &self,
-        hash: HashAlgorithm,
-        secret: &[u8],
-        label: &[u8],
-        context: &[u8],
-        out: &mut Buf,
-        output_len: usize,
-    ) -> Result<(), String>;
-
-    /// HKDF-Expand-Label for DTLS 1.3 (RFC 9147).
-    /// Derives key material using the DTLS 1.3 label format with "dtls13" prefix.
-    ///
-    /// HkdfLabel = struct {
-    ///     uint16 length;
-    ///     opaque label<6..255> = "dtls13" + Label;
-    ///     opaque context<0..255> = Context;
-    /// }
-    /// OKM = HKDF-Expand(Secret, HkdfLabel, Length)
-    fn hkdf_expand_label_dtls13(
-        &self,
-        hash: HashAlgorithm,
-        secret: &[u8],
-        label: &[u8],
-        context: &[u8],
-        out: &mut Buf,
-        output_len: usize,
-    ) -> Result<(), String>;
-}
-
 // ============================================================================
 // Core Provider Struct
 // ============================================================================
@@ -514,12 +447,10 @@ pub trait HkdfProvider: CryptoSafe {
 ///
 /// # Version-Specific Components
 ///
-/// Some components are version-specific:
-/// - **DTLS 1.2**: Uses `cipher_suites` and `prf_provider`
-/// - **DTLS 1.3**: Uses `dtls13_cipher_suites` and `hkdf_provider`
-///
 /// Shared components like `kx_groups`, `signature_verification`, `key_provider`,
 /// `secure_random`, `hash_provider`, and `hmac_provider` are used by both versions.
+/// PRF (TLS 1.2) and HKDF (TLS 1.3) key derivation are built generically on top
+/// of `hmac_provider` — see the [`prf_hkdf`](super::prf_hkdf) module.
 ///
 /// # Design
 ///
@@ -548,10 +479,8 @@ pub trait HkdfProvider: CryptoSafe {
 ///     hmac_provider: provider.hmac_provider,
 ///     // DTLS 1.2 components
 ///     cipher_suites: provider.cipher_suites,
-///     prf_provider: provider.prf_provider,
 ///     // DTLS 1.3 components
 ///     dtls13_cipher_suites: provider.dtls13_cipher_suites,
-///     hkdf_provider: provider.hkdf_provider,
 /// };
 /// # }
 /// # #[cfg(not(feature = "aws-lc-rs"))]
@@ -591,11 +520,6 @@ pub struct CryptoProvider {
     /// and MAC algorithms together (e.g., TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256).
     pub cipher_suites: &'static [&'static dyn SupportedDtls12CipherSuite],
 
-    /// PRF for TLS 1.2 key derivation.
-    ///
-    /// The Pseudo-Random Function used for key expansion in DTLS 1.2.
-    pub prf_provider: &'static dyn PrfProvider,
-
     // =========================================================================
     // DTLS 1.3 specific components
     // =========================================================================
@@ -604,11 +528,6 @@ pub struct CryptoProvider {
     /// TLS 1.3 cipher suites only specify the AEAD and hash algorithms
     /// (e.g., TLS_AES_128_GCM_SHA256). Key exchange is negotiated separately.
     pub dtls13_cipher_suites: &'static [&'static dyn SupportedDtls13CipherSuite],
-
-    /// HKDF provider for TLS 1.3 key derivation.
-    ///
-    /// TLS 1.3 uses HKDF instead of the TLS 1.2 PRF for all key derivation.
-    pub hkdf_provider: &'static dyn HkdfProvider,
 }
 
 /// Static storage for the default crypto provider.

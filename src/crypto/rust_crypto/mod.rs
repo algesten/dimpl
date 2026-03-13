@@ -41,12 +41,10 @@
 
 mod cipher_suite;
 mod hash;
-mod hkdf;
-mod hmac;
+pub(crate) mod hmac;
 mod kx_group;
 mod random;
 mod sign;
-mod tls12;
 
 use super::CryptoProvider;
 
@@ -84,12 +82,6 @@ use super::CryptoProvider;
 /// - SEC1 DER format (OpenSSL EC private key format)
 /// - PEM encoded versions of the above
 ///
-/// # TLS 1.2 PRF
-///
-/// Implements the TLS 1.2 PRF for key derivation, including:
-/// - Standard PRF for master secret and key expansion
-/// - Extended Master Secret (RFC 7627) for improved security
-///
 /// # Random Number Generation
 ///
 /// Uses `OsRng` from the `rand` crate for cryptographically secure random number generation.
@@ -104,9 +96,7 @@ pub fn default_provider() -> CryptoProvider {
         hmac_provider: &hmac::HMAC_PROVIDER,
         // DTLS 1.2 components
         cipher_suites: cipher_suite::ALL_CIPHER_SUITES,
-        prf_provider: &tls12::PRF_PROVIDER,
         // DTLS 1.3 components
         dtls13_cipher_suites: cipher_suite::ALL_DTLS13_CIPHER_SUITES,
-        hkdf_provider: &hkdf::HKDF_PROVIDER,
     }
 }

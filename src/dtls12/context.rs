@@ -211,7 +211,8 @@ impl CryptoContext {
         let Some(pms) = &self.pre_master_secret else {
             return Err("Pre-master secret not available".to_string());
         };
-        self.provider().prf_provider.prf_tls12(
+        crypto::prf_hkdf::prf_tls12(
+            self.provider().hmac_provider,
             pms,
             "extended master secret",
             session_hash,
@@ -276,7 +277,8 @@ impl CryptoContext {
         seed[32..].copy_from_slice(client_random);
 
         // Generate key material using PRF
-        self.provider().prf_provider.prf_tls12(
+        crypto::prf_hkdf::prf_tls12(
+            self.provider().hmac_provider,
             master_secret,
             "key expansion",
             &seed,
@@ -418,7 +420,8 @@ impl CryptoContext {
         };
 
         // Generate 12 bytes of verify data using PRF
-        self.provider().prf_provider.prf_tls12(
+        crypto::prf_hkdf::prf_tls12(
+            self.provider().hmac_provider,
             master_secret,
             label,
             handshake_hash,
@@ -468,7 +471,8 @@ impl CryptoContext {
         seed.try_extend_from_slice(server_random)
             .expect("server_random too long");
 
-        self.provider().prf_provider.prf_tls12(
+        crypto::prf_hkdf::prf_tls12(
+            self.provider().hmac_provider,
             master_secret,
             DTLS_SRTP_KEY_LABEL,
             &seed,
