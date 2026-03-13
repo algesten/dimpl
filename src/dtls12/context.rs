@@ -9,8 +9,24 @@ use crate::crypto;
 use crate::crypto::SrtpProfile;
 use crate::crypto::{Aad, Iv, Nonce};
 use crate::dtls12::message::DigitallySigned;
-use crate::dtls12::message::{Asn1Cert, Certificate, CurveType};
-use crate::dtls12::message::{Dtls12CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
+use crate::dtls12::message::{Asn1Cert, Certificate};
+use crate::dtls12::message::{
+    CurveType, Dtls12CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm,
+};
+
+/// Authentication mode for a DTLS 1.2 session.
+pub enum AuthMode {
+    /// Certificate-based authentication (ECDHE_ECDSA suites).
+    Certificate {
+        /// DER-encoded certificate.
+        certificate: Vec<u8>,
+        /// Parsed signing key for the certificate.
+        private_key: Box<dyn crypto::SigningKey>,
+    },
+    /// Pre-shared key authentication (PSK suites).
+    /// The actual PSK value is resolved during the handshake via [`CryptoContext::set_psk`].
+    Psk,
+}
 
 /// DTLS 1.2 crypto context holding negotiated keys and ciphers for a session.
 pub struct CryptoContext {
@@ -56,11 +72,11 @@ pub struct CryptoContext {
     /// Server cipher
     server_cipher: Option<Box<dyn crypto::Cipher>>,
 
-    /// Certificate (DER format)
-    certificate: Vec<u8>,
+    /// Authentication mode: certificate or PSK.
+    auth: AuthMode,
 
-    /// Parsed private key for the certificate with signature algorithm
-    private_key: Box<dyn crypto::SigningKey>,
+    /// Resolved PSK value (set during handshake after identity exchange)
+    psk: Option<Vec<u8>>,
 
     /// Client random (needed for SRTP key export per RFC 5705)
     client_random: Option<ArrayVec<u8, 32>>,
@@ -70,28 +86,8 @@ pub struct CryptoContext {
 }
 
 impl CryptoContext {
-    /// Create a new crypto context
-    pub fn new(
-        certificate: Vec<u8>,
-        private_key_bytes: Vec<u8>,
-        config: Arc<crate::Config>,
-    ) -> Self {
-        // Validate that we have a certificate and private key
-        if certificate.is_empty() {
-            panic!("Client certificate cannot be empty");
-        }
-
-        if private_key_bytes.is_empty() {
-            panic!("Client private key cannot be empty");
-        }
-
-        // Parse the private key using the provider
-        let private_key = config
-            .crypto_provider()
-            .key_provider
-            .load_private_key(&private_key_bytes)
-            .expect("Failed to parse client private key");
-
+    /// Create a new crypto context with the given authentication mode.
+    pub fn new(auth: AuthMode, config: Arc<crate::Config>) -> Self {
         CryptoContext {
             config,
             key_exchange: None,
@@ -107,8 +103,8 @@ impl CryptoContext {
             pre_master_secret: None,
             client_cipher: None,
             server_cipher: None,
-            certificate,
-            private_key,
+            auth,
+            psk: None,
             client_random: None,
             server_random: None,
         }
@@ -151,6 +147,28 @@ impl CryptoContext {
         ke.complete(peer_public_key, buf)?;
         self.pre_master_secret = Some(core::mem::take(buf));
         // Note: we keep key_exchange_public_key since it may be needed later
+        Ok(())
+    }
+
+    /// Set the resolved PSK value for this session.
+    pub fn set_psk(&mut self, psk: Vec<u8>) {
+        self.psk = Some(psk);
+    }
+
+    /// Compute PSK pre-master secret per RFC 4279 §2.
+    ///
+    /// Format: `uint16(N) || zeros(N) || uint16(N) || PSK(N)`
+    /// where N is the PSK length.
+    pub fn compute_psk_pre_master_secret(&mut self) -> Result<(), String> {
+        let psk = self.psk.as_ref().ok_or("PSK not set")?;
+        let n = psk.len();
+        // Total: 2 + N + 2 + N = 2N + 4
+        let mut pms = Buf::new();
+        pms.extend_from_slice(&(n as u16).to_be_bytes());
+        pms.extend_from_slice(&vec![0u8; n]);
+        pms.extend_from_slice(&(n as u16).to_be_bytes());
+        pms.extend_from_slice(psk);
+        self.pre_master_secret = Some(pms);
         Ok(())
     }
 
@@ -370,31 +388,41 @@ impl CryptoContext {
         }
     }
 
-    /// Get client certificate for authentication
+    /// Get client certificate for authentication.
+    /// Panics if no certificate is configured (PSK-only mode).
     pub fn get_client_certificate(&self) -> Certificate {
-        // We validate in constructor, so we can assume we have a certificate
-        // Create an Asn1Cert with a range covering the entire certificate
-        let cert = Asn1Cert(0..self.certificate.len());
+        // unwrap: only called for certificate-based suites
+        let AuthMode::Certificate { certificate, .. } = &self.auth else {
+            panic!("get_client_certificate called in PSK mode");
+        };
+        let cert = Asn1Cert(0..certificate.len());
         let mut certs = ArrayVec::new();
         certs.push(cert);
         Certificate::new(certs)
     }
 
-    /// Serialize client certificate for authentication
+    /// Serialize client certificate for authentication.
+    /// Panics if no certificate is configured (PSK-only mode).
     pub fn serialize_client_certificate(&self, output: &mut Buf) {
         let cert = self.get_client_certificate();
-        cert.serialize(&self.certificate, output);
+        let AuthMode::Certificate { certificate, .. } = &self.auth else {
+            panic!("serialize_client_certificate called in PSK mode");
+        };
+        cert.serialize(certificate, output);
     }
 
-    /// Sign the provided data using the client's private key
-    /// Returns the signature or an error if signing fails
+    /// Sign the provided data using the client's private key.
+    /// Returns an error if no private key is configured (PSK-only mode).
     pub fn sign_data(
         &mut self,
         data: &[u8],
         _hash_alg: HashAlgorithm,
         out: &mut Buf,
     ) -> Result<(), String> {
-        self.private_key.sign(data, out)
+        let AuthMode::Certificate { private_key, .. } = &mut self.auth else {
+            return Err("No private key configured (PSK mode)".to_string());
+        };
+        private_key.sign(data, out)
     }
 
     /// Generate verify data for a Finished message using PRF
@@ -485,7 +513,30 @@ impl CryptoContext {
         Ok(keying_material)
     }
 
-    /// Get group info for ECDHE key exchange
+    /// Signature algorithm for the configured private key.
+    /// Returns None in PSK-only mode.
+    pub fn signature_algorithm(&self) -> Option<SignatureAlgorithm> {
+        match &self.auth {
+            AuthMode::Certificate { private_key, .. } => Some(private_key.algorithm()),
+            AuthMode::Psk => None,
+        }
+    }
+
+    /// Default hash algorithm for the configured private key.
+    /// Returns None in PSK-only mode.
+    pub fn private_key_default_hash_algorithm(&self) -> Option<HashAlgorithm> {
+        match &self.auth {
+            AuthMode::Certificate { private_key, .. } => Some(private_key.hash_algorithm()),
+            AuthMode::Psk => None,
+        }
+    }
+
+    /// Create a hash context for the given algorithm
+    pub fn create_hash(&self, algorithm: HashAlgorithm) -> Box<dyn crypto::HashContext> {
+        self.provider().hash_provider.create_hash(algorithm)
+    }
+
+    /// Get the key exchange group info (curve type and named group).
     pub fn get_key_exchange_group_info(&self) -> Option<(CurveType, NamedGroup)> {
         // Use stored group if available (after key exchange is consumed)
         if let Some(group) = self.key_exchange_group {
@@ -499,24 +550,18 @@ impl CryptoContext {
         Some((CurveType::NamedCurve, ke.group()))
     }
 
-    /// Signature algorithm for the configured private key
-    pub fn signature_algorithm(&self) -> SignatureAlgorithm {
-        self.private_key.algorithm()
-    }
-
-    /// Default hash algorithm for the configured private key
-    pub fn private_key_default_hash_algorithm(&self) -> HashAlgorithm {
-        self.private_key.hash_algorithm()
-    }
-
-    /// Create a hash context for the given algorithm
-    pub fn create_hash(&self, algorithm: HashAlgorithm) -> Box<dyn crypto::HashContext> {
-        self.provider().hash_provider.create_hash(algorithm)
-    }
-
     /// Check if the client's private key is compatible with a given cipher suite.
     pub fn is_cipher_suite_compatible(&self, cipher_suite: Dtls12CipherSuite) -> bool {
-        cipher_suite.signature_algorithm() == self.private_key.algorithm()
+        match (&self.auth, cipher_suite.signature_algorithm()) {
+            // Certificate-based suite needs a matching private key
+            (AuthMode::Certificate { private_key, .. }, Some(sig_alg)) => {
+                sig_alg == private_key.algorithm()
+            }
+            // PSK suite is only compatible in PSK mode
+            (AuthMode::Psk, None) => true,
+            // Mismatch: cert context + PSK suite, or PSK context + cert suite
+            _ => false,
+        }
     }
 
     /// Get the client write IV if derived.
@@ -544,5 +589,90 @@ impl CryptoContext {
             signature.algorithm.hash,
             signature.algorithm.signature,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Config;
+
+    #[cfg(feature = "rcgen")]
+    fn cert_auth_mode(config: &Config) -> AuthMode {
+        let cert = crate::certificate::generate_self_signed_certificate().expect("generate cert");
+        let private_key = config
+            .crypto_provider()
+            .key_provider
+            .load_private_key(&cert.private_key)
+            .expect("parse key");
+        AuthMode::Certificate {
+            certificate: cert.certificate,
+            private_key,
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn certificate_mode_rejects_psk_suites() {
+        let config = Arc::new(Config::default());
+        let auth = cert_auth_mode(&config);
+        let ctx = CryptoContext::new(auth, config);
+
+        for suite in Dtls12CipherSuite::supported() {
+            if suite.is_psk() {
+                assert!(
+                    !ctx.is_cipher_suite_compatible(*suite),
+                    "Certificate-mode context must reject PSK suite {:?}",
+                    suite
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn certificate_mode_accepts_ecdhe_suites() {
+        let config = Arc::new(Config::default());
+        let auth = cert_auth_mode(&config);
+        let ctx = CryptoContext::new(auth, config);
+
+        // At least one ECDHE_ECDSA suite should be compatible
+        assert!(
+            Dtls12CipherSuite::supported()
+                .iter()
+                .filter(|s| !s.is_psk())
+                .any(|s| ctx.is_cipher_suite_compatible(*s)),
+            "Certificate-mode context must accept at least one ECDHE suite"
+        );
+    }
+
+    #[test]
+    fn psk_mode_rejects_certificate_suites() {
+        let config = Arc::new(Config::default());
+        let ctx = CryptoContext::new(AuthMode::Psk, config);
+
+        for suite in Dtls12CipherSuite::supported() {
+            if !suite.is_psk() {
+                assert!(
+                    !ctx.is_cipher_suite_compatible(*suite),
+                    "PSK-mode context must reject certificate suite {:?}",
+                    suite
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn psk_mode_accepts_psk_suites() {
+        let config = Arc::new(Config::default());
+        let ctx = CryptoContext::new(AuthMode::Psk, config);
+
+        assert!(
+            Dtls12CipherSuite::supported()
+                .iter()
+                .filter(|s| s.is_psk())
+                .any(|s| ctx.is_cipher_suite_compatible(*s)),
+            "PSK-mode context must accept at least one PSK suite"
+        );
     }
 }

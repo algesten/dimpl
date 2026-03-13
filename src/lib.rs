@@ -20,8 +20,9 @@
 //!
 //! ## Version selection
 //!
-//! Three constructors control which DTLS version is used:
-//! - [`Dtls::new_12`][new_12] — explicit DTLS 1.2
+//! Four constructors control which DTLS version is used:
+//! - [`Dtls::new_12`][new_12] — explicit DTLS 1.2 (certificate‑based)
+//! - [`Dtls::new_12_psk`][new_12_psk] — explicit DTLS 1.2 (PSK, no certificates)
 //! - [`Dtls::new_13`][new_13] — explicit DTLS 1.3
 //! - [`Dtls::new_auto`][new_auto] — auto‑sense: the first
 //!   incoming ClientHello determines the version (based on the
@@ -32,6 +33,8 @@
 //!   - `ECDHE_ECDSA_AES256_GCM_SHA384`
 //!   - `ECDHE_ECDSA_AES128_GCM_SHA256`
 //!   - `ECDHE_ECDSA_CHACHA20_POLY1305_SHA256`
+//! - **PSK cipher suites (TLS 1.2 over DTLS)**
+//!   - `PSK_AES128_CCM_8`
 //! - **Cipher suites (TLS 1.3 over DTLS)**
 //!   - `TLS_AES_128_GCM_SHA256`
 //!   - `TLS_AES_256_GCM_SHA384`
@@ -42,7 +45,6 @@
 //! - **DTLS‑SRTP**: Exports keying material for `SRTP_AEAD_AES_256_GCM`,
 //!   `SRTP_AEAD_AES_128_GCM`, and `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
 //! - **Extended Master Secret** ([RFC 7627]) is negotiated and enforced (DTLS 1.2).
-//! - Not supported: PSK cipher suites.
 //!
 //! ## Certificate model
 //! During the handshake the engine emits
@@ -132,6 +134,37 @@
 //! # }
 //! ```
 //!
+//! ## Example (PSK client)
+//!
+//! ```rust,no_run
+//! use std::sync::Arc;
+//! use std::time::Instant;
+//!
+//! use dimpl::{Config, Dtls, PskResolver};
+//!
+//! struct MyPsk;
+//!
+//! impl PskResolver for MyPsk {
+//!     fn resolve(&self, identity: &[u8]) -> Option<Vec<u8>> {
+//!         if identity == b"device-01" {
+//!             Some(b"shared-secret-key".to_vec())
+//!         } else {
+//!             None
+//!         }
+//!     }
+//! }
+//!
+//! let config = Arc::new(
+//!     Config::builder()
+//!         .with_psk_client(b"device-01".to_vec(), Arc::new(MyPsk))
+//!         .build()
+//!         .unwrap(),
+//! );
+//!
+//! let mut dtls = Dtls::new_12_psk(config, Instant::now());
+//! dtls.set_active(true); // client role
+//! ```
+//!
 //! ### MSRV
 //! Rust 1.85.0
 //!
@@ -140,6 +173,7 @@
 //! - Renegotiation is not implemented (WebRTC does full restart).
 //!
 //! [new_12]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_12
+//! [new_12_psk]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_12_psk
 //! [new_13]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_13
 //! [new_auto]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_auto
 //! [peer_cert]: https://docs.rs/dimpl/latest/dimpl/enum.Output.html#variant.PeerCert
@@ -192,7 +226,7 @@ mod error;
 pub use error::Error;
 
 mod config;
-pub use config::Config;
+pub use config::{Config, ConfigBuilder, Psk, PskResolver};
 
 #[cfg(feature = "rcgen")]
 pub mod certificate;
@@ -257,6 +291,17 @@ impl Dtls {
     /// certificate according to its security policy.
     pub fn new_12(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
         let inner = Inner::Server12(Server12::new(config, certificate, now));
+        Dtls { inner: Some(inner) }
+    }
+
+    /// Create a new DTLS 1.2 PSK-only instance (no certificate).
+    ///
+    /// Call [`set_active(true)`](Self::set_active) to switch to client
+    /// before the handshake begins. The `config` must have a
+    /// [`PskResolver`] configured, and for clients a PSK identity
+    /// via [`ConfigBuilder::with_psk_client`](ConfigBuilder).
+    pub fn new_12_psk(config: Arc<Config>, now: Instant) -> Self {
+        let inner = Inner::Server12(Server12::new_psk(config, now));
         Dtls { inner: Some(inner) }
     }
 
