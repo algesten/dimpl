@@ -377,7 +377,11 @@ pub trait HashProvider: CryptoSafe {
 /// HMAC provider for computing HMAC signatures.
 pub trait HmacProvider: CryptoSafe {
     /// Compute HMAC-SHA256(key, data) and return the result.
-    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String>;
+    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String> {
+        let mut out = [0u8; 32];
+        self.hmac(HashAlgorithm::SHA256, key, data, &mut out)?;
+        Ok(out)
+    }
 
     /// Compute HMAC for the given hash algorithm, writing the result to `out`.
     ///

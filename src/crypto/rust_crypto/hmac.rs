@@ -11,18 +11,6 @@ use crate::types::HashAlgorithm;
 pub(crate) struct RustCryptoHmacProvider;
 
 impl HmacProvider for RustCryptoHmacProvider {
-    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String> {
-        let mut mac =
-            Hmac::<Sha256>::new_from_slice(key).map_err(|_| "Invalid HMAC key".to_string())?;
-        mac.update(data);
-        let result = mac.finalize();
-        let bytes = result.into_bytes();
-
-        let mut output = [0u8; 32];
-        output.copy_from_slice(&bytes);
-        Ok(output)
-    }
-
     fn hmac(
         &self,
         hash: HashAlgorithm,

@@ -19,14 +19,6 @@ fn hmac_algorithm(hash: HashAlgorithm) -> Result<hmac::Algorithm, String> {
 pub(crate) struct AwsLcHmacProvider;
 
 impl HmacProvider for AwsLcHmacProvider {
-    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String> {
-        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, key);
-        let tag = hmac::sign(&hmac_key, data);
-        let mut result = [0u8; 32];
-        result.copy_from_slice(tag.as_ref());
-        Ok(result)
-    }
-
     fn hmac(
         &self,
         hash: HashAlgorithm,
