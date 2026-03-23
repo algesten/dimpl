@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.5.0
+
   * Remove PrfProvider/HkdfProvider, derive from HmacProvider (breaking) #94
 
 # 0.4.3
