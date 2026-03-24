@@ -28,7 +28,7 @@ use crate::dtls13::message::Sequence;
 use crate::timer::ExponentialBackoff;
 use crate::types::{HashAlgorithm, Random};
 use crate::window::ReplayWindow;
-use crate::{Config, DtlsCertificate, Error, Output, SeededRng};
+use crate::{Config, DtlsCertificate, DtlsCertificatePrivateKey, Error, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
@@ -196,11 +196,14 @@ impl Engine {
         let flight_backoff =
             ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries(), &mut rng);
 
-        let signing_key = config
-            .crypto_provider()
-            .key_provider
-            .load_private_key(&certificate.private_key)
-            .expect("Failed to load private key");
+        let signing_key = match &certificate.private_key {
+            DtlsCertificatePrivateKey::Pkcs8(key_der) => config
+                .crypto_provider()
+                .key_provider
+                .load_private_key(key_der)
+                .expect("Failed to load private key"),
+            DtlsCertificatePrivateKey::SigningKey(key) => (**key).clone_box(),
+        };
 
         let aead_encryption_threshold =
             jittered_aead_threshold(config.aead_encryption_limit(), &mut rng);

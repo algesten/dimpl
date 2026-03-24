@@ -80,7 +80,7 @@ pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, Certificate
 
     Ok(DtlsCertificate {
         certificate: cert_der,
-        private_key: key_der,
+        private_key: crate::DtlsCertificatePrivateKey::Pkcs8(key_der),
     })
 }
 

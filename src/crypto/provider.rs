@@ -209,6 +209,10 @@ pub trait SigningKey: CryptoSafe {
 
     /// Default hash algorithm for this key.
     fn hash_algorithm(&self) -> HashAlgorithm;
+
+    /// Clone this signing key into a new boxed instance.
+    /// Used to support cloning `DtlsCertificate` when using external signing keys.
+    fn clone_box(&self) -> Box<dyn SigningKey>;
 }
 
 /// Active key exchange instance (ephemeral keypair for one handshake).

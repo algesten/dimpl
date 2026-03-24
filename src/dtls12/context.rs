@@ -73,24 +73,28 @@ impl CryptoContext {
     /// Create a new crypto context
     pub fn new(
         certificate: Vec<u8>,
-        private_key_bytes: Vec<u8>,
+        private_key: crate::DtlsCertificatePrivateKey,
         config: Arc<crate::Config>,
     ) -> Self {
-        // Validate that we have a certificate and private key
+        // Validate that we have a certificate
         if certificate.is_empty() {
             panic!("Client certificate cannot be empty");
         }
 
-        if private_key_bytes.is_empty() {
-            panic!("Client private key cannot be empty");
-        }
-
-        // Parse the private key using the provider
-        let private_key = config
-            .crypto_provider()
-            .key_provider
-            .load_private_key(&private_key_bytes)
-            .expect("Failed to parse client private key");
+        // Load or use the private key
+        let private_key = match &private_key {
+            crate::DtlsCertificatePrivateKey::Pkcs8(key_der) => {
+                if key_der.is_empty() {
+                    panic!("Client private key cannot be empty");
+                }
+                config
+                    .crypto_provider()
+                    .key_provider
+                    .load_private_key(key_der)
+                    .expect("Failed to parse client private key")
+            }
+            crate::DtlsCertificatePrivateKey::SigningKey(key) => (**key).clone_box(),
+        };
 
         CryptoContext {
             config,

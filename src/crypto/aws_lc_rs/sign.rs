@@ -20,6 +20,7 @@ use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 struct EcdsaSigningKey {
     key_pair: EcdsaKeyPair,
     signing_algorithm: &'static EcdsaSigningAlgorithm,
+    key_der: Vec<u8>,
 }
 
 impl std::fmt::Debug for EcdsaSigningKey {
@@ -55,6 +56,16 @@ impl SigningKey for EcdsaSigningKey {
             panic!("Unsupported signing algorithm")
         }
     }
+
+    fn clone_box(&self) -> Box<dyn SigningKey> {
+        let key_pair = EcdsaKeyPair::from_pkcs8(self.signing_algorithm, &self.key_der)
+            .expect("Re-parsing key should not fail");
+        Box::new(EcdsaSigningKey {
+            key_pair,
+            signing_algorithm: self.signing_algorithm,
+            key_der: self.key_der.clone(),
+        })
+    }
 }
 
 /// Key provider implementation.
@@ -68,12 +79,14 @@ impl KeyProvider for AwsLcKeyProvider {
             return Ok(Box::new(EcdsaSigningKey {
                 key_pair,
                 signing_algorithm: &ECDSA_P256_SHA256_ASN1_SIGNING,
+                key_der: key_der.to_vec(),
             }));
         }
         if let Ok(key_pair) = EcdsaKeyPair::from_pkcs8(&ECDSA_P384_SHA384_ASN1_SIGNING, key_der) {
             return Ok(Box::new(EcdsaSigningKey {
                 key_pair,
                 signing_algorithm: &ECDSA_P384_SHA384_ASN1_SIGNING,
+                key_der: key_der.to_vec(),
             }));
         }
 
@@ -124,6 +137,7 @@ impl KeyProvider for AwsLcKeyProvider {
                         return Ok(Box::new(EcdsaSigningKey {
                             key_pair,
                             signing_algorithm: &ECDSA_P256_SHA256_ASN1_SIGNING,
+                            key_der: pkcs8_der.clone(),
                         }));
                     }
                 }
@@ -136,6 +150,7 @@ impl KeyProvider for AwsLcKeyProvider {
                         return Ok(Box::new(EcdsaSigningKey {
                             key_pair,
                             signing_algorithm: &ECDSA_P384_SHA384_ASN1_SIGNING,
+                            key_der: pkcs8_der.clone(),
                         }));
                     }
                 }
