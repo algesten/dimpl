@@ -83,6 +83,13 @@ impl SigningKeyTrait for EcdsaSigningKey {
             EcdsaSigningKey::P384(_) => HashAlgorithm::SHA384,
         }
     }
+
+    fn clone_box(&self) -> Box<dyn SigningKeyTrait> {
+        match self {
+            EcdsaSigningKey::P256(key) => Box::new(EcdsaSigningKey::P256(key.clone())),
+            EcdsaSigningKey::P384(key) => Box::new(EcdsaSigningKey::P384(key.clone())),
+        }
+    }
 }
 
 /// Key provider implementation.

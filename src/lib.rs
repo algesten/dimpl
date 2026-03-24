@@ -199,7 +199,7 @@ pub mod certificate;
 
 pub mod crypto;
 
-pub use crypto::{KeyingMaterial, SrtpProfile};
+pub use crypto::{KeyingMaterial, SigningKey, SrtpProfile};
 
 mod timer;
 
@@ -211,15 +211,99 @@ pub(crate) use rng::SeededRng;
 pub struct DtlsCertificate {
     /// Certificate in DER format.
     pub certificate: Vec<u8>,
-    /// Private key in DER format.
-    pub private_key: Vec<u8>,
+    /// Private key (either PKCS8 DER bytes or a signing key trait object).
+    pub private_key: DtlsCertificatePrivateKey,
+}
+
+/// Private key representation for DTLS certificates.
+///
+/// Supports either PKCS8 DER-encoded private key bytes or a pre-loaded
+/// signing key trait object. The latter is useful for hardware security
+/// modules or keystores where the private key material cannot be exported.
+///
+/// When using `SigningKey`, the Arc wrapper enables drop tracking: when the
+/// last reference is dropped, implementers can clean up native crypto resources
+/// via the SigningKey's Drop implementation.
+///
+/// # Examples
+///
+/// Using PKCS8 DER bytes (the default):
+/// ```ignore
+/// let cert = DtlsCertificate {
+///     certificate: cert_der,
+///     private_key: DtlsCertificatePrivateKey::Pkcs8(key_der),
+/// };
+/// ```
+///
+/// Using a custom signing key (e.g., from a hardware security module):
+/// ```ignore
+/// struct MyHsmSigningKey { /* ... */ }
+///
+/// impl SigningKey for MyHsmSigningKey {
+///     fn sign(&mut self, data: &[u8], out: &mut Buf) -> Result<(), String> {
+///         // Call HSM to sign data
+///         todo!()
+///     }
+///     
+///     fn algorithm(&self) -> SignatureAlgorithm {
+///         SignatureAlgorithm::ECDSA
+///     }
+///     
+///     fn hash_algorithm(&self) -> HashAlgorithm {
+///         HashAlgorithm::SHA256
+///     }
+///     
+///     fn clone_box(&self) -> Box<dyn SigningKey> {
+///         Box::new(MyHsmSigningKey { /* clone fields */ })
+///     }
+/// }
+///
+/// impl Drop for MyHsmSigningKey {
+///     fn drop(&mut self) {
+///         // Clean up HSM resources when the last reference is dropped
+///     }
+/// }
+///
+/// let signing_key = Arc::new(Box::new(MyHsmSigningKey { /* ... */ }) as Box<dyn SigningKey>);
+/// let cert = DtlsCertificate {
+///     certificate: cert_der,
+///     private_key: DtlsCertificatePrivateKey::SigningKey(signing_key),
+/// };
+/// ```
+pub enum DtlsCertificatePrivateKey {
+    /// Private key in PKCS8 DER format.
+    Pkcs8(Vec<u8>),
+    /// Pre-loaded signing key. Wrapped in Arc for cloning and drop tracking.
+    SigningKey(Arc<Box<dyn SigningKey>>),
+}
+
+impl Clone for DtlsCertificatePrivateKey {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Pkcs8(bytes) => Self::Pkcs8(bytes.clone()),
+            Self::SigningKey(key) => Self::SigningKey(Arc::clone(key)),
+        }
+    }
+}
+
+impl fmt::Debug for DtlsCertificatePrivateKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pkcs8(bytes) => write!(f, "Pkcs8({} bytes)", bytes.len()),
+            Self::SigningKey(_) => write!(f, "SigningKey"),
+        }
+    }
 }
 
 impl fmt::Debug for DtlsCertificate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let private_key_desc = match &self.private_key {
+            DtlsCertificatePrivateKey::Pkcs8(bytes) => format!("Pkcs8({})", bytes.len()),
+            DtlsCertificatePrivateKey::SigningKey(_) => "SigningKey".to_string(),
+        };
         f.debug_struct("DtlsCertificate")
             .field("certificate", &self.certificate.len())
-            .field("private_key", &self.private_key.len())
+            .field("private_key", &private_key_desc)
             .finish()
     }
 }
