@@ -488,10 +488,18 @@ impl State {
         })?;
 
         // Select signature/hash for SKE by intersecting client's list
-        // with our key type (prefer SHA256, then SHA384)
+        // with our key type, preferring the key's native hash algorithm
         let selected_signature = select_ske_signature_algorithm(
             server.client_signature_algorithms.as_ref(),
             server.engine.crypto_context().signature_algorithm(),
+            server
+                .engine
+                .crypto_context()
+                .private_key_default_hash_algorithm(),
+            server
+                .engine
+                .crypto_context()
+                .private_key_supported_hash_algorithms(),
         );
 
         debug!(
@@ -1182,12 +1190,21 @@ mod tests {
 fn select_ske_signature_algorithm(
     client_algs: Option<&SignatureAndHashAlgorithmVec>,
     our_sig: SignatureAlgorithm,
+    our_hash: HashAlgorithm,
+    supported_hashes: &[HashAlgorithm],
 ) -> SignatureAndHashAlgorithm {
-    // Our hash preference order
-    let hash_pref = [HashAlgorithm::SHA256, HashAlgorithm::SHA384];
+    // Prefer the key's native hash first, then fall back to the other
+    let hash_pref = match our_hash {
+        HashAlgorithm::SHA384 => [HashAlgorithm::SHA384, HashAlgorithm::SHA256],
+        _ => [HashAlgorithm::SHA256, HashAlgorithm::SHA384],
+    };
 
     if let Some(list) = client_algs {
         for h in hash_pref.iter() {
+            // Only consider hash algorithms the backend can actually sign with
+            if !supported_hashes.contains(h) {
+                continue;
+            }
             if let Some(chosen) = list
                 .iter()
                 .find(|alg| alg.signature == our_sig && alg.hash == *h)
@@ -1197,17 +1214,8 @@ fn select_ske_signature_algorithm(
         }
     }
 
-    // Fallback to our default hash for our key type
-    let hash = engine_default_hash_for_sig(our_sig);
-    SignatureAndHashAlgorithm::new(hash, our_sig)
-}
-
-fn engine_default_hash_for_sig(sig: SignatureAlgorithm) -> HashAlgorithm {
-    match sig {
-        SignatureAlgorithm::RSA => HashAlgorithm::SHA256,
-        SignatureAlgorithm::ECDSA => HashAlgorithm::SHA256,
-        _ => HashAlgorithm::SHA256,
-    }
+    // Fallback: use the key's native hash
+    SignatureAndHashAlgorithm::new(our_hash, our_sig)
 }
 
 fn select_certificate_request_sig_algs(

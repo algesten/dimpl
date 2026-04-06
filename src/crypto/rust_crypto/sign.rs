@@ -32,42 +32,53 @@ impl std::fmt::Debug for EcdsaSigningKey {
 }
 
 impl SigningKeyTrait for EcdsaSigningKey {
-    fn sign(&mut self, data: &[u8], out: &mut Buf) -> Result<(), String> {
+    fn sign(&mut self, data: &[u8], hash_alg: HashAlgorithm, out: &mut Buf) -> Result<(), String> {
+        use ecdsa::signature::hazmat::PrehashSigner;
+        use sha2::Digest;
+
         match self {
             EcdsaSigningKey::P256(key) => {
-                use ecdsa::signature::hazmat::PrehashSigner;
-                use sha2::{Digest, Sha256};
-
-                // Hash the data before signing (PrehashSigner expects a hash digest)
-                let mut hasher = Sha256::new();
-                hasher.update(data);
-                let hash = hasher.finalize();
-
-                let signature: Signature<NistP256> = key
-                    .sign_prehash(&hash)
-                    .map_err(|_| "Signing failed".to_string())?;
-                let sig_der = signature.to_der();
-                let sig_bytes = sig_der.as_bytes();
+                let signature: Signature<NistP256> = match hash_alg {
+                    HashAlgorithm::SHA256 => {
+                        let hash = sha2::Sha256::digest(data);
+                        key.sign_prehash(&hash)
+                    }
+                    HashAlgorithm::SHA384 => {
+                        let hash = sha2::Sha384::digest(data);
+                        key.sign_prehash(&hash)
+                    }
+                    _ => {
+                        return Err(format!(
+                            "P-256 key does not support hash algorithm {:?}",
+                            hash_alg
+                        ));
+                    }
+                }
+                .map_err(|_| "Signing failed".to_string())?;
                 out.clear();
-                out.extend_from_slice(sig_bytes);
+                out.extend_from_slice(signature.to_der().as_bytes());
                 Ok(())
             }
             EcdsaSigningKey::P384(key) => {
-                use ecdsa::signature::hazmat::PrehashSigner;
-                use sha2::{Digest, Sha384};
-
-                // Hash the data before signing (PrehashSigner expects a hash digest)
-                let mut hasher = Sha384::new();
-                hasher.update(data);
-                let hash = hasher.finalize();
-
-                let signature: Signature<NistP384> = key
-                    .sign_prehash(&hash)
-                    .map_err(|_| "Signing failed".to_string())?;
-                let sig_der = signature.to_der();
-                let sig_bytes = sig_der.as_bytes();
+                let signature: Signature<NistP384> = match hash_alg {
+                    HashAlgorithm::SHA256 => {
+                        let hash = sha2::Sha256::digest(data);
+                        key.sign_prehash(&hash)
+                    }
+                    HashAlgorithm::SHA384 => {
+                        let hash = sha2::Sha384::digest(data);
+                        key.sign_prehash(&hash)
+                    }
+                    _ => {
+                        return Err(format!(
+                            "P-384 key does not support hash algorithm {:?}",
+                            hash_alg
+                        ));
+                    }
+                }
+                .map_err(|_| "Signing failed".to_string())?;
                 out.clear();
-                out.extend_from_slice(sig_bytes);
+                out.extend_from_slice(signature.to_der().as_bytes());
                 Ok(())
             }
         }
@@ -82,6 +93,11 @@ impl SigningKeyTrait for EcdsaSigningKey {
             EcdsaSigningKey::P256(_) => HashAlgorithm::SHA256,
             EcdsaSigningKey::P384(_) => HashAlgorithm::SHA384,
         }
+    }
+
+    fn supported_hash_algorithms(&self) -> &[HashAlgorithm] {
+        // PrehashSigner accepts any hash digest, so both work for either curve.
+        &[HashAlgorithm::SHA256, HashAlgorithm::SHA384]
     }
 }
 
