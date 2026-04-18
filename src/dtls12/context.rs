@@ -393,10 +393,10 @@ impl CryptoContext {
     pub fn sign_data(
         &mut self,
         data: &[u8],
-        _hash_alg: HashAlgorithm,
+        hash_alg: HashAlgorithm,
         out: &mut Buf,
     ) -> Result<(), String> {
-        self.private_key.sign(data, out)
+        self.private_key.sign(data, hash_alg, out)
     }
 
     /// Generate verify data for a Finished message using PRF
@@ -511,6 +511,11 @@ impl CryptoContext {
     /// Default hash algorithm for the configured private key
     pub fn private_key_default_hash_algorithm(&self) -> HashAlgorithm {
         self.private_key.hash_algorithm()
+    }
+
+    /// Hash algorithms the configured private key can sign with
+    pub fn private_key_supported_hash_algorithms(&self) -> &[HashAlgorithm] {
+        self.private_key.supported_hash_algorithms()
     }
 
     /// Create a hash context for the given algorithm

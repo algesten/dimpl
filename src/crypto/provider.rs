@@ -201,14 +201,22 @@ pub trait HashContext: CryptoSafe {
 
 /// Signing key for generating digital signatures.
 pub trait SigningKey: CryptoSafe {
-    /// Sign data and return the signature.
-    fn sign(&mut self, data: &[u8], out: &mut Buf) -> Result<(), String>;
+    /// Sign data using the specified hash algorithm and return the signature.
+    fn sign(&mut self, data: &[u8], hash_alg: HashAlgorithm, out: &mut Buf) -> Result<(), String>;
 
     /// Signature algorithm used by this key.
     fn algorithm(&self) -> SignatureAlgorithm;
 
     /// Default hash algorithm for this key.
     fn hash_algorithm(&self) -> HashAlgorithm;
+
+    /// Hash algorithms this key can sign with.
+    ///
+    /// Used during negotiation to intersect with the peer's offered
+    /// algorithms. Backends that lock the hash at key-load time (e.g.
+    /// aws-lc-rs) return only the locked hash; backends that support
+    /// arbitrary prehash signing (e.g. RustCrypto) may return several.
+    fn supported_hash_algorithms(&self) -> &[HashAlgorithm];
 }
 
 /// Active key exchange instance (ephemeral keypair for one handshake).

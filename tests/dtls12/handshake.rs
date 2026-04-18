@@ -793,3 +793,80 @@ fn dtls12_handshake_timeout_expires() {
         "Client handshake should eventually time out when no packets are delivered"
     );
 }
+
+#[test]
+fn dtls12_handshake_p384_certificate() {
+    //! DTLS 1.2 handshake where both sides use P-384 ECDSA certificates.
+    //! Regression test: the server's ServerKeyExchange must sign with the
+    //! same hash algorithm it advertises on the wire (SHA-384 for P-384).
+
+    use crate::ossl_helper::{DtlsCertOptions, DtlsPKeyType, OsslDtlsCert};
+
+    let client_cert = OsslDtlsCert::new(DtlsCertOptions {
+        common_name: "WebRTC".into(),
+        pkey_type: DtlsPKeyType::EcDsaP384,
+    });
+    let server_cert = OsslDtlsCert::new(DtlsCertOptions {
+        common_name: "WebRTC".into(),
+        pkey_type: DtlsPKeyType::EcDsaP384,
+    });
+
+    let config = dtls12_config();
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(
+        Arc::clone(&config),
+        dimpl::DtlsCertificate {
+            certificate: client_cert.x509.to_der().expect("client cert der"),
+            private_key: client_cert
+                .pkey
+                .private_key_to_der()
+                .expect("client key der"),
+        },
+        now,
+    );
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(
+        config,
+        dimpl::DtlsCertificate {
+            certificate: server_cert.x509.to_der().expect("server cert der"),
+            private_key: server_cert
+                .pkey
+                .private_key_to_der()
+                .expect("server key der"),
+        },
+        now,
+    );
+    server.set_active(false);
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        if client_out.connected {
+            client_connected = true;
+        }
+        if server_out.connected {
+            server_connected = true;
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert!(client_connected, "Client should connect with P-384 cert");
+    assert!(server_connected, "Server should connect with P-384 cert");
+}

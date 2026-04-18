@@ -30,6 +30,8 @@ pub enum DtlsPKeyType {
     /// Generate an EC-DSA key pair using the NIST P-256 curve
     #[default]
     EcDsaP256,
+    /// Generate an EC-DSA key pair using the NIST P-384 curve
+    EcDsaP384,
 }
 
 /// Controls certificate generation options.
@@ -69,6 +71,12 @@ impl OsslDtlsCert {
             }
             DtlsPKeyType::EcDsaP256 => {
                 let nid = Nid::X9_62_PRIME256V1; // NIST P-256 curve
+                let group = EcGroup::from_curve_name(nid)?;
+                let key = EcKey::generate(&group)?;
+                PKey::from_ec_key(key)?
+            }
+            DtlsPKeyType::EcDsaP384 => {
+                let nid = Nid::SECP384R1;
                 let group = EcGroup::from_curve_name(nid)?;
                 let key = EcKey::generate(&group)?;
                 PKey::from_ec_key(key)?

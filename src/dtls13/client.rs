@@ -1284,7 +1284,7 @@ pub(crate) fn handshake_create_certificate_verify(
     let mut signature = Buf::new();
     engine
         .signing_key()
-        .sign(&signed_content, &mut signature)
+        .sign(&signed_content, hash_alg, &mut signature)
         .map_err(|e| Error::CryptoError(format!("Failed to sign CertificateVerify: {}", e)))?;
 
     // Determine the SignatureScheme from hash_alg + sig_alg

@@ -31,7 +31,14 @@ impl std::fmt::Debug for EcdsaSigningKey {
 }
 
 impl SigningKey for EcdsaSigningKey {
-    fn sign(&mut self, data: &[u8], buf: &mut Buf) -> Result<(), String> {
+    fn sign(&mut self, data: &[u8], hash_alg: HashAlgorithm, buf: &mut Buf) -> Result<(), String> {
+        let key_hash = self.hash_algorithm();
+        if hash_alg != key_hash {
+            return Err(format!(
+                "aws-lc-rs ECDSA key is locked to {:?} but {:?} was requested",
+                key_hash, hash_alg
+            ));
+        }
         let rng = aws_lc_rs::rand::SystemRandom::new();
         let signature = self
             .key_pair
@@ -51,6 +58,17 @@ impl SigningKey for EcdsaSigningKey {
             HashAlgorithm::SHA256
         } else if self.signing_algorithm == &ECDSA_P384_SHA384_ASN1_SIGNING {
             HashAlgorithm::SHA384
+        } else {
+            panic!("Unsupported signing algorithm")
+        }
+    }
+
+    fn supported_hash_algorithms(&self) -> &[HashAlgorithm] {
+        // aws-lc-rs locks the hash at key-load time; only one is supported.
+        if self.signing_algorithm == &ECDSA_P256_SHA256_ASN1_SIGNING {
+            &[HashAlgorithm::SHA256]
+        } else if self.signing_algorithm == &ECDSA_P384_SHA384_ASN1_SIGNING {
+            &[HashAlgorithm::SHA384]
         } else {
             panic!("Unsupported signing algorithm")
         }
