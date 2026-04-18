@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Fix DTLS 1.2 signature hash mismatch for P-384 keys #97
+
 # 0.5.0
 
   * Remove PrfProvider/HkdfProvider, derive from HmacProvider (breaking) #94
