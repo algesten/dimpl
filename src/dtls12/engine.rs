@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use super::queue::{QueueRx, QueueTx};
 use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::{Aad, Iv, Nonce};
-use crate::dtls12::context::CryptoContext;
+use crate::dtls12::context::{AuthMode, CryptoContext};
 use crate::dtls12::incoming::{Incoming, Record, RecordDecrypt};
 use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
@@ -105,17 +105,13 @@ struct Entry {
 }
 
 impl Engine {
-    pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate) -> Self {
+    pub fn new(config: Arc<Config>, auth: AuthMode) -> Self {
         let mut rng = SeededRng::new(config.rng_seed());
 
         let flight_backoff =
             ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries(), &mut rng);
 
-        let crypto_context = CryptoContext::new(
-            certificate.certificate,
-            certificate.private_key,
-            Arc::clone(&config),
-        );
+        let crypto_context = CryptoContext::new(auth, Arc::clone(&config));
 
         Self {
             config,

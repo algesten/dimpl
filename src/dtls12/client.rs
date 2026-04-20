@@ -21,12 +21,17 @@ use subtle::ConstantTimeEq;
 use crate::buffer::{Buf, ToBuf};
 use crate::crypto::SrtpProfile;
 use crate::dtls12::Server;
+use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
-use crate::dtls12::message::{Body, CipherSuiteVec, ClientHello, ClientKeyExchange};
-use crate::dtls12::message::{CompressionMethod, ContentType, Cookie, Dtls12CipherSuite};
+use crate::dtls12::message::{
+    Body, CipherSuiteVec, ClientHello, ClientKeyExchange, ClientPskKeys, ServerKeyExchangeParams,
+};
+use crate::dtls12::message::{
+    CompressionMethod, ContentType, Cookie, DigitallySigned, Dtls12CipherSuite,
+};
 use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
-use crate::{Error, KeyingMaterial, Output};
+use crate::{Config, DtlsCertificate, Error, KeyingMaterial, Output};
 
 /// DTLS client
 pub struct Client {
@@ -121,11 +126,20 @@ impl Client {
     pub(crate) fn new_from_hybrid(
         random: Random,
         handshake_fragment: &[u8],
-        config: std::sync::Arc<crate::Config>,
-        certificate: crate::DtlsCertificate,
+        config: std::sync::Arc<Config>,
+        certificate: DtlsCertificate,
         now: Instant,
     ) -> Result<Client, Error> {
-        let mut engine = Engine::new(config, certificate);
+        let private_key = config
+            .crypto_provider()
+            .key_provider
+            .load_private_key(&certificate.private_key)
+            .expect("Failed to parse client private key");
+        let auth = AuthMode::Certificate {
+            certificate: certificate.certificate,
+            private_key,
+        };
+        let mut engine = Engine::new(config, auth);
         engine.set_client(true);
         // The hybrid ClientHello was sent with message_seq=0 outside this
         // engine. Advance the counter so the with-cookie CH gets message_seq=1
@@ -489,7 +503,12 @@ impl State {
         }
         trace!("Extended Master Secret enabled");
 
-        Ok(Self::AwaitCertificate)
+        // PSK suites skip Certificate; go directly to ServerKeyExchange
+        if cs.is_psk() {
+            Ok(Self::AwaitServerKeyExchange)
+        } else {
+            Ok(Self::AwaitCertificate)
+        }
     }
 
     fn await_certificate(self, client: &mut Client) -> Result<Self, Error> {
@@ -537,6 +556,64 @@ impl State {
     }
 
     fn await_server_key_exchange(self, client: &mut Client) -> Result<Self, Error> {
+        let cipher_suite = client
+            .engine
+            .cipher_suite()
+            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+
+        if cipher_suite.is_psk() {
+            self.await_server_key_exchange_psk(client)
+        } else {
+            self.await_server_key_exchange_ecdhe(client)
+        }
+    }
+
+    /// PSK ServerKeyExchange carries only an optional identity hint (no signature).
+    /// Per RFC 4279 §2, ServerKeyExchange is omitted when the server has no hint.
+    fn await_server_key_exchange_psk(self, client: &mut Client) -> Result<Self, Error> {
+        // If the server skipped ServerKeyExchange (no hint), go straight to ServerHelloDone
+        let has_done = client
+            .engine
+            .has_complete_handshake(MessageType::ServerHelloDone);
+        if has_done {
+            return Ok(Self::AwaitServerHelloDone);
+        }
+
+        let maybe = client.engine.next_handshake(
+            MessageType::ServerKeyExchange,
+            &mut client.defragment_buffer,
+        )?;
+
+        let Some(handshake) = maybe else {
+            return Ok(self);
+        };
+
+        let Body::ServerKeyExchange(ske) = &handshake.body else {
+            unreachable!()
+        };
+
+        // PSK ServerKeyExchange contains only an identity hint per RFC 4279 §2
+        // (no curve_type or named_group — those are ECDHE-only parameters).
+        let hint_range = match &ske.params {
+            ServerKeyExchangeParams::Psk(psk) => psk.hint_range.clone(),
+            _ => {
+                return Err(Error::UnexpectedMessage(
+                    "ECDHE ServerKeyExchange in PSK path".to_string(),
+                ));
+            }
+        };
+
+        drop(handshake);
+
+        let hint = &client.defragment_buffer[hint_range];
+        trace!("PSK identity hint ({} bytes)", hint.len());
+        // Hint is informational only; we don't use it for PSK lookup currently
+
+        // PSK has no CertificateRequest
+        Ok(Self::AwaitServerHelloDone)
+    }
+
+    fn await_server_key_exchange_ecdhe(self, client: &mut Client) -> Result<Self, Error> {
         let maybe = client.engine.next_handshake(
             MessageType::ServerKeyExchange,
             &mut client.defragment_buffer,
@@ -566,11 +643,16 @@ impl State {
 
             // Extract ECDH params ranges
             let (curve_type, named_group, public_key_range) = match &server_key_exchange.params {
-                crate::dtls12::message::ServerKeyExchangeParams::Ecdh(ecdh) => (
+                ServerKeyExchangeParams::Ecdh(ecdh) => (
                     ecdh.curve_type,
                     ecdh.named_group,
                     ecdh.public_key_range.clone(),
                 ),
+                ServerKeyExchangeParams::Psk(_) => {
+                    return Err(Error::UnexpectedMessage(
+                        "PSK ServerKeyExchange in ECDHE path".to_string(),
+                    ));
+                }
             };
 
             (
@@ -617,19 +699,20 @@ impl State {
         }
 
         // Ensure the signature algorithm is compatible with the cipher suite
-        if signature_algorithm.signature != cipher_suite.signature_algorithm() {
-            return Err(Error::CryptoError(format!(
-                "Signature algorithm mismatch: {:?} != {:?}",
-                signature_algorithm.signature,
-                cipher_suite.signature_algorithm()
-            )));
+        if let Some(expected_sig) = cipher_suite.signature_algorithm() {
+            if signature_algorithm.signature != expected_sig {
+                return Err(Error::CryptoError(format!(
+                    "Signature algorithm mismatch: {:?} != {:?}",
+                    signature_algorithm.signature, expected_sig
+                )));
+            }
         }
 
         // unwrap: is ok because we verify the order of the flight
         let cert_der = client.server_certificates.first().unwrap();
 
         // Create a temporary DigitallySigned for verification (we only need the algorithm)
-        let temp_signed = crate::dtls12::message::DigitallySigned {
+        let temp_signed = DigitallySigned {
             algorithm: signature_algorithm,
             signature_range: 0..signature_bytes.len(),
         };
@@ -690,10 +773,12 @@ impl State {
 
         // Check that the hash algorithm that is default fo the PrivateKey in use
         // is one of the supported by the CertificateRequest
+        // unwrap: CertificateRequest only received for certificate-based suites
         let hash_algorithm = client
             .engine
             .crypto_context()
-            .private_key_default_hash_algorithm();
+            .private_key_default_hash_algorithm()
+            .unwrap();
 
         if !cr.supports_hash_algorithm(hash_algorithm) {
             return Err(Error::CertificateError(format!(
@@ -728,6 +813,16 @@ impl State {
         };
 
         trace!("Received ServerHelloDone");
+
+        let cipher_suite = client
+            .engine
+            .cipher_suite()
+            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+
+        if cipher_suite.is_psk() {
+            // PSK: no certificates involved
+            return Ok(Self::SendClientKeyExchange);
+        }
 
         // Validate the server certificate
         if client.server_certificates.is_empty() {
@@ -1130,24 +1225,11 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
 
     debug!("Using key exchange algorithm: {:?}", key_exchange_algorithm);
 
-    // For ECDHE, get group info before we create the handshake (to avoid borrow issues)
-    let group_info = if key_exchange_algorithm == KeyExchangeAlgorithm::EECDH {
-        engine.crypto_context().get_key_exchange_group_info()
-    } else {
-        None
-    };
-
-    // Generate key exchange data
-    let public_key = engine
-        .crypto_context_mut()
-        .maybe_init_key_exchange()
-        .map_err(|e| Error::CryptoError(format!("Failed to generate key exchange: {}", e)))?;
-
-    trace!("Generated public key size: {} bytes", public_key.len());
-
-    // Validate key exchange algorithm
     match key_exchange_algorithm {
         KeyExchangeAlgorithm::EECDH => {
+            // Get group info before the mutable borrow
+            let group_info = engine.crypto_context().get_key_exchange_group_info();
+
             // For ECDHE, use the group information we retrieved earlier
             let Some((curve_type, named_group)) = group_info else {
                 unreachable!("No group info available for ECDHE");
@@ -1157,6 +1239,40 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
                 "Using ECDHE group info: {:?}, {:?}",
                 curve_type, named_group
             );
+
+            let public_key = engine
+                .crypto_context_mut()
+                .maybe_init_key_exchange()
+                .map_err(|e| {
+                    Error::CryptoError(format!("Failed to generate key exchange: {}", e))
+                })?;
+
+            trace!("Generated public key size: {} bytes", public_key.len());
+            ClientKeyExchange::serialize_from_bytes(public_key, body);
+        }
+        KeyExchangeAlgorithm::PSK => {
+            let identity = engine
+                .config()
+                .psk_identity()
+                .ok_or_else(|| Error::PskError("No PSK identity configured".to_string()))?
+                .to_vec();
+
+            // Resolve the PSK via the configured resolver
+            let psk = engine
+                .config()
+                .psk_resolver()
+                .ok_or_else(|| Error::PskError("No PSK resolver configured".to_string()))?
+                .resolve(&identity)
+                .ok_or_else(|| Error::PskError("PSK resolver returned no key".to_string()))?;
+
+            // Set the PSK and compute pre-master secret
+            let crypto = engine.crypto_context_mut();
+            crypto.set_psk(psk);
+            crypto
+                .compute_psk_pre_master_secret()
+                .map_err(|e| Error::CryptoError(format!("Failed to compute PSK PMS: {}", e)))?;
+
+            ClientPskKeys::serialize_from_bytes(&identity, body);
         }
         _ => {
             return Err(Error::SecurityError(
@@ -1164,9 +1280,6 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
             ));
         }
     }
-
-    // Serialize the public key directly
-    ClientKeyExchange::serialize_from_bytes(public_key, body);
 
     Ok(())
 }
@@ -1177,11 +1290,16 @@ fn handshake_create_certificate_verify(body: &mut Buf, engine: &mut Engine) -> R
     // if we negotiate ECDHE_ECDSA_AES256_GCM_SHA384, we are gogin to use
     // SHA384 for the signature of the main crypto, but not for CertificateVerify
     // where a private key using P256 curve means we use SHA256.
-    let hash_alg = engine.crypto_context().private_key_default_hash_algorithm();
+    // unwrap: CertificateVerify only sent for certificate-based suites
+    let hash_alg = engine
+        .crypto_context()
+        .private_key_default_hash_algorithm()
+        .unwrap();
     debug!("Using hash algorithm for signature: {:?}", hash_alg);
 
     // Get the signature algorithm type
-    let sig_alg = engine.crypto_context().signature_algorithm();
+    // unwrap: CertificateVerify only sent for certificate-based suites
+    let sig_alg = engine.crypto_context().signature_algorithm().unwrap();
     debug!("Using signature algorithm: {:?}", sig_alg);
 
     // Create the signature algorithm

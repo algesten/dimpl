@@ -22,8 +22,9 @@ verification and SRTP key export yourself.
 
 ### Version selection
 
-Three constructors control which DTLS version is used:
-- [`Dtls::new_12`][new_12] — explicit DTLS 1.2
+Four constructors control which DTLS version is used:
+- [`Dtls::new_12`][new_12] — explicit DTLS 1.2 (certificate‑based)
+- [`Dtls::new_12_psk`][new_12_psk] — explicit DTLS 1.2 (PSK, no certificates)
 - [`Dtls::new_13`][new_13] — explicit DTLS 1.3
 - [`Dtls::new_auto`][new_auto] — auto‑sense: the first
   incoming ClientHello determines the version (based on the
@@ -34,6 +35,8 @@ Three constructors control which DTLS version is used:
   - `ECDHE_ECDSA_AES256_GCM_SHA384`
   - `ECDHE_ECDSA_AES128_GCM_SHA256`
   - `ECDHE_ECDSA_CHACHA20_POLY1305_SHA256`
+- **PSK cipher suites (TLS 1.2 over DTLS)**
+  - `PSK_AES128_CCM_8`
 - **Cipher suites (TLS 1.3 over DTLS)**
   - `TLS_AES_128_GCM_SHA256`
   - `TLS_AES_256_GCM_SHA384`
@@ -44,7 +47,6 @@ Three constructors control which DTLS version is used:
 - **DTLS‑SRTP**: Exports keying material for `SRTP_AEAD_AES_256_GCM`,
   `SRTP_AEAD_AES_128_GCM`, and `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
 - **Extended Master Secret** ([RFC 7627]) is negotiated and enforced (DTLS 1.2).
-- Not supported: PSK cipher suites.
 
 ### Certificate model
 During the handshake the engine emits
@@ -131,6 +133,37 @@ let dtls = mk_dtls_client();
 let _ = example_event_loop(dtls);
 ```
 
+## Example (PSK client)
+
+```rust
+use std::sync::Arc;
+use std::time::Instant;
+
+use dimpl::{Config, Dtls, PskResolver};
+
+struct MyPsk;
+
+impl PskResolver for MyPsk {
+    fn resolve(&self, identity: &[u8]) -> Option<Vec<u8>> {
+        if identity == b"device-01" {
+            Some(b"shared-secret-key".to_vec())
+        } else {
+            None
+        }
+    }
+}
+
+let config = Arc::new(
+    Config::builder()
+        .with_psk_client(b"device-01".to_vec(), Arc::new(MyPsk))
+        .build()
+        .unwrap(),
+);
+
+let mut dtls = Dtls::new_12_psk(config, Instant::now());
+dtls.set_active(true); // client role
+```
+
 #### MSRV
 Rust 1.85.0
 
@@ -139,6 +172,7 @@ Rust 1.85.0
 - Renegotiation is not implemented (WebRTC does full restart).
 
 [new_12]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_12
+[new_12_psk]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_12_psk
 [new_13]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_13
 [new_auto]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.new_auto
 [peer_cert]: https://docs.rs/dimpl/latest/dimpl/enum.Output.html#variant.PeerCert

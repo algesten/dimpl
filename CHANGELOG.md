@@ -1,5 +1,10 @@
 # Unreleased
 
+  * Add PSK (Pre-Shared Key) cipher suite for DTLS 1.2 (RFC 4279, RFC 7925)
+    * `PSK_AES128_CCM_8` (0xC0A8)
+  * Add `Dtls::new_12_psk()` constructor for PSK-only sessions
+  * Add `PskResolver` trait and PSK config builder methods
+  * Fix client to handle optional ServerKeyExchange in PSK handshakes (RFC 4279 §2)
   * Fix DTLS 1.2 signature hash mismatch for P-384 keys #97
 
 # 0.5.0

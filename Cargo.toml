@@ -7,7 +7,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/algesten/dimpl"
 readme = "README.md"
-keywords = ["dtls", "tls", "webrtc"]
+keywords = ["dtls", "tls", "webrtc", "psk"]
 categories = ["network-programming", "cryptography", "security"]
 
 # MSRV
@@ -17,13 +17,14 @@ rust-version = "1.85.0"
 default = ["aws-lc-rs", "rcgen"]
 
 # Default crypto provider
-aws-lc-rs = ["dep:aws-lc-rs", "_crypto-common"]
+aws-lc-rs = ["dep:aws-lc-rs", "dep:ccm", "dep:aes", "_crypto-common"]
 
 # Pure Rust crypto provider
 rust-crypto = [
             "dep:aes-gcm", "dep:chacha20poly1305", "dep:chacha20", "dep:p256",
             "dep:p384", "dep:x25519-dalek", "dep:sha2", "dep:hmac", "dep:hkdf",
             "dep:ecdsa", "dep:generic-array", "dep:rand_core",
+            "dep:ccm", "dep:aes",
             "_crypto-common"
 ]
 
@@ -68,6 +69,8 @@ generic-array = { version = "0.14", optional = true }
 rand_core = { version = "0.6", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 chacha20 = { version = "0.9", optional = true }
+ccm = { version = "0.5", default-features = false, optional = true }
+aes = { version = "0.8", optional = true }
 x25519-dalek = { version = "2", optional = true, features = ["static_secrets"] }
 
 # certificate generation
