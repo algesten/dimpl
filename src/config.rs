@@ -24,10 +24,15 @@ pub trait PskResolver: Send + Sync + UnwindSafe + RefUnwindSafe {
 ///
 /// Use [`Psk::Client`] for endpoints that initiate PSK handshakes (send identity),
 /// and [`Psk::Server`] for endpoints that resolve incoming identities.
+///
+/// `#[non_exhaustive]` so new variants (e.g. DTLS 1.3 external PSKs) or new
+/// fields can be added without a major version bump.
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum Psk {
     /// Client-side PSK: sends `identity` during handshake, uses `resolver`
     /// to look up the shared secret.
+    #[non_exhaustive]
     Client {
         /// The identity to send to the server.
         identity: Vec<u8>,
@@ -36,6 +41,7 @@ pub enum Psk {
     },
     /// Server-side PSK: optionally sends a `hint` to help the client choose
     /// an identity, uses `resolver` to look up secrets by client identity.
+    #[non_exhaustive]
     Server {
         /// Optional hint sent to the client in ServerKeyExchange.
         hint: Option<Vec<u8>>,

@@ -130,6 +130,10 @@ impl Client {
         certificate: DtlsCertificate,
         now: Instant,
     ) -> Result<Client, Error> {
+        // unwrap: malformed private_key bytes are a programmer error from the
+        // caller who constructed DtlsCertificate; panic matches the prior
+        // CryptoContext::new behavior which also panicked on empty/invalid
+        // key material.
         let private_key = config
             .crypto_provider()
             .key_provider

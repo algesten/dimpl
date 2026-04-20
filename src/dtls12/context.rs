@@ -165,7 +165,7 @@ impl CryptoContext {
         // Total: 2 + N + 2 + N = 2N + 4
         let mut pms = Buf::new();
         pms.extend_from_slice(&(n as u16).to_be_bytes());
-        pms.extend_from_slice(&vec![0u8; n]);
+        pms.resize(pms.len() + n, 0);
         pms.extend_from_slice(&(n as u16).to_be_bytes());
         pms.extend_from_slice(psk);
         self.pre_master_secret = Some(pms);
@@ -391,9 +391,13 @@ impl CryptoContext {
     }
 
     /// Get client certificate for authentication.
-    /// Panics if no certificate is configured (PSK-only mode).
+    ///
+    /// Invariant: callers must only invoke this for certificate-based suites.
+    /// PSK handshakes never send a Certificate message (RFC 4279), and the
+    /// state machine routes around this path via `cs.is_psk()` checks before
+    /// reaching Certificate serialization. Violating the invariant is a
+    /// programmer bug and panics.
     pub fn get_client_certificate(&self) -> Certificate {
-        // unwrap: only called for certificate-based suites
         let AuthMode::Certificate { certificate, .. } = &self.auth else {
             panic!("get_client_certificate called in PSK mode");
         };
@@ -404,7 +408,8 @@ impl CryptoContext {
     }
 
     /// Serialize client certificate for authentication.
-    /// Panics if no certificate is configured (PSK-only mode).
+    ///
+    /// Same invariant as [`Self::get_client_certificate`]: cert-mode only.
     pub fn serialize_client_certificate(&self, output: &mut Buf) {
         let cert = self.get_client_certificate();
         let AuthMode::Certificate { certificate, .. } = &self.auth else {

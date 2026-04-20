@@ -125,6 +125,10 @@ enum State {
 impl Server {
     /// Create a new DTLS server
     pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate, now: Instant) -> Server {
+        // unwrap: malformed private_key bytes are a programmer error from the
+        // caller who constructed DtlsCertificate; panic matches the prior
+        // CryptoContext::new behavior which also panicked on empty/invalid
+        // key material.
         let private_key = config
             .crypto_provider()
             .key_provider
