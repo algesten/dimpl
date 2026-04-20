@@ -971,15 +971,14 @@ impl State {
         }
 
         // Defense-in-depth for PSK: the random dummy key should already make
-        // the MAC above fail when the identity was unknown, but we additionally
-        // require psk_valid == Some(true) for PSK suites. Fails closed if the
-        // PSK branch somehow reached this point without setting the flag.
-        let is_psk = server
-            .engine
-            .cipher_suite()
-            .map(|cs| cs.is_psk())
-            .unwrap_or(false);
-        if is_psk && server.psk_valid != Some(true) {
+        // the MAC above fail when the identity was unknown. We additionally
+        // reject `Some(false)` explicitly so a future refactor that lets the
+        // dummy path survive the MAC check still fails closed here.
+        //
+        // `None` is legitimate for abbreviated (resumption) handshakes, which
+        // skip ClientKeyExchange and therefore never set psk_valid — those
+        // paths reuse a cached master_secret and don't consult the resolver.
+        if server.psk_valid == Some(false) {
             return Err(Error::SecurityError(
                 "Client Finished verification failed".to_string(),
             ));
