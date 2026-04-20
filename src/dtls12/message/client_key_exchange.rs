@@ -163,4 +163,50 @@ mod test {
         parsed.serialize(ECDH_MESSAGE, &mut serialized);
         assert_eq!(&*serialized, ECDH_MESSAGE);
     }
+
+    #[test]
+    fn psk_roundtrip() {
+        const PSK_MESSAGE: &[u8] = &[
+            0x00, 0x05, // identity length = 5
+            b'h', b'e', b'l', b'l', b'o',
+        ];
+        let (rest, parsed) =
+            ClientKeyExchange::parse(PSK_MESSAGE, 0, KeyExchangeAlgorithm::PSK).unwrap();
+        assert!(rest.is_empty());
+
+        let ExchangeKeys::Psk(psk) = &parsed.exchange_keys else {
+            panic!("expected Psk variant");
+        };
+        assert_eq!(&PSK_MESSAGE[psk.identity_range.clone()], b"hello");
+
+        let mut serialized = Buf::new();
+        parsed.serialize(PSK_MESSAGE, &mut serialized);
+        assert_eq!(&*serialized, PSK_MESSAGE);
+    }
+
+    #[test]
+    fn psk_rejects_oversized_length() {
+        // identity_length=0x0064 (100) but only 3 bytes follow — parser must fail
+        let bad: &[u8] = &[0x00, 0x64, b'a', b'b', b'c'];
+        let result = ClientKeyExchange::parse(bad, 0, KeyExchangeAlgorithm::PSK);
+        assert!(
+            result.is_err(),
+            "parser must reject PSK identity shorter than advertised length"
+        );
+    }
+
+    #[test]
+    fn psk_empty_identity() {
+        // identity_length=0 is wire-legal; parser should accept an empty range.
+        // (RFC 4279 §5.1 says server MAY reject this — that's an application
+        // policy decision, not a parse error.)
+        let empty: &[u8] = &[0x00, 0x00];
+        let (rest, parsed) =
+            ClientKeyExchange::parse(empty, 0, KeyExchangeAlgorithm::PSK).unwrap();
+        assert!(rest.is_empty());
+        let ExchangeKeys::Psk(psk) = &parsed.exchange_keys else {
+            panic!("expected Psk variant");
+        };
+        assert!(psk.identity_range.is_empty());
+    }
 }

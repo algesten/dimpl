@@ -199,4 +199,50 @@ mod test {
         parsed.serialize(&expected, &mut serialized, true);
         assert_eq!(&*serialized, &*expected);
     }
+
+    #[test]
+    fn psk_roundtrip() {
+        // PSK ServerKeyExchange: just hint_length + hint
+        const PSK_MESSAGE: &[u8] = &[
+            0x00, 0x04, // hint length = 4
+            b'h', b'i', b'n', b't',
+        ];
+        let (rest, parsed) =
+            ServerKeyExchange::parse(PSK_MESSAGE, 0, KeyExchangeAlgorithm::PSK).unwrap();
+        assert!(rest.is_empty());
+
+        let ServerKeyExchangeParams::Psk(psk) = &parsed.params else {
+            panic!("expected Psk variant");
+        };
+        assert_eq!(&PSK_MESSAGE[psk.hint_range.clone()], b"hint");
+        assert!(parsed.signature().is_none(), "PSK SKE must have no signature");
+
+        let mut serialized = Buf::new();
+        parsed.serialize(PSK_MESSAGE, &mut serialized, true);
+        assert_eq!(&*serialized, PSK_MESSAGE);
+    }
+
+    #[test]
+    fn psk_rejects_oversized_hint_length() {
+        // hint_length=0x00FF (255) but only 2 bytes follow — parser must fail
+        let bad: &[u8] = &[0x00, 0xFF, b'a', b'b'];
+        let result = ServerKeyExchange::parse(bad, 0, KeyExchangeAlgorithm::PSK);
+        assert!(
+            result.is_err(),
+            "parser must reject PSK hint shorter than advertised length"
+        );
+    }
+
+    #[test]
+    fn psk_empty_hint() {
+        // Zero-length hint is wire-legal (RFC 4279 §2).
+        let empty: &[u8] = &[0x00, 0x00];
+        let (rest, parsed) =
+            ServerKeyExchange::parse(empty, 0, KeyExchangeAlgorithm::PSK).unwrap();
+        assert!(rest.is_empty());
+        let ServerKeyExchangeParams::Psk(psk) = &parsed.params else {
+            panic!("expected Psk variant");
+        };
+        assert!(psk.hint_range.is_empty());
+    }
 }
