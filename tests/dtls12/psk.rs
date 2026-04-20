@@ -219,7 +219,7 @@ fn psk_invalid_identity_fails_at_finished() {
     for _ in 0..60 {
         if let Err(e) = client.handle_timeout(Instant::now()) {
             assert!(
-                matches!(e, Error::SecurityError(_)),
+                matches!(e, Error::SecurityError(_) | Error::CryptoError(_)),
                 "unexpected error: {e:?}"
             );
             error_found = true;
@@ -229,7 +229,7 @@ fn psk_invalid_identity_fails_at_finished() {
         for p in &co.packets {
             if let Err(e) = server.handle_packet(p) {
                 assert!(
-                    matches!(e, Error::SecurityError(_)),
+                    matches!(e, Error::SecurityError(_) | Error::CryptoError(_)),
                     "unexpected error: {e:?}"
                 );
                 error_found = true;
@@ -246,7 +246,7 @@ fn psk_invalid_identity_fails_at_finished() {
 
         if let Err(e) = server.handle_timeout(Instant::now()) {
             assert!(
-                matches!(e, Error::SecurityError(_)),
+                matches!(e, Error::SecurityError(_) | Error::CryptoError(_)),
                 "unexpected error: {e:?}"
             );
             error_found = true;
@@ -256,7 +256,7 @@ fn psk_invalid_identity_fails_at_finished() {
         for p in &so.packets {
             if let Err(e) = client.handle_packet(p) {
                 assert!(
-                    matches!(e, Error::SecurityError(_)),
+                    matches!(e, Error::SecurityError(_) | Error::CryptoError(_)),
                     "unexpected error: {e:?}"
                 );
                 error_found = true;
@@ -275,6 +275,103 @@ fn psk_invalid_identity_fails_at_finished() {
     assert!(
         error_found,
         "Expected SecurityError from PSK verification failure"
+    );
+}
+
+#[test]
+fn psk_mismatched_keys_fail_at_finished_via_mac() {
+    // Both resolvers return Some, so server.psk_valid stays Some(true) and
+    // the defense-in-depth flag check is bypassed — any failure here must
+    // come from the Finished MAC mismatch itself. Exercises the primary
+    // cryptographic guarantee independently of the flag.
+    let _ = env_logger::try_init();
+
+    struct ZeroKey;
+    impl PskResolver for ZeroKey {
+        fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+            Some(vec![0u8; 32])
+        }
+    }
+    struct OneKey;
+    impl PskResolver for OneKey {
+        fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+            Some(vec![0xAA; 32])
+        }
+    }
+
+    let server_config = dimpl::Config::builder()
+        .with_psk_server(None, Arc::new(ZeroKey))
+        .build()
+        .expect("server config should build");
+    let mut server = Dtls::new_12_psk(Arc::new(server_config), Instant::now());
+
+    let client_config = dimpl::Config::builder()
+        .with_psk_client(b"test_identity".to_vec(), Arc::new(OneKey))
+        .build()
+        .expect("client config should build");
+    let mut client = Dtls::new_12_psk(Arc::new(client_config), Instant::now());
+    client.set_active(true);
+
+    let mut error_found = false;
+    for _ in 0..60 {
+        if let Err(e) = client.handle_timeout(Instant::now()) {
+            assert!(
+                matches!(e, Error::SecurityError(_) | Error::CryptoError(_)),
+                "unexpected error: {e:?}"
+            );
+            error_found = true;
+            break;
+        }
+        let co = drain_outputs(&mut client);
+        for p in &co.packets {
+            if let Err(e) = server.handle_packet(p) {
+                assert!(
+                    matches!(e, Error::SecurityError(_) | Error::CryptoError(_)),
+                    "unexpected error: {e:?}"
+                );
+                error_found = true;
+                break;
+            }
+        }
+        if error_found {
+            break;
+        }
+        assert!(
+            !co.connected,
+            "client should not connect with mismatched PSK keys"
+        );
+
+        if let Err(e) = server.handle_timeout(Instant::now()) {
+            assert!(
+                matches!(e, Error::SecurityError(_) | Error::CryptoError(_)),
+                "unexpected error: {e:?}"
+            );
+            error_found = true;
+            break;
+        }
+        let so = drain_outputs(&mut server);
+        for p in &so.packets {
+            if let Err(e) = client.handle_packet(p) {
+                assert!(
+                    matches!(e, Error::SecurityError(_) | Error::CryptoError(_)),
+                    "unexpected error: {e:?}"
+                );
+                error_found = true;
+                break;
+            }
+        }
+        if error_found {
+            break;
+        }
+        assert!(
+            !so.connected,
+            "server should not connect with mismatched PSK keys"
+        );
+    }
+
+    assert!(
+        error_found,
+        "Expected SecurityError from Finished MAC mismatch"
     );
 }
 

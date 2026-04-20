@@ -37,6 +37,12 @@ use crate::dtls12::message::{SignatureAndHashAlgorithmVec, SrtpProfileId};
 use crate::dtls12::message::{SrtpProfileVec, SupportedGroupsExtension, UseSrtpExtension};
 use crate::{Config, Error, Output};
 
+/// Length of the random dummy PSK used when identity resolution fails.
+/// Fixed so handshake timing does not leak the failure, and long enough
+/// that a coincidental match with a real 32-byte PSK is cryptographically
+/// impossible.
+const DUMMY_PSK_LEN: usize = 32;
+
 /// DTLS server
 pub struct Server {
     /// Current server state.
@@ -79,8 +85,13 @@ pub struct Server {
     captured_session_hash: Option<Buf>,
 
     /// Whether the PSK identity resolved to a real key.
-    /// Defaults to `true` so non-PSK paths are unaffected.
-    psk_valid: bool,
+    ///
+    /// `None` until the PSK ClientKeyExchange is processed. Non-PSK handshakes
+    /// leave this `None` and the Finished check skips the PSK branch entirely.
+    /// Defaulting to `None` (rather than `true`) means a future refactor that
+    /// forgets to set it in the PSK path fails closed instead of silently
+    /// bypassing identity validation.
+    psk_valid: Option<bool>,
 
     /// The last now we seen
     last_now: Instant,
@@ -152,7 +163,7 @@ impl Server {
             client_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
             captured_session_hash: None,
-            psk_valid: true,
+            psk_valid: None,
             last_now: now,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
@@ -718,28 +729,26 @@ impl State {
             let identity = &server.defragment_buffer[identity_range];
             trace!("PSK identity ({} bytes)", identity.len());
 
-            // Resolve PSK via the configured resolver
-            let (psk, psk_valid) = {
-                let resolver = server
-                    .engine
-                    .config()
-                    .psk_resolver()
-                    .ok_or_else(|| Error::PskError("No PSK resolver configured".to_string()))?;
+            // Resolve PSK via the configured resolver. On failure we derive a
+            // random dummy of fixed length so the handshake proceeds identically
+            // to a valid-identity flow (no timing oracle) and the Finished MAC
+            // is guaranteed to mismatch — not merely likely to.
+            let resolved = server
+                .engine
+                .config()
+                .psk_resolver()
+                .ok_or_else(|| Error::PskError("No PSK resolver configured".to_string()))?
+                .resolve(identity);
 
-                match resolver.resolve(identity) {
-                    Some(key) => (key, true),
-                    None => {
-                        // Use a dummy PSK so the handshake proceeds identically
-                        // to a valid-identity flow. It will fail at Finished
-                        // verification, making the two cases indistinguishable.
-                        let dummy = vec![0u8; 32]; // length should match your typical PSK size
-                        (dummy, false)
-                    }
+            let (psk, psk_valid) = match resolved {
+                Some(key) => (key, true),
+                None => {
+                    let dummy: [u8; DUMMY_PSK_LEN] = server.engine.rng.random();
+                    (dummy.to_vec(), false)
                 }
             };
 
-            // Saving to server struct
-            server.psk_valid = psk_valid;
+            server.psk_valid = Some(psk_valid);
 
             let crypto = server.engine.crypto_context_mut();
             crypto.set_psk(psk);
@@ -957,9 +966,16 @@ impl State {
             ));
         }
 
-        // Defense-in-depth: dummy PSK should always fail above,
-        // but reject explicitly in case it accidentally passes.
-        if !server.psk_valid {
+        // Defense-in-depth for PSK: the random dummy key should already make
+        // the MAC above fail when the identity was unknown, but we additionally
+        // require psk_valid == Some(true) for PSK suites. Fails closed if the
+        // PSK branch somehow reached this point without setting the flag.
+        let is_psk = server
+            .engine
+            .cipher_suite()
+            .map(|cs| cs.is_psk())
+            .unwrap_or(false);
+        if is_psk && server.psk_valid != Some(true) {
             return Err(Error::SecurityError(
                 "Client Finished verification failed".to_string(),
             ));
