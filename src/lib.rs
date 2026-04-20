@@ -300,7 +300,16 @@ impl Dtls {
     /// before the handshake begins. The `config` must have a
     /// [`PskResolver`] configured, and for clients a PSK identity
     /// via [`ConfigBuilder::with_psk_client`](ConfigBuilder).
+    ///
+    /// Panics if `config` has no PSK configured. Without PSK data the
+    /// PSK suite filter would leave zero negotiable suites, so failing
+    /// fast at construction is preferable to a late handshake error.
     pub fn new_12_psk(config: Arc<Config>, now: Instant) -> Self {
+        assert!(
+            config.psk().is_some(),
+            "Dtls::new_12_psk requires a PSK configuration; \
+             set one via ConfigBuilder::with_psk_client or with_psk_server"
+        );
         let inner = Inner::Server12(Server12::new_psk(config, now));
         Dtls { inner: Some(inner) }
     }
@@ -772,6 +781,13 @@ mod test {
     fn test_protocol_version_auto_pending() {
         let dtls = new_instance_auto();
         assert_eq!(dtls.protocol_version(), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "requires a PSK configuration")]
+    fn new_12_psk_panics_without_psk_config() {
+        let config = Arc::new(Config::default());
+        let _ = Dtls::new_12_psk(config, Instant::now());
     }
 
     #[test]

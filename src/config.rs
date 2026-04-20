@@ -118,6 +118,10 @@ impl Config {
     ///
     /// This will cause the server to send a CertificateRequest message.
     /// Makes the server fail if the client does not send a certificate.
+    ///
+    /// Applies only to certificate-authenticated cipher suites. For RFC 4279
+    /// PSK suites the client never sends a certificate, so this flag has no
+    /// effect on a negotiated PSK handshake.
     #[inline(always)]
     pub fn require_client_certificate(&self) -> bool {
         self.require_client_certificate
@@ -327,6 +331,11 @@ impl ConfigBuilder {
     /// This will cause the server to send a CertificateRequest message.
     /// Makes the server fail if the client does not send a certificate.
     /// Defaults to true.
+    ///
+    /// Applies only to certificate-authenticated cipher suites. For RFC 4279
+    /// PSK suites the client never sends a certificate, so this flag has no
+    /// effect on a negotiated PSK handshake; no opt-out is required when
+    /// combining this builder with [`with_psk_server`](Self::with_psk_server).
     pub fn require_client_certificate(mut self, require: bool) -> Self {
         self.require_client_certificate = require;
         self
@@ -505,14 +514,21 @@ impl ConfigBuilder {
             ));
         }
 
-        // Validate cipher suite filters: at least one version must have suites
-        let dtls12_count = {
+        // Validate cipher suite filters: at least one version must have suites.
+        // Mirror Config::dtls12_cipher_suites() by dropping PSK suites when no PSK
+        // is configured, so a PSK-only filter without a PSK resolver fails fast.
+        let has_psk = self.psk.is_some();
+        let dtls12_suites: Vec<_> = {
             let all = crypto_provider.supported_cipher_suites();
             match &self.dtls12_cipher_suites {
-                Some(list) => all.filter(|cs| list.contains(&cs.suite())).count(),
-                None => all.count(),
+                Some(list) => all
+                    .filter(|cs| list.contains(&cs.suite()))
+                    .filter(|cs| has_psk || !cs.suite().is_psk())
+                    .collect(),
+                None => all.filter(|cs| has_psk || !cs.suite().is_psk()).collect(),
             }
         };
+        let dtls12_count = dtls12_suites.len();
         let dtls13_count = {
             let all = crypto_provider.dtls13_cipher_suites.iter();
             match &self.dtls13_cipher_suites {
@@ -528,18 +544,25 @@ impl ConfigBuilder {
             ));
         }
 
-        // Check if we have any non-PSK DTLS 1.2 suites that need key exchange groups
-        let has_non_psk_dtls12 = {
-            match &self.dtls12_cipher_suites {
-                Some(list) => crypto_provider
-                    .supported_cipher_suites()
-                    .filter(|cs| list.contains(&cs.suite()))
-                    .any(|cs| !cs.suite().is_psk()),
-                None => crypto_provider
-                    .supported_cipher_suites()
-                    .any(|cs| !cs.suite().is_psk()),
-            }
-        };
+        // When PSK is configured, at least one negotiable DTLS 1.2 suite must be
+        // a PSK suite. The only PSK suite we implement today is DTLS 1.2 (0xC0A8),
+        // so a surviving DTLS 1.3 suite is not a fallback: Dtls::new_12_psk only
+        // speaks DTLS 1.2, and under AuthMode::Psk every non-PSK suite is rejected
+        // by CryptoContext::is_cipher_suite_compatible.
+        if has_psk && !dtls12_suites.iter().any(|cs| cs.suite().is_psk()) {
+            return Err(Error::ConfigError(
+                "PSK is configured but no PSK cipher suite remains after filtering \
+                 DTLS 1.2 suites. Include at least one PSK suite in \
+                 dtls12_cipher_suites."
+                    .to_string(),
+            ));
+        }
+
+        // Skip DTLS 1.2 kx-group validation only when the surviving DTLS 1.2
+        // suites are exclusively PSK — those don't negotiate an ECDHE group.
+        // Any cert-based DTLS 1.2 suite left in the filter still needs a
+        // compatible key exchange group, even when PSK is also configured.
+        let has_non_psk_dtls12 = dtls12_suites.iter().any(|cs| !cs.suite().is_psk());
 
         // Validate kx_groups filter: each enabled version needs compatible groups
         // (PSK-only DTLS 1.2 configs don't need key exchange groups)
@@ -879,6 +902,119 @@ mod tests {
             config.dtls12_cipher_suites().any(|cs| cs.suite().is_psk()),
             "PSK suites should be included when a PskResolver is configured"
         );
+    }
+
+    #[test]
+    fn psk_config_with_only_non_psk_dtls12_filter_rejected() {
+        struct DummyResolver;
+        impl PskResolver for DummyResolver {
+            fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+                Some(b"key".to_vec())
+            }
+        }
+
+        // PSK config but the user filtered DTLS 1.2 down to a cert-only suite
+        // and disabled DTLS 1.3. AuthMode::Psk would reject every surviving
+        // suite at runtime, so build() should fail fast here.
+        let result = Config::builder()
+            .with_psk_client(b"identity".to_vec(), Arc::new(DummyResolver))
+            .dtls12_cipher_suites(&[Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256])
+            .dtls13_cipher_suites(&[])
+            .build();
+        match result {
+            Err(Error::ConfigError(msg)) => assert!(
+                msg.contains("PSK"),
+                "error should mention PSK: {msg}"
+            ),
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!("expected error for PSK config with only non-PSK suites"),
+        }
+    }
+
+    #[test]
+    fn psk_with_dtls13_but_no_psk_dtls12_suite_rejected() {
+        struct DummyResolver;
+        impl PskResolver for DummyResolver {
+            fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+                Some(b"key".to_vec())
+            }
+        }
+
+        // PSK configured, DTLS 1.2 filtered to cert-only, DTLS 1.3 left enabled.
+        // The surviving DTLS 1.3 suite is not a fallback for Dtls::new_12_psk,
+        // so build() must reject this config instead of producing one that can
+        // never complete a PSK handshake.
+        let result = Config::builder()
+            .with_psk_client(b"identity".to_vec(), Arc::new(DummyResolver))
+            .dtls12_cipher_suites(&[Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256])
+            .build();
+        match result {
+            Err(Error::ConfigError(msg)) => assert!(
+                msg.contains("PSK"),
+                "error should mention PSK: {msg}"
+            ),
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!(
+                "expected error for PSK config with only non-PSK DTLS 1.2 suites, \
+                 even when DTLS 1.3 is enabled"
+            ),
+        }
+    }
+
+    #[test]
+    fn psk_with_cert_dtls12_and_empty_kx_groups_rejected() {
+        struct DummyResolver;
+        impl PskResolver for DummyResolver {
+            fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+                Some(b"key".to_vec())
+            }
+        }
+
+        // Mixed config: PSK is set, but a cert-based DTLS 1.2 suite is also in
+        // the filter alongside a PSK suite. That cert suite still needs an
+        // ECDHE group, so kx_groups(&[]) must fail build — the fact that PSK
+        // is also configured does not excuse the missing groups.
+        let result = Config::builder()
+            .with_psk_server(None, Arc::new(DummyResolver))
+            .dtls12_cipher_suites(&[
+                Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+                Dtls12CipherSuite::PSK_AES128_CCM_8,
+            ])
+            .dtls13_cipher_suites(&[])
+            .kx_groups(&[])
+            .build();
+        match result {
+            Err(Error::ConfigError(msg)) => assert!(
+                msg.contains("key exchange"),
+                "error should mention key exchange groups: {msg}"
+            ),
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!(
+                "expected error when a cert-based DTLS 1.2 suite is enabled \
+                 without any kx groups, even alongside PSK"
+            ),
+        }
+    }
+
+    #[test]
+    fn psk_client_with_empty_kx_groups_builds() {
+        struct DummyResolver;
+        impl PskResolver for DummyResolver {
+            fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+                Some(b"key".to_vec())
+            }
+        }
+
+        // PSK suites don't need ECDHE groups. A truly PSK-only endpoint (with
+        // the DTLS 1.2 filter narrowed to PSK suites and DTLS 1.3 disabled)
+        // should be able to opt out of kx_groups entirely.
+        Config::builder()
+            .with_psk_client(b"identity".to_vec(), Arc::new(DummyResolver))
+            .dtls12_cipher_suites(&[Dtls12CipherSuite::PSK_AES128_CCM_8])
+            .dtls13_cipher_suites(&[])
+            .kx_groups(&[])
+            .build()
+            .expect("PSK-only client with empty kx_groups should build");
     }
 
     #[test]
