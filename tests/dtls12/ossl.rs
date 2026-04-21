@@ -1,10 +1,12 @@
 //! DTLS 1.2 interop tests: dimpl <-> OpenSSL (client + server).
 
 use std::collections::VecDeque;
+use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{Config, Dtls, Output};
+use dimpl::crypto::Dtls12CipherSuite;
+use dimpl::{Config, Dtls, Output, PskResolver};
 
 use crate::ossl_helper::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
 
@@ -891,4 +893,401 @@ fn dtls12_ossl_server_bidirectional_data() {
         client_received_data, expected_client_recv,
         "Client should receive both server messages"
     );
+}
+
+// ============================================================================
+// PSK interop tests
+// ============================================================================
+
+const PSK_IDENTITY: &[u8] = b"test-device";
+const PSK_KEY: &[u8] = b"0123456789abcdef"; // 16 bytes
+
+struct FixedPsk;
+
+impl PskResolver for FixedPsk {
+    fn resolve(&self, identity: &[u8]) -> Option<Vec<u8>> {
+        if identity == PSK_IDENTITY {
+            Some(PSK_KEY.to_vec())
+        } else {
+            None
+        }
+    }
+}
+
+fn psk_provider() -> dimpl::crypto::CryptoProvider {
+    let mut provider = Config::default().crypto_provider().clone();
+    let psk_suite = provider
+        .cipher_suites
+        .iter()
+        .copied()
+        .find(|cs| cs.suite() == Dtls12CipherSuite::PSK_AES128_CCM_8)
+        .expect("PSK_AES128_CCM_8 not in provider");
+
+    let suites = Box::leak(Box::new([psk_suite]));
+    provider.cipher_suites = suites;
+    provider
+}
+
+fn psk_dimpl_client_config() -> Arc<Config> {
+    Arc::new(
+        Config::builder()
+            .with_crypto_provider(psk_provider())
+            .with_psk_client(PSK_IDENTITY.to_vec(), Arc::new(FixedPsk))
+            .build()
+            .expect("build PSK client config"),
+    )
+}
+
+fn psk_dimpl_server_config() -> Arc<Config> {
+    Arc::new(
+        Config::builder()
+            .with_crypto_provider(psk_provider())
+            .with_psk_server(Some(b"hint".to_vec()), Arc::new(FixedPsk))
+            .build()
+            .expect("build PSK server config"),
+    )
+}
+
+/// Create an OpenSSL PSK DTLS context configured as server.
+fn ossl_psk_server() -> openssl::ssl::Ssl {
+    use openssl::ssl::{SslContextBuilder, SslMethod, SslOptions, SslVerifyMode};
+
+    let mut ctx = SslContextBuilder::new(SslMethod::dtls()).unwrap();
+    ctx.set_cipher_list("PSK-AES128-CCM8").unwrap();
+
+    // No peer cert verification for PSK
+    ctx.set_verify(SslVerifyMode::NONE);
+
+    let mut options = SslOptions::empty();
+    options.insert(SslOptions::NO_DTLSV1);
+    ctx.set_options(options);
+
+    ctx.set_psk_server_callback(|_ssl, identity, psk_out| {
+        if let Some(id) = identity {
+            if id == PSK_IDENTITY {
+                psk_out[..PSK_KEY.len()].copy_from_slice(PSK_KEY);
+                return Ok(PSK_KEY.len());
+            }
+        }
+        Ok(0)
+    });
+
+    let ctx = ctx.build();
+    let mut ssl = openssl::ssl::Ssl::new(&ctx).unwrap();
+    ssl.set_mtu(1150).expect("set MTU");
+    ssl
+}
+
+/// Create an OpenSSL PSK DTLS context configured as client.
+fn ossl_psk_client() -> openssl::ssl::Ssl {
+    use openssl::ssl::{SslContextBuilder, SslMethod, SslOptions, SslVerifyMode};
+
+    let mut ctx = SslContextBuilder::new(SslMethod::dtls()).unwrap();
+    ctx.set_cipher_list("PSK-AES128-CCM8").unwrap();
+
+    ctx.set_verify(SslVerifyMode::NONE);
+
+    let mut options = SslOptions::empty();
+    options.insert(SslOptions::NO_DTLSV1);
+    ctx.set_options(options);
+
+    ctx.set_psk_client_callback(|_ssl, _hint, identity_out, psk_out| {
+        identity_out[..PSK_IDENTITY.len()].copy_from_slice(PSK_IDENTITY);
+        identity_out[PSK_IDENTITY.len()] = 0; // null terminate
+        psk_out[..PSK_KEY.len()].copy_from_slice(PSK_KEY);
+        Ok(PSK_KEY.len())
+    });
+
+    let ctx = ctx.build();
+    let mut ssl = openssl::ssl::Ssl::new(&ctx).unwrap();
+    ssl.set_mtu(1150).expect("set MTU");
+    ssl
+}
+
+type IoBuffer = crate::ossl_helper::io_buf::IoBuffer;
+
+/// A minimal OpenSSL PSK endpoint. No certs, no SRTP — just PSK handshake + data.
+struct OsslPskEndpoint {
+    active: bool,
+    state: Option<OsslPskState>,
+}
+
+enum OsslPskState {
+    Init(openssl::ssl::Ssl, IoBuffer),
+    Handshaking(openssl::ssl::MidHandshakeSslStream<IoBuffer>),
+    Established(openssl::ssl::SslStream<IoBuffer>),
+}
+
+impl OsslPskEndpoint {
+    fn new(ssl: openssl::ssl::Ssl, active: bool) -> Self {
+        OsslPskEndpoint {
+            active,
+            state: Some(OsslPskState::Init(ssl, IoBuffer::default())),
+        }
+    }
+
+    fn io_buf(&mut self) -> &mut IoBuffer {
+        match self.state.as_mut().expect("state") {
+            OsslPskState::Init(_, buf) => buf,
+            OsslPskState::Handshaking(mid) => mid.get_mut(),
+            OsslPskState::Established(stream) => stream.get_mut(),
+        }
+    }
+
+    /// Feed incoming data and drive the handshake. Returns true on first connect.
+    fn handle_receive(&mut self, data: &[u8]) -> bool {
+        self.io_buf().set_incoming(data);
+        self.drive_handshake()
+    }
+
+    fn drive_handshake(&mut self) -> bool {
+        let taken = self.state.take().expect("state");
+
+        let result = match taken {
+            OsslPskState::Init(ssl, buf) => {
+                if self.active {
+                    ssl.connect(buf)
+                } else {
+                    ssl.accept(buf)
+                }
+            }
+            OsslPskState::Handshaking(mid) => mid.handshake(),
+            OsslPskState::Established(stream) => {
+                self.state = Some(OsslPskState::Established(stream));
+                return false;
+            }
+        };
+
+        match result {
+            Ok(stream) => {
+                self.state = Some(OsslPskState::Established(stream));
+                true
+            }
+            Err(openssl::ssl::HandshakeError::WouldBlock(mid)) => {
+                self.state = Some(OsslPskState::Handshaking(mid));
+                false
+            }
+            Err(e) => panic!("OpenSSL PSK handshake error: {:?}", e),
+        }
+    }
+
+    fn poll_datagram(&mut self) -> Option<crate::ossl_helper::DatagramSend> {
+        self.io_buf().pop_outgoing()
+    }
+
+    fn send_data(&mut self, data: &[u8]) {
+        if let Some(OsslPskState::Established(stream)) = &mut self.state {
+            stream.write_all(data).expect("send data");
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    fn read_data(&mut self) -> Option<Vec<u8>> {
+        if let Some(OsslPskState::Established(stream)) = &mut self.state {
+            let mut buf = vec![0u8; 2000];
+            match stream.read(&mut buf) {
+                Ok(n) => {
+                    buf.truncate(n);
+                    Some(buf)
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => None,
+                Err(e) => panic!("read error: {:?}", e),
+            }
+        } else {
+            None
+        }
+    }
+}
+
+#[test]
+#[ignore = "OpenSSL does not support PSK-AES128-CCM8 over DTLS (only TLS)"]
+fn dtls12_ossl_psk_dimpl_client_ossl_server() {
+    env_logger::try_init().ok();
+
+    let config = psk_dimpl_client_config();
+    let now = Instant::now();
+
+    let mut client = Dtls::new_12_psk(config, now);
+    client.set_active(true);
+
+    let ssl = ossl_psk_server();
+    let mut server = OsslPskEndpoint::new(ssl, false);
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut out_buf = vec![0u8; 2048];
+
+    for _ in 0..30 {
+        client.handle_timeout(Instant::now()).unwrap();
+
+        // Poll dimpl client → OpenSSL server
+        loop {
+            match client.poll_output(&mut out_buf) {
+                Output::Packet(data) => {
+                    if server.handle_receive(data) {
+                        server_connected = true;
+                    }
+                }
+                Output::Connected => {
+                    client_connected = true;
+                }
+                Output::Timeout(_) => break,
+                _ => {}
+            }
+        }
+
+        // Poll OpenSSL server → dimpl client
+        while let Some(datagram) = server.poll_datagram() {
+            client.handle_packet(&datagram).expect("handle server pkt");
+        }
+
+        // Poll dimpl again after receiving server packets
+        loop {
+            match client.poll_output(&mut out_buf) {
+                Output::Packet(data) => {
+                    if server.handle_receive(data) {
+                        server_connected = true;
+                    }
+                }
+                Output::Connected => {
+                    client_connected = true;
+                }
+                Output::Timeout(_) => break,
+                _ => {}
+            }
+        }
+
+        // Drive OpenSSL again in case dimpl sent more
+        while let Some(datagram) = server.poll_datagram() {
+            client.handle_packet(&datagram).expect("handle server pkt");
+        }
+
+        if client_connected && server_connected {
+            break;
+        }
+    }
+
+    assert!(client_connected, "dimpl PSK client should connect");
+    assert!(server_connected, "OpenSSL PSK server should connect");
+
+    // App data: client → server
+    client
+        .send_application_data(b"hello from dimpl")
+        .expect("send");
+    loop {
+        match client.poll_output(&mut out_buf) {
+            Output::Packet(data) => {
+                server.handle_receive(data);
+            }
+            Output::Timeout(_) => break,
+            _ => {}
+        }
+    }
+
+    let received = server.read_data().expect("server should receive data");
+    assert_eq!(received, b"hello from dimpl");
+
+    // App data: server → client
+    server.send_data(b"hello from openssl");
+    while let Some(datagram) = server.poll_datagram() {
+        client.handle_packet(&datagram).expect("handle server pkt");
+    }
+
+    let mut client_data = Vec::new();
+    loop {
+        match client.poll_output(&mut out_buf) {
+            Output::ApplicationData(data) => client_data.extend_from_slice(data),
+            Output::Timeout(_) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(client_data, b"hello from openssl");
+}
+
+#[test]
+#[ignore = "OpenSSL does not support PSK-AES128-CCM8 over DTLS (only TLS)"]
+fn dtls12_ossl_psk_ossl_client_dimpl_server() {
+    env_logger::try_init().ok();
+
+    let config = psk_dimpl_server_config();
+    let now = Instant::now();
+
+    let mut server = Dtls::new_12_psk(config, now);
+    server.set_active(false);
+
+    let ssl = ossl_psk_client();
+    let mut client = OsslPskEndpoint::new(ssl, true);
+
+    // Kick off OpenSSL client handshake
+    client.handle_receive(&[]);
+
+    let mut server_connected = false;
+    let mut client_connected = false;
+    let mut out_buf = vec![0u8; 2048];
+
+    for _ in 0..30 {
+        // Poll OpenSSL client → dimpl server
+        while let Some(datagram) = client.poll_datagram() {
+            server.handle_packet(&datagram).expect("handle client pkt");
+        }
+
+        server.handle_timeout(Instant::now()).unwrap();
+
+        // Poll dimpl server → OpenSSL client
+        loop {
+            match server.poll_output(&mut out_buf) {
+                Output::Packet(data) => {
+                    if client.handle_receive(data) {
+                        client_connected = true;
+                    }
+                }
+                Output::Connected => {
+                    server_connected = true;
+                }
+                Output::Timeout(_) => break,
+                _ => {}
+            }
+        }
+
+        if client_connected && server_connected {
+            break;
+        }
+    }
+
+    assert!(client_connected, "OpenSSL PSK client should connect");
+    assert!(server_connected, "dimpl PSK server should connect");
+
+    // App data: OpenSSL client → dimpl server
+    client.send_data(b"hello from openssl client");
+    while let Some(datagram) = client.poll_datagram() {
+        server.handle_packet(&datagram).expect("handle client pkt");
+    }
+
+    let mut server_data = Vec::new();
+    loop {
+        match server.poll_output(&mut out_buf) {
+            Output::ApplicationData(data) => server_data.extend_from_slice(data),
+            Output::Timeout(_) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(server_data, b"hello from openssl client");
+
+    // App data: dimpl server → OpenSSL client
+    server
+        .send_application_data(b"hello from dimpl server")
+        .expect("send");
+    loop {
+        match server.poll_output(&mut out_buf) {
+            Output::Packet(data) => {
+                client.handle_receive(data);
+            }
+            Output::Timeout(_) => break,
+            _ => {}
+        }
+    }
+
+    let received = client.read_data().expect("client should receive data");
+    assert_eq!(received, b"hello from dimpl server");
 }

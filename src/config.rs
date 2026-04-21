@@ -1,3 +1,6 @@
+use std::fmt;
+use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::Error;
@@ -5,6 +8,47 @@ use crate::crypto::{CryptoProvider, SupportedDtls12CipherSuite};
 use crate::crypto::{SupportedDtls13CipherSuite, SupportedKxGroup};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, NamedGroup};
+
+/// Callback for resolving PSK identities to shared secrets.
+///
+/// Implement this trait and provide it via [`ConfigBuilder::with_psk_client`]
+/// or [`ConfigBuilder::with_psk_server`] to enable PSK cipher suites.
+pub trait PskResolver: Send + Sync + UnwindSafe + RefUnwindSafe {
+    /// Look up a pre-shared key by the peer's identity.
+    ///
+    /// Returns the shared secret bytes, or `None` if the identity is unknown.
+    fn resolve(&self, identity: &[u8]) -> Option<Vec<u8>>;
+}
+
+/// PSK configuration for a DTLS endpoint.
+///
+/// Use [`Psk::Client`] for endpoints that initiate PSK handshakes (send identity),
+/// and [`Psk::Server`] for endpoints that resolve incoming identities.
+///
+/// `#[non_exhaustive]` so new variants (e.g. DTLS 1.3 external PSKs) or new
+/// fields can be added without a major version bump.
+#[derive(Clone)]
+#[non_exhaustive]
+pub enum Psk {
+    /// Client-side PSK: sends `identity` during handshake, uses `resolver`
+    /// to look up the shared secret.
+    #[non_exhaustive]
+    Client {
+        /// The identity to send to the server.
+        identity: Vec<u8>,
+        /// Resolver for looking up shared secrets.
+        resolver: Arc<dyn PskResolver>,
+    },
+    /// Server-side PSK: optionally sends a `hint` to help the client choose
+    /// an identity, uses `resolver` to look up secrets by client identity.
+    #[non_exhaustive]
+    Server {
+        /// Optional hint sent to the client in ServerKeyExchange.
+        hint: Option<Vec<u8>>,
+        /// Resolver for looking up shared secrets.
+        resolver: Arc<dyn PskResolver>,
+    },
+}
 
 #[cfg(feature = "aws-lc-rs")]
 use crate::crypto::aws_lc_rs;
@@ -15,7 +59,7 @@ use crate::crypto::rust_crypto;
 /// DTLS configuration shared by all connections.
 ///
 /// Build with [`Config::builder()`] or use [`Config::default()`].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     mtu: usize,
     max_queue_rx: usize,
@@ -31,6 +75,7 @@ pub struct Config {
     dtls12_cipher_suites: Option<Vec<Dtls12CipherSuite>>,
     dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
     kx_groups: Option<Vec<NamedGroup>>,
+    psk: Option<Psk>,
 }
 
 impl Config {
@@ -51,6 +96,7 @@ impl Config {
             dtls12_cipher_suites: None,
             dtls13_cipher_suites: None,
             kx_groups: None,
+            psk: None,
         }
     }
 
@@ -78,6 +124,10 @@ impl Config {
     ///
     /// This will cause the server to send a CertificateRequest message.
     /// Makes the server fail if the client does not send a certificate.
+    ///
+    /// Applies only to certificate-authenticated cipher suites. For RFC 4279
+    /// PSK suites the client never sends a certificate, so this flag has no
+    /// effect on a negotiated PSK handshake.
     #[inline(always)]
     pub fn require_client_certificate(&self) -> bool {
         self.require_client_certificate
@@ -148,21 +198,58 @@ impl Config {
         self.aead_encryption_limit
     }
 
+    /// PSK configuration, if any.
+    pub fn psk(&self) -> Option<&Psk> {
+        self.psk.as_ref()
+    }
+
+    /// PSK identity for the client to send during handshake.
+    pub fn psk_identity(&self) -> Option<&[u8]> {
+        match &self.psk {
+            Some(Psk::Client { identity, .. }) => Some(identity),
+            _ => None,
+        }
+    }
+
+    /// PSK identity hint for the server to send during handshake.
+    pub fn psk_identity_hint(&self) -> Option<&[u8]> {
+        match &self.psk {
+            Some(Psk::Server { hint, .. }) => hint.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// PSK resolver for looking up shared secrets by identity.
+    pub fn psk_resolver(&self) -> Option<&dyn PskResolver> {
+        match &self.psk {
+            Some(Psk::Client { resolver, .. } | Psk::Server { resolver, .. }) => {
+                Some(resolver.as_ref())
+            }
+            None => None,
+        }
+    }
+
     /// Allowed DTLS 1.2 cipher suites, filtered by the config's allow-list.
     ///
     /// Returns all provider-supported DTLS 1.2 cipher suites when no filter
     /// is set. When a filter is set via the builder's `dtls12_cipher_suites`
     /// method, only suites in both the provider and the filter are returned.
+    ///
+    /// PSK cipher suites are excluded when no [`PskResolver`] is configured,
+    /// preventing a certificate-mode endpoint from negotiating a PSK suite
+    /// and inadvertently skipping certificate authentication.
     pub fn dtls12_cipher_suites(
         &self,
     ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> + '_ {
         let filter = self.dtls12_cipher_suites.as_ref();
+        let has_psk = self.psk.is_some();
         self.crypto_provider
             .supported_cipher_suites()
             .filter(move |cs| match filter {
                 Some(list) => list.contains(&cs.suite()),
                 None => true,
             })
+            .filter(move |cs| has_psk || !cs.suite().is_psk())
     }
 
     /// Allowed DTLS 1.3 cipher suites, filtered by the config's allow-list.
@@ -201,7 +288,6 @@ impl Config {
 }
 
 /// Builder for [`Config`]. See each setter for defaults.
-#[derive(Debug)]
 pub struct ConfigBuilder {
     mtu: usize,
     max_queue_rx: usize,
@@ -217,6 +303,7 @@ pub struct ConfigBuilder {
     dtls12_cipher_suites: Option<Vec<Dtls12CipherSuite>>,
     dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
     kx_groups: Option<Vec<NamedGroup>>,
+    psk: Option<Psk>,
 }
 
 impl ConfigBuilder {
@@ -250,6 +337,11 @@ impl ConfigBuilder {
     /// This will cause the server to send a CertificateRequest message.
     /// Makes the server fail if the client does not send a certificate.
     /// Defaults to true.
+    ///
+    /// Applies only to certificate-authenticated cipher suites. For RFC 4279
+    /// PSK suites the client never sends a certificate, so this flag has no
+    /// effect on a negotiated PSK handshake; no opt-out is required when
+    /// combining this builder with [`with_psk_server`](Self::with_psk_server).
     pub fn require_client_certificate(mut self, require: bool) -> Self {
         self.require_client_certificate = require;
         self
@@ -360,6 +452,28 @@ impl ConfigBuilder {
         self
     }
 
+    /// Configure PSK for a client endpoint.
+    ///
+    /// The `identity` is sent to the server during the handshake.
+    /// The `resolver` looks up the shared secret by identity.
+    pub fn with_psk_client(mut self, identity: Vec<u8>, resolver: Arc<dyn PskResolver>) -> Self {
+        self.psk = Some(Psk::Client { identity, resolver });
+        self
+    }
+
+    /// Configure PSK for a server endpoint.
+    ///
+    /// The optional `hint` is sent to the client in ServerKeyExchange.
+    /// The `resolver` looks up the shared secret by client identity.
+    pub fn with_psk_server(
+        mut self,
+        hint: Option<Vec<u8>>,
+        resolver: Arc<dyn PskResolver>,
+    ) -> Self {
+        self.psk = Some(Psk::Server { hint, resolver });
+        self
+    }
+
     /// Build the configuration.
     ///
     /// This validates the crypto provider before returning the configuration.
@@ -406,14 +520,21 @@ impl ConfigBuilder {
             ));
         }
 
-        // Validate cipher suite filters: at least one version must have suites
-        let dtls12_count = {
+        // Validate cipher suite filters: at least one version must have suites.
+        // Mirror Config::dtls12_cipher_suites() by dropping PSK suites when no PSK
+        // is configured, so a PSK-only filter without a PSK resolver fails fast.
+        let has_psk = self.psk.is_some();
+        let dtls12_suites: Vec<_> = {
             let all = crypto_provider.supported_cipher_suites();
             match &self.dtls12_cipher_suites {
-                Some(list) => all.filter(|cs| list.contains(&cs.suite())).count(),
-                None => all.count(),
+                Some(list) => all
+                    .filter(|cs| list.contains(&cs.suite()))
+                    .filter(|cs| has_psk || !cs.suite().is_psk())
+                    .collect(),
+                None => all.filter(|cs| has_psk || !cs.suite().is_psk()).collect(),
             }
         };
+        let dtls12_count = dtls12_suites.len();
         let dtls13_count = {
             let all = crypto_provider.dtls13_cipher_suites.iter();
             match &self.dtls13_cipher_suites {
@@ -429,14 +550,35 @@ impl ConfigBuilder {
             ));
         }
 
+        // When PSK is configured, at least one negotiable DTLS 1.2 suite must be
+        // a PSK suite. The only PSK suite we implement today is DTLS 1.2 (0xC0A8),
+        // so a surviving DTLS 1.3 suite is not a fallback: Dtls::new_12_psk only
+        // speaks DTLS 1.2, and under AuthMode::Psk every non-PSK suite is rejected
+        // by CryptoContext::is_cipher_suite_compatible.
+        if has_psk && !dtls12_suites.iter().any(|cs| cs.suite().is_psk()) {
+            return Err(Error::ConfigError(
+                "PSK is configured but no PSK cipher suite remains after filtering \
+                 DTLS 1.2 suites. Include at least one PSK suite in \
+                 dtls12_cipher_suites."
+                    .to_string(),
+            ));
+        }
+
+        // Skip DTLS 1.2 kx-group validation only when the surviving DTLS 1.2
+        // suites are exclusively PSK — those don't negotiate an ECDHE group.
+        // Any cert-based DTLS 1.2 suite left in the filter still needs a
+        // compatible key exchange group, even when PSK is also configured.
+        let has_non_psk_dtls12 = dtls12_suites.iter().any(|cs| !cs.suite().is_psk());
+
         // Validate kx_groups filter: each enabled version needs compatible groups
+        // (PSK-only DTLS 1.2 configs don't need key exchange groups)
         let filtered_kx = |kx: &&'static dyn SupportedKxGroup| -> bool {
             match &self.kx_groups {
                 Some(list) => list.contains(&kx.name()),
                 None => true,
             }
         };
-        if dtls12_count > 0 {
+        if has_non_psk_dtls12 {
             let dtls12_kx_count = crypto_provider
                 .supported_kx_groups()
                 .filter(|kx| filtered_kx(kx))
@@ -478,6 +620,7 @@ impl ConfigBuilder {
             dtls12_cipher_suites: self.dtls12_cipher_suites,
             dtls13_cipher_suites: self.dtls13_cipher_suites,
             kx_groups: self.kx_groups,
+            psk: self.psk,
         })
     }
 }
@@ -487,6 +630,73 @@ impl Default for Config {
         Config::builder()
             .build()
             .expect("Default config should always validate")
+    }
+}
+
+impl fmt::Debug for Psk {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Psk::Client { identity, .. } => f
+                .debug_struct("Psk::Client")
+                .field("identity", &identity)
+                .field("resolver", &"...")
+                .finish(),
+            Psk::Server { hint, .. } => f
+                .debug_struct("Psk::Server")
+                .field("hint", &hint)
+                .field("resolver", &"...")
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("mtu", &self.mtu)
+            .field("max_queue_rx", &self.max_queue_rx)
+            .field("max_queue_tx", &self.max_queue_tx)
+            .field(
+                "require_client_certificate",
+                &self.require_client_certificate,
+            )
+            .field("use_server_cookie", &self.use_server_cookie)
+            .field("flight_start_rto", &self.flight_start_rto)
+            .field("flight_retries", &self.flight_retries)
+            .field("handshake_timeout", &self.handshake_timeout)
+            .field("crypto_provider", &self.crypto_provider)
+            .field("rng_seed", &self.rng_seed)
+            .field("aead_encryption_limit", &self.aead_encryption_limit)
+            .field("dtls12_cipher_suites", &self.dtls12_cipher_suites)
+            .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
+            .field("kx_groups", &self.kx_groups)
+            .field("psk", &self.psk)
+            .finish()
+    }
+}
+
+impl fmt::Debug for ConfigBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConfigBuilder")
+            .field("mtu", &self.mtu)
+            .field("max_queue_rx", &self.max_queue_rx)
+            .field("max_queue_tx", &self.max_queue_tx)
+            .field(
+                "require_client_certificate",
+                &self.require_client_certificate,
+            )
+            .field("use_server_cookie", &self.use_server_cookie)
+            .field("flight_start_rto", &self.flight_start_rto)
+            .field("flight_retries", &self.flight_retries)
+            .field("handshake_timeout", &self.handshake_timeout)
+            .field("crypto_provider", &self.crypto_provider)
+            .field("rng_seed", &self.rng_seed)
+            .field("aead_encryption_limit", &self.aead_encryption_limit)
+            .field("dtls12_cipher_suites", &self.dtls12_cipher_suites)
+            .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
+            .field("kx_groups", &self.kx_groups)
+            .field("psk", &self.psk)
+            .finish()
     }
 }
 
@@ -666,9 +876,149 @@ mod tests {
     fn no_filter_returns_all() {
         let config = Config::default();
         // Default provider should have at least 2 DTLS 1.2 and 2 DTLS 1.3 suites
+        // (PSK suites are excluded without a resolver, so only non-PSK count)
         assert!(config.dtls12_cipher_suites().count() >= 2);
         assert!(config.dtls13_cipher_suites().count() >= 2);
         assert!(config.kx_groups().count() >= 2);
+    }
+
+    #[test]
+    fn psk_suites_excluded_without_resolver() {
+        let config = Config::default();
+        assert!(
+            config.dtls12_cipher_suites().all(|cs| !cs.suite().is_psk()),
+            "PSK suites should be excluded when no PskResolver is configured"
+        );
+    }
+
+    #[test]
+    fn psk_suites_included_with_resolver() {
+        struct DummyResolver;
+        impl PskResolver for DummyResolver {
+            fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+                None
+            }
+        }
+
+        let config = Config::builder()
+            .with_psk_server(None, Arc::new(DummyResolver))
+            .build()
+            .expect("config with PSK resolver should build");
+        assert!(
+            config.dtls12_cipher_suites().any(|cs| cs.suite().is_psk()),
+            "PSK suites should be included when a PskResolver is configured"
+        );
+    }
+
+    #[test]
+    fn psk_config_with_only_non_psk_dtls12_filter_rejected() {
+        struct DummyResolver;
+        impl PskResolver for DummyResolver {
+            fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+                Some(b"key".to_vec())
+            }
+        }
+
+        // PSK config but the user filtered DTLS 1.2 down to a cert-only suite
+        // and disabled DTLS 1.3. AuthMode::Psk would reject every surviving
+        // suite at runtime, so build() should fail fast here.
+        let result = Config::builder()
+            .with_psk_client(b"identity".to_vec(), Arc::new(DummyResolver))
+            .dtls12_cipher_suites(&[Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256])
+            .dtls13_cipher_suites(&[])
+            .build();
+        match result {
+            Err(Error::ConfigError(msg)) => {
+                assert!(msg.contains("PSK"), "error should mention PSK: {msg}")
+            }
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!("expected error for PSK config with only non-PSK suites"),
+        }
+    }
+
+    #[test]
+    fn psk_with_dtls13_but_no_psk_dtls12_suite_rejected() {
+        struct DummyResolver;
+        impl PskResolver for DummyResolver {
+            fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+                Some(b"key".to_vec())
+            }
+        }
+
+        // PSK configured, DTLS 1.2 filtered to cert-only, DTLS 1.3 left enabled.
+        // The surviving DTLS 1.3 suite is not a fallback for Dtls::new_12_psk,
+        // so build() must reject this config instead of producing one that can
+        // never complete a PSK handshake.
+        let result = Config::builder()
+            .with_psk_client(b"identity".to_vec(), Arc::new(DummyResolver))
+            .dtls12_cipher_suites(&[Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256])
+            .build();
+        match result {
+            Err(Error::ConfigError(msg)) => {
+                assert!(msg.contains("PSK"), "error should mention PSK: {msg}")
+            }
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!(
+                "expected error for PSK config with only non-PSK DTLS 1.2 suites, \
+                 even when DTLS 1.3 is enabled"
+            ),
+        }
+    }
+
+    #[test]
+    fn psk_with_cert_dtls12_and_empty_kx_groups_rejected() {
+        struct DummyResolver;
+        impl PskResolver for DummyResolver {
+            fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+                Some(b"key".to_vec())
+            }
+        }
+
+        // Mixed config: PSK is set, but a cert-based DTLS 1.2 suite is also in
+        // the filter alongside a PSK suite. That cert suite still needs an
+        // ECDHE group, so kx_groups(&[]) must fail build — the fact that PSK
+        // is also configured does not excuse the missing groups.
+        let result = Config::builder()
+            .with_psk_server(None, Arc::new(DummyResolver))
+            .dtls12_cipher_suites(&[
+                Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+                Dtls12CipherSuite::PSK_AES128_CCM_8,
+            ])
+            .dtls13_cipher_suites(&[])
+            .kx_groups(&[])
+            .build();
+        match result {
+            Err(Error::ConfigError(msg)) => assert!(
+                msg.contains("key exchange"),
+                "error should mention key exchange groups: {msg}"
+            ),
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!(
+                "expected error when a cert-based DTLS 1.2 suite is enabled \
+                 without any kx groups, even alongside PSK"
+            ),
+        }
+    }
+
+    #[test]
+    fn psk_client_with_empty_kx_groups_builds() {
+        struct DummyResolver;
+        impl PskResolver for DummyResolver {
+            fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+                Some(b"key".to_vec())
+            }
+        }
+
+        // PSK suites don't need ECDHE groups. A truly PSK-only endpoint (with
+        // the DTLS 1.2 filter narrowed to PSK suites and DTLS 1.3 disabled)
+        // should be able to opt out of kx_groups entirely.
+        Config::builder()
+            .with_psk_client(b"identity".to_vec(), Arc::new(DummyResolver))
+            .dtls12_cipher_suites(&[Dtls12CipherSuite::PSK_AES128_CCM_8])
+            .dtls13_cipher_suites(&[])
+            .kx_groups(&[])
+            .build()
+            .expect("PSK-only client with empty kx_groups should build");
     }
 
     #[test]

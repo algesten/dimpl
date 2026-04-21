@@ -23,7 +23,9 @@ use crate::buffer::{Buf, ToBuf};
 use crate::crypto::SrtpProfile;
 use crate::dtls12::Client;
 use crate::dtls12::client::LocalEvent;
+use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
+use crate::dtls12::message::PskParams;
 use crate::dtls12::message::{Body, CertificateRequest, CertificateTypeVec, Dtls12CipherSuite};
 use crate::dtls12::message::{ClientCertificateType, CompressionMethod, ContentType};
 use crate::dtls12::message::{Cookie, CurveType, DistinguishedName, ExchangeKeys, ExtensionType};
@@ -34,6 +36,12 @@ use crate::dtls12::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgor
 use crate::dtls12::message::{SignatureAndHashAlgorithmVec, SrtpProfileId};
 use crate::dtls12::message::{SrtpProfileVec, SupportedGroupsExtension, UseSrtpExtension};
 use crate::{Config, Error, Output};
+
+/// Length of the random dummy PSK used when identity resolution fails.
+/// Fixed so handshake timing does not leak the failure, and long enough
+/// that a coincidental match with a real 32-byte PSK is cryptographically
+/// impossible.
+const DUMMY_PSK_LEN: usize = 32;
 
 /// DTLS server
 pub struct Server {
@@ -76,6 +84,15 @@ pub struct Server {
     /// Captured session hash for Extended Master Secret (RFC 7627)
     captured_session_hash: Option<Buf>,
 
+    /// Whether the PSK identity resolved to a real key.
+    ///
+    /// `None` until the PSK ClientKeyExchange is processed. Non-PSK handshakes
+    /// leave this `None` and the Finished check skips the PSK branch entirely.
+    /// Defaulting to `None` (rather than `true`) means a future refactor that
+    /// forgets to set it in the PSK path fails closed instead of silently
+    /// bypassing identity validation.
+    psk_valid: Option<bool>,
+
     /// The last now we seen
     last_now: Instant,
 
@@ -108,7 +125,26 @@ enum State {
 impl Server {
     /// Create a new DTLS server
     pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate, now: Instant) -> Server {
-        let engine = Engine::new(config, certificate);
+        // unwrap: malformed private_key bytes are a programmer error from the
+        // caller who constructed DtlsCertificate; panic matches the prior
+        // CryptoContext::new behavior which also panicked on empty/invalid
+        // key material.
+        let private_key = config
+            .crypto_provider()
+            .key_provider
+            .load_private_key(&certificate.private_key)
+            .expect("Failed to parse server private key");
+        let auth = AuthMode::Certificate {
+            certificate: certificate.certificate,
+            private_key,
+        };
+        let engine = Engine::new(config, auth);
+        Self::new_with_engine(engine, now)
+    }
+
+    /// Create a new PSK-only DTLS server (no certificate).
+    pub fn new_psk(config: Arc<Config>, now: Instant) -> Server {
+        let engine = Engine::new(config, AuthMode::Psk);
         Self::new_with_engine(engine, now)
     }
 
@@ -131,6 +167,7 @@ impl Server {
             client_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
             captured_session_hash: None,
+            psk_valid: None,
             last_now: now,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
@@ -439,7 +476,17 @@ impl State {
                 )
             })?;
 
-        Ok(Self::SendCertificate)
+        let cs = server
+            .engine
+            .cipher_suite()
+            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+
+        // PSK suites skip Certificate
+        if cs.is_psk() {
+            Ok(Self::SendServerKeyExchange)
+        } else {
+            Ok(Self::SendCertificate)
+        }
     }
 
     fn send_certificate(self, server: &mut Server) -> Result<Self, Error> {
@@ -454,6 +501,15 @@ impl State {
 
     fn send_server_key_exchange(self, server: &mut Server) -> Result<Self, Error> {
         trace!("Sending ServerKeyExchange");
+
+        let cs = server
+            .engine
+            .cipher_suite()
+            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+
+        if cs.is_psk() {
+            return self.send_server_key_exchange_psk(server);
+        }
 
         let client_random = server
             .client_random
@@ -488,14 +544,20 @@ impl State {
         })?;
 
         // Select signature/hash for SKE by intersecting client's list
-        // with our key type, preferring the key's native hash algorithm
+        // with our key type, preferring the key's native hash algorithm.
+        // unwrap: ServerKeyExchange signature only needed for certificate-based suites
         let selected_signature = select_ske_signature_algorithm(
             server.client_signature_algorithms.as_ref(),
-            server.engine.crypto_context().signature_algorithm(),
             server
                 .engine
                 .crypto_context()
-                .private_key_default_hash_algorithm(),
+                .signature_algorithm()
+                .unwrap(),
+            server
+                .engine
+                .crypto_context()
+                .private_key_default_hash_algorithm()
+                .unwrap(),
             server
                 .engine
                 .crypto_context()
@@ -527,6 +589,29 @@ impl State {
         }
     }
 
+    /// PSK ServerKeyExchange: send identity hint only (no ECDHE, no signature).
+    /// Per RFC 4279 §2, the message is omitted entirely when no hint is configured.
+    fn send_server_key_exchange_psk(self, server: &mut Server) -> Result<Self, Error> {
+        let Some(hint) = server
+            .engine
+            .config()
+            .psk_identity_hint()
+            .map(<[u8]>::to_vec)
+        else {
+            return Ok(Self::SendServerHelloDone);
+        };
+
+        server
+            .engine
+            .create_handshake(MessageType::ServerKeyExchange, move |body, _engine| {
+                PskParams::serialize_from_bytes(&hint, body);
+                Ok(())
+            })?;
+
+        // PSK never sends CertificateRequest
+        Ok(Self::SendServerHelloDone)
+    }
+
     fn send_certificate_request(self, server: &mut Server) -> Result<Self, Error> {
         debug!("Sending CertificateRequest");
         // Select CertificateRequest.signature_algorithms as intersection of client's list and our supported
@@ -552,6 +637,16 @@ impl State {
         server
             .engine
             .create_handshake(MessageType::ServerHelloDone, |_, _| Ok(()))?;
+
+        let cs = server
+            .engine
+            .cipher_suite()
+            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+
+        // PSK: no client certificates
+        if cs.is_psk() {
+            return Ok(Self::AwaitClientKeyExchange);
+        }
 
         if server.engine.config().require_client_certificate() {
             Ok(Self::AwaitCertificate)
@@ -627,31 +722,83 @@ impl State {
             .cipher_suite()
             .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
 
-        // Extract client's public key range before dropping handshake
-        let public_key_range = match &ckx.exchange_keys {
-            ExchangeKeys::Ecdh(keys) => keys.public_key_range.clone(),
-        };
+        if suite.is_psk() {
+            // Extract PSK identity range before dropping handshake
+            let identity_range = match &ckx.exchange_keys {
+                ExchangeKeys::Psk(keys) => keys.identity_range.clone(),
+                _ => {
+                    return Err(Error::UnexpectedMessage(
+                        "ECDHE ClientKeyExchange in PSK path".to_string(),
+                    ));
+                }
+            };
 
-        drop(maybe);
+            drop(maybe);
 
-        // Get the actual public key data from defragment_buffer
-        let client_pub = &server.defragment_buffer[public_key_range];
+            let identity = &server.defragment_buffer[identity_range];
+            trace!("PSK identity ({} bytes)", identity.len());
 
-        // Compute shared secret
-        let mut buf = server.engine.pop_buffer();
-        server
-            .engine
-            .crypto_context_mut()
-            .compute_shared_secret(client_pub, &mut buf)
-            .map_err(|e| Error::CryptoError(format!("Failed to compute shared secret: {}", e)))?;
+            // Resolve PSK via the configured resolver. On failure we derive a
+            // random dummy of fixed length so the handshake proceeds identically
+            // to a valid-identity flow (no timing oracle) and the Finished MAC
+            // is guaranteed to mismatch — not merely likely to.
+            let resolved = server
+                .engine
+                .config()
+                .psk_resolver()
+                .ok_or_else(|| Error::PskError("No PSK resolver configured".to_string()))?
+                .resolve(identity);
+
+            let (psk, psk_valid) = match resolved {
+                Some(key) => (key, true),
+                None => {
+                    let dummy: [u8; DUMMY_PSK_LEN] = server.engine.rng.random();
+                    (dummy.to_vec(), false)
+                }
+            };
+
+            server.psk_valid = Some(psk_valid);
+
+            let crypto = server.engine.crypto_context_mut();
+            crypto.set_psk(psk);
+            crypto
+                .compute_psk_pre_master_secret()
+                .map_err(|e| Error::CryptoError(format!("Failed to compute PSK PMS: {}", e)))?;
+        } else {
+            // Extract client's public key range before dropping handshake
+            let public_key_range = match &ckx.exchange_keys {
+                ExchangeKeys::Ecdh(keys) => keys.public_key_range.clone(),
+                ExchangeKeys::Psk(_) => {
+                    return Err(Error::UnexpectedMessage(
+                        "PSK ClientKeyExchange in ECDHE path".to_string(),
+                    ));
+                }
+            };
+
+            drop(maybe);
+
+            // Get the actual public key data from defragment_buffer
+            let client_pub = &server.defragment_buffer[public_key_range];
+
+            // Compute shared secret
+            let mut buf = server.engine.pop_buffer();
+            server
+                .engine
+                .crypto_context_mut()
+                .compute_shared_secret(client_pub, &mut buf)
+                .map_err(|e| {
+                    Error::CryptoError(format!("Failed to compute shared secret: {}", e))
+                })?;
+            server.engine.push_buffer(buf);
+        }
 
         // Capture session hash for EMS now (up to ClientKeyExchange)
         let suite_hash = suite.hash_algorithm();
+        let mut buf = server.engine.pop_buffer();
         server.engine.transcript_hash(suite_hash, &mut buf);
         server.captured_session_hash = Some(buf);
 
         // Derive master secret and keys (needed to decrypt client's Finished)
-        let suite_hash = suite.hash_algorithm();
         let client_random_buf = {
             let mut b = Buf::new();
             server.client_random.unwrap().serialize(&mut b);
@@ -823,6 +970,20 @@ impl State {
         // Use constant-time comparison to prevent timing attacks
         let is_eq: bool = verify_data.ct_eq(expected.as_slice()).into();
         if !is_eq {
+            return Err(Error::SecurityError(
+                "Client Finished verification failed".to_string(),
+            ));
+        }
+
+        // Defense-in-depth for PSK: the random dummy key should already make
+        // the MAC above fail when the identity was unknown. We additionally
+        // reject `Some(false)` explicitly so a future refactor that lets the
+        // dummy path survive the MAC check still fails closed here.
+        //
+        // `None` is legitimate for abbreviated (resumption) handshakes, which
+        // skip ClientKeyExchange and therefore never set psk_valid — those
+        // paths reuse a cached master_secret and don't consult the resolver.
+        if server.psk_valid == Some(false) {
             return Err(Error::SecurityError(
                 "Client Finished verification failed".to_string(),
             ));

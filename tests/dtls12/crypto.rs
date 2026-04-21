@@ -67,7 +67,8 @@ fn dtls12_all_cipher_suites() {
     let _ = env_logger::try_init();
 
     // Loop over all supported cipher suites and ensure we can connect
-    for &suite in Dtls12CipherSuite::all().iter() {
+    // Skip PSK suites — they require PSK config, not certificate-based interop
+    for &suite in Dtls12CipherSuite::all().iter().filter(|s| !s.is_psk()) {
         eprintln!("Testing suite (dimpl client ↔️ ossl server): {:?}", suite);
 
         run_dimpl_client_vs_ossl_server_for_suite(suite);
@@ -101,8 +102,8 @@ fn config_for_suite(suite: Dtls12CipherSuite) -> Arc<Config> {
 fn run_dimpl_client_vs_ossl_server_for_suite(suite: Dtls12CipherSuite) {
     // Generate certificates for both client and server matching the suite's signature algorithm
     let pkey_type = match suite.signature_algorithm() {
-        SignatureAlgorithm::ECDSA => DtlsPKeyType::EcDsaP256,
-        SignatureAlgorithm::RSA => DtlsPKeyType::Rsa2048,
+        Some(SignatureAlgorithm::ECDSA) => DtlsPKeyType::EcDsaP256,
+        Some(SignatureAlgorithm::RSA) => DtlsPKeyType::Rsa2048,
         _ => panic!("Unsupported signature algorithm in suite: {:?}", suite),
     };
 
@@ -211,8 +212,8 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: Dtls12CipherSuite) {
 fn run_ossl_client_vs_dimpl_server_for_suite(suite: Dtls12CipherSuite) {
     // Generate certificates for both ends
     let pkey_type = match suite.signature_algorithm() {
-        SignatureAlgorithm::ECDSA => DtlsPKeyType::EcDsaP256,
-        SignatureAlgorithm::RSA => DtlsPKeyType::Rsa2048,
+        Some(SignatureAlgorithm::ECDSA) => DtlsPKeyType::EcDsaP256,
+        Some(SignatureAlgorithm::RSA) => DtlsPKeyType::Rsa2048,
         _ => panic!("Unsupported signature algorithm in suite: {:?}", suite),
     };
 

@@ -3,45 +3,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Dtls, Output};
+use dimpl::Dtls;
 
 use crate::common::*;
-
-/// Collected outputs from polling a DTLS 1.2 endpoint to `Timeout`.
-#[derive(Default, Debug)]
-struct DrainedOutputs {
-    packets: Vec<Vec<u8>>,
-    connected: bool,
-    app_data: Vec<Vec<u8>>,
-    timeout: Option<Instant>,
-}
-
-/// Poll until `Timeout`, collecting everything.
-fn drain_outputs(endpoint: &mut Dtls) -> DrainedOutputs {
-    let mut result = DrainedOutputs::default();
-    let mut buf = vec![0u8; 2048];
-    loop {
-        match endpoint.poll_output(&mut buf) {
-            Output::Packet(p) => result.packets.push(p.to_vec()),
-            Output::Connected => result.connected = true,
-            Output::ApplicationData(data) => result.app_data.push(data.to_vec()),
-            Output::Timeout(t) => {
-                result.timeout = Some(t);
-                break;
-            }
-            _ => {}
-        }
-    }
-    result
-}
-
-/// Deliver a slice of packets to a destination endpoint.
-fn deliver_packets(packets: &[Vec<u8>], dest: &mut Dtls) {
-    for p in packets {
-        // Ignore errors - they may be expected for duplicates/replays
-        let _ = dest.handle_packet(p);
-    }
-}
 
 /// Complete a full DTLS 1.2 handshake between client and server.
 ///

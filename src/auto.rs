@@ -105,7 +105,7 @@ impl HybridClientHello {
         ch_body.push(0);
 
         // cipher_suites: 1.3 suites first, then 1.2 suites (filtered by config)
-        let mut suites: ArrayVec<u16, 8> = ArrayVec::new();
+        let mut suites: ArrayVec<u16, 16> = ArrayVec::new();
         for cs in config.dtls13_cipher_suites() {
             suites.push(cs.suite().as_u16());
         }
