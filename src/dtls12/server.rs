@@ -975,6 +975,19 @@ impl State {
             ));
         }
 
+        // Invariant: full PSK handshakes always set psk_valid in
+        // await_client_key_exchange before reaching Finished. A violation is a
+        // state-machine bug, not network input — `assert!` (not debug_assert!)
+        // because a silent bypass could let a forged-PSK Finished through.
+        // Loosen when dtls-conn-id lands and abbreviated handshakes legitimately
+        // skip ClientKeyExchange (reusing a cached master secret).
+        if server.engine.cipher_suite().is_some_and(|cs| cs.is_psk()) {
+            assert!(
+                server.psk_valid.is_some(),
+                "PSK handshake reached Finished without processing ClientKeyExchange"
+            );
+        }
+
         // Defense-in-depth for PSK: the random dummy key should already make
         // the MAC above fail when the identity was unknown. We additionally
         // reject `Some(false)` explicitly so a future refactor that lets the

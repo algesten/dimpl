@@ -13,20 +13,6 @@ use crate::dtls12::message::{Asn1Cert, Certificate};
 use crate::dtls12::message::{CurveType, Dtls12CipherSuite, HashAlgorithm};
 use crate::dtls12::message::{NamedGroup, SignatureAlgorithm};
 
-/// Authentication mode for a DTLS 1.2 session.
-pub enum AuthMode {
-    /// Certificate-based authentication (ECDHE_ECDSA suites).
-    Certificate {
-        /// DER-encoded certificate.
-        certificate: Vec<u8>,
-        /// Parsed signing key for the certificate.
-        private_key: Box<dyn crypto::SigningKey>,
-    },
-    /// Pre-shared key authentication (PSK suites).
-    /// The actual PSK value is resolved during the handshake via [`CryptoContext::set_psk`].
-    Psk,
-}
-
 /// DTLS 1.2 crypto context holding negotiated keys and ciphers for a session.
 pub struct CryptoContext {
     /// Configuration (contains crypto provider)
@@ -82,6 +68,20 @@ pub struct CryptoContext {
 
     /// Server random (needed for SRTP key export per RFC 5705)
     server_random: Option<ArrayVec<u8, 32>>,
+}
+
+/// Authentication mode for a DTLS 1.2 session.
+pub enum AuthMode {
+    /// Certificate-based authentication (ECDHE_ECDSA suites).
+    Certificate {
+        /// DER-encoded certificate.
+        certificate: Vec<u8>,
+        /// Parsed signing key for the certificate.
+        private_key: Box<dyn crypto::SigningKey>,
+    },
+    /// Pre-shared key authentication (PSK suites).
+    /// The actual PSK value is resolved during the handshake via [`CryptoContext::set_psk`].
+    Psk,
 }
 
 impl CryptoContext {

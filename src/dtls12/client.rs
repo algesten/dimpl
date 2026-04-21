@@ -570,51 +570,6 @@ impl State {
         }
     }
 
-    /// PSK ServerKeyExchange carries only an optional identity hint (no signature).
-    /// Per RFC 4279 §2, ServerKeyExchange is omitted when the server has no hint.
-    fn await_server_key_exchange_psk(self, client: &mut Client) -> Result<Self, Error> {
-        // If the server skipped ServerKeyExchange (no hint), go straight to ServerHelloDone
-        let has_done = client
-            .engine
-            .has_complete_handshake(MessageType::ServerHelloDone);
-        if has_done {
-            return Ok(Self::AwaitServerHelloDone);
-        }
-
-        let maybe = client.engine.next_handshake(
-            MessageType::ServerKeyExchange,
-            &mut client.defragment_buffer,
-        )?;
-
-        let Some(handshake) = maybe else {
-            return Ok(self);
-        };
-
-        let Body::ServerKeyExchange(ske) = &handshake.body else {
-            unreachable!()
-        };
-
-        // PSK ServerKeyExchange contains only an identity hint per RFC 4279 §2
-        // (no curve_type or named_group — those are ECDHE-only parameters).
-        let hint_range = match &ske.params {
-            ServerKeyExchangeParams::Psk(psk) => psk.hint_range.clone(),
-            _ => {
-                return Err(Error::UnexpectedMessage(
-                    "ECDHE ServerKeyExchange in PSK path".to_string(),
-                ));
-            }
-        };
-
-        drop(handshake);
-
-        let hint = &client.defragment_buffer[hint_range];
-        trace!("PSK identity hint ({} bytes)", hint.len());
-        // Hint is informational only; we don't use it for PSK lookup currently
-
-        // PSK has no CertificateRequest
-        Ok(Self::AwaitServerHelloDone)
-    }
-
     fn await_server_key_exchange_ecdhe(self, client: &mut Client) -> Result<Self, Error> {
         let maybe = client.engine.next_handshake(
             MessageType::ServerKeyExchange,
@@ -748,6 +703,51 @@ impl State {
         client.engine.push_buffer(kx_buf);
 
         Ok(Self::AwaitCertificateRequest)
+    }
+
+    /// PSK ServerKeyExchange carries only an optional identity hint (no signature).
+    /// Per RFC 4279 §2, ServerKeyExchange is omitted when the server has no hint.
+    fn await_server_key_exchange_psk(self, client: &mut Client) -> Result<Self, Error> {
+        // If the server skipped ServerKeyExchange (no hint), go straight to ServerHelloDone
+        let has_done = client
+            .engine
+            .has_complete_handshake(MessageType::ServerHelloDone);
+        if has_done {
+            return Ok(Self::AwaitServerHelloDone);
+        }
+
+        let maybe = client.engine.next_handshake(
+            MessageType::ServerKeyExchange,
+            &mut client.defragment_buffer,
+        )?;
+
+        let Some(handshake) = maybe else {
+            return Ok(self);
+        };
+
+        let Body::ServerKeyExchange(ske) = &handshake.body else {
+            unreachable!()
+        };
+
+        // PSK ServerKeyExchange contains only an identity hint per RFC 4279 §2
+        // (no curve_type or named_group — those are ECDHE-only parameters).
+        let hint_range = match &ske.params {
+            ServerKeyExchangeParams::Psk(psk) => psk.hint_range.clone(),
+            _ => {
+                return Err(Error::UnexpectedMessage(
+                    "ECDHE ServerKeyExchange in PSK path".to_string(),
+                ));
+            }
+        };
+
+        drop(handshake);
+
+        let hint = &client.defragment_buffer[hint_range];
+        trace!("PSK identity hint ({} bytes)", hint.len());
+        // Hint is informational only; we don't use it for PSK lookup currently
+
+        // PSK has no CertificateRequest
+        Ok(Self::AwaitServerHelloDone)
     }
 
     fn await_certificate_request(self, client: &mut Client) -> Result<Self, Error> {
