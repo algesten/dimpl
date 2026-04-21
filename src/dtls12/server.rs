@@ -981,11 +981,7 @@ impl State {
         // because a silent bypass could let a forged-PSK Finished through.
         // Loosen when dtls-conn-id lands and abbreviated handshakes legitimately
         // skip ClientKeyExchange (reusing a cached master secret).
-        if server
-            .engine
-            .cipher_suite()
-            .is_some_and(|cs| cs.is_psk())
-        {
+        if server.engine.cipher_suite().is_some_and(|cs| cs.is_psk()) {
             assert!(
                 server.psk_valid.is_some(),
                 "PSK handshake reached Finished without processing ClientKeyExchange"
