@@ -215,7 +215,10 @@ mod test {
             panic!("expected Psk variant");
         };
         assert_eq!(&PSK_MESSAGE[psk.hint_range.clone()], b"hint");
-        assert!(parsed.signature().is_none(), "PSK SKE must have no signature");
+        assert!(
+            parsed.signature().is_none(),
+            "PSK SKE must have no signature"
+        );
 
         let mut serialized = Buf::new();
         parsed.serialize(PSK_MESSAGE, &mut serialized, true);
@@ -237,8 +240,7 @@ mod test {
     fn psk_empty_hint() {
         // Zero-length hint is wire-legal (RFC 4279 §2).
         let empty: &[u8] = &[0x00, 0x00];
-        let (rest, parsed) =
-            ServerKeyExchange::parse(empty, 0, KeyExchangeAlgorithm::PSK).unwrap();
+        let (rest, parsed) = ServerKeyExchange::parse(empty, 0, KeyExchangeAlgorithm::PSK).unwrap();
         assert!(rest.is_empty());
         let ServerKeyExchangeParams::Psk(psk) = &parsed.params else {
             panic!("expected Psk variant");

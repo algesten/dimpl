@@ -928,10 +928,9 @@ mod tests {
             .dtls13_cipher_suites(&[])
             .build();
         match result {
-            Err(Error::ConfigError(msg)) => assert!(
-                msg.contains("PSK"),
-                "error should mention PSK: {msg}"
-            ),
+            Err(Error::ConfigError(msg)) => {
+                assert!(msg.contains("PSK"), "error should mention PSK: {msg}")
+            }
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!("expected error for PSK config with only non-PSK suites"),
         }
@@ -955,10 +954,9 @@ mod tests {
             .dtls12_cipher_suites(&[Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256])
             .build();
         match result {
-            Err(Error::ConfigError(msg)) => assert!(
-                msg.contains("PSK"),
-                "error should mention PSK: {msg}"
-            ),
+            Err(Error::ConfigError(msg)) => {
+                assert!(msg.contains("PSK"), "error should mention PSK: {msg}")
+            }
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!(
                 "expected error for PSK config with only non-PSK DTLS 1.2 suites, \

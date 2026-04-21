@@ -201,8 +201,7 @@ mod test {
         // (RFC 4279 §5.1 says server MAY reject this — that's an application
         // policy decision, not a parse error.)
         let empty: &[u8] = &[0x00, 0x00];
-        let (rest, parsed) =
-            ClientKeyExchange::parse(empty, 0, KeyExchangeAlgorithm::PSK).unwrap();
+        let (rest, parsed) = ClientKeyExchange::parse(empty, 0, KeyExchangeAlgorithm::PSK).unwrap();
         assert!(rest.is_empty());
         let ExchangeKeys::Psk(psk) = &parsed.exchange_keys else {
             panic!("expected Psk variant");

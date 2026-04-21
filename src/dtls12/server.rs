@@ -592,7 +592,12 @@ impl State {
     /// PSK ServerKeyExchange: send identity hint only (no ECDHE, no signature).
     /// Per RFC 4279 §2, the message is omitted entirely when no hint is configured.
     fn send_server_key_exchange_psk(self, server: &mut Server) -> Result<Self, Error> {
-        let Some(hint) = server.engine.config().psk_identity_hint().map(<[u8]>::to_vec) else {
+        let Some(hint) = server
+            .engine
+            .config()
+            .psk_identity_hint()
+            .map(<[u8]>::to_vec)
+        else {
             return Ok(Self::SendServerHelloDone);
         };
 

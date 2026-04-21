@@ -10,9 +10,8 @@ use crate::crypto::SrtpProfile;
 use crate::crypto::{Aad, Iv, Nonce};
 use crate::dtls12::message::DigitallySigned;
 use crate::dtls12::message::{Asn1Cert, Certificate};
-use crate::dtls12::message::{
-    CurveType, Dtls12CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm,
-};
+use crate::dtls12::message::{CurveType, Dtls12CipherSuite, HashAlgorithm};
+use crate::dtls12::message::{NamedGroup, SignatureAlgorithm};
 
 /// Authentication mode for a DTLS 1.2 session.
 pub enum AuthMode {
