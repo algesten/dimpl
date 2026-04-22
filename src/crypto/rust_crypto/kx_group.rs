@@ -47,7 +47,7 @@ impl EcdhKeyExchange {
         match group {
             NamedGroup::X25519 => {
                 use rand_core::OsRng;
-                let secret = x25519_dalek::EphemeralSecret::random_from_rng(&mut OsRng);
+                let secret = x25519_dalek::EphemeralSecret::random_from_rng(OsRng);
                 let public_key_obj = x25519_dalek::PublicKey::from(&secret);
                 buf.clear();
                 buf.extend_from_slice(public_key_obj.as_bytes());

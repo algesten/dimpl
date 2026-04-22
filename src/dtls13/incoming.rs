@@ -29,17 +29,6 @@ impl Incoming {
     pub fn into_records(self) -> impl Iterator<Item = Record> {
         self.records.records.into_iter()
     }
-
-    /// Create an Incoming from pre-filtered records.
-    /// Returns None if records is empty (same invariant as parse_packet).
-    pub fn from_records(records: ArrayVec<Record, 16>) -> Option<Self> {
-        if records.is_empty() {
-            return None;
-        }
-        Some(Incoming {
-            records: Box::new(Records { records }),
-        })
-    }
 }
 
 impl Incoming {
@@ -52,7 +41,7 @@ impl Incoming {
     /// Will surface parser errors.
     pub fn parse_packet(
         packet: &[u8],
-        decrypt: &mut dyn RecordDecrypt,
+        decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls13CipherSuite>,
     ) -> Result<Option<Self>, Error> {
         // Parse records directly from packet, copying each record ONCE into its own buffer
@@ -79,10 +68,10 @@ pub struct Records {
 impl Records {
     pub fn parse(
         mut packet: &[u8],
-        decrypt: &mut dyn RecordDecrypt,
+        decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls13CipherSuite>,
     ) -> Result<Records, Error> {
-        let mut records = ArrayVec::new();
+        let mut parsed_records: ArrayVec<Record, 16> = ArrayVec::new();
 
         // Find record boundaries and copy each record ONCE from the packet
         while !packet.is_empty() {
@@ -143,7 +132,7 @@ impl Records {
             match Record::parse(record_slice, decrypt, cs) {
                 Ok(record) => {
                     if let Some(record) = record {
-                        if records.try_push(record).is_err() {
+                        if parsed_records.try_push(record).is_err() {
                             return Err(Error::TooManyRecords);
                         }
                     } else {
@@ -154,6 +143,15 @@ impl Records {
             }
 
             packet = &packet[record_end..];
+        }
+
+        let mut records = ArrayVec::new();
+        for record in parsed_records {
+            if let Some(record) = decrypt.classify_record(record)? {
+                records
+                    .try_push(record)
+                    .expect("filtered records cannot exceed parsed records");
+            }
         }
 
         Ok(Records { records })
@@ -180,7 +178,7 @@ impl Record {
     /// Copies record data from UDP packet ONCE into a pooled buffer.
     pub fn parse(
         record_slice: &[u8],
-        decrypt: &mut dyn RecordDecrypt,
+        decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls13CipherSuite>,
     ) -> Result<Option<Record>, Error> {
         // ONLY COPY: UDP packet slice -> pooled buffer
@@ -392,11 +390,13 @@ impl ParsedRecord {
     }
 }
 
-/// Trait abstracting the decryption operations needed for parsing incoming records.
+/// Trait abstracting record parsing-time handling for incoming records.
 ///
-/// This decouples the record parser from the full `Engine`, allowing incoming record
-/// parsing to depend only on the cryptographic operations it actually uses.
-pub trait RecordDecrypt {
+/// This decouples the record parser from the full `Engine`, allowing the parse loop
+/// to decrypt records, classify control records, and queue only the records that
+/// should survive into `Incoming`.
+pub trait RecordHandler {
+    fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error>;
     fn is_peer_encryption_enabled(&self) -> bool;
     fn resolve_epoch(&self, epoch_bits: u8) -> u16;
     fn resolve_sequence(&self, epoch: u16, seq_bits: u64, s_flag: bool) -> u64;
@@ -513,3 +513,105 @@ invariants are later observed across a catch_unwind boundary. Marking Incoming
 as UnwindSafe is a sound assertion and clarifies behavior for callers.
 */
 impl std::panic::UnwindSafe for Incoming {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct TestHandler {
+        classify_calls: usize,
+        dropped_acks: usize,
+    }
+
+    impl RecordHandler for TestHandler {
+        fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
+            self.classify_calls += 1;
+            if record.record().content_type == ContentType::Ack {
+                self.dropped_acks += 1;
+                return Ok(None);
+            }
+            Ok(Some(record))
+        }
+
+        fn is_peer_encryption_enabled(&self) -> bool {
+            false
+        }
+
+        fn resolve_epoch(&self, _epoch_bits: u8) -> u16 {
+            panic!("resolve_epoch should not be called when peer encryption is disabled");
+        }
+
+        fn resolve_sequence(&self, _epoch: u16, _seq_bits: u64, _s_flag: bool) -> u64 {
+            panic!("resolve_sequence should not be called when peer encryption is disabled");
+        }
+
+        fn replay_check(&self, _seq: Sequence) -> bool {
+            panic!("replay_check should not be called when peer encryption is disabled");
+        }
+
+        fn replay_update(&mut self, _seq: Sequence) {
+            panic!("replay_update should not be called when peer encryption is disabled");
+        }
+
+        fn decrypt_record(
+            &mut self,
+            _header: &[u8],
+            _seq: Sequence,
+            _ciphertext: &mut TmpBuf,
+        ) -> Result<(), Error> {
+            panic!("decrypt_record should not be called when peer encryption is disabled");
+        }
+
+        fn decrypt_sequence_number(
+            &self,
+            _epoch: u16,
+            _seq_bytes: &mut [u8],
+            _ciphertext_sample: &[u8; 16],
+        ) {
+            panic!("decrypt_sequence_number should not be called when peer encryption is disabled");
+        }
+    }
+
+    fn build_plaintext_record(content_type: ContentType, seq: u64, fragment: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.push(content_type.as_u8());
+        out.extend_from_slice(&[0xFE, 0xFD]);
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&seq.to_be_bytes()[2..]);
+        out.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+        out.extend_from_slice(fragment);
+        out
+    }
+
+    fn build_ciphertext_record(epoch: u16, seq: u16, fragment: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let flags = 0b0010_0000 | 0b0000_1000 | 0b0000_0100 | (epoch as u8 & 0x03);
+        out.push(flags);
+        out.extend_from_slice(&seq.to_be_bytes());
+        out.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+        out.extend_from_slice(fragment);
+        out
+    }
+
+    #[test]
+    fn parse_packet_filters_control_records_after_packet_validation() {
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&build_plaintext_record(ContentType::Ack, 1, &[0xAA, 0xBB]));
+        packet.extend_from_slice(&build_ciphertext_record(2, 2, &[0x11, 0x22, 0x33]));
+
+        let mut handler = TestHandler::default();
+        let incoming = Incoming::parse_packet(&packet, &mut handler, None)
+            .unwrap()
+            .expect("ciphertext application data record should remain");
+
+        assert_eq!(handler.classify_calls, 2);
+        assert_eq!(handler.dropped_acks, 1);
+        assert_eq!(incoming.records().len(), 1);
+        assert_eq!(
+            incoming.first().record().content_type,
+            ContentType::ApplicationData
+        );
+        assert_eq!(incoming.first().record().sequence.epoch, 2);
+    }
+}

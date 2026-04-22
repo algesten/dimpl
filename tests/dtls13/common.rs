@@ -16,6 +16,7 @@ pub struct DrainedOutputs {
     pub keying_material: Option<(Vec<u8>, SrtpProfile)>,
     pub app_data: Vec<Vec<u8>>,
     pub timeout: Option<Instant>,
+    pub close_notify: bool,
 }
 
 /// Poll until `Timeout`, collecting only packets.
@@ -45,6 +46,7 @@ pub fn drain_outputs(endpoint: &mut Dtls) -> DrainedOutputs {
                 result.keying_material = Some((km.to_vec(), profile));
             }
             Output::ApplicationData(data) => result.app_data.push(data.to_vec()),
+            Output::CloseNotify => result.close_notify = true,
             Output::Timeout(t) => {
                 result.timeout = Some(t);
                 break;
@@ -69,6 +71,40 @@ pub fn trigger_timeout(ep: &mut Dtls, now: &mut Instant) {
     ep.handle_timeout(*now).expect("handle_timeout");
 }
 
+/// Complete a full DTLS 1.3 handshake between client and server.
+///
+/// Returns the final `Instant` (time advanced during the handshake).
+/// Panics if the handshake does not complete within the iteration limit.
+pub fn complete_dtls13_handshake(
+    client: &mut Dtls,
+    server: &mut Dtls,
+    mut now: Instant,
+) -> Instant {
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(client);
+        let server_out = drain_outputs(server);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+
+        deliver_packets(&client_out.packets, server);
+        deliver_packets(&server_out.packets, client);
+
+        if client_connected && server_connected {
+            return now;
+        }
+        now += Duration::from_millis(10);
+    }
+
+    panic!("DTLS 1.3 handshake did not complete within iteration limit");
+}
+
 /// Create a DTLS 1.3 config with default settings.
 pub fn dtls13_config() -> Arc<Config> {
     Arc::new(
@@ -86,4 +122,25 @@ pub fn dtls13_config_with_mtu(mtu: usize) -> Arc<Config> {
             .build()
             .expect("Failed to build DTLS 1.3 config"),
     )
+}
+
+/// Create a connected DTLS 1.3 client/server pair with self-signed certificates.
+///
+/// Returns `(client, server, now)` with the handshake already completed.
+#[cfg(feature = "rcgen")]
+pub fn setup_connected_13_pair(now: Instant) -> (Dtls, Dtls, Instant) {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let config = dtls13_config();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    let now = complete_dtls13_handshake(&mut client, &mut server, now);
+    (client, server, now)
 }

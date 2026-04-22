@@ -2,6 +2,7 @@
 
 # 0.6.0
 
+  * Implement graceful shutdown #91
   * Add PSK (Pre-Shared Key) cipher suite `PSK_AES128_CCM_8` for DTLS 1.2 (breaking) #92
   * Fix DTLS 1.2 signature hash mismatch for P-384 keys #97
 

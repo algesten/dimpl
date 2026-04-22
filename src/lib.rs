@@ -71,6 +71,7 @@
 //! - `PeerCert(&[u8])`: peer leaf certificate (DER) — validate in your app
 //! - `KeyingMaterial(KeyingMaterial, SrtpProfile)`: DTLS‑SRTP export
 //! - `ApplicationData(&[u8])`: plaintext received from peer
+//! - `CloseNotify`: peer sent a graceful shutdown alert
 //!
 //! # Example (Sans‑IO loop)
 //!
@@ -107,6 +108,9 @@
 //!                 }
 //!                 Output::ApplicationData(_data) => {
 //!                     // Deliver plaintext to application
+//!                 }
+//!                 Output::CloseNotify => {
+//!                     // Peer initiated graceful shutdown
 //!                 }
 //!                 _ => {}
 //!             }
@@ -279,6 +283,17 @@ enum Inner {
     ClientPending(ClientPending),
 }
 
+fn is_dtls12_psk_only(config: &Config) -> bool {
+    if config.dtls13_cipher_suites().next().is_some() {
+        return false;
+    }
+
+    let mut suites = config.dtls12_cipher_suites().map(|cs| cs.suite());
+    suites
+        .next()
+        .is_some_and(|first| first.is_psk() && suites.all(|s| s.is_psk()))
+}
+
 impl Dtls {
     /// Create a new DTLS 1.2 instance in the server role.
     ///
@@ -339,9 +354,14 @@ impl Dtls {
     /// **Client role** ([`set_active(true)`](Self::set_active)): the
     /// instance sends a hybrid ClientHello compatible with both DTLS 1.2
     /// and 1.3 servers and forks into the correct handshake once the
-    /// server responds.
+    /// server responds. If the configuration only enables PSK DTLS 1.2
+    /// suites, `new_auto` delegates to the DTLS 1.2 PSK state machine.
     pub fn new_auto(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Self {
-        let inner = Inner::Server13(Server13::new_auto(config, certificate, now));
+        let inner = if is_dtls12_psk_only(config.as_ref()) {
+            Inner::Server12(Server12::new_psk(config, now))
+        } else {
+            Inner::Server13(Server13::new_auto(config, certificate, now))
+        };
         Dtls { inner: Some(inner) }
     }
 
@@ -582,6 +602,38 @@ impl Dtls {
             Inner::ClientPending(_) => Err(Error::HandshakePending),
         }
     }
+
+    /// Initiate graceful shutdown by sending a `close_notify` alert.
+    ///
+    /// **Connected** (`AwaitApplicationData`): queues a `close_notify` alert;
+    /// the next [`poll_output`](Self::poll_output) cycle yields it as
+    /// [`Output::Packet`].
+    ///
+    /// **Handshake in progress**: aborts immediately without sending an
+    /// alert (no authenticated channel exists). Subsequent calls to
+    /// [`send_application_data`](Self::send_application_data) will return
+    /// an error.
+    ///
+    /// **Pending** (version not yet resolved): returns
+    /// [`Error::HandshakePending`]. Callers who want to discard a pending
+    /// connection can simply drop the [`Dtls`] value.
+    ///
+    /// The alert is not retransmitted (per RFC 6347 §4.2.7 / RFC 9147 §5.10).
+    pub fn close(&mut self) -> Result<(), Error> {
+        let inner = self.inner.as_mut().unwrap();
+
+        if inner.is_pending() {
+            return Err(Error::HandshakePending);
+        }
+
+        match inner {
+            Inner::Client12(client) => client.close(),
+            Inner::Server12(server) => server.close(),
+            Inner::Client13(client) => client.close(),
+            Inner::Server13(server) => server.close(),
+            Inner::ClientPending(_) => Err(Error::HandshakePending),
+        }
+    }
 }
 
 impl Inner {
@@ -632,6 +684,8 @@ pub enum Output<'a> {
     KeyingMaterial(KeyingMaterial, SrtpProfile),
     /// Received application data plaintext.
     ApplicationData(&'a [u8]),
+    /// The peer sent a `close_notify` alert, indicating graceful connection closure.
+    CloseNotify,
 }
 
 impl fmt::Debug for Output<'_> {
@@ -643,6 +697,7 @@ impl fmt::Debug for Output<'_> {
             Self::PeerCert(v) => write!(f, "PeerCert({})", v.len()),
             Self::KeyingMaterial(v, p) => write!(f, "KeyingMaterial({}, {:?})", v.len(), p),
             Self::ApplicationData(v) => write!(f, "ApplicationData({})", v.len()),
+            Self::CloseNotify => write!(f, "CloseNotify"),
         }
     }
 }
@@ -653,8 +708,17 @@ mod test {
     use std::panic::UnwindSafe;
 
     use crate::certificate::generate_self_signed_certificate;
+    use crate::crypto::Dtls12CipherSuite;
 
     use super::*;
+
+    struct FixedPsk;
+
+    impl PskResolver for FixedPsk {
+        fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+            Some(b"0123456789abcdef".to_vec())
+        }
+    }
 
     fn new_instance() -> Dtls {
         let client_cert =
@@ -746,6 +810,28 @@ mod test {
     }
 
     #[test]
+    fn test_auto_psk_only_dtls12_uses_dtls12_path() {
+        let cert = generate_self_signed_certificate().expect("Failed to generate cert");
+        let config = Arc::new(
+            Config::builder()
+                .with_psk_client(b"identity".to_vec(), Arc::new(FixedPsk))
+                .dtls12_cipher_suites(&[Dtls12CipherSuite::PSK_AES128_CCM_8])
+                .dtls13_cipher_suites(&[])
+                .build()
+                .expect("PSK-only DTLS 1.2 config should build"),
+        );
+
+        let mut dtls = Dtls::new_auto(config, cert, Instant::now());
+        dtls.set_active(true);
+
+        assert!(dtls.is_active(), "client should become active");
+        assert!(
+            matches!(dtls.inner, Some(Inner::Client12(_))),
+            "PSK-only DTLS 1.2 auto config should reuse the DTLS 1.2 client path"
+        );
+    }
+
+    #[test]
     fn is_send() {
         fn is_send<T: Send>(_t: T) {}
         fn is_sync<T: Sync>(_t: T) {}
@@ -794,6 +880,13 @@ mod test {
     fn test_auto_server_send_application_data_pending() {
         let mut dtls = new_instance_auto();
         let err = dtls.send_application_data(b"early data").unwrap_err();
+        assert!(matches!(err, Error::HandshakePending));
+    }
+
+    #[test]
+    fn test_auto_close_pending() {
+        let mut dtls = new_instance_auto();
+        let err = dtls.close().unwrap_err();
         assert!(matches!(err, Error::HandshakePending));
     }
 }

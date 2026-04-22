@@ -120,6 +120,7 @@ enum State {
     SendChangeCipherSpec,
     SendFinished,
     AwaitApplicationData,
+    Closed,
 }
 
 impl Server {
@@ -189,13 +190,10 @@ impl Server {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
-        let last_now = self.last_now;
-
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.client_certificates);
         }
-
-        self.engine.poll_output(buf, last_now)
+        self.engine.poll_output(buf, self.last_now)
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
@@ -210,6 +208,10 @@ impl Server {
 
     /// Send application data when the server is in the Running state
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
+        if self.state == State::Closed {
+            return Err(Error::ConnectionClosed);
+        }
+
         if self.state != State::AwaitApplicationData {
             self.queued_data.push(data.to_buf());
             return Ok(());
@@ -222,6 +224,25 @@ impl Server {
                 body.extend_from_slice(data);
             })?;
 
+        Ok(())
+    }
+
+    /// Initiate graceful shutdown by sending a `close_notify` alert.
+    pub fn close(&mut self) -> Result<(), Error> {
+        if self.state == State::Closed {
+            return Ok(());
+        }
+        if self.state != State::AwaitApplicationData {
+            self.engine.abort();
+            self.state = State::Closed;
+            return Ok(());
+        }
+        self.engine
+            .create_record(ContentType::Alert, 1, false, |body| {
+                body.push(1); // level: warning
+                body.push(0); // description: close_notify
+            })?;
+        self.state = State::Closed;
         Ok(())
     }
 
@@ -258,6 +279,7 @@ impl State {
             State::SendChangeCipherSpec => "SendChangeCipherSpec",
             State::SendFinished => "SendFinished",
             State::AwaitApplicationData => "AwaitApplicationData",
+            State::Closed => "Closed",
         }
     }
 
@@ -277,6 +299,7 @@ impl State {
             State::SendChangeCipherSpec => self.send_change_cipher_spec(server),
             State::SendFinished => self.send_finished(server),
             State::AwaitApplicationData => self.await_application_data(server),
+            State::Closed => Ok(self),
         }
     }
 
@@ -1080,6 +1103,19 @@ impl State {
     }
 
     fn await_application_data(self, server: &mut Server) -> Result<Self, Error> {
+        if server.engine.close_notify_received() {
+            // RFC 5246 §7.2.1: respond with a reciprocal close_notify and
+            // close down immediately, discarding any pending writes.
+            server.engine.discard_pending_writes();
+            server
+                .engine
+                .create_record(ContentType::Alert, 1, false, |body| {
+                    body.push(1); // level: warning
+                    body.push(0); // description: close_notify
+                })?;
+            return Ok(State::Closed);
+        }
+
         // Now send any application data that was queued before we were connected.
         if !server.queued_data.is_empty() {
             debug!(
@@ -1305,6 +1341,58 @@ fn select_named_group(
     server_groups.first().copied()
 }
 
+fn select_ske_signature_algorithm(
+    client_algs: Option<&SignatureAndHashAlgorithmVec>,
+    our_sig: SignatureAlgorithm,
+    our_hash: HashAlgorithm,
+    supported_hashes: &[HashAlgorithm],
+) -> SignatureAndHashAlgorithm {
+    // Prefer the key's native hash first, then fall back to the other
+    let hash_pref = match our_hash {
+        HashAlgorithm::SHA384 => [HashAlgorithm::SHA384, HashAlgorithm::SHA256],
+        _ => [HashAlgorithm::SHA256, HashAlgorithm::SHA384],
+    };
+
+    if let Some(list) = client_algs {
+        for h in hash_pref.iter() {
+            // Only consider hash algorithms the backend can actually sign with
+            if !supported_hashes.contains(h) {
+                continue;
+            }
+            if let Some(chosen) = list
+                .iter()
+                .find(|alg| alg.signature == our_sig && alg.hash == *h)
+            {
+                return *chosen;
+            }
+        }
+    }
+
+    // Fallback: use the key's native hash
+    SignatureAndHashAlgorithm::new(our_hash, our_sig)
+}
+
+fn select_certificate_request_sig_algs(
+    client_algs: Option<&SignatureAndHashAlgorithmVec>,
+) -> SignatureAndHashAlgorithmVec {
+    // Our supported set (RSA/ECDSA with SHA256/384)
+    let ours = SignatureAndHashAlgorithm::supported();
+
+    // Build intersection preserving client preference order
+    let mut out = ArrayVec::new();
+    if let Some(list) = client_algs {
+        for alg in list.iter() {
+            if ours
+                .iter()
+                .any(|a| a.hash == alg.hash && a.signature == alg.signature)
+            {
+                out.push(*alg);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1359,56 +1447,4 @@ mod tests {
 
         assert_eq!(selected, None);
     }
-}
-
-fn select_ske_signature_algorithm(
-    client_algs: Option<&SignatureAndHashAlgorithmVec>,
-    our_sig: SignatureAlgorithm,
-    our_hash: HashAlgorithm,
-    supported_hashes: &[HashAlgorithm],
-) -> SignatureAndHashAlgorithm {
-    // Prefer the key's native hash first, then fall back to the other
-    let hash_pref = match our_hash {
-        HashAlgorithm::SHA384 => [HashAlgorithm::SHA384, HashAlgorithm::SHA256],
-        _ => [HashAlgorithm::SHA256, HashAlgorithm::SHA384],
-    };
-
-    if let Some(list) = client_algs {
-        for h in hash_pref.iter() {
-            // Only consider hash algorithms the backend can actually sign with
-            if !supported_hashes.contains(h) {
-                continue;
-            }
-            if let Some(chosen) = list
-                .iter()
-                .find(|alg| alg.signature == our_sig && alg.hash == *h)
-            {
-                return *chosen;
-            }
-        }
-    }
-
-    // Fallback: use the key's native hash
-    SignatureAndHashAlgorithm::new(our_hash, our_sig)
-}
-
-fn select_certificate_request_sig_algs(
-    client_algs: Option<&SignatureAndHashAlgorithmVec>,
-) -> SignatureAndHashAlgorithmVec {
-    // Our supported set (RSA/ECDSA with SHA256/384)
-    let ours = SignatureAndHashAlgorithm::supported();
-
-    // Build intersection preserving client preference order
-    let mut out = ArrayVec::new();
-    if let Some(list) = client_algs {
-        for alg in list.iter() {
-            if ours
-                .iter()
-                .any(|a| a.hash == alg.hash && a.signature == alg.signature)
-            {
-                out.push(*alg);
-            }
-        }
-    }
-    out
 }
