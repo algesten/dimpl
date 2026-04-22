@@ -42,7 +42,7 @@ impl Incoming {
     /// Will surface parser errors.
     pub fn parse_packet(
         packet: &[u8],
-        decrypt: &mut dyn RecordDecrypt,
+        decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls12CipherSuite>,
     ) -> Result<Option<Self>, Error> {
         // Parse records directly from packet, copying each record ONCE into its own buffer
@@ -69,10 +69,10 @@ pub struct Records {
 impl Records {
     pub fn parse(
         mut packet: &[u8],
-        decrypt: &mut dyn RecordDecrypt,
+        decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls12CipherSuite>,
     ) -> Result<Records, Error> {
-        let mut records = ArrayVec::new();
+        let mut parsed_records: ArrayVec<Record, 8> = ArrayVec::new();
 
         // Find record boundaries and copy each record ONCE from the packet
         while !packet.is_empty() {
@@ -93,7 +93,7 @@ impl Records {
             match Record::parse(record_slice, decrypt, cs) {
                 Ok(record) => {
                     if let Some(record) = record {
-                        if records.try_push(record).is_err() {
+                        if parsed_records.try_push(record).is_err() {
                             return Err(Error::TooManyRecords);
                         }
                     } else {
@@ -104,6 +104,15 @@ impl Records {
             }
 
             packet = &packet[record_end..];
+        }
+
+        let mut records = ArrayVec::new();
+        for record in parsed_records {
+            if let Some(record) = decrypt.classify_record(record)? {
+                records
+                    .try_push(record)
+                    .expect("filtered records cannot exceed parsed records");
+            }
         }
 
         Ok(Records { records })
@@ -130,7 +139,7 @@ impl Record {
     /// Copies record data from UDP packet ONCE into a pooled buffer.
     pub fn parse(
         record_slice: &[u8],
-        decrypt: &mut dyn RecordDecrypt,
+        decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls12CipherSuite>,
     ) -> Result<Option<Record>, Error> {
         // ONLY COPY: UDP packet slice -> pooled buffer
@@ -271,11 +280,13 @@ impl ParsedRecord {
     }
 }
 
-/// Trait abstracting the decryption operations needed for parsing incoming records.
+/// Trait abstracting record parsing-time handling for incoming records.
 ///
-/// This decouples the record parser from the full `Engine`, allowing incoming record
-/// parsing to depend only on the cryptographic operations it actually uses.
-pub trait RecordDecrypt {
+/// This decouples the record parser from the full `Engine`, allowing the parse loop
+/// to decrypt records, classify control records, and queue only the records that
+/// should survive into `Incoming`.
+pub trait RecordHandler {
+    fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error>;
     fn is_peer_encryption_enabled(&self) -> bool;
     fn replay_check(&self, seq: Sequence) -> bool;
     fn replay_update(&mut self, seq: Sequence);
@@ -358,3 +369,91 @@ invariants are later observed across a catch_unwind boundary. Marking Incoming
 as UnwindSafe is a sound assertion and clarifies behavior for callers.
 */
 impl std::panic::UnwindSafe for Incoming {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct TestHandler {
+        classify_calls: usize,
+        dropped_alerts: usize,
+    }
+
+    impl RecordHandler for TestHandler {
+        fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
+            self.classify_calls += 1;
+            if record.record().content_type == ContentType::Alert {
+                self.dropped_alerts += 1;
+                return Ok(None);
+            }
+            Ok(Some(record))
+        }
+
+        fn is_peer_encryption_enabled(&self) -> bool {
+            false
+        }
+
+        fn replay_check(&self, _seq: Sequence) -> bool {
+            panic!("replay_check should not be called for plaintext tests");
+        }
+
+        fn replay_update(&mut self, _seq: Sequence) {
+            panic!("replay_update should not be called for plaintext tests");
+        }
+
+        fn decryption_aad_and_nonce(&self, _dtls: &DTLSRecord, _buf: &[u8]) -> (Aad, Nonce) {
+            panic!("decryption_aad_and_nonce should not be called for plaintext tests");
+        }
+
+        fn explicit_nonce_len(&self) -> usize {
+            panic!("explicit_nonce_len should not be called for plaintext tests");
+        }
+
+        fn decrypt_data(
+            &mut self,
+            _ciphertext: &mut TmpBuf,
+            _aad: Aad,
+            _nonce: Nonce,
+        ) -> Result<(), Error> {
+            panic!("decrypt_data should not be called for plaintext tests");
+        }
+    }
+
+    fn build_record(content_type: ContentType, epoch: u16, seq: u64, fragment: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.push(content_type.as_u8());
+        out.extend_from_slice(&[0xFE, 0xFD]);
+        out.extend_from_slice(&epoch.to_be_bytes());
+        out.extend_from_slice(&seq.to_be_bytes()[2..]);
+        out.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+        out.extend_from_slice(fragment);
+        out
+    }
+
+    #[test]
+    fn parse_packet_filters_control_records_after_packet_validation() {
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&build_record(ContentType::Alert, 0, 1, &[0x01, 0x00]));
+        packet.extend_from_slice(&build_record(
+            ContentType::ApplicationData,
+            1,
+            2,
+            &[0xAA, 0xBB],
+        ));
+
+        let mut handler = TestHandler::default();
+        let incoming = Incoming::parse_packet(&packet, &mut handler, None)
+            .unwrap()
+            .expect("application data record should remain");
+
+        assert_eq!(handler.classify_calls, 2);
+        assert_eq!(handler.dropped_alerts, 1);
+        assert_eq!(incoming.records().len(), 1);
+        assert_eq!(
+            incoming.first().record().content_type,
+            ContentType::ApplicationData
+        );
+        assert_eq!(incoming.first().record().sequence.epoch, 1);
+    }
+}

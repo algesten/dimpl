@@ -227,7 +227,6 @@ impl Client {
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.server_certificates);
         }
-
         self.engine.poll_output(buf, self.last_now)
     }
 
@@ -249,6 +248,10 @@ impl Client {
 
     /// Send application data when the client is connected.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
+        if self.state == State::Closed || self.state == State::HalfClosedLocal {
+            return Err(Error::ConnectionClosed);
+        }
+
         if self.state != State::AwaitApplicationData {
             self.queued_data.push(data.to_buf());
             return Ok(());
@@ -264,6 +267,27 @@ impl Client {
             },
         )?;
 
+        Ok(())
+    }
+
+    /// Initiate graceful shutdown by sending a `close_notify` alert.
+    pub fn close(&mut self) -> Result<(), Error> {
+        if self.state == State::Closed || self.state == State::HalfClosedLocal {
+            return Ok(());
+        }
+        if self.state != State::AwaitApplicationData {
+            self.engine.abort();
+            self.state = State::Closed;
+            return Ok(());
+        }
+        let epoch = self.engine.app_send_epoch();
+        self.engine
+            .create_ciphertext_record(ContentType::Alert, epoch, false, |body| {
+                body.push(1); // level: legacy (ignored in DTLS 1.3)
+                body.push(0); // description: close_notify
+            })?;
+        self.engine.cancel_flights();
+        self.state = State::HalfClosedLocal;
         Ok(())
     }
 
@@ -296,6 +320,8 @@ enum State {
     SendCertificateVerify,
     SendFinished,
     AwaitApplicationData,
+    HalfClosedLocal,
+    Closed,
 }
 
 impl State {
@@ -312,6 +338,8 @@ impl State {
             State::SendCertificateVerify => "SendCertificateVerify",
             State::SendFinished => "SendFinished",
             State::AwaitApplicationData => "AwaitApplicationData",
+            State::HalfClosedLocal => "HalfClosedLocal",
+            State::Closed => "Closed",
         }
     }
 
@@ -328,6 +356,8 @@ impl State {
             State::SendCertificateVerify => self.send_certificate_verify(client),
             State::SendFinished => self.send_finished(client),
             State::AwaitApplicationData => self.await_application_data(client),
+            State::HalfClosedLocal => self.half_closed_local(client),
+            State::Closed => Ok(self),
         }
     }
 
@@ -1076,6 +1106,30 @@ impl State {
                 client.engine.advance_peer_handshake_seq();
                 debug!("Received KeyUpdate (request={:?})", request);
             }
+        }
+
+        Ok(self)
+    }
+
+    fn half_closed_local(self, client: &mut Client) -> Result<Self, Error> {
+        // Write half is closed: drain incoming KeyUpdate to keep recv keys in sync,
+        // but do not send our own KeyUpdate response.
+        if client.engine.has_complete_handshake(MessageType::KeyUpdate) {
+            let maybe = client.engine.next_handshake_no_transcript(
+                MessageType::KeyUpdate,
+                &mut client.defragment_buffer,
+            )?;
+            if let Some(handshake) = maybe {
+                let Body::KeyUpdate(_) = handshake.body else {
+                    unreachable!()
+                };
+                client.engine.update_recv_keys()?;
+                client.engine.advance_peer_handshake_seq();
+            }
+        }
+
+        if client.engine.close_notify_received() {
+            return Ok(State::Closed);
         }
 
         Ok(self)

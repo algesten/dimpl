@@ -7,7 +7,7 @@ use super::queue::{QueueRx, QueueTx};
 use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::{Aad, Iv, Nonce};
 use crate::dtls12::context::{AuthMode, CryptoContext};
-use crate::dtls12::incoming::{Incoming, Record, RecordDecrypt};
+use crate::dtls12::incoming::{Incoming, Record, RecordHandler};
 use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
 use crate::timer::ExponentialBackoff;
@@ -88,6 +88,12 @@ pub struct Engine {
 
     /// Whether we are ready to release application data from poll_output.
     release_app_data: bool,
+
+    /// Whether a close_notify alert has been received from the peer.
+    close_notify_received: bool,
+
+    /// Whether [`Output::CloseNotify`] has already been emitted.
+    close_notify_reported: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +142,8 @@ impl Engine {
             flight_timeout: Timeout::Unarmed,
             connect_timeout: Timeout::Unarmed,
             release_app_data: false,
+            close_notify_received: false,
+            close_notify_reported: false,
         }
     }
 
@@ -200,13 +208,9 @@ impl Engine {
         Ok(())
     }
 
-    /// Insert the Incoming using the logic:
-    ///
-    /// 1. If it is a handshake, sort by the message_seq
-    /// 2. If it is not a handshake, sort by sequence_number
-    ///
+    /// Insert a parsed datagram into the receive queue.
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
-        // Capacity guard
+        // Capacity guard before iterating records.
         if self.queue_rx.len() >= self.config.max_queue_rx() {
             warn!(
                 "Receive queue full (max {}): {:?}",
@@ -364,6 +368,11 @@ impl Engine {
 
         if let Ok(p) = self.poll_packet_tx(buf) {
             return Output::Packet(p);
+        }
+
+        if self.close_notify_received && !self.close_notify_reported {
+            self.close_notify_reported = true;
+            return Output::CloseNotify;
         }
 
         let next_timeout = self.poll_timeout(now);
@@ -895,6 +904,27 @@ impl Engine {
         self.release_app_data = true;
     }
 
+    /// Whether a close_notify alert has been received from the peer.
+    pub fn close_notify_received(&self) -> bool {
+        self.close_notify_received
+    }
+
+    /// Discard all pending outgoing data.
+    ///
+    /// RFC 5246 §7.2.1: on receiving close_notify, discard any pending writes.
+    pub fn discard_pending_writes(&mut self) {
+        self.queue_tx.clear();
+    }
+
+    /// Abort the connection: flush all queued output, retransmission state, and
+    /// disable timers so that no further packets are emitted.
+    pub fn abort(&mut self) {
+        self.queue_tx.clear();
+        self.flight_saved_records.clear();
+        self.flight_timeout = Timeout::Disabled;
+        self.connect_timeout = Timeout::Disabled;
+    }
+
     /// Pop a buffer from the buffer pool for temporary use
     pub(crate) fn pop_buffer(&mut self) -> Buf {
         self.buffers_free.pop()
@@ -1094,7 +1124,72 @@ impl Engine {
     }
 }
 
-impl RecordDecrypt for Engine {
+impl RecordHandler for Engine {
+    fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
+        if record.record().content_type == ContentType::Alert {
+            let epoch = record.record().sequence.epoch;
+            if epoch == 0 {
+                if self.peer_encryption_enabled {
+                    // Post-handshake: epoch 0 alerts are unauthenticated, discard.
+                    self.push_buffer(record.into_buffer());
+                    return Ok(None);
+                }
+
+                let fatal_description = {
+                    let fragment = record.record().fragment(record.buffer());
+                    (fragment.len() >= 2 && fragment[0] == 2).then(|| fragment[1])
+                };
+                self.push_buffer(record.into_buffer());
+
+                if let Some(description) = fatal_description {
+                    return Err(Error::SecurityError(format!(
+                        "Received fatal alert: level=2, description={}",
+                        description
+                    )));
+                }
+
+                return Ok(None);
+            }
+
+            if !self.peer_encryption_enabled {
+                // Epoch >= 1 before peer encryption is enabled must stay queued
+                // for re-parsing after enable_peer_encryption().
+                return Ok(Some(record));
+            }
+
+            let alert = {
+                let fragment = record.record().fragment(record.buffer());
+                (fragment.len() >= 2).then(|| (fragment[0], fragment[1]))
+            };
+            self.push_buffer(record.into_buffer());
+
+            if let Some((level, description)) = alert {
+                if description == 0 {
+                    self.close_notify_received = true;
+                    return Ok(None);
+                }
+
+                if level == 2 {
+                    return Err(Error::SecurityError(format!(
+                        "Received fatal alert: level={}, description={}",
+                        level, description
+                    )));
+                }
+            }
+
+            return Ok(None);
+        }
+
+        if self.close_notify_received
+            && record.record().content_type == ContentType::ApplicationData
+        {
+            self.push_buffer(record.into_buffer());
+            return Ok(None);
+        }
+
+        Ok(Some(record))
+    }
+
     fn is_peer_encryption_enabled(&self) -> bool {
         self.peer_encryption_enabled
     }

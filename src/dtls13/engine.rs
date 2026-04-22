@@ -15,7 +15,7 @@ use crate::crypto::SigningKey;
 use crate::crypto::SupportedDtls13CipherSuite;
 use crate::crypto::SupportedKxGroup;
 use crate::crypto::prf_hkdf;
-use crate::dtls13::incoming::{Incoming, RecordDecrypt};
+use crate::dtls13::incoming::{Incoming, Record, RecordHandler};
 use crate::dtls13::message::Body;
 use crate::dtls13::message::ContentType;
 use crate::dtls13::message::Dtls13CipherSuite;
@@ -157,6 +157,14 @@ pub struct Engine {
 
     /// Set when app_send_record_count reaches aead_encryption_threshold.
     needs_key_update: bool,
+
+    /// Sequence number of the received close_notify alert, if any.
+    /// Per RFC 9147 §5.10, any data with an epoch/sequence number pair
+    /// after this must be discarded; earlier records are still valid.
+    close_notify_sequence: Option<Sequence>,
+
+    /// Whether [`Output::CloseNotify`] has already been emitted.
+    close_notify_reported: bool,
 }
 
 struct EpochKeys {
@@ -244,6 +252,8 @@ impl Engine {
             app_send_record_count: 0,
             aead_encryption_threshold,
             needs_key_update: false,
+            close_notify_sequence: None,
+            close_notify_reported: false,
         }
     }
 
@@ -338,52 +348,6 @@ impl Engine {
             );
             return Err(Error::ReceiveQueueFull);
         }
-
-        // Handle ACK, Alert, and CCS records immediately; collect the rest for queuing.
-        // A single UDP datagram can contain mixed record types, so we process
-        // each record individually without discarding siblings.
-        let mut non_ack_records = ArrayVec::new();
-        for record in incoming.into_records() {
-            match record.record().content_type {
-                ContentType::Ack => {
-                    let fragment = record.record().fragment(record.buffer());
-                    self.process_ack(fragment);
-                }
-                ContentType::Alert => {
-                    let fragment = record.record().fragment(record.buffer());
-                    if fragment.len() >= 2 {
-                        let level = fragment[0];
-                        let description = fragment[1];
-                        // RFC 8446 §6 / RFC 9147 §6: fatal alerts (level 2) and
-                        // close_notify (description 0) must close the connection.
-                        if level == 2 || description == 0 {
-                            return Err(Error::SecurityError(format!(
-                                "Received fatal alert: level={}, description={}",
-                                level, description
-                            )));
-                        }
-                        // Warning alerts (level 1) with non-zero description are
-                        // discarded per RFC 8446 §6.
-                        debug!(
-                            "Discarding warning alert: level={}, description={}",
-                            level, description
-                        );
-                    }
-                }
-                // RFC 9147 §5: CCS records must be discarded in DTLS 1.3.
-                ContentType::ChangeCipherSpec => {
-                    trace!("Discarding CCS record");
-                }
-                _ => {
-                    non_ack_records.try_push(record).ok();
-                }
-            }
-        }
-
-        let incoming = match Incoming::from_records(non_ack_records) {
-            Some(incoming) => incoming,
-            None => return Ok(()),
-        };
 
         if incoming.first().first_handshake().is_some() {
             self.insert_incoming_handshake(incoming)
@@ -572,6 +536,11 @@ impl Engine {
 
         if let Ok(p) = self.poll_packet_tx(buf) {
             return Output::Packet(p);
+        }
+
+        if self.close_notify_sequence.is_some() && !self.close_notify_reported {
+            self.close_notify_reported = true;
+            return Output::CloseNotify;
         }
 
         let next_timeout = self.poll_timeout(now);
@@ -1250,6 +1219,31 @@ impl Engine {
     pub fn release_application_data(&mut self) {
         self.release_app_data = true;
         self.hs_recv_keys = None;
+    }
+
+    /// Whether a close_notify alert has been received from the peer.
+    pub fn close_notify_received(&self) -> bool {
+        self.close_notify_sequence.is_some()
+    }
+
+    /// Cancel in-flight retransmissions without clearing the transmit queue.
+    /// Used by close() to stop retransmitting control records while still
+    /// allowing the queued close_notify alert to be sent.
+    pub fn cancel_flights(&mut self) {
+        self.flight_saved_records.clear();
+        self.flight_timeout = Timeout::Disabled;
+        self.connect_timeout = Timeout::Disabled;
+        self.handshake_ack_deadline = None;
+    }
+
+    /// Abort the connection: flush all queued output, retransmission state, and
+    /// disable timers so that no further packets are emitted.
+    pub fn abort(&mut self) {
+        self.queue_tx.clear();
+        self.flight_saved_records.clear();
+        self.flight_timeout = Timeout::Disabled;
+        self.connect_timeout = Timeout::Disabled;
+        self.handshake_ack_deadline = None;
     }
 
     /// Send an ACK record listing received handshake record numbers.
@@ -2259,10 +2253,58 @@ fn reconstruct_sequence(partial: u64, expected: u64, bits: u32) -> u64 {
 }
 
 // =========================================================================
-// RecordDecrypt Implementation
+// RecordHandler Implementation
 // =========================================================================
 
-impl RecordDecrypt for Engine {
+impl RecordHandler for Engine {
+    fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
+        if let Some(cn_seq) = self.close_notify_sequence {
+            if record.record().sequence > cn_seq {
+                self.push_buffer(record.into_buffer());
+                return Ok(None);
+            }
+        }
+
+        match record.record().content_type {
+            ContentType::Ack => {
+                let fragment = record.record().fragment(record.buffer());
+                self.process_ack(fragment);
+                self.push_buffer(record.into_buffer());
+                Ok(None)
+            }
+            ContentType::Alert => {
+                // RFC 8446 §6: TLS 1.3 ignores the AlertLevel byte; severity is
+                // implicit in the description (only close_notify and user_canceled
+                // are non-fatal).
+                let description = {
+                    let fragment = record.record().fragment(record.buffer());
+                    fragment.get(1).copied()
+                };
+                let sequence = record.record().sequence;
+                self.push_buffer(record.into_buffer());
+
+                match description {
+                    Some(0) => {
+                        self.close_notify_sequence.get_or_insert(sequence);
+                        Ok(None)
+                    }
+                    Some(90) => Ok(None),
+                    Some(description) => Err(Error::SecurityError(format!(
+                        "Received fatal alert: description={}",
+                        description
+                    ))),
+                    None => Ok(None),
+                }
+            }
+            ContentType::ChangeCipherSpec => {
+                trace!("Discarding CCS record");
+                self.push_buffer(record.into_buffer());
+                Ok(None)
+            }
+            _ => Ok(Some(record)),
+        }
+    }
+
     fn is_peer_encryption_enabled(&self) -> bool {
         self.peer_encryption_enabled
     }

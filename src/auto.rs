@@ -104,12 +104,17 @@ impl HybridClientHello {
         // legacy_cookie: empty (DTLS 1.3 requires zero-length)
         ch_body.push(0);
 
-        // cipher_suites: 1.3 suites first, then 1.2 suites (filtered by config)
+        // cipher_suites: 1.3 suites first, then non-PSK DTLS 1.2 suites.
+        // The DTLS 1.2 fallback (`Client12::new_from_hybrid`) is
+        // certificate-auth only and cannot complete a PSK suite.
         let mut suites: ArrayVec<u16, 16> = ArrayVec::new();
         for cs in config.dtls13_cipher_suites() {
             suites.push(cs.suite().as_u16());
         }
-        for cs in config.dtls12_cipher_suites() {
+        for cs in config
+            .dtls12_cipher_suites()
+            .filter(|cs| !cs.suite().is_psk())
+        {
             suites.push(cs.suite().as_u16());
         }
         ch_body.extend_from_slice(&((suites.len() * 2) as u16).to_be_bytes());
@@ -453,6 +458,35 @@ fn server_hello_version_inner(packet: &[u8]) -> Option<DetectedVersion> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PskResolver;
+    use crate::dtls12::message::Dtls12CipherSuite;
+
+    fn offered_cipher_suites(hybrid: &HybridClientHello) -> Vec<u16> {
+        let body = &hybrid.handshake_fragment[12..];
+        let mut offset = 2 + 32; // legacy_version + random
+
+        let session_id_len = body[offset] as usize;
+        offset += 1 + session_id_len;
+
+        let cookie_len = body[offset] as usize;
+        offset += 1 + cookie_len;
+
+        let suites_len = u16::from_be_bytes([body[offset], body[offset + 1]]) as usize;
+        offset += 2;
+
+        body[offset..offset + suites_len]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .collect()
+    }
+
+    struct DummyResolver;
+
+    impl PskResolver for DummyResolver {
+        fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+            Some(b"0123456789abcdef".to_vec())
+        }
+    }
 
     #[test]
     fn hello_verify_request_is_dtls12() {
@@ -608,5 +642,28 @@ mod tests {
             0x17, 0xFE, 0xFD, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xFF,
         ];
         assert_eq!(server_hello_version(&pkt), DetectedVersion::Unknown);
+    }
+
+    #[test]
+    fn hybrid_client_hello_excludes_psk_dtls12_suites() {
+        let config = Arc::new(
+            Config::builder()
+                .with_psk_client(b"identity".to_vec(), Arc::new(DummyResolver))
+                .build()
+                .expect("config with PSK should build"),
+        );
+
+        assert!(
+            config.dtls12_cipher_suites().any(|cs| cs.suite().is_psk()),
+            "precondition: PSK-enabled config should expose a PSK DTLS 1.2 suite"
+        );
+
+        let hybrid = HybridClientHello::new(&config).expect("hybrid ClientHello should build");
+        let offered = offered_cipher_suites(&hybrid);
+
+        assert!(
+            !offered.contains(&Dtls12CipherSuite::PSK_AES128_CCM_8.as_u16()),
+            "auto client must not advertise PSK DTLS 1.2 suites it cannot use after fallback"
+        );
     }
 }

@@ -16,6 +16,7 @@ pub struct DrainedOutputs {
     pub keying_material: Option<(Vec<u8>, SrtpProfile)>,
     pub app_data: Vec<Vec<u8>>,
     pub timeout: Option<Instant>,
+    pub close_notify: bool,
 }
 
 /// Poll until `Timeout`, collecting only packets.
@@ -45,6 +46,7 @@ pub fn drain_outputs(endpoint: &mut Dtls) -> DrainedOutputs {
                 result.keying_material = Some((km.to_vec(), profile));
             }
             Output::ApplicationData(data) => result.app_data.push(data.to_vec()),
+            Output::CloseNotify => result.close_notify = true,
             Output::Timeout(t) => {
                 result.timeout = Some(t);
                 break;
