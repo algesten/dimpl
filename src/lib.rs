@@ -877,6 +877,18 @@ mod test {
     }
 
     #[test]
+    #[should_panic(expected = "Server certificate cannot be empty")]
+    fn new_12_panics_on_empty_certificate() {
+        let cert = generate_self_signed_certificate().expect("Failed to generate cert");
+        let config = Arc::new(Config::default());
+        let empty = DtlsCertificate {
+            certificate: vec![],
+            private_key: cert.private_key,
+        };
+        let _ = Dtls::new_12(config, empty, Instant::now());
+    }
+
+    #[test]
     fn test_auto_server_send_application_data_pending() {
         let mut dtls = new_instance_auto();
         let err = dtls.send_application_data(b"early data").unwrap_err();
