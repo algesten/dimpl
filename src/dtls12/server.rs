@@ -126,6 +126,10 @@ enum State {
 impl Server {
     /// Create a new DTLS server
     pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate, now: Instant) -> Server {
+        assert!(
+            !certificate.certificate.is_empty(),
+            "Server certificate cannot be empty"
+        );
         // unwrap: malformed private_key bytes are a programmer error from the
         // caller who constructed DtlsCertificate; panic matches the prior
         // CryptoContext::new behavior which also panicked on empty/invalid
