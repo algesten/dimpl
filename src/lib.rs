@@ -323,9 +323,8 @@ fn client_hello_wants_psk(packet: &[u8], config: &Config) -> bool {
         return false;
     }
 
-    let frag_off = ((record_body[6] as u32) << 16)
-        | ((record_body[7] as u32) << 8)
-        | record_body[8] as u32;
+    let frag_off =
+        ((record_body[6] as u32) << 16) | ((record_body[7] as u32) << 8) | record_body[8] as u32;
     if frag_off != 0 {
         return false;
     }
@@ -625,8 +624,8 @@ impl Dtls {
         // mode must be chosen before construction. Peek at the buffered
         // ClientHello to see which cipher suite the server would pick,
         // so PSK clients survive the fallback.
-        let use_psk = config.psk().is_some()
-            && buffered.iter().any(|p| client_hello_wants_psk(p, &config));
+        let use_psk =
+            config.psk().is_some() && buffered.iter().any(|p| client_hello_wants_psk(p, &config));
 
         let mut server12 = if use_psk {
             Server12::new_psk(config, now)
