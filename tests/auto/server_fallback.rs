@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Dtls, Error, Output, ProtocolVersion};
+use dimpl::{Config, Dtls, Error, Output, ProtocolVersion, PskResolver};
 
 use crate::common::*;
 
@@ -629,6 +629,57 @@ fn auto_server_fragmented_ch_no_cookie() {
     assert!(cc, "Client should connect with fragmented CH, no cookie");
     assert!(sc, "Server should connect with fragmented CH, no cookie");
     assert_eq!(sv, Some(ProtocolVersion::DTLS1_3));
+}
+
+// ============================================================================
+// Auto server + DTLS 1.2 PSK client → fallback picks PSK-mode Server12
+// ============================================================================
+
+/// Regression for https://github.com/algesten/dimpl/issues/100 — a
+/// `Dtls::new_auto` server configured with `with_psk_server` must accept a
+/// DTLS 1.2 PSK client. Before the fix the fallback always constructed a
+/// certificate-auth Server12 and failed with "No mutually acceptable cipher
+/// suite".
+#[test]
+#[cfg(feature = "rcgen")]
+fn auto_server_psk_fallback_with_dtls12_psk_client() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    struct FixedPsk;
+    impl PskResolver for FixedPsk {
+        fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+            Some(b"0123456789abcdef".to_vec())
+        }
+    }
+
+    let server_cert = generate_self_signed_certificate().unwrap();
+
+    let client_config = Arc::new(
+        Config::builder()
+            .with_psk_client(b"test-device".to_vec(), Arc::new(FixedPsk))
+            .build()
+            .expect("build PSK client config"),
+    );
+    let server_config = Arc::new(
+        Config::builder()
+            .with_psk_server(Some(b"hint".to_vec()), Arc::new(FixedPsk))
+            .build()
+            .expect("build PSK server config"),
+    );
+
+    let mut client = Dtls::new_12_psk(client_config, Instant::now());
+    client.set_active(true);
+
+    let mut server = Dtls::new_auto(server_config, server_cert, Instant::now());
+
+    let (cc, sc, cv, sv) = run_handshake(&mut client, &mut server);
+
+    assert!(cc, "PSK client should connect after auto-server fallback");
+    assert!(sc, "Auto server should connect to DTLS 1.2 PSK client");
+    assert_eq!(cv, Some(ProtocolVersion::DTLS1_2));
+    assert_eq!(sv, Some(ProtocolVersion::DTLS1_2));
 }
 
 /// Fragmented DTLS 1.3 ClientHello → keying material matches between client and auto server.
