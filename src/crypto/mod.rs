@@ -26,6 +26,7 @@ pub use keying::{KeyingMaterial, SrtpProfile};
 pub use dtls_aead::{Aad, Nonce};
 
 // Re-export internal AEAD constants/types for crate-internal use
+pub(crate) use dtls_aead::DTLS12_CID_MAX_LEN;
 pub(crate) use dtls_aead::Iv;
 
 // Re-export buffer types for provider trait implementations
@@ -46,13 +47,6 @@ pub use crate::dtls12::message::Dtls12CipherSuite;
 pub use crate::types::{
     Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm, SignatureScheme,
 };
-
-impl Deref for Aad {
-    type Target = [u8];
-    fn deref(&self) -> &Self::Target {
-        &self.0[..]
-    }
-}
 
 impl Deref for Nonce {
     type Target = [u8];

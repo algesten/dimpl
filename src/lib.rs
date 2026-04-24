@@ -457,6 +457,57 @@ impl Dtls {
         }
     }
 
+    /// The highest authenticated (epoch, sequence_number) observed on
+    /// this association, or `None` if no record has been authenticated
+    /// yet.
+    ///
+    /// Intended for the RFC 9146 §6 peer-address-update policy: a
+    /// datagram whose source address differs from the currently-bound
+    /// address may authorize an address update only if the record it
+    /// carries (a) passes AEAD authentication and (b) has a
+    /// `(epoch, sequence_number)` strictly greater than what this
+    /// accessor returned before the datagram was delivered. Sample the
+    /// accessor before `handle_packet`, then again after `poll_output`
+    /// drained to `Timeout`: a strictly-increased value proves a fresh
+    /// authenticated record landed.
+    ///
+    /// Returns `None` for DTLS 1.3 associations and while still in the
+    /// auto-sense `Pending` state. DTLS 1.3 support is a separate
+    /// follow-up item; today only the DTLS 1.2 / DTLS 1.2 PSK paths
+    /// surface freshness metadata here.
+    pub fn newest_authenticated_record(&self) -> Option<(u16, u64)> {
+        // Current epoch is always 1 after the handshake activates
+        // application-data encryption on both DTLS 1.2 paths — the
+        // engine does not rekey and does not support renegotiation.
+        let seq = match self.inner.as_ref()? {
+            Inner::Client12(c) => c.engine().newest_authenticated_sequence()?,
+            Inner::Server12(s) => s.engine().newest_authenticated_sequence()?,
+            Inner::Client13(_) | Inner::Server13(_) | Inner::ClientPending(_) => return None,
+        };
+        Some((1, seq))
+    }
+
+    /// Returns the CID the peer will include in records sent to us, or
+    /// `None` if CID was not negotiated.
+    ///
+    /// This differs from [`Config::connection_id`] (what the caller
+    /// requested) vs. what the handshake actually agreed on. `None` with
+    /// `config.connection_id().is_some()` means the CID was requested
+    /// but the peer did not negotiate it — most often because the
+    /// association resolved to DTLS 1.3, where dimpl does not implement
+    /// RFC 9147 CID. Callers using CID for routing should check this
+    /// accessor rather than relying on `Config::connection_id` alone.
+    ///
+    /// The returned slice may be empty if the peer advertised
+    /// zero-length CID (RFC 9146 §3 "legacy framing in that direction").
+    pub fn negotiated_connection_id(&self) -> Option<&[u8]> {
+        match self.inner.as_ref()? {
+            Inner::Client12(c) => c.engine().inbound_cid(),
+            Inner::Server12(s) => s.engine().inbound_cid(),
+            Inner::Client13(_) | Inner::Server13(_) | Inner::ClientPending(_) => None,
+        }
+    }
+
     /// Return true if the instance is operating in the client role.
     pub fn is_active(&self) -> bool {
         matches!(
@@ -473,6 +524,18 @@ impl Dtls {
     /// client sends a hybrid ClientHello compatible with both DTLS 1.2
     /// and 1.3. The version is determined from the server's first
     /// response.
+    ///
+    /// **Role flip is intended for auto-mode bootstrapping, not
+    /// mid-session swaps.** Flipping `active` after
+    /// [`Output::Connected`] fires is unsupported: the underlying
+    /// engine carries negotiated state (CID, replay window, sequence
+    /// numbers, transcript) that is labelled for the original role and
+    /// is not re-initialized across `into_client` / `into_server`. In
+    /// particular, a connected `Client12`/`Server12` with a negotiated
+    /// `connection_id` will keep its inbound/outbound CID labels in the
+    /// flipped role, where the labels no longer describe the correct
+    /// wire direction. Use a fresh `Dtls` instance instead of flipping
+    /// role after handshake completion.
     pub fn set_active(&mut self, active: bool) {
         match (self.is_active(), active) {
             (true, false) => {
@@ -769,6 +832,12 @@ pub enum Output<'a> {
     ApplicationData(&'a [u8]),
     /// The peer sent a `close_notify` alert, indicating graceful connection closure.
     CloseNotify,
+    /// The negotiated Connection ID that identifies this endpoint (RFC 9146).
+    ///
+    /// Emitted once after `Connected` when CID was negotiated. The caller
+    /// uses this to route future datagrams (after peer address change) to
+    /// this `Dtls` instance.
+    ConnectionId(&'a [u8]),
 }
 
 impl fmt::Debug for Output<'_> {
@@ -781,6 +850,7 @@ impl fmt::Debug for Output<'_> {
             Self::KeyingMaterial(v, p) => write!(f, "KeyingMaterial({}, {:?})", v.len(), p),
             Self::ApplicationData(v) => write!(f, "ApplicationData({})", v.len()),
             Self::CloseNotify => write!(f, "CloseNotify"),
+            Self::ConnectionId(v) => write!(f, "ConnectionId({})", v.len()),
         }
     }
 }

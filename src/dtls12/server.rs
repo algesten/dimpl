@@ -28,13 +28,14 @@ use crate::dtls12::engine::Engine;
 use crate::dtls12::message::PskParams;
 use crate::dtls12::message::{Body, CertificateRequest, CertificateTypeVec, Dtls12CipherSuite};
 use crate::dtls12::message::{ClientCertificateType, CompressionMethod, ContentType};
+use crate::dtls12::message::{ClientHello, ConnectionIdExtension, SrtpProfileVec};
 use crate::dtls12::message::{Cookie, CurveType, DistinguishedName, ExchangeKeys, ExtensionType};
 use crate::dtls12::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
 use crate::dtls12::message::{MessageType, NamedGroup, NamedGroupVec, ProtocolVersion, Random};
 use crate::dtls12::message::{ServerHello, SessionId, SignatureAlgorithm};
 use crate::dtls12::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm};
 use crate::dtls12::message::{SignatureAndHashAlgorithmVec, SrtpProfileId};
-use crate::dtls12::message::{SrtpProfileVec, SupportedGroupsExtension, UseSrtpExtension};
+use crate::dtls12::message::{SupportedGroupsExtension, UseSrtpExtension};
 use crate::{Config, Error, Output};
 
 /// Length of the random dummy PSK used when identity resolution fails.
@@ -65,6 +66,9 @@ pub struct Server {
 
     /// The negotiated SRTP profile (if any)
     negotiated_srtp_profile: Option<SrtpProfile>,
+
+    /// Peer's Connection ID (from ClientHello extension). We put this in records to the peer.
+    peer_cid: Option<Vec<u8>>,
 
     /// Client's offered supported_groups (if any)
     client_supported_groups: Option<NamedGroupVec>,
@@ -166,6 +170,7 @@ impl Server {
             cookie_secret,
             extension_data: Buf::new(),
             negotiated_srtp_profile: None,
+            peer_cid: None,
             client_supported_groups: None,
             client_signature_algorithms: None,
             client_random: None,
@@ -179,7 +184,21 @@ impl Server {
         }
     }
 
+    /// Borrow the underlying DTLS 1.2 engine (crate-internal accessor).
+    pub(crate) fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
     pub fn into_client(self) -> Client {
+        // Role flip must happen before handshake completion — see
+        // `Dtls::set_active` rustdoc. Any negotiated CID implies a
+        // post-handshake flip, which is unsupported because CID labels
+        // are tied to the original role.
+        debug_assert!(
+            self.engine.inbound_cid().is_none(),
+            "Dtls::set_active role flip after CID negotiation is unsupported; \
+             CID labels are tied to the original role. Use a fresh Dtls instance."
+        );
         Client::new_with_engine(self.engine, self.last_now)
     }
 
@@ -194,6 +213,23 @@ impl Server {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
+        // `Output::ConnectionId` borrows from `buf`. If the caller's buffer
+        // can't hold the negotiated CID, defer the notification — leave the
+        // event at the front of the queue and fall through to the engine.
+        // The caller will see `Timeout`, retry `poll_output` with a larger
+        // buffer, and the ConnectionId event is delivered then. This keeps
+        // the CID plumbing panic-free.
+        if let Some(LocalEvent::ConnectionId(cid)) = self.local_events.front() {
+            if cid.len() > buf.len() {
+                warn!(
+                    "poll_output buffer too small for ConnectionId ({} bytes < {} bytes); deferring",
+                    buf.len(),
+                    cid.len()
+                );
+                return self.engine.poll_output(buf, self.last_now);
+            }
+        }
+
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.client_certificates);
         }
@@ -343,8 +379,18 @@ impl State {
             ch.cipher_suites.len()
         );
 
-        // Stateless cookie: require 32-byte cookie matching HMAC(secret, client_random)
+        // Stateless cookie: require 32-byte cookie matching
+        // HMAC(secret, client_random || offered_cid). RFC 9146 §3 + §7
+        // HelloVerifyRequest example: "If a
+        // server sends a HelloVerifyRequest, then the second ClientHello
+        // sent by the client MUST contain the same connection_id extension
+        // as the first one." Binding the offered CID into the cookie
+        // provides that equality check without any server-side per-client
+        // state — a swap across the CH pair produces a fresh CH whose
+        // cookie no longer verifies, so the server issues another HVR and
+        // the exchange cannot complete with mismatched CIDs.
         let client_random = ch.random;
+        let offered_cid = extract_offered_cid(&ch, &server.defragment_buffer);
         let hmac_provider = server.engine.config().crypto_provider().hmac_provider;
         let need_cookie = server.engine.config().use_server_cookie();
         let cookie_valid = !need_cookie
@@ -352,12 +398,18 @@ impl State {
                 hmac_provider,
                 &server.cookie_secret,
                 client_random,
+                offered_cid.as_deref(),
                 ch.cookie,
             );
         if !cookie_valid {
             debug!("Invalid/missing cookie; sending HelloVerifyRequest");
 
-            let cookie = compute_cookie(hmac_provider, &server.cookie_secret, client_random)?;
+            let cookie = compute_cookie(
+                hmac_provider,
+                &server.cookie_secret,
+                client_random,
+                offered_cid.as_deref(),
+            )?;
             // Start/restart flight timer for server Flight 2 (HelloVerifyRequest)
             server.engine.flight_begin(2);
             server
@@ -437,6 +489,22 @@ impl State {
                         warn!("Failed to parse SignatureAlgorithms extension");
                     }
                 }
+                ExtensionType::ConnectionId => {
+                    let ext_data = ext.extension_data(&server.defragment_buffer);
+                    match ConnectionIdExtension::parse(ext_data) {
+                        Ok((_, cid_ext)) => {
+                            // Store the client's CID — we'll include it in records we send
+                            server.peer_cid = Some(cid_ext.cid.to_vec());
+                            trace!("Client offered Connection ID ({} bytes)", cid_ext.cid.len());
+                        }
+                        Err(_) => {
+                            // RFC 5246 §7.2.2 decode_error on malformed extension.
+                            return Err(Error::SecurityError(
+                                "Malformed connection_id extension from client".to_string(),
+                            ));
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -489,6 +557,21 @@ impl State {
         let negotiated_srtp_profile = server.negotiated_srtp_profile;
         let extension_data = &mut server.extension_data;
 
+        // Determine CID to include in ServerHello extension.
+        // We echo our CID (from config) only if the client also offered CID.
+        let our_cid = if server.peer_cid.is_some() {
+            server.engine.config().connection_id().map(|c| c.to_vec())
+        } else {
+            None
+        };
+
+        // `set_cid_negotiated` arms outbound CID immediately; inbound is armed
+        // separately when the peer's CCS is processed.
+        if let (Some(peer_cid), Some(our_cid_clone)) = (server.peer_cid.clone(), our_cid.clone()) {
+            server.engine.set_cid_negotiated(our_cid_clone, peer_cid);
+            debug!("Connection ID negotiated");
+        }
+
         // Send ServerHello
         server
             .engine
@@ -500,6 +583,7 @@ impl State {
                     session_id,
                     negotiated_srtp_profile,
                     extension_data,
+                    our_cid.as_deref(),
                 )
             })?;
 
@@ -1071,6 +1155,12 @@ impl State {
         debug!("Handshake complete; ready for application data");
         server.local_events.push_back(LocalEvent::Connected);
 
+        if let Some(cid) = server.engine.inbound_cid() {
+            server
+                .local_events
+                .push_back(LocalEvent::ConnectionId(cid.to_vec()));
+        }
+
         // Emit SRTP keying material if negotiated
         if let Some(profile) = server.negotiated_srtp_profile {
             let suite_hash = server.engine.cipher_suite().unwrap().hash_algorithm();
@@ -1143,10 +1233,24 @@ fn compute_cookie(
     hmac_provider: &dyn crate::crypto::HmacProvider,
     secret: &[u8],
     client_random: Random,
+    offered_cid: Option<&[u8]>,
 ) -> Result<Cookie, Error> {
-    // cookie = trunc_32(HMAC(secret, client_random))
+    // cookie = trunc_32(HMAC(secret, client_random || cid_marker || cid_bytes))
+    //
+    // The cid_marker byte distinguishes "no CID extension offered" (0x00)
+    // from "CID extension offered with zero-length value" (0x01). Without
+    // the marker, these two CH variants would collide in the HMAC input
+    // and the CID-equality check RFC 9146 §3 / §7 illustrates would not hold.
     let mut buf = Buf::new();
     client_random.serialize(&mut buf);
+    match offered_cid {
+        None => buf.push(0x00),
+        Some(cid) => {
+            buf.push(0x01);
+            buf.push(cid.len() as u8);
+            buf.extend_from_slice(cid);
+        }
+    }
     let tag = hmac_provider
         .hmac_sha256(secret, &buf)
         .map_err(|e| Error::CryptoError(format!("Failed to compute HMAC: {}", e)))?;
@@ -1159,16 +1263,33 @@ fn verify_cookie(
     hmac_provider: &dyn crate::crypto::HmacProvider,
     secret: &[u8],
     client_random: Random,
+    offered_cid: Option<&[u8]>,
     cookie: Cookie,
 ) -> bool {
     if cookie.len() != 32 {
         return false;
     }
-    match compute_cookie(hmac_provider, secret, client_random) {
+    match compute_cookie(hmac_provider, secret, client_random, offered_cid) {
         // Use constant-time comparison to prevent timing attacks
         Ok(expected) => expected.as_ref().ct_eq(cookie.as_ref()).into(),
         Err(_) => false,
     }
+}
+
+/// Extract the client's offered CID extension body from a ClientHello, if
+/// present. Returns the *raw* extension_data bytes (not the parsed CID value)
+/// so cookie binding is robust even when the extension body is malformed:
+/// two CHs with identical extension bytes produce the same cookie and pass
+/// the RFC 9146 §3 / §7 CID-equality check; the strict extension parser runs later
+/// in `handle_client_hello_extensions` to reject malformed bodies with
+/// SecurityError / decode_error.
+fn extract_offered_cid(ch: &ClientHello, defragment_buffer: &[u8]) -> Option<Vec<u8>> {
+    for ext in ch.extensions.iter() {
+        if ext.extension_type == ExtensionType::ConnectionId {
+            return Some(ext.extension_data(defragment_buffer).to_vec());
+        }
+    }
+    None
 }
 
 fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
@@ -1184,6 +1305,7 @@ fn handshake_create_server_hello(
     session_id: SessionId,
     negotiated_srtp_profile: Option<SrtpProfile>,
     extension_data: &mut Buf,
+    connection_id: Option<&[u8]>,
 ) -> Result<(), Error> {
     let server_version = ProtocolVersion::DTLS1_2;
 
@@ -1205,7 +1327,7 @@ fn handshake_create_server_hello(
         CompressionMethod::Null,
         None,
     )
-    .with_extensions(extension_data, srtp_pid);
+    .with_extensions(extension_data, srtp_pid, connection_id);
 
     sh.serialize(extension_data, body);
     Ok(())

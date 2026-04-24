@@ -35,9 +35,6 @@ impl DTLSRecord {
     /// Length of the explicit nonce prefix in DTLS 1.2 AES-GCM records.
     pub const EXPLICIT_NONCE_LEN: usize = 8;
 
-    /// Byte offset in the record header where the 2-byte length field is
-    pub const LENGTH_OFFSET: Range<usize> = 11..13;
-
     /// Parse a DTLS record from the input buffer.
     pub fn parse(
         input: &[u8],

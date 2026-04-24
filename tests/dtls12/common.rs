@@ -112,6 +112,7 @@ pub struct DrainedOutputs {
     pub packets: Vec<Vec<u8>>,
     pub connected: bool,
     pub peer_cert: Option<Vec<u8>>,
+    pub connection_id: Option<Vec<u8>>,
     pub keying_material: Option<(Vec<u8>, SrtpProfile)>,
     pub app_data: Vec<Vec<u8>>,
     pub timeout: Option<Instant>,
@@ -127,6 +128,7 @@ pub fn drain_outputs(endpoint: &mut Dtls) -> DrainedOutputs {
             Output::Packet(p) => result.packets.push(p.to_vec()),
             Output::Connected => result.connected = true,
             Output::PeerCert(cert) => result.peer_cert = Some(cert.to_vec()),
+            Output::ConnectionId(cid) => result.connection_id = Some(cid.to_vec()),
             Output::KeyingMaterial(km, profile) => {
                 result.keying_material = Some((km.to_vec(), profile));
             }

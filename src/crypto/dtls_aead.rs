@@ -134,19 +134,61 @@ impl Nonce {
     }
 }
 
+/// Maximum length of a DTLS 1.2 Connection ID (RFC 9146).
+///
+/// RFC 9146 caps CID length at a single byte. `Config::build` rejects
+/// `connection_id` longer than this, and `ConnectionIdExtension::parse`
+/// enforces the same ceiling via its `ArrayVec<u8, 255>` backing store.
+pub const DTLS12_CID_MAX_LEN: usize = 255;
+
+/// Maximum capacity for a DTLS AAD buffer.
+///
+/// 23 fixed bytes (DTLS 1.2 CID AAD header, RFC 9146 §5) + up to 255 CID bytes.
+/// Sizing for the worst case keeps the `try_extend_from_slice(cid)` paths
+/// panic-free for any config-validated CID without a runtime bound check.
+/// Also covers DTLS 1.2 (13 bytes) and DTLS 1.3 (3-5 bytes) AAD forms.
+pub const DTLS12_CID_AAD_MAX: usize = 23 + DTLS12_CID_MAX_LEN;
+
 /// Additional Authenticated Data for DTLS records.
 ///
-/// Variable-length to support both DTLS 1.2 (13 bytes) and DTLS 1.3 (3-5 bytes).
+/// Variable-length to support DTLS 1.2 (13 bytes), DTLS 1.2 with CID (23+N bytes),
+/// and DTLS 1.3 (3-5 bytes).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Aad(pub ArrayVec<u8, 13>);
+pub struct Aad(ArrayVec<u8, DTLS12_CID_AAD_MAX>);
+
+impl Aad {
+    /// Borrow the AAD as a byte slice for AEAD operations.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for Aad {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl Aad {
     /// Create Additional Authenticated Data for a DTLS 1.2 record.
-    pub(crate) fn new_dtls12(content_type: ContentType, sequence: Sequence, length: u16) -> Self {
+    ///
+    /// `version` is the 2-byte wire version field observed in the record
+    /// header (e.g. `[0xFE, 0xFD]` for DTLS 1.2, `[0xFE, 0xFF]` for
+    /// DTLS 1.0). RFC 6347 §4.1.2.1 names this slot `DTLSCompressed.version`
+    /// — the bytes that were actually transmitted — so the sender and
+    /// receiver must bind the same bytes or AEAD authentication fails.
+    pub(crate) fn new_dtls12(
+        content_type: ContentType,
+        sequence: Sequence,
+        version: [u8; 2],
+        length: u16,
+    ) -> Self {
         let mut aad = ArrayVec::new();
 
         // First set the full 8-byte sequence number
         let seq_bytes = sequence.sequence_number.to_be_bytes();
+        // unwrap: total DTLS 1.2 AAD is 13 bytes, well within DTLS12_CID_AAD_MAX.
         aad.try_extend_from_slice(&seq_bytes).unwrap();
 
         // Overwrite the first 2 bytes with epoch
@@ -157,12 +199,81 @@ impl Aad {
         // Content type at index 8
         aad.push(content_type.as_u8());
 
-        // Protocol version bytes (major:minor) at indexes 9-10
-        aad.push(0xfe); // DTLS 1.2 major version
-        aad.push(0xfd); // DTLS 1.2 minor version
+        // Protocol version bytes (major:minor) at indexes 9-10, from the wire
+        aad.push(version[0]);
+        aad.push(version[1]);
 
         // Payload length (2 bytes) at indexes 11-12
+        // unwrap: same capacity argument as the seq_bytes extend above.
         aad.try_extend_from_slice(&length.to_be_bytes()).unwrap();
+
+        Aad(aad)
+    }
+
+    /// Create Additional Authenticated Data for a DTLS 1.2 CID record (RFC 9146 §5).
+    ///
+    /// `version` is the 2-byte wire `DTLSCiphertext.version` field from the
+    /// record header. Per RFC 9146 §5 the AAD binds the exact bytes the
+    /// sender put on the wire, so a peer that emits `0xFE 0xFF` (DTLS 1.0)
+    /// requires `[0xFE, 0xFF]` here — hardcoding `0xFE 0xFD` would silently
+    /// fail AEAD against such a peer.
+    ///
+    /// AAD layout:
+    /// ```text
+    /// seq_num_placeholder(8, 0xFF) | tls12_cid(1) | cid_length(1) |
+    /// tls12_cid(1) | version(2) | epoch(2) | sequence_number(6) |
+    /// cid(N) | length_of_DTLSInnerPlaintext(2)
+    /// ```
+    pub(crate) fn new_dtls12_cid(
+        sequence: Sequence,
+        version: [u8; 2],
+        cid: &[u8],
+        inner_plaintext_len: u16,
+    ) -> Self {
+        let mut aad = ArrayVec::new();
+
+        // 8 bytes of 0xFF as sequence number placeholder.
+        // unwrap: fixed 8 bytes, well within DTLS12_CID_AAD_MAX.
+        aad.try_extend_from_slice(&[0xFF; 8]).unwrap();
+
+        // tls12_cid content type (25)
+        aad.push(ContentType::Tls12Cid.as_u8());
+
+        // CID length (1 byte).
+        // `cid.len() as u8` is lossless: `Config::build` rejects CID > 255
+        // bytes, and `ConnectionIdExtension::parse` enforces the same 255
+        // ceiling via its `ArrayVec<u8, 255>` backing store, so the value
+        // always fits in u8.
+        aad.push(cid.len() as u8);
+
+        // tls12_cid content type again (25)
+        aad.push(ContentType::Tls12Cid.as_u8());
+
+        // Wire version bytes from the record header.
+        aad.push(version[0]);
+        aad.push(version[1]);
+
+        // First set the full 8-byte sequence number.
+        // unwrap: at this point 13 bytes are consumed, adding 8 stays within DTLS12_CID_AAD_MAX.
+        let seq_bytes = sequence.sequence_number.to_be_bytes();
+        aad.try_extend_from_slice(&seq_bytes).unwrap();
+
+        // Overwrite the first 2 bytes with epoch
+        let epoch_bytes = sequence.epoch.to_be_bytes();
+        aad[13] = epoch_bytes[0];
+        aad[14] = epoch_bytes[1];
+
+        // CID (N bytes).
+        // unwrap: 21 fixed bytes are consumed by now, `cid.len() <=
+        // DTLS12_CID_MAX_LEN` by config validation, and remaining capacity
+        // is DTLS12_CID_AAD_MAX - 21 = 257, so the extend always succeeds.
+        aad.try_extend_from_slice(cid).unwrap();
+
+        // Length of DTLSInnerPlaintext (2 bytes).
+        // unwrap: worst case is 21 + DTLS12_CID_MAX_LEN + 2 =
+        // DTLS12_CID_AAD_MAX which matches capacity exactly — still fits.
+        aad.try_extend_from_slice(&inner_plaintext_len.to_be_bytes())
+            .unwrap();
 
         Aad(aad)
     }
@@ -203,5 +314,41 @@ mod tests {
         assert!(plaintext_len_from_fragment_len(0).is_none());
         assert!(plaintext_len_from_fragment_len(3).is_none());
         assert!(plaintext_len_from_fragment_len(DTLS_AEAD_OVERHEAD - 1).is_none());
+    }
+
+    #[test]
+    fn aad_new_dtls12_cid_layout() {
+        // RFC 9146 §5 AAD layout verification
+        let sequence = Sequence {
+            epoch: 1,
+            sequence_number: 42,
+        };
+        let cid = b"test-cid";
+        let inner_plaintext_len: u16 = 100;
+
+        let aad = Aad::new_dtls12_cid(sequence, [0xFE, 0xFD], cid, inner_plaintext_len);
+        let bytes = aad.as_slice();
+
+        // Total: 8 + 1 + 1 + 1 + 2 + 2 + 6 + 8 + 2 = 31 bytes
+        assert_eq!(bytes.len(), 23 + cid.len());
+
+        // seq_num_placeholder: 8 bytes of 0xFF
+        assert_eq!(&bytes[0..8], &[0xFF; 8]);
+        // tls12_cid content type
+        assert_eq!(bytes[8], 25);
+        // cid_length
+        assert_eq!(bytes[9], cid.len() as u8);
+        // tls12_cid content type again
+        assert_eq!(bytes[10], 25);
+        // version: DTLS 1.2 = {0xFE, 0xFD}
+        assert_eq!(&bytes[11..13], &[0xFE, 0xFD]);
+        // epoch
+        assert_eq!(&bytes[13..15], &[0x00, 0x01]);
+        // sequence_number (6 bytes)
+        assert_eq!(&bytes[15..21], &[0x00, 0x00, 0x00, 0x00, 0x00, 42]);
+        // CID
+        assert_eq!(&bytes[21..21 + cid.len()], cid);
+        // inner_plaintext_len
+        assert_eq!(&bytes[21 + cid.len()..], &inner_plaintext_len.to_be_bytes());
     }
 }

@@ -76,6 +76,7 @@ pub struct Config {
     dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
     kx_groups: Option<Vec<NamedGroup>>,
     psk: Option<Psk>,
+    connection_id: Option<Vec<u8>>,
 }
 
 impl Config {
@@ -97,12 +98,32 @@ impl Config {
             dtls13_cipher_suites: None,
             kx_groups: None,
             psk: None,
+            connection_id: None,
         }
     }
 
-    /// Max transmission unit.
+    /// Max transmission unit (coalescing target for outbound datagrams).
     ///
-    /// The largest size UDP packets we will produce.
+    /// The implementation packs multiple DTLS records into a single
+    /// outbound datagram up to this size, and sizes encrypted handshake
+    /// fragments so each handshake record fits. Application-data writes
+    /// that exceed one record's plaintext capacity
+    /// (`DTLS12_MAX_PLAINTEXT_LEN = 2^14` bytes) are rejected with
+    /// [`Error::Oversized`]. Handshake fragmentation returns
+    /// [`Error::MtuTooSmall`] when the configured MTU cannot fit even a
+    /// single record of the required overhead (record header, negotiated
+    /// CID bytes, AEAD, handshake header).
+    ///
+    /// This is **not** a hard ceiling on every individual record: a
+    /// single outbound application-data record may exceed MTU when the
+    /// plaintext plus DTLS + AEAD + CID overhead is larger than MTU,
+    /// because `DTLS12_MAX_PLAINTEXT_LEN` (2^14) may be bigger than a
+    /// caller-chosen MTU. Set MTU above `DTLS12_MAX_PLAINTEXT_LEN +
+    /// record overhead` if strict per-datagram sizing matters, or
+    /// fragment application data caller-side.
+    ///
+    /// [`Error::Oversized`]: crate::Error::Oversized
+    /// [`Error::MtuTooSmall`]: crate::Error::MtuTooSmall
     #[inline(always)]
     pub fn mtu(&self) -> usize {
         self.mtu
@@ -229,6 +250,33 @@ impl Config {
         }
     }
 
+    /// Connection ID to advertise to the peer (RFC 9146, DTLS 1.2 only).
+    ///
+    /// When set on a DTLS 1.2 or DTLS 1.2 PSK association, the endpoint
+    /// offers CID negotiation during the handshake and the peer includes
+    /// this CID in encrypted records it sends to us, allowing
+    /// demultiplexing by CID instead of the UDP 5-tuple.
+    ///
+    /// **Version scope.** The current CID implementation is RFC 9146
+    /// (DTLS 1.2). RFC 9147 §9 defines a separate DTLS 1.3 CID
+    /// mechanism (`NewConnectionId` / `RequestConnectionId`
+    /// post-handshake messages, unified-header CID bit) which dimpl does
+    /// not implement. A `with_connection_id` value configured on a
+    /// [`Dtls::new_13`] association is silently ignored: no CID
+    /// negotiation, no `Output::ConnectionId` event, no `tls12_cid`
+    /// records on the wire. Use `with_connection_id` on the explicit
+    /// DTLS 1.2 / DTLS 1.2 PSK constructors (`Dtls::new_12`,
+    /// `Dtls::new_12_psk`); on `Dtls::new_auto` the config only takes
+    /// effect if the auto-sense path resolves to DTLS 1.2.
+    ///
+    /// An empty slice is valid — per RFC 9146 §3 it negotiates the
+    /// extension but leaves that direction on legacy RFC 6347 framing.
+    ///
+    /// [`Dtls::new_13`]: crate::Dtls::new_13
+    pub fn connection_id(&self) -> Option<&[u8]> {
+        self.connection_id.as_deref()
+    }
+
     /// Allowed DTLS 1.2 cipher suites, filtered by the config's allow-list.
     ///
     /// Returns all provider-supported DTLS 1.2 cipher suites when no filter
@@ -304,13 +352,26 @@ pub struct ConfigBuilder {
     dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
     kx_groups: Option<Vec<NamedGroup>>,
     psk: Option<Psk>,
+    connection_id: Option<Vec<u8>>,
 }
 
 impl ConfigBuilder {
     /// Set the max transmission unit (MTU).
     ///
-    /// The largest size UDP packets we will produce.
+    /// This is a **coalescing target** for outbound datagrams, not a hard
+    /// per-record ceiling — see [`Config::mtu`] for the full contract.
+    /// Handshake fragmentation honors this bound (returning
+    /// [`Error::MtuTooSmall`] if record overhead exceeds it), but a single
+    /// application-data record whose plaintext + CID + AEAD overhead
+    /// exceeds MTU will still be emitted; the only hard cap on
+    /// application data is [`Error::Oversized`] at
+    /// `DTLS12_MAX_PLAINTEXT_LEN = 2^14`.
+    ///
     /// Defaults to 1150.
+    ///
+    /// [`Config::mtu`]: crate::Config::mtu
+    /// [`Error::MtuTooSmall`]: crate::Error::MtuTooSmall
+    /// [`Error::Oversized`]: crate::Error::Oversized
     pub fn mtu(mut self, mtu: usize) -> Self {
         self.mtu = mtu;
         self
@@ -474,6 +535,138 @@ impl ConfigBuilder {
         self
     }
 
+    /// Set the Connection ID (CID) to advertise to the peer (RFC 9146).
+    ///
+    /// The peer includes this CID in encrypted records it sends to us, so
+    /// roaming peers stay addressable across 5-tuple changes. CID must be
+    /// at most 255 bytes.
+    ///
+    /// Per RFC 9146 §3, an **empty** CID (`Vec::new()`) negotiates the
+    /// extension but leaves this direction on legacy RFC 6347 framing; a
+    /// non-empty value engages `tls12_cid` framing for records sent to us.
+    /// The per-direction choice is independent: the peer may choose the
+    /// opposite framing for records we send to it.
+    ///
+    /// `Output::ConnectionId` fires once on successful negotiation in
+    /// **either** case — including the zero-length case, where the
+    /// emitted slice is empty (`&[]`). Empty means "the peer will send
+    /// us records with legacy (non-`tls12_cid`) framing", so the emitted
+    /// bytes are not a valid routing key for that direction; do not use
+    /// them as a load-balancer key, since every empty-CID association
+    /// would route to the same bucket.
+    ///
+    /// When negotiation completes, the state machine emits
+    /// [`Output::ConnectionId`][output_cid] once. Poll for it in the
+    /// standard event loop:
+    ///
+    /// ```
+    /// # #[cfg(feature = "rcgen")]
+    /// # {
+    /// use std::sync::Arc;
+    /// use std::time::Instant;
+    ///
+    /// use dimpl::{certificate, Config, Dtls, Output};
+    ///
+    /// let config = Config::builder()
+    ///     .with_connection_id(b"my-cid".to_vec())
+    ///     .build()
+    ///     .unwrap();
+    /// let cert = certificate::generate_self_signed_certificate().unwrap();
+    /// let mut dtls = Dtls::new_12(Arc::new(config), cert, Instant::now());
+    /// dtls.set_active(true); // client role
+    ///
+    /// // Standard poll-to-Timeout loop: the caller's buffer must be large
+    /// // enough for the CID bytes; if not, `poll_output` defers and re-emits
+    /// // the event on the next call.
+    /// let mut buf = vec![0u8; 2048];
+    /// loop {
+    ///     match dtls.poll_output(&mut buf) {
+    ///         Output::Packet(_p) => { /* send on UDP socket */ }
+    ///         Output::ConnectionId(cid) => {
+    ///             // Peer will place these bytes in the CID field of its
+    ///             // encrypted records. Use them to route incoming
+    ///             // datagrams to this session — see "Peer address
+    ///             // updates" below for the safe integration pattern.
+    ///             let _ = cid;
+    ///         }
+    ///         Output::Timeout(_) => break,
+    ///         _ => {}
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    ///
+    /// ## Peer address updates (RFC 9146 §6)
+    ///
+    /// `Output::ConnectionId` is a **routing hint, not authorization to
+    /// change the send address.** dimpl is Sans-IO and never observes
+    /// the source address of incoming datagrams, so it cannot enforce
+    /// the RFC 9146 §6 conditions for replacing the peer address. Those
+    /// are the caller's responsibility:
+    ///
+    /// 1. **Lookup, then authenticate.** A visible CID match in an
+    ///    incoming datagram only routes the bytes to a candidate
+    ///    association. `Dtls::handle_packet` returning `Ok(())` is **not**
+    ///    an authentication signal: per RFC 6347 §4.1.2.7 / RFC 9146 §6,
+    ///    invalid records (tampered CID, failed AEAD, truncated header,
+    ///    replay, bogus inner type) are silently discarded and still
+    ///    surface as `Ok(())` from `handle_packet`. Before authorizing
+    ///    an address update the caller must observe an
+    ///    authentication-positive signal such as new `ApplicationData`,
+    ///    handshake-state progression, or a successful keying-material
+    ///    export — not `Ok(())` alone.
+    /// 2. **Newer than newest.** Per RFC 9146 §6, an authenticated CID
+    ///    record may update the peer address only if its (epoch,
+    ///    sequence_number) is strictly greater than the newest
+    ///    authenticated record received so far. Stale CID records seen
+    ///    from a different source do not authorize an update.
+    /// 3. **Reachability strategy.** Apply your own address-validation
+    ///    policy (e.g. a probe round-trip) before committing the new
+    ///    address for outbound traffic, especially for unattended IoT
+    ///    deployments.
+    ///
+    /// Concrete pattern: sample
+    /// [`Dtls::newest_authenticated_record`] *before* `handle_packet`,
+    /// deliver the datagram, poll to `Timeout`, and re-sample the
+    /// accessor. A strictly-increased `(epoch, sequence_number)` plus
+    /// an authentication-positive output (`ApplicationData`, handshake
+    /// progression, or `KeyingMaterial`) proves an authenticated fresh
+    /// record landed — only *then* consider the address-update policy.
+    /// Treat `Output::ConnectionId` purely as "what bytes to look at
+    /// when routing" and never as "where to send next."
+    ///
+    /// [`Dtls::handle_packet`]: crate::Dtls::handle_packet
+    /// [`Dtls::newest_authenticated_record`]: crate::Dtls::newest_authenticated_record
+    ///
+    /// ## Privacy (RFC 9146 §8)
+    ///
+    /// CIDs are observable on the wire and are not rotated within a session.
+    /// Reusing the same CID across unrelated associations — or using a
+    /// predictable scheme (counter, timestamp, MAC address) — lets a passive
+    /// observer link traffic across paths and time. Prefer a freshly
+    /// generated, unpredictable CID per association (e.g. 8 random bytes
+    /// from a CSPRNG). The peer's CID advertised back in
+    /// [`Output::ConnectionId`][output_cid] should be treated as opaque.
+    ///
+    /// ## Alerts are the caller's responsibility
+    ///
+    /// dimpl is Sans-IO: it does not emit TLS alerts on the wire. Rejection
+    /// errors from CID-extension handling surface as [`Error::SecurityError`]
+    /// with an RFC-mandated description code the caller is expected to
+    /// translate into a fatal alert:
+    ///
+    /// - Unsolicited `connection_id` in ServerHello → `unsupported_extension(110)`
+    ///   (RFC 5246 §7.4.1.4, RFC 9146 §3)
+    /// - Malformed `connection_id` extension body → `decode_error(50)`
+    ///   (RFC 5246 §7.2.2)
+    ///
+    /// [output_cid]: crate::Output::ConnectionId
+    /// [`Error::SecurityError`]: crate::Error::SecurityError
+    pub fn with_connection_id(mut self, cid: Vec<u8>) -> Self {
+        self.connection_id = Some(cid);
+        self
+    }
+
     /// Build the configuration.
     ///
     /// This validates the crypto provider before returning the configuration.
@@ -511,6 +704,60 @@ impl ConfigBuilder {
                 "MTU {} is too small (minimum 64)",
                 self.mtu
             )));
+        }
+
+        // Validate connection_id: must be at most DTLS12_CID_MAX_LEN bytes.
+        //
+        // This is the single source of truth for the CID length invariant
+        // relied on throughout the DTLS 1.2 CID path:
+        //
+        // - `crypto::dtls_aead::DTLS12_CID_AAD_MAX` (23 + DTLS12_CID_MAX_LEN)
+        //   sizes the AAD ArrayVec so the `try_extend_from_slice(cid)` unwraps
+        //   in `Aad::new_dtls12_cid` cannot panic.
+        // - `dtls12::incoming::Record::decrypt_record`'s `ArrayVec<u8, 255>`
+        //   wire-CID buffer and its `try_extend_from_slice(...).expect(...)`
+        //   rely on it (RFC 9146 §5.3 on-wire auth).
+        // - `dtls12::message::extensions::ConnectionIdExtension::{new, parse}`
+        //   uses the same 255-byte backing store (matches the u8 length byte
+        //   on the wire).
+        // - `Client::into_output` / `Server::into_output`'s poll-buffer handling
+        //   assumes the caller's buffer can fit up to DTLS12_CID_MAX_LEN bytes
+        //   of CID.
+        //
+        // If this ceiling ever changes, audit every site listed above.
+        if let Some(ref cid) = self.connection_id {
+            if cid.len() > crate::crypto::DTLS12_CID_MAX_LEN {
+                return Err(Error::ConfigError(format!(
+                    "Connection ID length {} exceeds maximum {}",
+                    cid.len(),
+                    crate::crypto::DTLS12_CID_MAX_LEN
+                )));
+            }
+        }
+
+        // Round-5 review #3: `connection_id` is RFC 9146 (DTLS 1.2). If
+        // the caller sets a CID but the cipher-suite filter drops every
+        // DTLS 1.2 suite, the ClientHello would advertise CID on a
+        // handshake that can only succeed as DTLS 1.3, where dimpl does
+        // not implement RFC 9147 CID. Reject the combination at config
+        // build time so the mismatch is caught before the handshake.
+        if self.connection_id.is_some() {
+            let has_dtls12 = {
+                let mut all = crypto_provider.supported_cipher_suites();
+                match &self.dtls12_cipher_suites {
+                    Some(list) => all.any(|cs| list.contains(&cs.suite())),
+                    None => all.next().is_some(),
+                }
+            };
+            if !has_dtls12 {
+                return Err(Error::ConfigError(
+                    "Connection ID is configured (RFC 9146, DTLS 1.2) but no \
+                     DTLS 1.2 cipher suite survives the filter. Either include \
+                     a DTLS 1.2 suite in `dtls12_cipher_suites` or drop \
+                     `with_connection_id`."
+                        .to_string(),
+                ));
+            }
         }
 
         // Validate aead_encryption_limit: must be at least 1
@@ -621,6 +868,7 @@ impl ConfigBuilder {
             dtls13_cipher_suites: self.dtls13_cipher_suites,
             kx_groups: self.kx_groups,
             psk: self.psk,
+            connection_id: self.connection_id,
         })
     }
 }
@@ -671,6 +919,7 @@ impl fmt::Debug for Config {
             .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
             .field("kx_groups", &self.kx_groups)
             .field("psk", &self.psk)
+            .field("connection_id", &self.connection_id)
             .finish()
     }
 }
@@ -696,6 +945,7 @@ impl fmt::Debug for ConfigBuilder {
             .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
             .field("kx_groups", &self.kx_groups)
             .field("psk", &self.psk)
+            .field("connection_id", &self.connection_id)
             .finish()
     }
 }
