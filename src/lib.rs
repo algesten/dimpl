@@ -323,8 +323,54 @@ fn client_hello_handshake(packet: &[u8]) -> Option<&[u8]> {
 /// errors. A packet that fails to parse in the DTLS 1.3 engine should
 /// only trigger a downgrade if it at least claims to be a ClientHello —
 /// otherwise random/garbage traffic could force fallback.
+///
+/// In addition to the record/handshake header check from
+/// [`client_hello_handshake`], this validates wire-format integrity of
+/// the handshake header (fragment fits inside the declared total length;
+/// fragment bytes actually present in the record) and, for an
+/// unfragmented CH, requires the declared length to be at least the
+/// minimum a real DTLS 1.2 ClientHello can carry. A header-only fake
+/// or a CH whose declared length cannot fit a valid 1.2 body fails the
+/// check.
 fn looks_like_client_hello(packet: &[u8]) -> bool {
-    client_hello_handshake(packet).is_some()
+    let Some(record_body) = client_hello_handshake(packet) else {
+        return false;
+    };
+
+    // Handshake header (12 bytes already validated to be present):
+    //   msg_type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3)
+    let length = ((record_body[1] as usize) << 16)
+        | ((record_body[2] as usize) << 8)
+        | record_body[3] as usize;
+    let frag_off = ((record_body[6] as usize) << 16)
+        | ((record_body[7] as usize) << 8)
+        | record_body[8] as usize;
+    let frag_len = ((record_body[9] as usize) << 16)
+        | ((record_body[10] as usize) << 8)
+        | record_body[11] as usize;
+
+    // Fragment must lie within the declared total CH length, and the
+    // declared fragment bytes must actually be present in the record.
+    if frag_off.saturating_add(frag_len) > length {
+        return false;
+    }
+    if 12usize.saturating_add(frag_len) > record_body.len() {
+        return false;
+    }
+
+    // Minimum DTLS 1.2 ClientHello body:
+    //   version(2) + random(32) + sid_len(1) + cookie_len(1) +
+    //   cipher_suites_len(2) + compression_methods_len(1) +
+    //   compression_method(1) = 40 bytes (with empty sid/cookie/suites).
+    // Use 41 to also require a single byte for at least one cipher suite
+    // half — anything below this cannot be a real CH.
+    const MIN_CH_BODY: usize = 41;
+    let is_unfragmented = frag_off == 0 && frag_len == length;
+    if is_unfragmented && length < MIN_CH_BODY {
+        return false;
+    }
+
+    true
 }
 
 /// Peek at a buffered DTLS 1.2 ClientHello to decide whether the auto-sense
@@ -1028,36 +1074,68 @@ mod test {
         pkt
     }
 
-    fn make_handshake_body(msg_type: u8) -> Vec<u8> {
+    /// Build a handshake message: 12-byte header + body bytes.
+    fn make_handshake(
+        msg_type: u8,
+        length: u32,
+        frag_off: u32,
+        frag_len: u32,
+        body: &[u8],
+    ) -> Vec<u8> {
+        let mut hs = Vec::with_capacity(12 + body.len());
+        hs.push(msg_type);
+        hs.extend_from_slice(&length.to_be_bytes()[1..]); // 3-byte length
+        hs.extend_from_slice(&[0x00, 0x00]); // message_seq
+        hs.extend_from_slice(&frag_off.to_be_bytes()[1..]); // 3-byte fragment_offset
+        hs.extend_from_slice(&frag_len.to_be_bytes()[1..]); // 3-byte fragment_length
+        hs.extend_from_slice(body);
+        hs
+    }
+
+    /// Minimum-shape DTLS 1.2 ClientHello body (41 bytes):
+    /// version(2) + random(32) + sid_len=0(1) + cookie_len=0(1) +
+    /// suites_len=2(2) + 2 bytes of suite + comp_len=1(1) + null comp(1)
+    /// = 42. We use 41 to match the gate's lower bound; an extra byte is
+    /// fine. Returns a fixed valid-shape body for use in unit tests.
+    fn min_ch_body() -> Vec<u8> {
         let mut body = Vec::new();
-        body.push(msg_type);
-        body.extend_from_slice(&[0x00, 0x00, 0x00]); // length
-        body.extend_from_slice(&[0x00, 0x00]); // message_seq
-        body.extend_from_slice(&[0x00, 0x00, 0x00]); // fragment_offset
-        body.extend_from_slice(&[0x00, 0x00, 0x00]); // fragment_length
+        body.extend_from_slice(&[0xFE, 0xFD]); // version
+        body.extend_from_slice(&[0u8; 32]); // random
+        body.push(0); // session_id_length = 0
+        body.push(0); // cookie_length = 0
+        body.extend_from_slice(&[0x00, 0x02]); // cipher_suites_length = 2
+        body.extend_from_slice(&[0xC0, 0x2B]); // one suite (ECDHE_ECDSA_AES128_GCM)
+        body.push(1); // compression_methods_length = 1
+        body.push(0); // null compression
         body
     }
 
     #[test]
-    fn looks_like_client_hello_accepts_handshake_with_ch_msg_type() {
-        let body = make_handshake_body(0x01);
-        let pkt = make_record(0x16, &body);
+    fn looks_like_client_hello_accepts_minimum_shape_ch() {
+        let body = min_ch_body();
+        let len = body.len() as u32;
+        let hs = make_handshake(0x01, len, 0, len, &body);
+        let pkt = make_record(0x16, &hs);
         assert!(looks_like_client_hello(&pkt));
     }
 
     #[test]
     fn looks_like_client_hello_rejects_non_handshake_record() {
-        let body = make_handshake_body(0x01);
-        let pkt = make_record(0x17, &body); // ApplicationData
+        let body = min_ch_body();
+        let len = body.len() as u32;
+        let hs = make_handshake(0x01, len, 0, len, &body);
+        let pkt = make_record(0x17, &hs); // ApplicationData
         assert!(!looks_like_client_hello(&pkt));
     }
 
     #[test]
     fn looks_like_client_hello_rejects_other_handshake_msg_types() {
         // ServerHello, HelloVerifyRequest, Finished, etc.
+        let body = min_ch_body();
+        let len = body.len() as u32;
         for msg_type in [0x02, 0x03, 0x04, 0x0B, 0x0E, 0x14] {
-            let body = make_handshake_body(msg_type);
-            let pkt = make_record(0x16, &body);
+            let hs = make_handshake(msg_type, len, 0, len, &body);
+            let pkt = make_record(0x16, &hs);
             assert!(
                 !looks_like_client_hello(&pkt),
                 "msg_type {:#x} should not look like a CH",
@@ -1081,6 +1159,69 @@ mod test {
         // Valid record header but handshake body too short (< 12 bytes).
         let pkt = make_record(0x16, &[0x01, 0x00, 0x00]);
         assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_header_only_ch() {
+        // Handshake header with msg_type=ClientHello but length=0 and no body.
+        // Pre-tightening this passed; it must now be rejected.
+        let hs = make_handshake(0x01, 0, 0, 0, &[]);
+        let pkt = make_record(0x16, &hs);
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_undersized_unfragmented_ch() {
+        // Unfragmented CH (frag_off=0, frag_len=length) but length=20 — way
+        // below the 41-byte minimum a real DTLS 1.2 CH can have.
+        let body = vec![0xAA; 20];
+        let hs = make_handshake(0x01, 20, 0, 20, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_inconsistent_fragment_overflow() {
+        // fragment_offset + fragment_length > length — wire-format
+        // contradiction; the fragment claims to extend past the total CH.
+        let body = min_ch_body();
+        let hs = make_handshake(0x01, 50, 0, 100, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_missing_fragment_bytes() {
+        // fragment_length declares 200 bytes of body but only ~40 are
+        // present in the record. The fragment's bytes are not actually
+        // there.
+        let body = min_ch_body();
+        let hs = make_handshake(0x01, 200, 0, 200, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_accepts_first_fragment_of_fragmented_ch() {
+        // frag_off=0, frag_len=20, length=200 — first fragment of a
+        // larger CH. The minimum-body check only applies to unfragmented
+        // CHs, so this must pass even though length<41 wouldn't apply
+        // here either.
+        let body = vec![0xAA; 20];
+        let hs = make_handshake(0x01, 200, 0, 20, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_accepts_non_first_fragment() {
+        // frag_off=20, frag_len=20, length=200 — middle fragment of a
+        // larger CH. Must pass: discarding non-first fragments here would
+        // break interop when fragments arrive out of order.
+        let body = vec![0xBB; 20];
+        let hs = make_handshake(0x01, 200, 20, 20, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(looks_like_client_hello(&pkt));
     }
 
     #[test]
