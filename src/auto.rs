@@ -39,6 +39,7 @@ const EXT_PADDING: u16 = 0x0015;
 const EXT_EXTENDED_MASTER_SECRET: u16 = 0x0017;
 const EXT_SUPPORTED_VERSIONS: u16 = 0x002B;
 const EXT_KEY_SHARE: u16 = 0x0033;
+const EXT_CONNECTION_ID: u16 = 0x0036;
 const EXT_RENEGOTIATION_INFO: u16 = 0xFF01;
 
 /// A self-contained hybrid ClientHello compatible with both DTLS 1.2 and 1.3.
@@ -189,7 +190,20 @@ impl HybridClientHello {
         ext_buf.push(0); // renegotiated_connection length = 0
         ext_entries.push((EXT_RENEGOTIATION_INFO, start, ext_buf.len()));
 
-        // 9. padding: fill to MTU
+        // 9. connection_id (RFC 9146, DTLS 1.2 compat): emit when the caller
+        // configured a CID. Without this, auto-mode hybrid CH1 would omit
+        // the extension, causing CH1 (no CID) / CH2 (with CID) to disagree
+        // across HVR; `Config::build` already rejects a CID-without-DTLS-1.2
+        // combination, so reaching here guarantees at least one DTLS 1.2
+        // suite is offered.
+        if let Some(cid) = config.connection_id() {
+            let start = ext_buf.len();
+            ext_buf.push(cid.len() as u8);
+            ext_buf.extend_from_slice(cid);
+            ext_entries.push((EXT_CONNECTION_ID, start, ext_buf.len()));
+        }
+
+        // 10. padding: fill to MTU
         let record_header = 13usize;
         let handshake_header = 12usize;
         let body_so_far = ch_body.len()

@@ -3,8 +3,6 @@
 //! This module defines the validation rules for crypto providers used with dimpl,
 //! based on the documented support in lib.rs.
 
-use arrayvec::ArrayVec;
-
 use super::{Aad, CryptoProvider, Nonce, SupportedDtls12CipherSuite, SupportedKxGroup};
 use crate::Error;
 use crate::buffer::{Buf, TmpBuf};
@@ -299,10 +297,7 @@ impl CryptoProvider {
                 })?;
 
             let nonce = Nonce(tv.nonce);
-            let mut aad_vec = ArrayVec::new();
-            // unwrap: AAD is at most 12 bytes, well within capacity 13
-            aad_vec.try_extend_from_slice(tv.aad).unwrap();
-            let aad = Aad(aad_vec);
+            let aad = Aad::new_dtls13(tv.aad);
 
             // Encrypt
             let mut cipher = cs.create_cipher(tv.key).map_err(|e| {

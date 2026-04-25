@@ -14,6 +14,7 @@ pub struct DrainedOutputs {
     pub connected: bool,
     pub peer_cert: Option<Vec<u8>>,
     pub keying_material: Option<(Vec<u8>, SrtpProfile)>,
+    pub connection_id: Option<Vec<u8>>,
     pub app_data: Vec<Vec<u8>>,
     pub timeout: Option<Instant>,
     pub close_notify: bool,
@@ -45,6 +46,7 @@ pub fn drain_outputs(endpoint: &mut Dtls) -> DrainedOutputs {
             Output::KeyingMaterial(km, profile) => {
                 result.keying_material = Some((km.to_vec(), profile));
             }
+            Output::ConnectionId(cid) => result.connection_id = Some(cid.to_vec()),
             Output::ApplicationData(data) => result.app_data.push(data.to_vec()),
             Output::CloseNotify => result.close_notify = true,
             Output::Timeout(t) => {

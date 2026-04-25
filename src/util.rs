@@ -2,6 +2,9 @@ use arrayvec::ArrayVec;
 use nom::error::{ErrorKind, ParseError, make_error};
 use nom::{Err, IResult, Input, Parser};
 
+use crate::Error;
+use crate::types::ContentType;
+
 /// A combinator that parses items using the provided parser but only collects
 /// items that pass a filter predicate. Allows zero matches.
 #[inline(always)]
@@ -97,6 +100,34 @@ where
             Ok((i, acc))
         }
     }
+}
+
+/// Recover the real content type from a DTLSInnerPlaintext.
+///
+/// DTLSInnerPlaintext = content || real_content_type(1) || zeros(padding).
+/// Scans backward past zero padding to find the content type byte.
+/// Returns `(real_content_type, content_length)`.
+///
+/// Rejects `ContentType::Unknown(_)` — unspecified values are a peer bug.
+/// Callers using this inside a DTLS 1.2 CID record (RFC 9146 §5) must
+/// additionally reject `Tls12Cid` (nested CID is nonsensical) and `Ack`
+/// (DTLS 1.3 only). That DTLS-version-specific check stays in the caller
+/// so DTLS 1.3 can still accept `Ack` here.
+pub fn recover_inner_content_type(decrypted: &[u8]) -> Result<(ContentType, usize), Error> {
+    let mut i = decrypted.len();
+    while i > 0 && decrypted[i - 1] == 0 {
+        i -= 1;
+    }
+    if i == 0 {
+        return Err(Error::ParseError(nom::error::ErrorKind::Fail));
+    }
+    // The byte before padding is the content type
+    i -= 1;
+    let content_type = ContentType::from_u8(decrypted[i]);
+    if matches!(content_type, ContentType::Unknown(_)) {
+        return Err(Error::ParseError(nom::error::ErrorKind::Fail));
+    }
+    Ok((content_type, i))
 }
 
 pub fn be_u48<I, E: ParseError<I>>(input: I) -> IResult<I, u64, E>

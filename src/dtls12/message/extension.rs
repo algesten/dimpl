@@ -90,6 +90,7 @@ pub enum ExtensionType {
     PostHandshakeAuth,
     SignatureAlgorithmsCert,
     KeyShare,
+    ConnectionId,
     RenegotiationInfo,
     Unknown(u16),
 }
@@ -140,6 +141,7 @@ impl ExtensionType {
             0x0031 => ExtensionType::PostHandshakeAuth,
             0x0032 => ExtensionType::SignatureAlgorithmsCert,
             0x0033 => ExtensionType::KeyShare,
+            0x0036 => ExtensionType::ConnectionId,
             0xFF01 => ExtensionType::RenegotiationInfo,
             _ => ExtensionType::Unknown(value),
         }
@@ -184,6 +186,7 @@ impl ExtensionType {
             ExtensionType::PostHandshakeAuth => 0x0031,
             ExtensionType::SignatureAlgorithmsCert => 0x0032,
             ExtensionType::KeyShare => 0x0033,
+            ExtensionType::ConnectionId => 0x0036,
             ExtensionType::RenegotiationInfo => 0xFF01,
             ExtensionType::Unknown(value) => *value,
         }
@@ -200,7 +203,7 @@ impl ExtensionType {
     }
 
     /// Supported extension types that this implementation handles.
-    pub const fn supported() -> &'static [ExtensionType; 8] {
+    pub const fn supported() -> &'static [ExtensionType; 9] {
         &[
             ExtensionType::SupportedGroups,
             ExtensionType::EcPointFormats,
@@ -210,6 +213,7 @@ impl ExtensionType {
             ExtensionType::ExtendedMasterSecret,
             ExtensionType::RenegotiationInfo,
             ExtensionType::SessionTicket,
+            ExtensionType::ConnectionId,
         ]
     }
 }

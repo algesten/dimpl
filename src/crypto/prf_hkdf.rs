@@ -212,7 +212,7 @@ mod tests {
     use super::*;
 
     fn hex_to_vec(hex: &str) -> Vec<u8> {
-        let hex = hex.replace(' ', "").replace('\n', "");
+        let hex = hex.replace([' ', '\n'], "");
         let mut v = Vec::new();
         for i in 0..hex.len() / 2 {
             // unwrap: test-only hex parsing

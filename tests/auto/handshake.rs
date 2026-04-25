@@ -714,3 +714,86 @@ fn auto_client_protocol_version_after_negotiating_dtls12() {
     );
     assert_eq!(client.protocol_version(), Some(ProtocolVersion::DTLS1_2));
 }
+
+/// Regression for Round-6 review #1: when `Config::with_connection_id`
+/// is set on an auto-mode client, the hybrid CH1 must carry the
+/// `connection_id` extension so CH1/CH2 bytes agree across HVR and CID
+/// is negotiated in a single HVR round-trip — not silently dropped or
+/// forced into an extra retry.
+#[test]
+#[cfg(feature = "rcgen")]
+fn auto_client_with_cid_to_dtls12_server_negotiates_cid() {
+    use dimpl::Config;
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let client_cid = b"auto-cli-cid";
+    let server_cid = b"auto-srv-cid";
+    let client_config = Arc::new(
+        Config::builder()
+            .with_connection_id(client_cid.to_vec())
+            .build()
+            .expect("client config"),
+    );
+    let server_config = Arc::new(
+        Config::builder()
+            .with_connection_id(server_cid.to_vec())
+            .build()
+            .expect("server config"),
+    );
+
+    let mut now = Instant::now();
+    let mut client = Dtls::new_auto(client_config, client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_12(server_config, server_cert, now);
+    server.set_active(false);
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut client_cid_event: Option<Vec<u8>> = None;
+    let mut server_cid_event: Option<Vec<u8>> = None;
+
+    for _ in 0..60 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let co = drain_outputs(&mut client);
+        let so = drain_outputs(&mut server);
+
+        client_connected |= co.connected;
+        server_connected |= so.connected;
+        if co.connection_id.is_some() {
+            client_cid_event = co.connection_id;
+        }
+        if so.connection_id.is_some() {
+            server_cid_event = so.connection_id;
+        }
+
+        deliver_packets(&co.packets, &mut server);
+        deliver_packets(&so.packets, &mut client);
+
+        if client_connected && server_connected {
+            break;
+        }
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        client_connected && server_connected,
+        "auto+CID handshake should complete"
+    );
+    assert_eq!(
+        client_cid_event.as_deref(),
+        Some(&client_cid[..]),
+        "auto client must emit Output::ConnectionId with its own CID"
+    );
+    assert_eq!(
+        server_cid_event.as_deref(),
+        Some(&server_cid[..]),
+        "DTLS 1.2 server must emit Output::ConnectionId with its own CID"
+    );
+}

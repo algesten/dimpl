@@ -26,9 +26,10 @@ use crate::dtls12::engine::Engine;
 use crate::dtls12::message::{Body, CipherSuiteVec, ClientHello, ClientKeyExchange};
 use crate::dtls12::message::{ClientPskKeys, ServerKeyExchangeParams};
 use crate::dtls12::message::{CompressionMethod, ContentType, Cookie};
+use crate::dtls12::message::{ConnectionIdExtension, Random, SessionId};
 use crate::dtls12::message::{DigitallySigned, Dtls12CipherSuite};
 use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
-use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
+use crate::dtls12::message::{SignatureAndHashAlgorithm, UseSrtpExtension};
 use crate::{Config, DtlsCertificate, Error, KeyingMaterial, Output};
 
 /// DTLS client
@@ -55,6 +56,9 @@ pub struct Client {
 
     /// The negotiated SRTP profile (if any)
     negotiated_srtp_profile: Option<SrtpProfile>,
+
+    /// Peer's Connection ID (from ServerHello extension). We put this in records we send.
+    peer_cid: Option<Vec<u8>>,
 
     /// Server random. Set by ServerHello.
     server_random: Option<Random>,
@@ -83,9 +87,10 @@ pub struct Client {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum LocalEvent {
+pub enum LocalEvent {
     PeerCert,
     Connected,
+    ConnectionId(Vec<u8>),
     KeyingMaterial(ArrayVec<u8, 88>, SrtpProfile),
 }
 
@@ -101,6 +106,7 @@ impl Client {
             cookie: None,
             extension_data: Buf::new(),
             negotiated_srtp_profile: None,
+            peer_cid: None,
             server_random: None,
             server_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
@@ -165,6 +171,7 @@ impl Client {
             cookie: None,
             extension_data: Buf::new(),
             negotiated_srtp_profile: None,
+            peer_cid: None,
             server_random: None,
             server_certificates: Vec::with_capacity(3),
             defragment_buffer: Buf::new(),
@@ -178,7 +185,22 @@ impl Client {
         Ok(client)
     }
 
+    /// Borrow the underlying DTLS 1.2 engine (crate-internal accessor).
+    pub(crate) fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
     pub fn into_server(self) -> Server {
+        // Role flip must happen before handshake completion — see
+        // `Dtls::set_active` rustdoc. CID state is labelled for the
+        // original direction and does not survive a role swap
+        // meaningfully. Debug-build guard: any negotiated CID implies a
+        // post-handshake flip, which is unsupported.
+        debug_assert!(
+            self.engine.inbound_cid().is_none(),
+            "Dtls::set_active role flip after CID negotiation is unsupported; \
+             CID labels are tied to the original role. Use a fresh Dtls instance."
+        );
         Server::new_with_engine(self.engine, self.last_now)
     }
 
@@ -193,6 +215,23 @@ impl Client {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
+        // `Output::ConnectionId` borrows from `buf`. If the caller's buffer
+        // can't hold the negotiated CID, defer the notification — leave the
+        // event at the front of the queue and fall through to the engine.
+        // The caller will see `Timeout`, retry `poll_output` with a larger
+        // buffer, and the ConnectionId event is delivered then. This keeps
+        // the CID plumbing panic-free.
+        if let Some(LocalEvent::ConnectionId(cid)) = self.local_events.front() {
+            if cid.len() > buf.len() {
+                warn!(
+                    "poll_output buffer too small for ConnectionId ({} bytes < {} bytes); deferring",
+                    buf.len(),
+                    cid.len()
+                );
+                return self.engine.poll_output(buf, self.last_now);
+            }
+        }
+
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.server_certificates);
         }
@@ -338,7 +377,14 @@ impl State {
     fn send_client_hello(self, client: &mut Client) -> Result<Self, Error> {
         let session_id = client.session_id.unwrap_or_else(SessionId::empty);
         let cookie = client.cookie.unwrap_or_else(Cookie::empty);
-        // unwrap: is ok because we set the random in handle_timeout
+        // `handle_timeout` normally sets `client.random` before this state,
+        // but `handle_packet → make_progress` can also reach `SendClientHello`
+        // (e.g. when a passive client processes an early stray datagram
+        // that silent-discards before the first user-driven `handle_timeout`
+        // tick). Initialize lazily so that path is panic-free.
+        if client.random.is_none() {
+            client.random = Some(Random::new(&mut client.engine.rng));
+        }
         let random = client.random.unwrap();
 
         // Determine flight number: 1 for initial CH, 3 for retransmit with cookie
@@ -517,6 +563,33 @@ impl State {
                 extended_master_secret = true;
                 trace!("Server negotiated Extended Master Secret");
             }
+
+            if extension.extension_type == ExtensionType::ConnectionId {
+                // RFC 9146 §3 + RFC 5246 §7.4.1.4: a server MUST NOT send an
+                // extension the client did not offer. If our config disabled
+                // CID, treat a ServerHello connection_id as unsupported_extension.
+                if client.engine.config().connection_id().is_none() {
+                    return Err(Error::SecurityError(
+                        "Server sent unsolicited connection_id extension".to_string(),
+                    ));
+                }
+                let extension_data = extension.extension_data(&client.defragment_buffer);
+                match ConnectionIdExtension::parse(extension_data) {
+                    Ok((_, cid_ext)) => {
+                        client.peer_cid = Some(cid_ext.cid.to_vec());
+                        trace!(
+                            "Server negotiated Connection ID ({} bytes)",
+                            cid_ext.cid.len()
+                        );
+                    }
+                    Err(_) => {
+                        // RFC 5246 §7.2.2 decode_error on malformed extension.
+                        return Err(Error::SecurityError(
+                            "Malformed connection_id extension from server".to_string(),
+                        ));
+                    }
+                }
+            }
         }
 
         // Without extended master secret, in DTLS1.2 a security attack
@@ -531,6 +604,16 @@ impl State {
             debug!("Negotiated SRTP profile: {:?}", profile);
         }
         trace!("Extended Master Secret enabled");
+
+        // A server MUST NOT send connection_id unless we offered it (RFC 9146 §3),
+        // so require our config to also have a CID before enabling.
+        // `set_cid_negotiated` arms outbound CID immediately; inbound is armed
+        // separately when the peer's ChangeCipherSpec is processed.
+        let our_cid = client.engine.config().connection_id().map(|c| c.to_vec());
+        if let (Some(peer_cid), Some(our_cid)) = (client.peer_cid.clone(), our_cid) {
+            client.engine.set_cid_negotiated(our_cid, peer_cid);
+            debug!("Connection ID negotiated");
+        }
 
         // PSK suites skip Certificate; go directly to ServerKeyExchange
         if cs.is_psk() {
@@ -608,7 +691,6 @@ impl State {
             return Ok(self);
         };
 
-        // Extract all ranges/data we need before accessing buffer
         let (signature_range, signature_algorithm, curve_type, named_group, public_key_range) = {
             let handshake = maybe.as_ref().unwrap();
             let Body::ServerKeyExchange(server_key_exchange) = &handshake.body else {
@@ -1132,8 +1214,13 @@ impl State {
         // Receiving server Finished implicitly acks our Flight 5; stop resends
         client.engine.flight_stop_resend_timers();
 
-        // Emit Connected event
         client.local_events.push_back(LocalEvent::Connected);
+
+        if let Some(cid) = client.engine.inbound_cid() {
+            client
+                .local_events
+                .push_back(LocalEvent::ConnectionId(cid.to_vec()));
+        }
 
         // Extract and emit SRTP keying material if we have a negotiated profile
         if let Some(profile) = client.negotiated_srtp_profile {
@@ -1381,6 +1468,15 @@ impl LocalEvent {
                 Output::PeerCert(&buf[..l])
             }
             LocalEvent::Connected => Output::Connected,
+            LocalEvent::ConnectionId(cid) => {
+                // `poll_output` peeks this event and defers if `buf` can't hold
+                // the CID, so this path only runs when the size check passed.
+                // Truncate defensively — never panic — if that invariant is
+                // ever violated by a future refactor.
+                let l = cid.len().min(buf.len());
+                buf[..l].copy_from_slice(&cid[..l]);
+                Output::ConnectionId(&buf[..l])
+            }
             LocalEvent::KeyingMaterial(m, profile) => {
                 Output::KeyingMaterial(KeyingMaterial::new(&m), profile)
             }

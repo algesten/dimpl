@@ -52,6 +52,36 @@ pub enum Error {
     /// value to communicate from dtls13/server.rs to lib.rs
     #[doc(hidden)]
     Dtls12Fallback,
+    /// Application data exceeds the DTLS record-size ceiling.
+    ///
+    /// RFC 6347 §4.1.1 / RFC 9146 §5 cap `DTLSPlaintext` /
+    /// `DTLSInnerPlaintext` at `2^14` bytes. Callers must fragment larger
+    /// payloads before calling `send_application_data`.
+    Oversized(usize),
+    /// Configured MTU is too small to hold even a single record header plus
+    /// a handshake-header byte of body. Encountered when negotiated CID
+    /// bytes + AEAD overhead + handshake/record headers already fill or
+    /// exceed `Config::mtu()`. Terminal for this association: the caller
+    /// must either raise MTU or renegotiate with a shorter peer CID
+    /// (dimpl rejects renegotiation, so in practice the association
+    /// cannot make handshake progress).
+    MtuTooSmall {
+        /// Overhead bytes consumed by headers + CID + AEAD + handshake.
+        overhead: usize,
+        /// Configured MTU as reported by `Config::mtu()`.
+        mtu: usize,
+    },
+    /// DTLS 1.2 sequence-number space is exhausted for this epoch.
+    ///
+    /// RFC 6347 §4.1: implementations MUST abandon the association or
+    /// rehandshake before the 48-bit wire sequence number wraps. dimpl
+    /// does not implement renegotiation or rekey, so this is terminal.
+    SequenceNumberExhausted {
+        /// The epoch whose sequence space is exhausted.
+        epoch: u16,
+        /// The next sequence number that would have been emitted.
+        sequence: u64,
+    },
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {
@@ -90,6 +120,27 @@ impl std::fmt::Display for Error {
             Error::ConnectionClosed => write!(f, "connection closed"),
             Error::Dtls12Fallback => {
                 write!(f, "dtls 1.2 fallback (internal)")
+            }
+            Error::Oversized(n) => {
+                write!(
+                    f,
+                    "payload {} bytes exceeds DTLS record-size ceiling (16384)",
+                    n
+                )
+            }
+            Error::MtuTooSmall { overhead, mtu } => {
+                write!(
+                    f,
+                    "MTU {} cannot fit DTLS record overhead of {} bytes",
+                    mtu, overhead
+                )
+            }
+            Error::SequenceNumberExhausted { epoch, sequence } => {
+                write!(
+                    f,
+                    "DTLS 1.2 sequence number exhausted (epoch={}, seq={})",
+                    epoch, sequence
+                )
             }
         }
     }

@@ -78,6 +78,11 @@ impl Buf {
         self.0.resize(len, value);
     }
 
+    /// Shorten the buffer to the specified length, dropping trailing bytes.
+    pub fn truncate(&mut self, len: usize) {
+        self.0.truncate(len);
+    }
+
     /// Convert the buffer into the underlying `Vec<u8>`.
     pub fn into_vec(mut self) -> Vec<u8> {
         std::mem::take(&mut self.0)

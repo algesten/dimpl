@@ -1,4 +1,5 @@
 use super::extension::ExtensionVec;
+use super::extensions::connection_id::ConnectionIdExtension;
 use super::extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
 use super::{CompressionMethod, Dtls12CipherSuite, Extension, ExtensionType};
 use super::{ProtocolVersion, Random, SessionId};
@@ -42,7 +43,12 @@ impl ServerHello {
     /// - Uses the provided buffer to stage extension bytes and then stores Range references
     /// - Includes UseSRTP if a profile is provided
     /// - Includes Extended Master Secret if the flag is set
-    pub fn with_extensions(mut self, buf: &mut Buf, srtp_profile: Option<SrtpProfileId>) -> Self {
+    pub fn with_extensions(
+        mut self,
+        buf: &mut Buf,
+        srtp_profile: Option<SrtpProfileId>,
+        connection_id: Option<&[u8]>,
+    ) -> Self {
         // Clear the buffer and collect extension byte ranges
         buf.clear();
 
@@ -69,6 +75,13 @@ impl ServerHello {
         let start = buf.len();
         buf.push(0); // renegotiated_connection length = 0
         ranges.push((ExtensionType::RenegotiationInfo, start, buf.len()));
+
+        // Connection ID (RFC 9146) - echo our CID if the client offered CID
+        if let Some(cid) = connection_id {
+            let start = buf.len();
+            ConnectionIdExtension::new(cid).serialize(buf);
+            ranges.push((ExtensionType::ConnectionId, start, buf.len()));
+        }
 
         let mut extensions = ExtensionVec::new();
         for (t, s, e) in ranges {
@@ -112,18 +125,45 @@ impl ServerHello {
                     input_ext.as_ptr() as usize - original_input.as_ptr() as usize;
                 let ext_base_offset = base_offset + consumed_to_ext_data;
 
-                // Parse extensions manually to pass base_offset, filtering unknown types
+                // RFC 5246 §7.4.1.4: "There MUST NOT be more than one
+                // extension of the same type." The rule applies to every
+                // codepoint, not just ones we support, so track all seen
+                // raw u16 types before filtering.
                 let mut extensions_vec = ExtensionVec::new();
                 let mut current_input = input_ext;
                 let mut current_offset = ext_base_offset;
+                let mut seen_types: ArrayVec<u16, 64> = ArrayVec::new();
                 while !current_input.is_empty() {
                     let before_len = current_input.len();
                     let (new_rest, ext) = Extension::parse(current_input, current_offset)?;
                     let parsed_len = before_len - new_rest.len();
                     current_offset += parsed_len;
-                    // Only keep supported extension types
+
+                    let ty = ext.extension_type.as_u16();
+                    if seen_types.contains(&ty) {
+                        return Err(Err::Failure(Error::new(current_input, ErrorKind::Verify)));
+                    }
+                    // Fail closed on tracker overflow — matches ClientHello
+                    // handling; silent drop would defeat the RFC 5246
+                    // §7.4.1.4 no-duplicates guarantee.
+                    seen_types.try_push(ty).map_err(|_| {
+                        Err::Failure(Error::new(current_input, ErrorKind::TooLarge))
+                    })?;
+
                     if ext.extension_type.is_supported() {
-                        extensions_vec.push(ext);
+                        // Defense-in-depth duplicate gate mirroring
+                        // ClientHello: reject supported duplicates at
+                        // the ExtensionVec layer too, so the dedup
+                        // guarantee does not rely solely on `seen_types`.
+                        if extensions_vec
+                            .iter()
+                            .any(|e| e.extension_type == ext.extension_type)
+                        {
+                            return Err(Err::Failure(Error::new(current_input, ErrorKind::Verify)));
+                        }
+                        extensions_vec.try_push(ext).map_err(|_| {
+                            Err::Failure(Error::new(current_input, ErrorKind::TooLarge))
+                        })?;
                     }
                     current_input = new_rest;
                 }
@@ -218,5 +258,33 @@ mod test {
 
         let result = ServerHello::parse(&message, 0);
         assert!(result.is_err());
+    }
+
+    /// RFC 5246 §7.4.1.4: duplicate Hello extensions are forbidden. A
+    /// ServerHello with two `connection_id` extensions must fail to
+    /// parse so the second value can't overwrite the first after the
+    /// client has stored `peer_cid`.
+    #[test]
+    fn duplicate_connection_id_extension_rejected() {
+        // Build a fresh ServerHello: random + session_id + cipher_suite +
+        // compression + extensions_length + two CID extensions.
+        let mut msg: Vec<u8> = Vec::new();
+        msg.extend_from_slice(&[0xFE, 0xFD]); // DTLS 1.2
+        msg.extend_from_slice(&[0u8; 32]); // Random
+        msg.push(0x00); // SessionId length = 0
+        msg.extend_from_slice(&[0xC0, 0x2B]); // cipher suite
+        msg.push(0x00); // compression method Null
+        // extensions_length: two CID extensions, each 6 bytes → 12 bytes.
+        msg.extend_from_slice(&0x000Cu16.to_be_bytes());
+        // CID ext 1: type=0x0036, len=2, cid_len=1, cid=[0xAA]
+        msg.extend_from_slice(&[0x00, 0x36, 0x00, 0x02, 0x01, 0xAA]);
+        // CID ext 2: same type, different value → duplicate.
+        msg.extend_from_slice(&[0x00, 0x36, 0x00, 0x02, 0x01, 0xBB]);
+
+        let result = ServerHello::parse(&msg, 0);
+        assert!(
+            result.is_err(),
+            "duplicate connection_id in ServerHello must fail to parse"
+        );
     }
 }

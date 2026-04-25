@@ -16,6 +16,18 @@ use crate::{Config, Error, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
+/// Maximum DTLS 1.2 `DTLSPlaintext` / `DTLSInnerPlaintext` length in bytes
+/// (RFC 6347 §4.1.1 and RFC 9146 §5: MUST NOT exceed `2^14`). Enforced
+/// before encryption so the `u16` length cast in the wire record cannot
+/// wrap and so AEAD AAD carries a length that matches the RFC ceiling.
+pub(crate) const DTLS12_MAX_PLAINTEXT_LEN: usize = 1 << 14;
+
+/// Maximum DTLS 1.2 record sequence number (48 bits on the wire per
+/// RFC 6347 §4.1). Incrementing past this MUST trigger rekey /
+/// renegotiation; since dimpl rejects both, we return `Oversized` and
+/// close the association.
+pub(crate) const DTLS12_MAX_SEQUENCE_NUMBER: u64 = (1u64 << 48) - 1;
+
 // Using debug_ignore_primary since CryptoContext doesn't implement Debug
 pub struct Engine {
     config: Arc<Config>,
@@ -94,6 +106,101 @@ pub struct Engine {
 
     /// Whether [`Output::CloseNotify`] has already been emitted.
     close_notify_reported: bool,
+
+    /// Connection ID (RFC 9146) state: negotiated values and per-direction
+    /// activation liveness. Kept as a single private field so the valid
+    /// combinations are unrepresentable outside of this module. Mutators:
+    /// `set_cid_negotiated` (arms outbound synchronously at negotiation
+    /// completion) and `activate_inbound_cid` (flips inbound live, called
+    /// from `enable_peer_encryption` after the peer's ChangeCipherSpec).
+    /// Reads: `inbound_cid`, `CidState::inbound_framing`,
+    /// `CidState::inbound_if_live`, `CidState::outbound_if_live`.
+    cid: CidState,
+}
+
+/// DTLS 1.2 Connection ID negotiation + activation state (RFC 9146).
+///
+/// RFC 9146 §3 treats a zero-length CID advertised for a direction as
+/// "stay on legacy RFC 6347 framing in that direction". `tls12_cid` framing
+/// is reserved for directions whose negotiated CID is **non-empty**. The
+/// stored `inbound`/`outbound` bytes preserve the negotiated value for
+/// reporting, but the framing-relevant queries (`inbound_if_live`,
+/// `outbound_if_live`) return `Some` only when the direction has a
+/// non-empty value AND has been armed (outbound at negotiation, inbound
+/// after the peer's ChangeCipherSpec).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CidState {
+    /// CID extension was not negotiated (either side declined).
+    None,
+    /// CID extension was negotiated. Either direction may still be on legacy
+    /// framing if its negotiated CID is zero-length.
+    Negotiated {
+        /// What the peer writes into the CID field of records sent to us.
+        /// Empty = peer asked for legacy framing inbound.
+        inbound: Vec<u8>,
+        /// What we write into the CID field of records sent to the peer.
+        /// Empty = we asked for legacy framing outbound.
+        outbound: Vec<u8>,
+        /// True once the peer's ChangeCipherSpec has been processed — the
+        /// gate for accepting CID-framed inbound records (no effect if
+        /// `inbound` is empty, since that direction stays on legacy framing).
+        inbound_armed: bool,
+        /// True once we arm the outbound direction — flipped at negotiation
+        /// completion (no effect if `outbound` is empty).
+        outbound_armed: bool,
+    },
+}
+
+impl CidState {
+    /// Inbound CID value if the extension was negotiated, regardless of
+    /// activation or length. Used for `Output::ConnectionId` reporting.
+    fn inbound(&self) -> Option<&[u8]> {
+        match self {
+            CidState::Negotiated { inbound, .. } => Some(inbound),
+            CidState::None => None,
+        }
+    }
+
+    /// Inbound CID value iff inbound direction is *framing-live* — armed
+    /// AND non-empty. Zero-length inbound stays on legacy framing (RFC 9146
+    /// §3), so it returns `None` here.
+    fn inbound_if_live(&self) -> Option<&[u8]> {
+        match self {
+            CidState::Negotiated {
+                inbound,
+                inbound_armed: true,
+                ..
+            } if !inbound.is_empty() => Some(inbound),
+            _ => None,
+        }
+    }
+
+    /// Outbound CID value iff outbound direction is *framing-live* — armed
+    /// AND non-empty. Zero-length outbound stays on legacy framing.
+    fn outbound_if_live(&self) -> Option<&[u8]> {
+        match self {
+            CidState::Negotiated {
+                outbound,
+                outbound_armed: true,
+                ..
+            } if !outbound.is_empty() => Some(outbound),
+            _ => None,
+        }
+    }
+
+    /// Negotiated inbound CID iff it is non-empty — the value the peer puts
+    /// in incoming `tls12_cid` records. Distinct from `inbound_if_live` in
+    /// that it does not require the peer's CCS: records reordered ahead of
+    /// CCS are still framed with this CID and must parse with its length.
+    /// The receive path uses this both to route incoming `tls12_cid`
+    /// records and to reject legacy-framed epoch-1 records when CID framing
+    /// is expected (RFC 9146 §3).
+    fn inbound_framing(&self) -> Option<&[u8]> {
+        match self {
+            CidState::Negotiated { inbound, .. } if !inbound.is_empty() => Some(inbound),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +251,7 @@ impl Engine {
             release_app_data: false,
             close_notify_received: false,
             close_notify_reported: false,
+            cid: CidState::None,
         }
     }
 
@@ -179,6 +287,72 @@ impl Engine {
     /// Total per-record AEAD overhead: explicit_nonce_len + tag_len.
     pub fn aead_overhead(&self) -> usize {
         self.explicit_nonce_len + self.tag_len
+    }
+
+    /// Total wire-expansion overhead for an outbound record before the
+    /// plaintext body. Includes the record header, any outbound CID bytes
+    /// (only when outbound CID is live at the requested epoch), the
+    /// DTLSInnerPlaintext real-type byte for CID records (RFC 9146 §5), and
+    /// AEAD overhead for encrypted epochs.
+    ///
+    /// Shared by both `create_record` (datagram packing) and
+    /// `create_handshake` (handshake fragmentation). Keeping the two paths
+    /// in sync is the whole point: handshake fragmentation sizes chunks
+    /// against this same overhead so a fragment can't exceed MTU once CID
+    /// adds its bytes back in.
+    pub(crate) fn outbound_record_overhead(&self, epoch: u16) -> usize {
+        let cid_len = if epoch >= 1 {
+            self.cid.outbound_if_live().map_or(0, |c| c.len())
+        } else {
+            0
+        };
+        let aead = if epoch >= 1 { self.aead_overhead() } else { 0 };
+        // CID records carry a DTLSInnerPlaintext real_type byte after the
+        // plaintext body, which is then covered by AEAD.
+        let inner = if cid_len > 0 { 1 } else { 0 };
+        DTLSRecord::HEADER_LEN + cid_len + inner + aead
+    }
+
+    /// Record that CID negotiation completed. `inbound` is the value the peer
+    /// writes into records sent to us; `outbound` is what we write into
+    /// records sent to the peer. Either may be empty — per RFC 9146 §3 an
+    /// empty value for a direction means "stay on legacy RFC 6347 framing in
+    /// that direction". Outbound is armed immediately; inbound arms on the
+    /// peer's ChangeCipherSpec via `activate_inbound_cid`.
+    pub fn set_cid_negotiated(&mut self, inbound: Vec<u8>, outbound: Vec<u8>) {
+        self.cid = CidState::Negotiated {
+            inbound,
+            outbound,
+            inbound_armed: false,
+            outbound_armed: true,
+        };
+    }
+
+    /// Arm the inbound direction. No-op if CID was not negotiated. If the
+    /// negotiated inbound CID is empty, this still flips the flag but
+    /// `inbound_if_live` stays `None` because zero-length inbound keeps
+    /// legacy framing.
+    pub fn activate_inbound_cid(&mut self) {
+        if let CidState::Negotiated { inbound_armed, .. } = &mut self.cid {
+            *inbound_armed = true;
+        }
+    }
+
+    /// Inbound CID value if negotiated (regardless of arming or length).
+    /// `Some(&[])` means the extension was negotiated but this direction
+    /// stays on legacy framing.
+    pub fn inbound_cid(&self) -> Option<&[u8]> {
+        self.cid.inbound()
+    }
+
+    /// The highest authenticated sequence number observed in the
+    /// current peer epoch's replay window, or `None` if no record has
+    /// been authenticated yet. Callers using CID for RFC 9146 §6
+    /// peer-address updates should require this value to advance
+    /// strictly between the "old address" and "new address"
+    /// observations before committing the update.
+    pub fn newest_authenticated_sequence(&self) -> Option<u64> {
+        self.replay.max_seq()
     }
 
     /// Is the given cipher suite allowed by configuration
@@ -400,12 +574,14 @@ impl Engine {
         let fragment = next.record().fragment(record_buffer);
         let len = fragment.len();
 
-        assert!(
-            len <= buf.len(),
-            "Output buffer too small for application data {} > {}",
-            len,
-            buf.len()
-        );
+        if len > buf.len() {
+            // Defer: leave the record unhandled so a subsequent poll with a
+            // larger buffer delivers it. Keeps `poll_output` panic-free when
+            // the caller supplies an undersized buffer, matching the
+            // defer-and-retry contract used by LocalEvent::ConnectionId at
+            // the client/server wrapper layer (plan §5 poll-buffer safety).
+            return Err(buf);
+        }
 
         buf[..len].copy_from_slice(fragment);
         next.set_handled();
@@ -429,16 +605,19 @@ impl Engine {
     }
 
     fn poll_packet_tx<'a>(&mut self, buf: &'a mut [u8]) -> Result<&'a [u8], &'a mut [u8]> {
-        let Some(p) = self.queue_tx.pop_front() else {
+        // Peek the front packet's size first. If the caller's buffer can't
+        // hold it, defer — leave the packet queued and fall through so a
+        // subsequent poll with a larger buffer can deliver it. Panic-free
+        // poll_output per plan §5 poll-buffer safety, matching the
+        // defer-and-retry contract used by LocalEvent::ConnectionId.
+        let Some(front_len) = self.queue_tx.front().map(|b| b.len()) else {
             return Err(buf);
         };
-
-        assert!(
-            p.len() <= buf.len(),
-            "Output buffer too small for packet {} > {}",
-            p.len(),
-            buf.len()
-        );
+        if front_len > buf.len() {
+            return Err(buf);
+        }
+        // unwrap: front() just returned Some, queue is single-threaded.
+        let p = self.queue_tx.pop_front().unwrap();
 
         let len = p.len();
         buf[..len].copy_from_slice(&p);
@@ -649,6 +828,20 @@ impl Engine {
         // Let the caller fill the fragment (plaintext)
         f(&mut fragment);
 
+        // RFC 6347 §4.1.1 / RFC 9146 §5: DTLSPlaintext and
+        // DTLSInnerPlaintext are capped at 2^14 bytes. When CID is active,
+        // the inner-plaintext length is `fragment.len() + 1` (the
+        // real_type byte), so the plaintext body itself must leave room
+        // for that. Reject here before any `u16` cast downstream can wrap.
+        let inner_plaintext_len = if self.cid.outbound_if_live().is_some() && epoch >= 1 {
+            fragment.len() + 1
+        } else {
+            fragment.len()
+        };
+        if inner_plaintext_len > DTLS12_MAX_PLAINTEXT_LEN {
+            return Err(Error::Oversized(fragment.len()));
+        }
+
         // Use this as a marker to know whether we are to record fragments for resends.
         if save_fragment {
             let mut clone = self.buffers_free.pop();
@@ -660,14 +853,26 @@ impl Engine {
             });
         }
 
-        // Compute wire length of the record if serialized into a datagram
-        // Record header (13) + handshake/change/app data bytes + AEAD overhead (if epoch >= 1)
-        let overhead = if maybe_suite.is_some() {
-            self.aead_overhead()
+        // CID framing applies only to encrypted records (epoch >= 1) AND only
+        // when outbound CID is actively engaged. `outbound_cid_if_live()`
+        // returns Some iff both conditions are met at the state layer.
+        // Cloned into an owned `Vec` so it survives across the `&mut self`
+        // encrypt call below without borrowing the CID state.
+        let outbound_cid: Option<Vec<u8>> = if epoch >= 1 {
+            self.cid.outbound_if_live().map(|c| c.to_vec())
         } else {
-            0
+            None
         };
-        let record_wire_len = DTLSRecord::HEADER_LEN + fragment.len() + overhead;
+        let use_cid = outbound_cid.is_some();
+        let cid_len = outbound_cid.as_ref().map_or(0, |c| c.len());
+
+        // Compute wire length of the record if serialized into a datagram.
+        // `outbound_record_overhead` accounts for record header, outbound CID
+        // bytes, the DTLSInnerPlaintext real_type byte (if CID), and AEAD
+        // overhead — matching the same expansion `create_handshake` sizes
+        // fragments against.
+        let record_wire_len = self.outbound_record_overhead(epoch) + fragment.len();
+        let _ = (use_cid, cid_len); // retained as local scope; use is inline via outbound_cid
 
         // Decide whether to append to the existing last datagram or create a new one
         let can_append = self
@@ -686,12 +891,24 @@ impl Engine {
             return Err(Error::TransmitQueueFull);
         }
 
-        // Sequence number to use for this record
+        // Sequence number to use for this record. RFC 6347 §4.1:
+        // implementations MUST abandon the association or rehandshake
+        // before sequence-number wrap. dimpl rejects both renegotiation
+        // and rekey, so hitting the 48-bit ceiling is terminal and the
+        // error is distinct from payload-size failures (on 32-bit targets
+        // the previous `Oversized(u64 as usize)` would also lose
+        // information).
         let sequence = if epoch == 0 {
             self.sequence_epoch_0
         } else {
             self.sequence_epoch_n
         };
+        if sequence.sequence_number > DTLS12_MAX_SEQUENCE_NUMBER {
+            return Err(Error::SequenceNumberExhausted {
+                epoch: sequence.epoch,
+                sequence: sequence.sequence_number,
+            });
+        }
         let length = fragment.len() as u16;
 
         // Handle encryption for epochs >= 1
@@ -729,8 +946,17 @@ impl Engine {
                 }
             };
 
-            // DTLS 1.2 AEAD: AAD uses the plaintext length (DTLSCompressed.length).
-            let aad = Aad::new_dtls12(content_type, sequence, length);
+            // Wire version emitted on the send path is always DTLS 1.2.
+            let wire_version = ProtocolVersion::DTLS1_2.as_u16().to_be_bytes();
+            let aad = if let Some(peer_cid) = outbound_cid.as_deref() {
+                // DTLSInnerPlaintext wrapping: append the real content type byte
+                fragment.push(content_type.as_u8());
+                let inner_plaintext_len = fragment.len() as u16;
+                Aad::new_dtls12_cid(sequence, wire_version, peer_cid, inner_plaintext_len)
+            } else {
+                // DTLS 1.2 AEAD: AAD uses the plaintext length (DTLSCompressed.length).
+                Aad::new_dtls12(content_type, sequence, wire_version, length)
+            };
 
             // Encrypt the fragment in-place
             self.encrypt_data(&mut fragment, aad, nonce)?;
@@ -745,9 +971,16 @@ impl Engine {
             }
         }
 
+        // Outer content type: Tls12Cid when CID is active, otherwise the real type
+        let outer_content_type = if use_cid {
+            ContentType::Tls12Cid
+        } else {
+            content_type
+        };
+
         // Build the record structure referencing the (possibly encrypted) fragment
         let record = DTLSRecord {
-            content_type,
+            content_type: outer_content_type,
             version: ProtocolVersion::DTLS1_2,
             sequence,
             length: fragment.len() as u16,
@@ -761,14 +994,29 @@ impl Engine {
             self.sequence_epoch_n.sequence_number += 1;
         }
 
-        // Serialize the record into the chosen datagram buffer
+        // Serialize the record into the chosen datagram buffer.
+        // For CID records, insert the peer CID between sequence and length.
+        let serialize = |record: &DTLSRecord, fragment: &[u8], output: &mut Buf| {
+            if let Some(peer_cid) = outbound_cid.as_deref() {
+                output.push(record.content_type.as_u8());
+                ProtocolVersion::DTLS1_2.serialize(output);
+                output.extend_from_slice(&record.sequence.epoch.to_be_bytes());
+                output.extend_from_slice(&record.sequence.sequence_number.to_be_bytes()[2..]);
+                output.extend_from_slice(peer_cid);
+                output.extend_from_slice(&record.length.to_be_bytes());
+                output.extend_from_slice(fragment);
+            } else {
+                record.serialize(fragment, output);
+            }
+        };
+
         if can_append {
             let last = self.queue_tx.back_mut().unwrap();
-            record.serialize(&fragment, last);
+            serialize(&record, &fragment, last);
         } else {
             let mut buffer = self.buffers_free.pop();
             buffer.clear();
-            record.serialize(&fragment, &mut buffer);
+            serialize(&record, &fragment, &mut buffer);
             self.queue_tx.push_back(buffer);
         }
 
@@ -823,13 +1071,10 @@ impl Engine {
 
         // Handshake header is 12 bytes
         let handshake_header_len = 12usize;
-        let aead_overhead = if epoch >= 1 {
+        if epoch >= 1 {
             self.cipher_suite()
                 .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
-            self.aead_overhead()
-        } else {
-            0
-        };
+        }
 
         // At least one record must be created even if total_len == 0
         while offset < total_len || (total_len == 0 && offset == 0) {
@@ -837,9 +1082,25 @@ impl Engine {
             let already_used_in_current = self.queue_tx.back().map(|b| b.len()).unwrap_or(0);
             let available_in_current = self.config.mtu().saturating_sub(already_used_in_current);
 
-            // Fixed overhead per handshake record on the wire:
-            // DTLS record header + handshake header + AEAD overhead (if epoch >= 1)
-            let fixed_overhead = DTLSRecord::HEADER_LEN + handshake_header_len + aead_overhead;
+            // Fixed overhead per handshake record on the wire. Uses the
+            // shared `outbound_record_overhead` helper so CID bytes and the
+            // DTLSInnerPlaintext real_type byte are accounted for — without
+            // this, encrypted handshake fragments with a long peer CID or a
+            // small MTU would overrun the datagram (RFC 9146 §4, RFC 6347
+            // §4.1.1).
+            let fixed_overhead = self.outbound_record_overhead(epoch) + handshake_header_len;
+
+            // RFC 9146 §4 + RFC 6347 §4.1.1: CID bytes are part of the wire
+            // record overhead, so a small `Config::mtu()` combined with a
+            // long peer CID can leave zero room for a fragment body byte.
+            // Fail closed deterministically instead of looping forever with
+            // `chunk_len == 0` when the body is non-empty.
+            if total_len > 0 && fixed_overhead >= self.config.mtu() {
+                return Err(Error::MtuTooSmall {
+                    overhead: fixed_overhead,
+                    mtu: self.config.mtu(),
+                });
+            }
 
             // Prefer to pack into the current datagram. If the current one cannot fit even
             // the fixed overhead, we will start a fresh datagram and compute space again.
@@ -851,6 +1112,16 @@ impl Engine {
                 self.config.mtu().saturating_sub(fixed_overhead)
             };
 
+            // RFC 6347 §4.1.1 / RFC 9146 §5: the DTLSPlaintext.fragment
+            // (post-DTLSInnerPlaintext wrap) is capped at 2^14. For CID the
+            // inner plaintext is `handshake_header + body + real_type`, so
+            // the body alone must leave room for the real_type byte. This
+            // ceiling is independent of MTU and bites when MTU is large.
+            let cid_inner_byte = usize::from(self.cid.outbound_if_live().is_some() && epoch >= 1);
+            let max_body_for_record = DTLS12_MAX_PLAINTEXT_LEN
+                .saturating_sub(handshake_header_len)
+                .saturating_sub(cid_inner_byte);
+
             // Remaining bytes from the handshake body we still need to send.
             let remaining_body_bytes = total_len.saturating_sub(offset);
 
@@ -858,7 +1129,9 @@ impl Engine {
             let chunk_len = if total_len == 0 {
                 0
             } else {
-                remaining_body_bytes.min(available_for_body)
+                remaining_body_bytes
+                    .min(available_for_body)
+                    .min(max_body_for_record)
             };
 
             let frag_range = if chunk_len == 0 {
@@ -1033,6 +1306,17 @@ impl Engine {
         debug!("Peer encryption enabled");
         self.peer_encryption_enabled = true;
 
+        // Activate inbound CID acceptance now that the peer's ChangeCipherSpec
+        // has been processed. Before this point the peer should only have sent
+        // epoch-0 plaintext, so treating content-type 25 records as undecryptable
+        // pre-CCS matters for clarity even if the queue-and-defer flow would have
+        // handled it anyway. `activate_inbound_cid` is a no-op if CID was not
+        // negotiated.
+        self.activate_inbound_cid();
+        if self.cid.inbound_if_live().is_some() {
+            debug!("Inbound CID activated");
+        }
+
         let maybe_index_epoch1 = self
             .queue_rx
             .iter()
@@ -1074,7 +1358,15 @@ impl Engine {
         // DTLS 1.2 AEAD: AAD uses the plaintext length. Recover plaintext length
         // from the record header by subtracting this suite's wire overhead.
         let plaintext_len = dtls.length.saturating_sub(self.aead_overhead() as u16);
-        let aad = Aad::new_dtls12(dtls.content_type, dtls.sequence, plaintext_len);
+        // Bind the wire version bytes (RFC 6347 §4.1.2.1) — accepting both
+        // 0xFEFD (DTLS 1.2) and 0xFEFF (DTLS 1.0 compatibility).
+        let wire_version = dtls.version.as_u16().to_be_bytes();
+        let aad = Aad::new_dtls12(
+            dtls.content_type,
+            dtls.sequence,
+            wire_version,
+            plaintext_len,
+        );
         let iv = self.peer_iv();
         let seq64 = ((dtls.sequence.epoch as u64) << 48) | dtls.sequence.sequence_number;
         let nonce = match self.explicit_nonce_len {
@@ -1212,6 +1504,26 @@ impl RecordHandler for Engine {
         self.explicit_nonce_len
     }
 
+    fn decryption_aad_and_nonce_cid(
+        &self,
+        dtls: &DTLSRecord,
+        buf: &[u8],
+        cid: &[u8],
+        inner_plaintext_len: u16,
+    ) -> (Aad, Nonce) {
+        // Bind the wire version bytes observed on this record (RFC 9146 §5).
+        let wire_version = dtls.version.as_u16().to_be_bytes();
+        let aad = Aad::new_dtls12_cid(dtls.sequence, wire_version, cid, inner_plaintext_len);
+        let iv = self.peer_iv();
+        let seq64 = ((dtls.sequence.epoch as u64) << 48) | dtls.sequence.sequence_number;
+        let nonce = match self.explicit_nonce_len {
+            0 => Nonce::xor(iv.as_12_bytes(), seq64),
+            DTLSRecord::EXPLICIT_NONCE_LEN => Nonce::new(iv, dtls.nonce(buf)),
+            len => Nonce::new(iv, dtls.nonce_with_len(buf, len)),
+        };
+        (aad, nonce)
+    }
+
     fn decrypt_data(
         &mut self,
         ciphertext: &mut TmpBuf,
@@ -1219,5 +1531,21 @@ impl RecordHandler for Engine {
         nonce: Nonce,
     ) -> Result<(), Error> {
         Engine::decrypt_data(self, ciphertext, aad, nonce)
+    }
+
+    fn our_cid(&self) -> Option<&[u8]> {
+        // Receive-path framing: returns `Some(cid)` iff the peer's records to
+        // us are expected to use `tls12_cid` framing (inbound negotiated
+        // with non-zero length). Zero-length inbound stays on legacy
+        // framing per RFC 9146 §3 and is reported as `None` here.
+        self.cid.inbound_framing()
+    }
+
+    fn inbound_cid_active(&self) -> Option<&[u8]> {
+        self.cid.inbound_if_live()
+    }
+
+    fn aead_overhead(&self) -> usize {
+        Engine::aead_overhead(self)
     }
 }

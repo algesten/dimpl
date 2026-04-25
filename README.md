@@ -47,6 +47,25 @@ Four constructors control which DTLS version is used:
 - **DTLS‑SRTP**: Exports keying material for `SRTP_AEAD_AES_256_GCM`,
   `SRTP_AEAD_AES_128_GCM`, and `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
 - **Extended Master Secret** ([RFC 7627]) is negotiated and enforced (DTLS 1.2).
+- **Connection ID** ([RFC 9146]) is supported for DTLS 1.2 (extension codepoint
+  54 / 0x0036). Configure with [`Config::with_connection_id`][with_cid];
+  `Output::ConnectionId` is emitted when negotiation completes. The CID is a
+  **routing hint, not authorization to change the send address**: per RFC
+  9146 §6 the caller must (a) wait for an authentication-positive signal
+  (e.g. `ApplicationData` from `poll_output`) before updating peer address
+  — `handle_packet` returning `Ok(())` is **not** proof of authentication,
+  since invalid records are silently discarded per RFC 6347 §4.1.2.7; (b)
+  require strict-monotonic (epoch, sequence_number) on the authenticated
+  record; (c) apply an address-reachability policy. See
+  [`Config::with_connection_id`][with_cid] rustdoc for the full pattern.
+
+### Known non-interop: pre-RFC Connection ID codepoint 53 (0x35)
+Older implementations that predate RFC 9146 — notably OpenSSL before 3.2 and
+some embedded stacks — use extension type `53` from
+`draft-ietf-tls-dtls-connection-id-07`. dimpl implements the final RFC 9146
+codepoint (54) only, so peers stuck on the draft codepoint will fall back to
+legacy framing instead of successfully negotiating CID. This is expected for
+roaming PSK/IoT deployments that still ship the draft codepoint.
 
 ### Certificate model
 During the handshake the engine emits
@@ -188,6 +207,8 @@ Rust 1.85.0
 [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
 [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
 [RFC 7627]: https://www.rfc-editor.org/rfc/rfc7627
+[RFC 9146]: https://www.rfc-editor.org/rfc/rfc9146
+[with_cid]: https://docs.rs/dimpl/latest/dimpl/struct.ConfigBuilder.html#method.with_connection_id
 
 
 License: MIT OR Apache-2.0

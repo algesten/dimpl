@@ -474,6 +474,26 @@ impl State {
                         }
                     }
                 }
+                ExtensionType::Unknown(0x0036) => {
+                    // Explicit policy marker: dimpl does not implement
+                    // DTLS 1.3 Connection ID (RFC 9147 §9). A
+                    // ClientHello offering `0x0036` in the hybrid /
+                    // cross-version path is allowed (RFC 8446 §4.1.2:
+                    // clients MAY send extensions that aren't
+                    // applicable to the negotiated version); the
+                    // DTLS 1.3 server path simply does not echo the
+                    // extension in ServerHello or EncryptedExtensions,
+                    // so no DTLS 1.3 CID is negotiated. A `debug!` log
+                    // makes the "client requested, server ignored"
+                    // outcome visible; the symmetric client-side
+                    // behavior is documented at
+                    // `src/dtls13/client.rs` for the ServerHello /
+                    // EE reception paths.
+                    debug!(
+                        "DTLS 1.3 server: ignoring connection_id(0x0036) extension offered by \
+                         client — RFC 9147 CID is not implemented, no CID will be negotiated"
+                    );
+                }
                 _ => {}
             }
         }

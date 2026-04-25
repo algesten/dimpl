@@ -1,5 +1,6 @@
-use super::extensions::{ECPointFormatsExtension, SignatureAlgorithmsExtension};
-use super::extensions::{SupportedGroupsExtension, UseSrtpExtension};
+use super::extensions::UseSrtpExtension;
+use super::extensions::{ConnectionIdExtension, ECPointFormatsExtension};
+use super::extensions::{SignatureAlgorithmsExtension, SupportedGroupsExtension};
 use super::{CipherSuiteVec, CompressionMethod, CompressionMethodVec, Dtls12CipherSuite};
 use super::{Cookie, Extension, ExtensionType, ProtocolVersion, Random, SessionId};
 use arrayvec::ArrayVec;
@@ -50,7 +51,7 @@ impl ClientHello {
         buf.clear();
 
         // First write all extension data
-        let mut ranges = ArrayVec::<(ExtensionType, usize, usize), 8>::new();
+        let mut ranges = ArrayVec::<(ExtensionType, usize, usize), 9>::new();
 
         // Check if provider has ECDH support
         let has_ecdh = config.crypto_provider().has_ecdh();
@@ -108,6 +109,13 @@ impl ClientHello {
             start_pos,
             start_pos, // No data at all
         ));
+
+        // Connection ID (RFC 9146)
+        if let Some(cid) = config.connection_id() {
+            let start_pos = buf.len();
+            ConnectionIdExtension::new(cid).serialize(buf);
+            ranges.push((ExtensionType::ConnectionId, start_pos, buf.len()));
+        }
 
         // Now create all extensions using ranges
         for (extension_type, start, end) in ranges {
@@ -188,18 +196,66 @@ impl ClientHello {
         let consumed = extensions_data.as_ptr() as usize - original_input.as_ptr() as usize;
         let data_base_offset = base_offset + consumed;
 
-        // Parse individual extensions, filtering to only known types
+        // Parse individual extensions, filtering to only known types.
+        // RFC 5246 §7.4.1.4: "There MUST NOT be more than one extension of
+        // the same type." The rule is not limited to extension types this
+        // implementation understands, so we track every raw u16 codepoint
+        // seen, reject duplicates regardless of support, then store only
+        // supported extensions in `ExtensionVec`. Capacity overflow on
+        // the supported set maps to a parse error instead of a panic.
         let mut extensions_rest = extensions_data;
         let mut current_offset = data_base_offset;
+        let mut seen_types: ArrayVec<u16, 64> = ArrayVec::new();
         while !extensions_rest.is_empty() {
             let before_len = extensions_rest.len();
             let (rest, extension) = Extension::parse(extensions_rest, current_offset)?;
             let parsed_len = before_len - rest.len();
             current_offset += parsed_len;
 
-            // Only keep supported extension types
+            let ty = extension.extension_type.as_u16();
+            if seen_types.contains(&ty) {
+                return Err(nom::Err::Failure(nom::error::Error::new(
+                    extensions_rest,
+                    nom::error::ErrorKind::Verify,
+                )));
+            }
+            // Fail closed on tracker overflow: a silent drop here would
+            // allow an attacker to arrange 64 distinct codepoints and
+            // then smuggle a duplicate past `contains` — bypassing
+            // RFC 5246 §7.4.1.4 and, crucially, the CH1/CH2 CID
+            // equality check the HVR cookie binding provides. 64
+            // min-size extensions cost 256 bytes, well inside a single
+            // ClientHello.
+            seen_types.try_push(ty).map_err(|_| {
+                nom::Err::Failure(nom::error::Error::new(
+                    extensions_rest,
+                    nom::error::ErrorKind::TooLarge,
+                ))
+            })?;
+
             if extension.extension_type.is_supported() {
-                extensions.push(extension);
+                // Defense-in-depth duplicate gate: even if `seen_types`
+                // was bypassed (Round-5 review #1), reject a second
+                // supported extension of the same type before it lands
+                // in `ExtensionVec`. Downstream (HVR cookie binding,
+                // `handle_client_hello_extensions`) relies on
+                // at-most-one-`connection_id` to hold its CH1/CH2
+                // equality guarantee.
+                if extensions
+                    .iter()
+                    .any(|e| e.extension_type == extension.extension_type)
+                {
+                    return Err(nom::Err::Failure(nom::error::Error::new(
+                        extensions_rest,
+                        nom::error::ErrorKind::Verify,
+                    )));
+                }
+                extensions.try_push(extension).map_err(|_| {
+                    nom::Err::Failure(nom::error::Error::new(
+                        extensions_rest,
+                        nom::error::ErrorKind::TooLarge,
+                    ))
+                })?;
             }
             extensions_rest = rest;
         }
@@ -314,5 +370,128 @@ mod tests {
 
         let result = ClientHello::parse(&message, 0);
         assert!(result.is_err());
+    }
+
+    /// RFC 5246 §7.4.1.4: duplicate Hello extensions are forbidden. A
+    /// ClientHello with two `connection_id` (0x0036) extensions must fail
+    /// to parse rather than let the second overwrite the first after
+    /// cookie binding. Directly targets the CID-specific risk where the
+    /// HVR cookie binds the first raw CID but server negotiation would
+    /// otherwise let the second CID overwrite `peer_cid`.
+    #[test]
+    fn duplicate_connection_id_extension_rejected() {
+        // Build a ClientHello: base message + extensions length + two CID
+        // extensions with different CID values.
+        let mut msg = MESSAGE.to_vec();
+        // extensions_length (2 bytes)
+        // Each CID extension body: 2 (type) + 2 (len) + 1 (cid_len) + 1 (cid byte) = 6 bytes
+        let ext_total = 6u16 * 2;
+        msg.extend_from_slice(&ext_total.to_be_bytes());
+        // Extension 1: connection_id with cid = [0xAA]
+        msg.extend_from_slice(&[0x00, 0x36, 0x00, 0x02, 0x01, 0xAA]);
+        // Extension 2: connection_id with cid = [0xBB] — duplicate type
+        msg.extend_from_slice(&[0x00, 0x36, 0x00, 0x02, 0x01, 0xBB]);
+
+        let result = ClientHello::parse(&msg, 0);
+        assert!(
+            result.is_err(),
+            "duplicate connection_id extension must fail to parse"
+        );
+    }
+
+    /// RFC 5246 §7.4.1.4 applies to every extension codepoint, not just
+    /// supported ones. Two extensions with the same unknown type must
+    /// fail to parse; two extensions with distinct unknown types must
+    /// still parse and be silently ignored.
+    #[test]
+    fn duplicate_unknown_extension_rejected() {
+        let mut msg = MESSAGE.to_vec();
+        // extensions_length = 8 (two 4-byte zero-body unknown extensions).
+        msg.extend_from_slice(&0x0008u16.to_be_bytes());
+        // Unknown ext type 0xFAFA (not in ExtensionType::supported()), zero body
+        msg.extend_from_slice(&[0xFA, 0xFA, 0x00, 0x00]);
+        // Duplicate 0xFAFA
+        msg.extend_from_slice(&[0xFA, 0xFA, 0x00, 0x00]);
+
+        let result = ClientHello::parse(&msg, 0);
+        assert!(
+            result.is_err(),
+            "duplicate unknown extension type must fail to parse"
+        );
+    }
+
+    #[test]
+    fn distinct_unknown_extensions_still_parse() {
+        let mut msg = MESSAGE.to_vec();
+        msg.extend_from_slice(&0x0008u16.to_be_bytes());
+        msg.extend_from_slice(&[0xFA, 0xFA, 0x00, 0x00]);
+        msg.extend_from_slice(&[0xFB, 0xFB, 0x00, 0x00]);
+
+        let (_, parsed) = ClientHello::parse(&msg, 0).expect("distinct unknowns must parse");
+        // Unknown extensions are not stored (filtered post-dedup).
+        assert!(parsed.extensions.is_empty());
+    }
+
+    /// Security-relevant regression (2026-04-22 review #1): prior code
+    /// silently dropped on `seen_types.try_push` overflow, letting an
+    /// attacker arrange 64 distinct codepoints followed by two
+    /// `connection_id` extensions and bypass CH1/CH2 CID equality. With
+    /// fail-closed overflow handling, this pattern now parse-fails.
+    #[test]
+    fn seen_types_overflow_fails_closed() {
+        let mut ext_data: Vec<u8> = Vec::new();
+        // 64 distinct unknown codepoints (0x1000..0x103F), zero body.
+        for i in 0x1000u16..0x1040u16 {
+            ext_data.extend_from_slice(&i.to_be_bytes());
+            ext_data.extend_from_slice(&[0x00, 0x00]);
+        }
+        // Two `connection_id` extensions with different CID values — if
+        // the overflow silently drops, these duplicate past the guard
+        // and the server's `peer_cid` can diverge from the cookie-bound
+        // value.
+        ext_data.extend_from_slice(&[0x00, 0x36, 0x00, 0x02, 0x01, 0xAA]);
+        ext_data.extend_from_slice(&[0x00, 0x36, 0x00, 0x02, 0x01, 0xBB]);
+
+        let mut msg = MESSAGE.to_vec();
+        msg.extend_from_slice(&(ext_data.len() as u16).to_be_bytes());
+        msg.extend_from_slice(&ext_data);
+
+        let result = ClientHello::parse(&msg, 0);
+        assert!(
+            result.is_err(),
+            "65th+ codepoint must fail-close parsing, not silently drop the dedup guarantee"
+        );
+    }
+
+    /// Capacity overflow: more supported extensions than `ExtensionVec`
+    /// capacity must return an error, not panic. `ExtensionVec` capacity
+    /// equals the supported-extension count, so we synthesize one
+    /// occurrence of every supported extension PLUS a duplicate to
+    /// exceed capacity (and also hit the duplicate check — either path
+    /// must return an error, never panic).
+    #[test]
+    fn too_many_supported_extensions_does_not_panic() {
+        use crate::dtls12::message::ExtensionType;
+        let supported = ExtensionType::supported();
+        let mut msg = MESSAGE.to_vec();
+        // Each extension body: 4 bytes (type + length), 0 bytes data
+        let ext_total = (4 * (supported.len() + 1)) as u16;
+        msg.extend_from_slice(&ext_total.to_be_bytes());
+        for et in supported.iter() {
+            let ty = et.as_u16();
+            msg.extend_from_slice(&ty.to_be_bytes());
+            msg.extend_from_slice(&[0x00, 0x00]); // zero-length body
+        }
+        // One more copy of the first supported type → duplicate.
+        let ty = supported[0].as_u16();
+        msg.extend_from_slice(&ty.to_be_bytes());
+        msg.extend_from_slice(&[0x00, 0x00]);
+
+        // Must not panic; must return an error.
+        let result = ClientHello::parse(&msg, 0);
+        assert!(
+            result.is_err(),
+            "over-capacity extensions must return an error, not panic"
+        );
     }
 }

@@ -31,6 +31,19 @@ impl ReplayWindow {
         }
     }
 
+    /// The highest authenticated sequence number ever observed in this
+    /// window. Returns `None` if no record has been authenticated yet
+    /// (i.e. `update` has never been called). RFC 9146 §6's
+    /// "strictly greater than the newest authenticated record already
+    /// seen" is computed against this value.
+    pub fn max_seq(&self) -> Option<u64> {
+        if self.window == 0 {
+            None
+        } else {
+            Some(self.max_seq)
+        }
+    }
+
     /// Update the window state to record that `seqno` has been received.
     /// Must only be called after the record has been authenticated (decrypted successfully).
     pub fn update(&mut self, seqno: u64) {

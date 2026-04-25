@@ -124,6 +124,17 @@ pub struct Client {
 
     /// Server handshake traffic secret (for server Finished verification)
     server_hs_traffic_secret: Option<Buf>,
+
+    /// Whether our own ClientHello on the wire offered the
+    /// `connection_id(0x0036)` codepoint. `true` only via
+    /// `Client::new_from_hybrid` when the hybrid CH emitted CID
+    /// (RFC 9147 §9 solicitation); `false` on the direct
+    /// `Dtls::new_13` path, which never emits the extension. Used by
+    /// the ServerHello / EncryptedExtensions handlers to distinguish
+    /// "server echo of our solicitation" (silent-accept since dimpl
+    /// does not implement DTLS 1.3 CID) from "true unsolicited
+    /// extension" (RFC 8446 §4.2 `illegal_parameter` abort).
+    offered_cid: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -159,6 +170,10 @@ impl Client {
             handshake_secret: None,
             client_hs_traffic_secret: None,
             server_hs_traffic_secret: None,
+            // Direct `Dtls::new_13` path: the DTLS 1.3 ClientHello
+            // builder does not emit `connection_id(0x0036)`, so any
+            // server echo is truly unsolicited.
+            offered_cid: false,
         }
     }
 
@@ -175,13 +190,18 @@ impl Client {
         certificate: crate::DtlsCertificate,
         now: Instant,
     ) -> Result<Client, Error> {
+        // The hybrid CH emits `connection_id(0x0036)` iff the caller
+        // configured CID (see `HybridClientHello::new`). Capture that
+        // at fork time so the DTLS 1.3 handlers can tell a solicited
+        // echo from an unsolicited one without re-deriving from config.
+        let offered_cid = config.connection_id().is_some();
+
         let mut engine = Engine::new(config, certificate);
         engine.set_client(true);
 
         // Inject transcript + sequence state from the hybrid CH that was
         // already sent on the wire by ClientPending.
         engine.inject_hybrid_client_hello(&hybrid.transcript_bytes);
-
         let mut client = Client {
             state: State::AwaitServerHello,
             engine,
@@ -204,6 +224,7 @@ impl Client {
             handshake_secret: None,
             client_hs_traffic_secret: None,
             server_hs_traffic_secret: None,
+            offered_cid,
         };
         client.handle_timeout(now)?;
         Ok(client)
@@ -600,6 +621,30 @@ impl State {
                         server_key_share = Some((ks.entry.group, ke_start..ke_end));
                     }
                 }
+                ExtensionType::Unknown(0x0036) => {
+                    // RFC 9147 §9 defines DTLS 1.3 CID; dimpl does not
+                    // implement it. Silent-accept the echo iff our own
+                    // ClientHello on the wire actually emitted `0x0036`
+                    // (`client.offered_cid`). That flag is set true only
+                    // by `Client::new_from_hybrid` when the hybrid CH
+                    // solicited CID; the direct `Dtls::new_13` path
+                    // never emits the codepoint, so a server echo on
+                    // that path is unsolicited and MUST abort with
+                    // `illegal_parameter` per RFC 8446 §4.2 — a
+                    // `config.connection_id().is_some()` proxy would
+                    // silent-accept incorrectly here.
+                    if client.offered_cid {
+                        warn!(
+                            "DTLS 1.3 server echoed connection_id extension (our hybrid CH \
+                             solicited it); dimpl does not implement RFC 9147 CID, so the \
+                             echo is ignored and the session proceeds without CID framing"
+                        );
+                    } else {
+                        return Err(Error::SecurityError(
+                            "DTLS 1.3 server sent unsolicited connection_id extension".to_string(),
+                        ));
+                    }
+                }
                 _ => {}
             }
         }
@@ -680,17 +725,40 @@ impl State {
 
         // Process extensions
         for ext in &ee.extensions {
-            if ext.extension_type == ExtensionType::UseSrtp {
-                let ext_data = ext.extension_data(&client.defragment_buffer);
-                if let Ok((_, use_srtp)) = UseSrtpExtension::parse(ext_data) {
-                    if !use_srtp.profiles.is_empty() {
-                        client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
-                        trace!(
-                            "EncryptedExtensions UseSRTP; selected profile: {:?}",
-                            client.negotiated_srtp_profile
-                        );
+            match ext.extension_type {
+                ExtensionType::UseSrtp => {
+                    let ext_data = ext.extension_data(&client.defragment_buffer);
+                    if let Ok((_, use_srtp)) = UseSrtpExtension::parse(ext_data) {
+                        if !use_srtp.profiles.is_empty() {
+                            client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
+                            trace!(
+                                "EncryptedExtensions UseSRTP; selected profile: {:?}",
+                                client.negotiated_srtp_profile
+                            );
+                        }
                     }
                 }
+                ExtensionType::Unknown(0x0036) => {
+                    // Same reasoning as the ServerHello handler: gate
+                    // on whether our own ClientHello actually emitted
+                    // the codepoint, not on config. `offered_cid` is
+                    // true only after `new_from_hybrid` with CID
+                    // configured; the direct `new_13` path is always
+                    // false even when `config.connection_id()` is Some.
+                    if client.offered_cid {
+                        warn!(
+                            "DTLS 1.3 server echoed connection_id in EncryptedExtensions \
+                             (our hybrid CH solicited it); dimpl does not implement \
+                             RFC 9147 CID, so the echo is ignored"
+                        );
+                    } else {
+                        return Err(Error::SecurityError(
+                            "DTLS 1.3 server sent unsolicited connection_id extension in EncryptedExtensions"
+                                .to_string(),
+                        ));
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -1021,7 +1089,19 @@ impl State {
         // Timers will stop when we receive an ACK from the server confirming it
         // received our epoch-2 flight.
 
-        // Emit Connected event
+        // Emit Connected event. If `Config::with_connection_id` was set
+        // but we resolved to DTLS 1.3 (where dimpl does not implement
+        // RFC 9147 CID), warn so callers relying on CID for routing
+        // have a log line alongside the new
+        // `Dtls::negotiated_connection_id()` accessor that returns
+        // `None` here.
+        if client.engine.config().connection_id().is_some() {
+            warn!(
+                "Config::with_connection_id was set, but this association negotiated DTLS 1.3 \
+                 where dimpl does not implement RFC 9147 CID. No CID routing will be available \
+                 — use `Dtls::negotiated_connection_id()` to detect this case programmatically."
+            );
+        }
         client.local_events.push_back(LocalEvent::Connected);
 
         // Extract and emit SRTP keying material if negotiated
