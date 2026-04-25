@@ -294,6 +294,29 @@ fn is_dtls12_psk_only(config: &Config) -> bool {
         .is_some_and(|first| first.is_psk() && suites.all(|s| s.is_psk()))
 }
 
+/// If `packet` is a Handshake record carrying a ClientHello, return the
+/// inner handshake message bytes (msg_type + length + message_seq +
+/// fragment_offset + fragment_length + body). Returns `None` for any
+/// other content type, message type, or malformed framing.
+///
+/// Shared by [`looks_like_client_hello`] (structural check only) and
+/// [`client_hello_wants_psk`] (which inspects cipher suites further).
+fn client_hello_handshake(packet: &[u8]) -> Option<&[u8]> {
+    // DTLS record header: content_type(1) + version(2) + epoch(2) + seq(6) + length(2) = 13
+    if packet.len() < 13 || packet[0] != 0x16 {
+        return None;
+    }
+    let record_len = u16::from_be_bytes([packet[11], packet[12]]) as usize;
+    let record_body = packet.get(13..13 + record_len)?;
+
+    // Handshake header: msg_type(1) + length(3) + message_seq(2) +
+    //   fragment_offset(3) + fragment_length(3) = 12
+    if record_body.len() < 12 || record_body[0] != 0x01 {
+        return None;
+    }
+    Some(record_body)
+}
+
 /// Lightweight structural check: does this packet look like a ClientHello?
 ///
 /// Used by the auto-sense server to gate the DTLS 1.2 fallback on parse
@@ -301,18 +324,7 @@ fn is_dtls12_psk_only(config: &Config) -> bool {
 /// only trigger a downgrade if it at least claims to be a ClientHello —
 /// otherwise random/garbage traffic could force fallback.
 fn looks_like_client_hello(packet: &[u8]) -> bool {
-    // DTLS record header: content_type(1) + version(2) + epoch(2) + seq(6) + length(2) = 13
-    if packet.len() < 13 || packet[0] != 0x16 {
-        return false;
-    }
-    let record_len = u16::from_be_bytes([packet[11], packet[12]]) as usize;
-    let Some(record_body) = packet.get(13..13 + record_len) else {
-        return false;
-    };
-
-    // Handshake header: msg_type(1) + length(3) + message_seq(2) +
-    //   fragment_offset(3) + fragment_length(3) = 12
-    record_body.len() >= 12 && record_body[0] == 0x01
+    client_hello_handshake(packet).is_some()
 }
 
 /// Peek at a buffered DTLS 1.2 ClientHello to decide whether the auto-sense
@@ -329,20 +341,9 @@ fn looks_like_client_hello(packet: &[u8]) -> bool {
 fn client_hello_wants_psk(packet: &[u8], config: &Config) -> bool {
     use dtls12::message::Dtls12CipherSuite;
 
-    // DTLS record header: content_type(1) + version(2) + epoch(2) + seq(6) + length(2) = 13
-    if packet.len() < 13 || packet[0] != 0x16 {
-        return false;
-    }
-    let record_len = u16::from_be_bytes([packet[11], packet[12]]) as usize;
-    let Some(record_body) = packet.get(13..13 + record_len) else {
+    let Some(record_body) = client_hello_handshake(packet) else {
         return false;
     };
-
-    // Handshake header: msg_type(1) + length(3) + message_seq(2) +
-    //   fragment_offset(3) + fragment_length(3) = 12
-    if record_body.len() < 12 || record_body[0] != 0x01 {
-        return false;
-    }
 
     let frag_off =
         ((record_body[6] as u32) << 16) | ((record_body[7] as u32) << 8) | record_body[8] as u32;
