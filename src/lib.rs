@@ -349,9 +349,19 @@ fn looks_like_client_hello(packet: &[u8]) -> bool {
         | ((record_body[10] as usize) << 8)
         | record_body[11] as usize;
 
+    // Only the first fragment (offset 0) is allowed to trigger fallback.
+    // A non-first fragment arriving alone could be a spoofed packet
+    // designed to force a downgrade; a real fragmented CH always sends
+    // a fragment with offset 0 too, and the clean Dtls12Fallback path
+    // (driven by supported_versions, not by this gate) handles real
+    // fragmented 1.2 CHs once reassembly completes.
+    if frag_off != 0 {
+        return false;
+    }
+
     // Fragment must lie within the declared total CH length, and the
     // declared fragment bytes must actually be present in the record.
-    if frag_off.saturating_add(frag_len) > length {
+    if frag_len > length {
         return false;
     }
     if 12usize.saturating_add(frag_len) > record_body.len() {
@@ -365,7 +375,7 @@ fn looks_like_client_hello(packet: &[u8]) -> bool {
     // Use 41 to also require a single byte for at least one cipher suite
     // half — anything below this cannot be a real CH.
     const MIN_CH_BODY: usize = 41;
-    let is_unfragmented = frag_off == 0 && frag_len == length;
+    let is_unfragmented = frag_len == length;
     if is_unfragmented && length < MIN_CH_BODY {
         return false;
     }
@@ -1214,14 +1224,61 @@ mod test {
     }
 
     #[test]
-    fn looks_like_client_hello_accepts_non_first_fragment() {
-        // frag_off=20, frag_len=20, length=200 — middle fragment of a
-        // larger CH. Must pass: discarding non-first fragments here would
-        // break interop when fragments arrive out of order.
+    fn looks_like_client_hello_rejects_non_first_fragment() {
+        // frag_off > 0: a non-first fragment arriving alone could be a
+        // spoofed packet aimed at forcing a downgrade. Real fragmented
+        // CHs always include a frag_off=0 fragment, and the clean
+        // Dtls12Fallback path (gated by supported_versions, not by this
+        // check) handles fully reassembled fragmented 1.2 CHs.
         let body = vec![0xBB; 20];
         let hs = make_handshake(0x01, 200, 20, 20, &body);
         let pkt = make_record(0x16, &hs);
-        assert!(looks_like_client_hello(&pkt));
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    /// CH-shaped body whose `cipher_suites_length` exceeds the bytes that
+    /// follow it — the DTLS 1.3 body parser will error on this. Used to
+    /// drive the auto-server into the gated ParseError fallback path.
+    fn ch_shaped_malformed_body() -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0xFE, 0xFD]); // version
+        body.extend_from_slice(&[0u8; 32]); // random
+        body.push(0); // session_id_length = 0
+        body.push(0); // cookie_length = 0
+        body.extend_from_slice(&[0xFF, 0xFF]); // cipher_suites_length = 65535 — bogus
+        body.extend_from_slice(&[0xC0, 0x2B]); // 2 bytes that pretend to be a suite
+        body.push(1); // compression_methods_length = 1
+        body.push(0); // null compression
+        body
+    }
+
+    #[test]
+    fn auto_server_falls_back_on_ch_shaped_malformed_packet() {
+        // Documents the intentional behavior of the gated fallback: a
+        // packet that is structurally a ClientHello (passes
+        // `looks_like_client_hello`) but whose body cannot be parsed by
+        // the DTLS 1.3 engine should still flip the auto-sense server
+        // into DTLS 1.2 mode. (Random non-CH garbage does not — see
+        // `auto_server_drops_garbage_without_falling_back`.)
+        let body = ch_shaped_malformed_body();
+        let len = body.len() as u32;
+        let hs = make_handshake(0x01, len, 0, len, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(
+            looks_like_client_hello(&pkt),
+            "fixture must pass the structural gate"
+        );
+
+        let mut dtls = new_instance_auto();
+        // Server12 will also fail to parse this packet on replay, so
+        // ignore the result of handle_packet — we only care about which
+        // inner state we ended up in.
+        let _ = dtls.handle_packet(&pkt);
+        let fell_back = matches!(dtls.inner, Some(Inner::Server12(_)));
+        assert!(
+            fell_back,
+            "auto-sense server must fall back to DTLS 1.2 on a CH-shaped malformed packet"
+        );
     }
 
     #[test]
