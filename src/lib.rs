@@ -294,6 +294,27 @@ fn is_dtls12_psk_only(config: &Config) -> bool {
         .is_some_and(|first| first.is_psk() && suites.all(|s| s.is_psk()))
 }
 
+/// Lightweight structural check: does this packet look like a ClientHello?
+///
+/// Used by the auto-sense server to gate the DTLS 1.2 fallback on parse
+/// errors. A packet that fails to parse in the DTLS 1.3 engine should
+/// only trigger a downgrade if it at least claims to be a ClientHello —
+/// otherwise random/garbage traffic could force fallback.
+fn looks_like_client_hello(packet: &[u8]) -> bool {
+    // DTLS record header: content_type(1) + version(2) + epoch(2) + seq(6) + length(2) = 13
+    if packet.len() < 13 || packet[0] != 0x16 {
+        return false;
+    }
+    let record_len = u16::from_be_bytes([packet[11], packet[12]]) as usize;
+    let Some(record_body) = packet.get(13..13 + record_len) else {
+        return false;
+    };
+
+    // Handshake header: msg_type(1) + length(3) + message_seq(2) +
+    //   fragment_offset(3) + fragment_length(3) = 12
+    record_body.len() >= 12 && record_body[0] == 0x01
+}
+
 /// Peek at a buffered DTLS 1.2 ClientHello to decide whether the auto-sense
 /// server fallback should construct a PSK-mode Server12.
 ///
@@ -540,15 +561,25 @@ impl Dtls {
         match self.inner.as_mut().unwrap() {
             Inner::ClientPending(_) => self.handle_pending_auto_client(packet),
             Inner::Server13(server) if server.is_auto_mode() => {
+                // Run the structural check unconditionally so the time
+                // spent here does not leak which error branch the parser
+                // took — same cost whether handle_packet returns Ok,
+                // Dtls12Fallback, ParseError, or anything else.
+                let is_ch_shaped = looks_like_client_hello(packet);
                 match server.handle_packet(packet) {
                     Ok(()) => Ok(()),
-                    Err(Error::Dtls12Fallback | Error::ParseError(_) | Error::ParseIncomplete) => {
-                        // We detected a DTLS12 ClientHello, or the very
-                        // first packet failed to parse in the
-                        // DTLS 1.3 message parser (e.g. a pure DTLS 1.2
-                        // ClientHello with no 1.3 cipher suites). Fall
-                        // back to 1.2. Later parse errors (corrupted
-                        // fragments of a 1.3 CH) are not caught here.
+                    Err(Error::Dtls12Fallback) => {
+                        // The 1.3 engine cleanly rejected a ClientHello
+                        // that did not offer DTLS 1.3 in supported_versions.
+                        self.handle_pending_auto_server()
+                    }
+                    Err(Error::ParseError(_) | Error::ParseIncomplete) if is_ch_shaped => {
+                        // The packet is structurally a ClientHello but the
+                        // 1.3 parser couldn't handle it — fall back to 1.2,
+                        // which has a more permissive parser. Random/garbage
+                        // traffic that happens to error is not caught here,
+                        // so an off-path attacker cannot force a downgrade
+                        // by spraying malformed packets.
                         self.handle_pending_auto_server()
                     }
                     Err(e) => Err(e),
@@ -983,5 +1014,89 @@ mod test {
         let mut dtls = new_instance_auto();
         let err = dtls.close().unwrap_err();
         assert!(matches!(err, Error::HandshakePending));
+    }
+
+    fn make_record(content_type: u8, body: &[u8]) -> Vec<u8> {
+        let mut pkt = Vec::with_capacity(13 + body.len());
+        pkt.push(content_type);
+        pkt.extend_from_slice(&[0xFE, 0xFD]); // version
+        pkt.extend_from_slice(&[0x00, 0x00]); // epoch
+        pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // seq
+        pkt.extend_from_slice(&(body.len() as u16).to_be_bytes());
+        pkt.extend_from_slice(body);
+        pkt
+    }
+
+    fn make_handshake_body(msg_type: u8) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.push(msg_type);
+        body.extend_from_slice(&[0x00, 0x00, 0x00]); // length
+        body.extend_from_slice(&[0x00, 0x00]); // message_seq
+        body.extend_from_slice(&[0x00, 0x00, 0x00]); // fragment_offset
+        body.extend_from_slice(&[0x00, 0x00, 0x00]); // fragment_length
+        body
+    }
+
+    #[test]
+    fn looks_like_client_hello_accepts_handshake_with_ch_msg_type() {
+        let body = make_handshake_body(0x01);
+        let pkt = make_record(0x16, &body);
+        assert!(looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_non_handshake_record() {
+        let body = make_handshake_body(0x01);
+        let pkt = make_record(0x17, &body); // ApplicationData
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_other_handshake_msg_types() {
+        // ServerHello, HelloVerifyRequest, Finished, etc.
+        for msg_type in [0x02, 0x03, 0x04, 0x0B, 0x0E, 0x14] {
+            let body = make_handshake_body(msg_type);
+            let pkt = make_record(0x16, &body);
+            assert!(
+                !looks_like_client_hello(&pkt),
+                "msg_type {:#x} should not look like a CH",
+                msg_type
+            );
+        }
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_truncated_packets() {
+        assert!(!looks_like_client_hello(&[]));
+        assert!(!looks_like_client_hello(&[0x16; 12])); // too short for record header
+        // Record header claims body length 100 but no body bytes follow.
+        let mut pkt = vec![0x16, 0xFE, 0xFD, 0, 0, 0, 0, 0, 0, 0, 0];
+        pkt.extend_from_slice(&100u16.to_be_bytes());
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_short_handshake_body() {
+        // Valid record header but handshake body too short (< 12 bytes).
+        let pkt = make_record(0x16, &[0x01, 0x00, 0x00]);
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn auto_server_drops_garbage_without_falling_back() {
+        let mut dtls = new_instance_auto();
+        // Random non-handshake bytes — the 1.3 engine will error, but the
+        // auto-sense path must not downgrade to 1.2.
+        let garbage = [0xFF; 64];
+        let _ = dtls.handle_packet(&garbage);
+        // Inner must remain Server13 in auto-sense mode.
+        let still_pending = match &dtls.inner {
+            Some(Inner::Server13(s)) => s.is_auto_mode(),
+            _ => false,
+        };
+        assert!(
+            still_pending,
+            "auto-sense server must not fall back to DTLS 1.2 on garbage input"
+        );
     }
 }
