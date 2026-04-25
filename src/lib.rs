@@ -542,13 +542,12 @@ impl Dtls {
             Inner::Server13(server) if server.is_auto_mode() => {
                 match server.handle_packet(packet) {
                     Ok(()) => Ok(()),
-                    Err(Error::Dtls12Fallback | Error::ParseError(_) | Error::ParseIncomplete) => {
-                        // We detected a DTLS12 ClientHello, or the very
-                        // first packet failed to parse in the
-                        // DTLS 1.3 message parser (e.g. a pure DTLS 1.2
-                        // ClientHello with no 1.3 cipher suites). Fall
-                        // back to 1.2. Later parse errors (corrupted
-                        // fragments of a 1.3 CH) are not caught here.
+                    Err(Error::Dtls12Fallback) => {
+                        // We parsed a ClientHello and explicitly detected
+                        // that it does not offer DTLS 1.3. Fall back to 1.2.
+                        // Parser failures are not treated as downgrade
+                        // signals; malformed or incomplete packets stay on
+                        // the pending auto-sense server and surface errors.
                         self.handle_pending_auto_server()
                     }
                     Err(e) => Err(e),
@@ -890,6 +889,25 @@ mod test {
         // These must NOT panic — inner should still be intact
         dtls.handle_timeout(now).unwrap();
         let _ = dtls.poll_output(&mut buf);
+    }
+
+    #[test]
+    fn test_auto_server_malformed_packet_does_not_fallback() {
+        let mut dtls = new_instance_auto();
+        let malformed = [
+            0x16, // handshake
+            0xFE, 0xFD, // DTLS 1.2 legacy record version
+            0x00, 0x00, // epoch 0
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sequence 0
+            0x00, 0x14, // record length claims 20 bytes
+            0x01, 0x00, 0x00, 0x00, // truncated ClientHello fragment
+        ];
+
+        let err = dtls.handle_packet(&malformed).unwrap_err();
+
+        assert!(matches!(err, Error::ParseIncomplete));
+        assert_eq!(dtls.protocol_version(), None);
+        assert!(matches!(dtls.inner, Some(Inner::Server13(ref s)) if s.is_auto_mode()));
     }
 
     #[test]

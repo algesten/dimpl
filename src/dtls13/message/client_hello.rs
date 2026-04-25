@@ -7,7 +7,7 @@ use nom::number::complete::{be_u8, be_u16};
 use nom::{Err, IResult};
 
 use crate::buffer::Buf;
-use crate::util::many1;
+use crate::util::{many0, many1};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ClientHello {
@@ -47,9 +47,16 @@ impl ClientHello {
         let (input, legacy_session_id) = SessionId::parse(input)?;
         let (input, legacy_cookie) = Cookie::parse(input)?;
         let (input, cipher_suites_len) = be_u16(input)?;
+        if cipher_suites_len == 0 || cipher_suites_len % 2 != 0 {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
         let (input, input_cipher) = take(cipher_suites_len)(input)?;
+        // Accept a well-formed DTLS 1.2 ClientHello with no DTLS 1.3
+        // cipher suites so auto-sense can make an explicit version decision
+        // from supported_versions instead of treating parser failure as a
+        // fallback signal.
         let (rest, cipher_suites) =
-            many1(Dtls13CipherSuite::parse, Dtls13CipherSuite::is_supported)(input_cipher)?;
+            many0(Dtls13CipherSuite::parse, Dtls13CipherSuite::is_supported)(input_cipher)?;
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
@@ -202,6 +209,29 @@ mod tests {
         assert_eq!(parsed, client_hello);
 
         assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn dtls12_only_cipher_suites_parse_for_auto_detection() {
+        let mut message = MESSAGE.to_vec();
+        // DTLS 1.2 ECDHE_ECDSA AES-GCM suites are intentionally unknown to
+        // the DTLS 1.3 suite filter, but the ClientHello is structurally valid.
+        message[40..44].copy_from_slice(&[0xC0, 0x2B, 0xC0, 0x2C]);
+
+        let (rest, parsed) = ClientHello::parse(&message, 0).unwrap();
+
+        assert!(rest.is_empty());
+        assert!(parsed.cipher_suites.is_empty());
+    }
+
+    #[test]
+    fn empty_cipher_suites_is_malformed() {
+        let mut message = Vec::new();
+        message.extend_from_slice(&MESSAGE[..38]);
+        message.extend_from_slice(&[0x00, 0x00]);
+        message.extend_from_slice(&MESSAGE[44..]);
+
+        assert!(ClientHello::parse(&message, 0).is_err());
     }
 
     #[test]
