@@ -294,6 +294,95 @@ fn is_dtls12_psk_only(config: &Config) -> bool {
         .is_some_and(|first| first.is_psk() && suites.all(|s| s.is_psk()))
 }
 
+/// If `packet` is a Handshake record carrying a ClientHello, return the
+/// inner handshake message bytes (msg_type + length + message_seq +
+/// fragment_offset + fragment_length + body). Returns `None` for any
+/// other content type, message type, or malformed framing.
+///
+/// Shared by [`looks_like_client_hello`] (structural check only) and
+/// [`client_hello_wants_psk`] (which inspects cipher suites further).
+fn client_hello_handshake(packet: &[u8]) -> Option<&[u8]> {
+    // DTLS record header: content_type(1) + version(2) + epoch(2) + seq(6) + length(2) = 13
+    if packet.len() < 13 || packet[0] != 0x16 {
+        return None;
+    }
+    let record_len = u16::from_be_bytes([packet[11], packet[12]]) as usize;
+    let record_body = packet.get(13..13 + record_len)?;
+
+    // Handshake header: msg_type(1) + length(3) + message_seq(2) +
+    //   fragment_offset(3) + fragment_length(3) = 12
+    if record_body.len() < 12 || record_body[0] != 0x01 {
+        return None;
+    }
+    Some(record_body)
+}
+
+/// Lightweight structural check: does this packet look like a ClientHello?
+///
+/// Used by the auto-sense server to gate the DTLS 1.2 fallback on parse
+/// errors. A packet that fails to parse in the DTLS 1.3 engine should
+/// only trigger a downgrade if it at least claims to be a ClientHello —
+/// otherwise random/garbage traffic could force fallback.
+///
+/// In addition to the record/handshake header check from
+/// [`client_hello_handshake`], this validates wire-format integrity of
+/// the handshake header (fragment fits inside the declared total length;
+/// fragment bytes actually present in the record) and, for an
+/// unfragmented CH, requires the declared length to be at least the
+/// minimum a real DTLS 1.2 ClientHello can carry. A header-only fake
+/// or a CH whose declared length cannot fit a valid 1.2 body fails the
+/// check.
+fn looks_like_client_hello(packet: &[u8]) -> bool {
+    let Some(record_body) = client_hello_handshake(packet) else {
+        return false;
+    };
+
+    // Handshake header (12 bytes already validated to be present):
+    //   msg_type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3)
+    let length = ((record_body[1] as usize) << 16)
+        | ((record_body[2] as usize) << 8)
+        | record_body[3] as usize;
+    let frag_off = ((record_body[6] as usize) << 16)
+        | ((record_body[7] as usize) << 8)
+        | record_body[8] as usize;
+    let frag_len = ((record_body[9] as usize) << 16)
+        | ((record_body[10] as usize) << 8)
+        | record_body[11] as usize;
+
+    // Only the first fragment (offset 0) is allowed to trigger fallback.
+    // A non-first fragment arriving alone could be a spoofed packet
+    // designed to force a downgrade; a real fragmented CH always sends
+    // a fragment with offset 0 too, and the clean Dtls12Fallback path
+    // (driven by supported_versions, not by this gate) handles real
+    // fragmented 1.2 CHs once reassembly completes.
+    if frag_off != 0 {
+        return false;
+    }
+
+    // Fragment must lie within the declared total CH length, and the
+    // declared fragment bytes must actually be present in the record.
+    if frag_len > length {
+        return false;
+    }
+    if 12usize.saturating_add(frag_len) > record_body.len() {
+        return false;
+    }
+
+    // Minimum DTLS 1.2 ClientHello body:
+    //   version(2) + random(32) + sid_len(1) + cookie_len(1) +
+    //   cipher_suites_len(2) + compression_methods_len(1) +
+    //   compression_method(1) = 40 bytes (with empty sid/cookie/suites).
+    // Use 41 to also require a single byte for at least one cipher suite
+    // half — anything below this cannot be a real CH.
+    const MIN_CH_BODY: usize = 41;
+    let is_unfragmented = frag_len == length;
+    if is_unfragmented && length < MIN_CH_BODY {
+        return false;
+    }
+
+    true
+}
+
 /// Peek at a buffered DTLS 1.2 ClientHello to decide whether the auto-sense
 /// server fallback should construct a PSK-mode Server12.
 ///
@@ -308,20 +397,9 @@ fn is_dtls12_psk_only(config: &Config) -> bool {
 fn client_hello_wants_psk(packet: &[u8], config: &Config) -> bool {
     use dtls12::message::Dtls12CipherSuite;
 
-    // DTLS record header: content_type(1) + version(2) + epoch(2) + seq(6) + length(2) = 13
-    if packet.len() < 13 || packet[0] != 0x16 {
-        return false;
-    }
-    let record_len = u16::from_be_bytes([packet[11], packet[12]]) as usize;
-    let Some(record_body) = packet.get(13..13 + record_len) else {
+    let Some(record_body) = client_hello_handshake(packet) else {
         return false;
     };
-
-    // Handshake header: msg_type(1) + length(3) + message_seq(2) +
-    //   fragment_offset(3) + fragment_length(3) = 12
-    if record_body.len() < 12 || record_body[0] != 0x01 {
-        return false;
-    }
 
     let frag_off =
         ((record_body[6] as u32) << 16) | ((record_body[7] as u32) << 8) | record_body[8] as u32;
@@ -540,15 +618,25 @@ impl Dtls {
         match self.inner.as_mut().unwrap() {
             Inner::ClientPending(_) => self.handle_pending_auto_client(packet),
             Inner::Server13(server) if server.is_auto_mode() => {
+                // Run the structural check unconditionally so the time
+                // spent here does not leak which error branch the parser
+                // took — same cost whether handle_packet returns Ok,
+                // Dtls12Fallback, ParseError, or anything else.
+                let is_ch_shaped = looks_like_client_hello(packet);
                 match server.handle_packet(packet) {
                     Ok(()) => Ok(()),
-                    Err(Error::Dtls12Fallback | Error::ParseError(_) | Error::ParseIncomplete) => {
-                        // We detected a DTLS12 ClientHello, or the very
-                        // first packet failed to parse in the
-                        // DTLS 1.3 message parser (e.g. a pure DTLS 1.2
-                        // ClientHello with no 1.3 cipher suites). Fall
-                        // back to 1.2. Later parse errors (corrupted
-                        // fragments of a 1.3 CH) are not caught here.
+                    Err(Error::Dtls12Fallback) => {
+                        // The 1.3 engine cleanly rejected a ClientHello
+                        // that did not offer DTLS 1.3 in supported_versions.
+                        self.handle_pending_auto_server()
+                    }
+                    Err(Error::ParseError(_) | Error::ParseIncomplete) if is_ch_shaped => {
+                        // The packet is structurally a ClientHello but the
+                        // 1.3 parser couldn't handle it — fall back to 1.2,
+                        // which has a more permissive parser. Random/garbage
+                        // traffic that happens to error is not caught here,
+                        // so an off-path attacker cannot force a downgrade
+                        // by spraying malformed packets.
                         self.handle_pending_auto_server()
                     }
                     Err(e) => Err(e),
@@ -983,5 +1071,231 @@ mod test {
         let mut dtls = new_instance_auto();
         let err = dtls.close().unwrap_err();
         assert!(matches!(err, Error::HandshakePending));
+    }
+
+    fn make_record(content_type: u8, body: &[u8]) -> Vec<u8> {
+        let mut pkt = Vec::with_capacity(13 + body.len());
+        pkt.push(content_type);
+        pkt.extend_from_slice(&[0xFE, 0xFD]); // version
+        pkt.extend_from_slice(&[0x00, 0x00]); // epoch
+        pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // seq
+        pkt.extend_from_slice(&(body.len() as u16).to_be_bytes());
+        pkt.extend_from_slice(body);
+        pkt
+    }
+
+    /// Build a handshake message: 12-byte header + body bytes.
+    fn make_handshake(
+        msg_type: u8,
+        length: u32,
+        frag_off: u32,
+        frag_len: u32,
+        body: &[u8],
+    ) -> Vec<u8> {
+        let mut hs = Vec::with_capacity(12 + body.len());
+        hs.push(msg_type);
+        hs.extend_from_slice(&length.to_be_bytes()[1..]); // 3-byte length
+        hs.extend_from_slice(&[0x00, 0x00]); // message_seq
+        hs.extend_from_slice(&frag_off.to_be_bytes()[1..]); // 3-byte fragment_offset
+        hs.extend_from_slice(&frag_len.to_be_bytes()[1..]); // 3-byte fragment_length
+        hs.extend_from_slice(body);
+        hs
+    }
+
+    /// Minimum-shape DTLS 1.2 ClientHello body (41 bytes):
+    /// version(2) + random(32) + sid_len=0(1) + cookie_len=0(1) +
+    /// suites_len=2(2) + 2 bytes of suite + comp_len=1(1) + null comp(1)
+    /// = 42. We use 41 to match the gate's lower bound; an extra byte is
+    /// fine. Returns a fixed valid-shape body for use in unit tests.
+    fn min_ch_body() -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0xFE, 0xFD]); // version
+        body.extend_from_slice(&[0u8; 32]); // random
+        body.push(0); // session_id_length = 0
+        body.push(0); // cookie_length = 0
+        body.extend_from_slice(&[0x00, 0x02]); // cipher_suites_length = 2
+        body.extend_from_slice(&[0xC0, 0x2B]); // one suite (ECDHE_ECDSA_AES128_GCM)
+        body.push(1); // compression_methods_length = 1
+        body.push(0); // null compression
+        body
+    }
+
+    #[test]
+    fn looks_like_client_hello_accepts_minimum_shape_ch() {
+        let body = min_ch_body();
+        let len = body.len() as u32;
+        let hs = make_handshake(0x01, len, 0, len, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_non_handshake_record() {
+        let body = min_ch_body();
+        let len = body.len() as u32;
+        let hs = make_handshake(0x01, len, 0, len, &body);
+        let pkt = make_record(0x17, &hs); // ApplicationData
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_other_handshake_msg_types() {
+        // ServerHello, HelloVerifyRequest, Finished, etc.
+        let body = min_ch_body();
+        let len = body.len() as u32;
+        for msg_type in [0x02, 0x03, 0x04, 0x0B, 0x0E, 0x14] {
+            let hs = make_handshake(msg_type, len, 0, len, &body);
+            let pkt = make_record(0x16, &hs);
+            assert!(
+                !looks_like_client_hello(&pkt),
+                "msg_type {:#x} should not look like a CH",
+                msg_type
+            );
+        }
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_truncated_packets() {
+        assert!(!looks_like_client_hello(&[]));
+        assert!(!looks_like_client_hello(&[0x16; 12])); // too short for record header
+        // Record header claims body length 100 but no body bytes follow.
+        let mut pkt = vec![0x16, 0xFE, 0xFD, 0, 0, 0, 0, 0, 0, 0, 0];
+        pkt.extend_from_slice(&100u16.to_be_bytes());
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_short_handshake_body() {
+        // Valid record header but handshake body too short (< 12 bytes).
+        let pkt = make_record(0x16, &[0x01, 0x00, 0x00]);
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_header_only_ch() {
+        // Handshake header with msg_type=ClientHello but length=0 and no body.
+        // Pre-tightening this passed; it must now be rejected.
+        let hs = make_handshake(0x01, 0, 0, 0, &[]);
+        let pkt = make_record(0x16, &hs);
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_undersized_unfragmented_ch() {
+        // Unfragmented CH (frag_off=0, frag_len=length) but length=20 — way
+        // below the 41-byte minimum a real DTLS 1.2 CH can have.
+        let body = vec![0xAA; 20];
+        let hs = make_handshake(0x01, 20, 0, 20, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_inconsistent_fragment_overflow() {
+        // fragment_offset + fragment_length > length — wire-format
+        // contradiction; the fragment claims to extend past the total CH.
+        let body = min_ch_body();
+        let hs = make_handshake(0x01, 50, 0, 100, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_missing_fragment_bytes() {
+        // fragment_length declares 200 bytes of body but only ~40 are
+        // present in the record. The fragment's bytes are not actually
+        // there.
+        let body = min_ch_body();
+        let hs = make_handshake(0x01, 200, 0, 200, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_accepts_first_fragment_of_fragmented_ch() {
+        // frag_off=0, frag_len=20, length=200 — first fragment of a
+        // larger CH. The minimum-body check only applies to unfragmented
+        // CHs, so this must pass even though length<41 wouldn't apply
+        // here either.
+        let body = vec![0xAA; 20];
+        let hs = make_handshake(0x01, 200, 0, 20, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(looks_like_client_hello(&pkt));
+    }
+
+    #[test]
+    fn looks_like_client_hello_rejects_non_first_fragment() {
+        // frag_off > 0: a non-first fragment arriving alone could be a
+        // spoofed packet aimed at forcing a downgrade. Real fragmented
+        // CHs always include a frag_off=0 fragment, and the clean
+        // Dtls12Fallback path (gated by supported_versions, not by this
+        // check) handles fully reassembled fragmented 1.2 CHs.
+        let body = vec![0xBB; 20];
+        let hs = make_handshake(0x01, 200, 20, 20, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(!looks_like_client_hello(&pkt));
+    }
+
+    /// CH-shaped body whose `cipher_suites_length` exceeds the bytes that
+    /// follow it — the DTLS 1.3 body parser will error on this. Used to
+    /// drive the auto-server into the gated ParseError fallback path.
+    fn ch_shaped_malformed_body() -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0xFE, 0xFD]); // version
+        body.extend_from_slice(&[0u8; 32]); // random
+        body.push(0); // session_id_length = 0
+        body.push(0); // cookie_length = 0
+        body.extend_from_slice(&[0xFF, 0xFF]); // cipher_suites_length = 65535 — bogus
+        body.extend_from_slice(&[0xC0, 0x2B]); // 2 bytes that pretend to be a suite
+        body.push(1); // compression_methods_length = 1
+        body.push(0); // null compression
+        body
+    }
+
+    #[test]
+    fn auto_server_falls_back_on_ch_shaped_malformed_packet() {
+        // Documents the intentional behavior of the gated fallback: a
+        // packet that is structurally a ClientHello (passes
+        // `looks_like_client_hello`) but whose body cannot be parsed by
+        // the DTLS 1.3 engine should still flip the auto-sense server
+        // into DTLS 1.2 mode. (Random non-CH garbage does not — see
+        // `auto_server_drops_garbage_without_falling_back`.)
+        let body = ch_shaped_malformed_body();
+        let len = body.len() as u32;
+        let hs = make_handshake(0x01, len, 0, len, &body);
+        let pkt = make_record(0x16, &hs);
+        assert!(
+            looks_like_client_hello(&pkt),
+            "fixture must pass the structural gate"
+        );
+
+        let mut dtls = new_instance_auto();
+        // Server12 will also fail to parse this packet on replay, so
+        // ignore the result of handle_packet — we only care about which
+        // inner state we ended up in.
+        let _ = dtls.handle_packet(&pkt);
+        let fell_back = matches!(dtls.inner, Some(Inner::Server12(_)));
+        assert!(
+            fell_back,
+            "auto-sense server must fall back to DTLS 1.2 on a CH-shaped malformed packet"
+        );
+    }
+
+    #[test]
+    fn auto_server_drops_garbage_without_falling_back() {
+        let mut dtls = new_instance_auto();
+        // Random non-handshake bytes — the 1.3 engine will error, but the
+        // auto-sense path must not downgrade to 1.2.
+        let garbage = [0xFF; 64];
+        let _ = dtls.handle_packet(&garbage);
+        // Inner must remain Server13 in auto-sense mode.
+        let still_pending = match &dtls.inner {
+            Some(Inner::Server13(s)) => s.is_auto_mode(),
+            _ => false,
+        };
+        assert!(
+            still_pending,
+            "auto-sense server must not fall back to DTLS 1.2 on garbage input"
+        );
     }
 }
