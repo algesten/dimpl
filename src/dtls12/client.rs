@@ -235,14 +235,14 @@ impl Client {
     }
 
     /// Initiate graceful shutdown by sending a `close_notify` alert.
-    pub fn close(&mut self) -> Result<(), Error> {
+    pub fn close(&mut self) -> Result<bool, Error> {
         if self.state == State::Closed {
-            return Ok(());
+            return Ok(false);
         }
         if self.state != State::AwaitApplicationData {
             self.engine.abort();
             self.state = State::Closed;
-            return Ok(());
+            return Ok(false);
         }
         self.engine
             .create_record(ContentType::Alert, 1, false, |body| {
@@ -250,7 +250,7 @@ impl Client {
                 body.push(0); // description: close_notify
             })?;
         self.state = State::Closed;
-        Ok(())
+        Ok(true)
     }
 
     fn make_progress(&mut self) -> Result<(), Error> {

@@ -790,7 +790,7 @@ impl Dtls {
     /// connection can simply drop the [`Dtls`] value.
     ///
     /// The alert is not retransmitted (per RFC 6347 §4.2.7 / RFC 9147 §5.10).
-    pub fn close(&mut self) -> Result<(), Error> {
+    pub fn close(&mut self) -> Result<bool, Error> {
         let inner = self.inner.as_mut().unwrap();
 
         if inner.is_pending() {

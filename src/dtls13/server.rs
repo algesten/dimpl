@@ -307,14 +307,14 @@ impl Server {
     }
 
     /// Initiate graceful shutdown by sending a `close_notify` alert.
-    pub fn close(&mut self) -> Result<(), Error> {
+    pub fn close(&mut self) -> Result<bool, Error> {
         if self.state == State::Closed || self.state == State::HalfClosedLocal {
-            return Ok(());
+            return Ok(false);
         }
         if self.state != State::AwaitApplicationData {
             self.engine.abort();
             self.state = State::Closed;
-            return Ok(());
+            return Ok(false);
         }
         let epoch = self.engine.app_send_epoch();
         self.engine
@@ -324,7 +324,7 @@ impl Server {
             })?;
         self.engine.cancel_flights();
         self.state = State::HalfClosedLocal;
-        Ok(())
+        Ok(true)
     }
 
     fn make_progress(&mut self) -> Result<(), Error> {
