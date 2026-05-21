@@ -1,7 +1,9 @@
 use super::Asn1Cert;
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
+use nom::Err;
 use nom::bytes::complete::take;
+use nom::error::{Error, ErrorKind};
 use nom::{IResult, number::complete::be_u24};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -30,7 +32,9 @@ impl Certificate {
             let offset =
                 certs_base_offset + (rest.as_ptr() as usize - certs_data.as_ptr() as usize);
             let (new_rest, cert) = Asn1Cert::parse(rest, offset)?;
-            certificate_list.push(cert);
+            certificate_list
+                .try_push(cert)
+                .map_err(|_| Err::Failure(Error::new(rest, ErrorKind::LengthValue)))?;
             rest = new_rest;
         }
 
@@ -76,5 +80,25 @@ mod tests {
         let mut serialized = Buf::new();
         parsed.serialize(MESSAGE, &mut serialized);
         assert_eq!(&*serialized, MESSAGE);
+    }
+
+    #[test]
+    fn rejects_too_many_certificates() {
+        let mut message = Vec::new();
+        let total_len = 33 * 4;
+        message.extend_from_slice(&(total_len as u32).to_be_bytes()[1..]);
+        for _ in 0..33 {
+            message.extend_from_slice(&[0x00, 0x00, 0x01, 0xAA]);
+        }
+
+        let result = Certificate::parse(&message, 0);
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "oversized certificate list should fail with LengthValue"
+        );
     }
 }

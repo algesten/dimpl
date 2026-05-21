@@ -1,9 +1,11 @@
 use super::Asn1Cert;
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
+use nom::Err;
+use nom::IResult;
 use nom::bytes::complete::take;
-use nom::number::complete::{be_u16, be_u24};
-use nom::{IResult, number::complete::be_u8};
+use nom::error::{Error, ErrorKind};
+use nom::number::complete::{be_u8, be_u16, be_u24};
 use std::ops::Range;
 
 /// TLS 1.3 CertificateEntry (RFC 8446 Section 4.4.2).
@@ -54,10 +56,12 @@ impl Certificate {
             let extensions_range = (certs_base_offset + ext_relative)
                 ..(certs_base_offset + ext_relative + ext_slice.len());
 
-            certificate_list.push(CertificateEntry {
-                cert,
-                extensions_range,
-            });
+            certificate_list
+                .try_push(CertificateEntry {
+                    cert,
+                    extensions_range,
+                })
+                .map_err(|_| Err::Failure(Error::new(rest, ErrorKind::LengthValue)))?;
             rest = r;
         }
 
@@ -128,5 +132,27 @@ mod tests {
         let mut serialized = Buf::new();
         parsed.serialize(MESSAGE, &mut serialized);
         assert_eq!(&*serialized, MESSAGE);
+    }
+
+    #[test]
+    fn rejects_too_many_certificates() {
+        let mut message = Vec::new();
+        message.push(0x00); // empty certificate_request_context
+        let total_len = 33 * 6;
+        message.extend_from_slice(&(total_len as u32).to_be_bytes()[1..]);
+        for _ in 0..33 {
+            message.extend_from_slice(&[0x00, 0x00, 0x01, 0xAA]); // cert_data
+            message.extend_from_slice(&[0x00, 0x00]); // empty extensions
+        }
+
+        let result = Certificate::parse(&message, 0);
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "oversized certificate list should fail with LengthValue"
+        );
     }
 }
