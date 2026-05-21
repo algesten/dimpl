@@ -259,6 +259,13 @@ impl Engine {
             return Ok(());
         }
 
+        if self.peer_encryption_enabled && first_record.record().sequence.epoch == 0 {
+            // Keep old plaintext handshake records available long enough to
+            // trigger flight resends above, but never queue or process them as
+            // new messages after peer encryption is enabled.
+            return Ok(());
+        }
+
         // Reject new handshakes after initial handshake is complete (renegotiation not supported).
         if self.release_app_data && handshake.header.message_seq >= self.peer_handshake_seq_no {
             return Err(Error::RenegotiationAttempt);
@@ -290,6 +297,29 @@ impl Engine {
     fn insert_incoming_non_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
         let first = incoming.first();
         let seq_current = first.record().sequence;
+
+        if self.peer_encryption_enabled
+            && seq_current.epoch == 0
+            && first.record().content_type == ContentType::Handshake
+        {
+            return Ok(());
+        }
+
+        if self.peer_encryption_enabled {
+            for record in incoming.records().iter() {
+                if record.record().sequence.epoch == 0
+                    && record.record().content_type == ContentType::Handshake
+                {
+                    if record.handshakes().is_empty() {
+                        record.set_handled();
+                    } else {
+                        for handshake in record.handshakes() {
+                            handshake.set_handled();
+                        }
+                    }
+                }
+            }
+        }
 
         let search_result = self
             .queue_rx
@@ -1126,8 +1156,38 @@ impl Engine {
 
 impl RecordHandler for Engine {
     fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
+        let epoch = record.record().sequence.epoch;
+
+        if record.record().content_type == ContentType::ChangeCipherSpec
+            && epoch == 0
+            && self.peer_encryption_enabled
+        {
+            // DTLS 1.2 peers may retransmit their last handshake flight after
+            // we have already enabled peer encryption. A late plaintext CCS is
+            // no longer actionable; queuing it would leave an unhandled control
+            // record in queue_rx and prevent handled app-data records behind it
+            // from being purged.
+            self.push_buffer(record.into_buffer());
+            return Ok(None);
+        }
+
+        if record.record().content_type == ContentType::Handshake
+            && epoch == 0
+            && self.peer_encryption_enabled
+            && record
+                .first_handshake()
+                .and_then(|handshake| handshake.dupe_triggers_resend())
+                .is_none()
+        {
+            // Stale plaintext handshakes must still be visible to
+            // insert_incoming_handshake when they can trigger final-flight
+            // retransmission. Other post-encryption epoch-0 handshakes are
+            // unauthenticated and no longer actionable.
+            self.push_buffer(record.into_buffer());
+            return Ok(None);
+        }
+
         if record.record().content_type == ContentType::Alert {
-            let epoch = record.record().sequence.epoch;
             if epoch == 0 {
                 if self.peer_encryption_enabled {
                     // Post-handshake: epoch 0 alerts are unauthenticated, discard.

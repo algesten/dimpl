@@ -9,6 +9,152 @@ use dimpl::{Config, Dtls, Output};
 
 use crate::common::*;
 
+#[cfg(feature = "rcgen")]
+struct FinalFlightResend {
+    client: Dtls,
+    server: Dtls,
+    f6_init: Vec<Vec<u8>>,
+    f6_resend: Vec<Vec<u8>>,
+    stale_epoch0_handshake: Vec<u8>,
+}
+
+#[cfg(feature = "rcgen")]
+fn prepare_server_final_flight_resend(max_queue_rx: usize) -> FinalFlightResend {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let mut now = Instant::now();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config_client = Arc::new(
+        Config::builder()
+            .mtu(115)
+            .max_queue_rx(max_queue_rx)
+            .build()
+            .expect("Failed to build config"),
+    );
+    let config_server = Arc::new(
+        Config::builder()
+            .mtu(115)
+            .max_queue_rx(max_queue_rx)
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut client = Dtls::new_12(config_client, client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config_server, server_cert, now);
+    server.set_active(false);
+
+    client.handle_timeout(now).expect("client timeout start");
+    client.handle_timeout(now).expect("client arm flight 1");
+    let f1 = collect_packets(&mut client);
+    for packet in f1 {
+        server.handle_packet(&packet).expect("server recv f1");
+    }
+
+    server.handle_timeout(now).expect("server arm flight 2");
+    let f2 = collect_packets(&mut server);
+    assert!(!f2.is_empty(), "server should emit flight 2 after CH");
+    for packet in f2 {
+        client.handle_packet(&packet).expect("client recv f2");
+    }
+
+    client.handle_timeout(now).expect("client arm flight 3");
+    let f3 = collect_packets(&mut client);
+    assert!(!f3.is_empty(), "client should emit flight 3 after HVR");
+    let stale_epoch0_handshake = first_record_matching(&f3, 22, 0)
+        .expect("flight 3 should contain a plaintext ClientHello record");
+    for packet in f3 {
+        server.handle_packet(&packet).expect("server recv f3");
+    }
+
+    server.handle_timeout(now).expect("server arm flight 4");
+    let f4 = collect_packets(&mut server);
+    assert!(
+        !f4.is_empty(),
+        "server should emit flight 4 after CH+cookie"
+    );
+    for packet in f4 {
+        client.handle_packet(&packet).expect("client recv f4");
+    }
+
+    client.handle_timeout(now).expect("client arm flight 5");
+    let f5_init = collect_packets(&mut client);
+    assert!(
+        !f5_init.is_empty(),
+        "client should emit flight 5 after server flight"
+    );
+    for packet in &f5_init {
+        server.handle_packet(packet).expect("server recv f5");
+    }
+
+    server.handle_timeout(now).expect("server arm flight 6");
+    let f6_init = collect_packets(&mut server);
+    assert!(!f6_init.is_empty(), "server should emit initial flight 6");
+    let f6_init_hdrs = collect_headers(&f6_init);
+    assert!(
+        f6_init_hdrs.iter().any(|h| h.ctype == 20 && h.epoch == 0),
+        "server flight 6 should include epoch 0 CCS"
+    );
+    assert!(
+        f6_init_hdrs.iter().any(|h| h.ctype == 22 && h.epoch == 1),
+        "server flight 6 should include epoch 1 Finished"
+    );
+
+    trigger_timeout(&mut client, &mut now);
+    let f5_resend = collect_packets(&mut client);
+    assert!(!f5_resend.is_empty(), "client should resend flight 5");
+    for packet in &f5_resend {
+        server.handle_packet(packet).expect("server recv f5 resend");
+    }
+
+    let f6_resend = collect_packets(&mut server);
+    assert!(
+        !f6_resend.is_empty(),
+        "server should resend flight 6 upon receiving duplicate Finished"
+    );
+    let f6_resend_hdrs = collect_headers(&f6_resend);
+    assert!(
+        f6_resend_hdrs.iter().any(|h| h.ctype == 22 && h.epoch == 1),
+        "resend flight 6 should include epoch 1 Finished"
+    );
+    assert_epochs_and_seq_increased(&f6_init_hdrs, &f6_resend_hdrs);
+
+    FinalFlightResend {
+        client,
+        server,
+        f6_init,
+        f6_resend,
+        stale_epoch0_handshake,
+    }
+}
+
+#[cfg(feature = "rcgen")]
+fn first_record_matching(datagrams: &[Vec<u8>], content_type: u8, epoch: u16) -> Option<Vec<u8>> {
+    for datagram in datagrams {
+        let mut offset = 0usize;
+        while offset + 13 <= datagram.len() {
+            let len = u16::from_be_bytes([datagram[offset + 11], datagram[offset + 12]]) as usize;
+            let end = offset + 13 + len;
+            if end > datagram.len() {
+                break;
+            }
+
+            let record_epoch = u16::from_be_bytes([datagram[offset + 3], datagram[offset + 4]]);
+            if datagram[offset] == content_type && record_epoch == epoch {
+                return Some(datagram[offset..end].to_vec());
+            }
+
+            offset = end;
+        }
+    }
+
+    None
+}
+
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_resends_each_flight_epoch_and_sequence_increase() {
@@ -137,120 +283,207 @@ fn dtls12_resends_each_flight_epoch_and_sequence_increase() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_duplicate_triggers_server_resend_of_final_flight() {
-    // Use a small MTU to make record packing simple and deterministic.
-    let now0 = Instant::now();
-    let mut now = now0;
-
-    use dimpl::certificate::generate_self_signed_certificate;
-
-    // Certificates for client and server
-    let client_cert = generate_self_signed_certificate().expect("gen client cert");
-    let server_cert = generate_self_signed_certificate().expect("gen server cert");
-
-    let config_client = Arc::new(
-        Config::builder()
-            .mtu(115) // modestly small but enough to keep flights split
-            .build()
-            .expect("Failed to build config"),
-    );
-    let config_server = Arc::new(
-        Config::builder()
-            .mtu(115) // modestly small but enough to keep flights split
-            .build()
-            .expect("Failed to build config"),
-    );
-
-    // Client
-    let mut client = Dtls::new_12(config_client, client_cert.clone(), now);
-    client.set_active(true);
-
-    // Server
-    let mut server = Dtls::new_12(config_server, server_cert.clone(), now);
-    server.set_active(false);
-
-    // FLIGHT 1 (ClientHello)
-    client.handle_timeout(now).expect("client timeout start");
-    client.handle_timeout(now).expect("client arm flight 1");
-    let f1 = collect_packets(&mut client);
-    for p in f1 {
-        server.handle_packet(&p).expect("server recv f1");
-    }
-
-    // FLIGHT 2 (HelloVerifyRequest)
-    server.handle_timeout(now).expect("server arm flight 2");
-    let f2 = collect_packets(&mut server);
-    assert!(!f2.is_empty(), "server should emit flight 2 after CH");
-    for p in f2 {
-        client.handle_packet(&p).expect("client recv f2");
-    }
-
-    // FLIGHT 3 (ClientHello with cookie)
-    client.handle_timeout(now).expect("client arm flight 3");
-    let f3 = collect_packets(&mut client);
-    assert!(!f3.is_empty(), "client should emit flight 3 after HVR");
-    for p in f3 {
-        server.handle_packet(&p).expect("server recv f3");
-    }
-
-    // FLIGHT 4 (ServerHello, Certificate, ... , ServerHelloDone)
-    server.handle_timeout(now).expect("server arm flight 4");
-    let f4 = collect_packets(&mut server);
+    let result = prepare_server_final_flight_resend(Config::default().max_queue_rx());
     assert!(
-        !f4.is_empty(),
-        "server should emit flight 4 after CH+cookie"
+        !result.f6_init.is_empty(),
+        "server should emit initial flight 6"
     );
-    for p in f4 {
-        client.handle_packet(&p).expect("client recv f4");
-    }
-
-    // FLIGHT 5 (Client cert?, CKX, CV?, CCS, Finished)
-    client.handle_timeout(now).expect("client arm flight 5");
-    let f5_init = collect_packets(&mut client);
     assert!(
-        !f5_init.is_empty(),
-        "client should emit flight 5 after server flight"
-    );
-    for p in &f5_init {
-        server.handle_packet(p).expect("server recv f5");
-    }
-
-    // Server should send FLIGHT 6 (CCS, Finished) exactly once initially.
-    server.handle_timeout(now).expect("server arm flight 6");
-    let f6_init = collect_packets(&mut server);
-    assert!(!f6_init.is_empty(), "server should emit initial flight 6");
-    let f6_init_hdrs = collect_headers(&f6_init);
-    assert!(
-        f6_init_hdrs.iter().any(|h| h.ctype == 22 && h.epoch == 1),
-        "server flight 6 should include epoch 1 Finished"
-    );
-
-    // IMPORTANT PART: Trigger a client resend of flight 5 (duplicate Finished)
-    // and deliver to the server. The server has its timer stopped after flight 6,
-    // so this resend must be caused by duplicate-handshake processing.
-    trigger_timeout(&mut client, &mut now);
-    let f5_resend = collect_packets(&mut client);
-    assert!(
-        !f5_resend.is_empty(),
-        "client should resend flight 5 on its timer"
-    );
-    for p in &f5_resend {
-        server.handle_packet(p).expect("server recv f5 resend");
-    }
-
-    // The server should resend its final flight in response to the duplicate.
-    let f6_resend = collect_packets(&mut server);
-    assert!(
-        !f6_resend.is_empty(),
+        !result.f6_resend.is_empty(),
         "server should resend flight 6 upon receiving duplicate Finished"
     );
-    let f6_resend_hdrs = collect_headers(&f6_resend);
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_late_retransmitted_ccs_does_not_pin_receive_queue() {
+    //! After the handshake, a peer can still retransmit its final flight. The
+    //! epoch-0 ChangeCipherSpec in that flight must be ignored; otherwise it
+    //! remains unhandled and prevents handled app-data records behind it from
+    //! being purged.
+
+    const RX_QUEUE_LIMIT: usize = 8;
+
+    let FinalFlightResend {
+        mut client,
+        mut server,
+        f6_init,
+        f6_resend,
+        stale_epoch0_handshake: _,
+    } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    deliver_packets(&f6_init, &mut client);
+    let client_connected = drain_outputs(&mut client).connected;
     assert!(
-        f6_resend_hdrs.iter().any(|h| h.ctype == 22 && h.epoch == 1),
-        "resend flight 6 should include epoch 1 Finished"
+        client_connected,
+        "client should connect after initial flight 6"
     );
 
-    // Epochs must match and sequence numbers must increase on resend.
-    assert_epochs_and_seq_increased(&f6_init_hdrs, &f6_resend_hdrs);
+    for packet in &f6_resend {
+        client
+            .handle_packet(packet)
+            .expect("late final-flight resend should be tolerated");
+    }
+
+    for i in 0..=RX_QUEUE_LIMIT {
+        let msg = format!("post-ccs app data {i}");
+        server
+            .send_application_data(msg.as_bytes())
+            .expect("send app data");
+
+        let server_out = drain_outputs(&mut server);
+        assert!(
+            !server_out.packets.is_empty(),
+            "server should emit app-data packets"
+        );
+
+        for packet in &server_out.packets {
+            client
+                .handle_packet(packet)
+                .expect("late CCS must not make receive queue fill");
+        }
+
+        let client_out = drain_outputs(&mut client);
+        assert!(
+            client_out
+                .app_data
+                .iter()
+                .any(|received| received == msg.as_bytes()),
+            "client should receive app data after late CCS"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_late_epoch0_handshake_does_not_pin_receive_queue() {
+    //! After peer encryption is enabled, plaintext epoch-0 handshake records are
+    //! unauthenticated and no longer actionable. They must be ignored for the
+    //! same queue-pinning reason as late CCS records.
+
+    const RX_QUEUE_LIMIT: usize = 8;
+
+    let FinalFlightResend {
+        mut client,
+        mut server,
+        f6_init,
+        f6_resend: _,
+        stale_epoch0_handshake: _,
+    } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    deliver_packets(&f6_init, &mut client);
+    let client_connected = drain_outputs(&mut client).connected;
+    assert!(
+        client_connected,
+        "client should connect after initial flight 6"
+    );
+
+    client
+        .handle_packet(&malformed_epoch0_handshake_packet(0x7fff))
+        .expect("late epoch-0 handshake should be tolerated");
+
+    for i in 0..=RX_QUEUE_LIMIT {
+        let msg = format!("post-handshake app data {i}");
+        server
+            .send_application_data(msg.as_bytes())
+            .expect("send app data");
+
+        let server_out = drain_outputs(&mut server);
+        assert!(
+            !server_out.packets.is_empty(),
+            "server should emit app-data packets"
+        );
+
+        for packet in &server_out.packets {
+            client
+                .handle_packet(packet)
+                .expect("late epoch-0 handshake must not make receive queue fill");
+        }
+
+        let client_out = drain_outputs(&mut client);
+        assert!(
+            client_out
+                .app_data
+                .iter()
+                .any(|received| received == msg.as_bytes()),
+            "client should receive app data after late epoch-0 handshake"
+        );
+    }
+}
+
+fn malformed_epoch0_handshake_packet(sequence_number: u64) -> Vec<u8> {
+    let sequence_bytes = sequence_number.to_be_bytes();
+    let mut packet = Vec::with_capacity(14);
+    packet.push(22);
+    packet.extend_from_slice(&[0xfe, 0xfd]);
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    packet.extend_from_slice(&sequence_bytes[2..]);
+    packet.extend_from_slice(&1u16.to_be_bytes());
+    packet.push(0xff);
+    packet
+}
+
+fn append_record(mut packet: Vec<u8>, record: &[u8]) -> Vec<u8> {
+    packet.extend_from_slice(record);
+    packet
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_late_epoch0_handshake_trailing_app_data_does_not_pin_receive_queue() {
+    //! A stale epoch-0 handshake can arrive behind a valid encrypted record in
+    //! the same datagram. The encrypted app data should still be delivered, and
+    //! the stale plaintext handshake must not keep that datagram in the queue.
+
+    const RX_QUEUE_LIMIT: usize = 8;
+
+    let FinalFlightResend {
+        mut client,
+        mut server,
+        f6_init,
+        f6_resend: _,
+        stale_epoch0_handshake,
+    } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    deliver_packets(&f6_init, &mut client);
+    let client_connected = drain_outputs(&mut client).connected;
+    assert!(
+        client_connected,
+        "client should connect after initial flight 6"
+    );
+
+    for i in 0..=RX_QUEUE_LIMIT {
+        let msg = format!("post-handshake app data {i}");
+        server
+            .send_application_data(msg.as_bytes())
+            .expect("send app data");
+
+        let server_out = drain_outputs(&mut server);
+        assert!(
+            !server_out.packets.is_empty(),
+            "server should emit app-data packets"
+        );
+
+        for packet in server_out.packets {
+            let packet = if i == 0 {
+                append_record(packet, &stale_epoch0_handshake)
+            } else {
+                packet
+            };
+            client
+                .handle_packet(&packet)
+                .expect("trailing late epoch-0 handshake must not make receive queue fill");
+        }
+
+        let client_out = drain_outputs(&mut client);
+        assert!(
+            client_out
+                .app_data
+                .iter()
+                .any(|received| received == msg.as_bytes()),
+            "client should receive app data after trailing late epoch-0 handshake"
+        );
+    }
 }
 
 #[test]
