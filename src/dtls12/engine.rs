@@ -17,6 +17,12 @@ use crate::{Config, Error, InternalError, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
+enum PollBuffer<'a> {
+    Ready(&'a [u8]),
+    Empty(&'a mut [u8]),
+    TooSmall { needed: usize },
+}
+
 // Using debug_ignore_primary since CryptoContext doesn't implement Debug
 pub struct Engine {
     config: Arc<Config>,
@@ -416,12 +422,15 @@ impl Engine {
 
         // First check if we have any decrypted app data.
         let buf = match self.poll_app_data(buf) {
-            Ok(p) => return Output::ApplicationData(p),
-            Err(b) => b,
+            PollBuffer::Ready(p) => return Output::ApplicationData(p),
+            PollBuffer::Empty(b) => b,
+            PollBuffer::TooSmall { needed } => return Output::BufferTooSmall { needed },
         };
 
-        if let Ok(p) = self.poll_packet_tx(buf) {
-            return Output::Packet(p);
+        match self.poll_packet_tx(buf) {
+            PollBuffer::Ready(p) => return Output::Packet(p),
+            PollBuffer::Empty(_) => {}
+            PollBuffer::TooSmall { needed } => return Output::BufferTooSmall { needed },
         }
 
         if self.close_notify_received && !self.close_notify_reported {
@@ -434,9 +443,9 @@ impl Engine {
         Output::Timeout(next_timeout)
     }
 
-    fn poll_app_data<'a>(&mut self, buf: &'a mut [u8]) -> Result<&'a [u8], &'a mut [u8]> {
+    fn poll_app_data<'a>(&mut self, buf: &'a mut [u8]) -> PollBuffer<'a> {
         if !self.release_app_data {
-            return Err(buf);
+            return PollBuffer::Empty(buf);
         }
 
         let mut unhandled = self
@@ -447,24 +456,21 @@ impl Engine {
             .skip_while(|r| r.is_handled());
 
         let Some(next) = unhandled.next() else {
-            return Err(buf);
+            return PollBuffer::Empty(buf);
         };
 
         let record_buffer = next.buffer();
         let fragment = next.record().fragment(record_buffer);
         let len = fragment.len();
 
-        assert!(
-            len <= buf.len(),
-            "Output buffer too small for application data {} > {}",
-            len,
-            buf.len()
-        );
+        if len > buf.len() {
+            return PollBuffer::TooSmall { needed: len };
+        }
 
         buf[..len].copy_from_slice(fragment);
         next.set_handled();
 
-        Ok(&buf[..len])
+        PollBuffer::Ready(&buf[..len])
     }
 
     fn purge_handled_queue_rx(&mut self) {
@@ -482,22 +488,20 @@ impl Engine {
         }
     }
 
-    fn poll_packet_tx<'a>(&mut self, buf: &'a mut [u8]) -> Result<&'a [u8], &'a mut [u8]> {
-        let Some(p) = self.queue_tx.pop_front() else {
-            return Err(buf);
+    fn poll_packet_tx<'a>(&mut self, buf: &'a mut [u8]) -> PollBuffer<'a> {
+        let Some(p) = self.queue_tx.front() else {
+            return PollBuffer::Empty(buf);
         };
 
-        assert!(
-            p.len() <= buf.len(),
-            "Output buffer too small for packet {} > {}",
-            p.len(),
-            buf.len()
-        );
-
         let len = p.len();
-        buf[..len].copy_from_slice(&p);
+        if len > buf.len() {
+            return PollBuffer::TooSmall { needed: len };
+        }
 
-        Ok(&buf[..len])
+        buf[..len].copy_from_slice(p);
+        self.queue_tx.pop_front();
+
+        PollBuffer::Ready(&buf[..len])
     }
 
     fn poll_timeout(&self, now: Instant) -> Instant {

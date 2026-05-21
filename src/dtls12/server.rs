@@ -201,7 +201,13 @@ impl Server {
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
         if let Some(event) = self.local_events.pop_front() {
-            return event.into_output(buf, &self.client_certificates);
+            return match event.into_output(buf, &self.client_certificates) {
+                Ok(output) => output,
+                Err((event, needed)) => {
+                    self.local_events.push_front(event);
+                    Output::BufferTooSmall { needed }
+                }
+            };
         }
         self.engine.poll_output(buf, self.last_now)
     }

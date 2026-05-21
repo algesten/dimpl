@@ -112,6 +112,7 @@ pub struct DrainedOutputs {
     pub packets: Vec<Vec<u8>>,
     pub connected: bool,
     pub peer_cert: Option<Vec<u8>>,
+    pub peer_cert_deferred_for_small_buffer: bool,
     pub keying_material: Option<(Vec<u8>, SrtpProfile)>,
     pub app_data: Vec<Vec<u8>>,
     pub timeout: Option<Instant>,
@@ -120,18 +121,55 @@ pub struct DrainedOutputs {
 
 /// Poll until `Timeout`, collecting everything.
 pub fn drain_outputs(endpoint: &mut Dtls) -> DrainedOutputs {
+    drain_outputs_with_initial_buffer(endpoint, 2048)
+}
+
+/// Poll until `Timeout`, collecting everything and growing the output buffer
+/// when the engine reports that it is too small.
+pub fn drain_outputs_with_initial_buffer(
+    endpoint: &mut Dtls,
+    initial_len: usize,
+) -> DrainedOutputs {
     let mut result = DrainedOutputs::default();
-    let mut buf = vec![0u8; 2048];
+    let mut buf = vec![0u8; initial_len];
+    let mut pending_too_small = None;
     loop {
         match endpoint.poll_output(&mut buf) {
-            Output::Packet(p) => result.packets.push(p.to_vec()),
-            Output::Connected => result.connected = true,
-            Output::PeerCert(cert) => result.peer_cert = Some(cert.to_vec()),
-            Output::KeyingMaterial(km, profile) => {
-                result.keying_material = Some((km.to_vec(), profile));
+            Output::Packet(p) => {
+                pending_too_small = None;
+                result.packets.push(p.to_vec());
+                buf.resize(initial_len, 0);
             }
-            Output::ApplicationData(data) => result.app_data.push(data.to_vec()),
-            Output::CloseNotify => result.close_notify = true,
+            Output::Connected => {
+                pending_too_small = None;
+                result.connected = true;
+                buf.resize(initial_len, 0);
+            }
+            Output::PeerCert(cert) => {
+                result.peer_cert_deferred_for_small_buffer |= pending_too_small == Some(cert.len());
+                pending_too_small = None;
+                result.peer_cert = Some(cert.to_vec());
+                buf.resize(initial_len, 0);
+            }
+            Output::KeyingMaterial(km, profile) => {
+                pending_too_small = None;
+                result.keying_material = Some((km.to_vec(), profile));
+                buf.resize(initial_len, 0);
+            }
+            Output::ApplicationData(data) => {
+                pending_too_small = None;
+                result.app_data.push(data.to_vec());
+                buf.resize(initial_len, 0);
+            }
+            Output::CloseNotify => {
+                pending_too_small = None;
+                result.close_notify = true;
+                buf.resize(initial_len, 0);
+            }
+            Output::BufferTooSmall { needed } => {
+                pending_too_small = Some(needed);
+                buf.resize(needed, 0);
+            }
             Output::Timeout(t) => {
                 result.timeout = Some(t);
                 break;

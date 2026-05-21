@@ -231,7 +231,13 @@ impl Client {
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
         if let Some(event) = self.local_events.pop_front() {
-            return event.into_output(buf, &self.server_certificates);
+            return match event.into_output(buf, &self.server_certificates) {
+                Ok(output) => output,
+                Err((event, needed)) => {
+                    self.local_events.push_front(event);
+                    Output::BufferTooSmall { needed }
+                }
+            };
         }
         self.engine.poll_output(buf, self.last_now)
     }
@@ -1547,20 +1553,23 @@ fn parse_certificate_request(cr_data: &[u8], base_offset: usize) -> Result<Optio
 // =========================================================================
 
 impl LocalEvent {
-    pub fn into_output<'a>(self, buf: &'a mut [u8], peer_certs: &[Buf]) -> Output<'a> {
+    pub fn into_output<'a>(
+        self,
+        buf: &'a mut [u8],
+        peer_certs: &[Buf],
+    ) -> Result<Output<'a>, (Self, usize)> {
         match self {
             LocalEvent::PeerCert => {
                 let l = peer_certs[0].len();
-                assert!(
-                    l <= buf.len(),
-                    "Output buffer too small for peer certificate"
-                );
+                if l > buf.len() {
+                    return Err((LocalEvent::PeerCert, l));
+                }
                 buf[..l].copy_from_slice(&peer_certs[0]);
-                Output::PeerCert(&buf[..l])
+                Ok(Output::PeerCert(&buf[..l]))
             }
-            LocalEvent::Connected => Output::Connected,
+            LocalEvent::Connected => Ok(Output::Connected),
             LocalEvent::KeyingMaterial(m, profile) => {
-                Output::KeyingMaterial(KeyingMaterial::new(&m), profile)
+                Ok(Output::KeyingMaterial(KeyingMaterial::new(&m), profile))
             }
         }
     }
@@ -1696,5 +1705,32 @@ mod tests {
                 }
             ))
         ));
+    }
+
+    #[test]
+    fn peer_cert_output_is_deferred_when_buffer_is_too_small() {
+        let mut cert = Buf::new();
+        cert.extend_from_slice(&[1, 2, 3, 4]);
+        let certs = [cert];
+
+        let mut out = [0u8; 2];
+        let result = LocalEvent::PeerCert.into_output(&mut out, &certs);
+
+        assert!(matches!(result, Err((LocalEvent::PeerCert, 4))));
+    }
+
+    #[test]
+    fn peer_cert_output_is_copied_when_buffer_fits() {
+        let mut cert = Buf::new();
+        cert.extend_from_slice(&[1, 2, 3, 4]);
+        let certs = [cert];
+
+        let mut out = [0u8; 4];
+        let result = LocalEvent::PeerCert.into_output(&mut out, &certs);
+
+        match result {
+            Ok(Output::PeerCert(bytes)) => assert_eq!(bytes, &[1, 2, 3, 4]),
+            other => panic!("expected PeerCert output, got: {other:?}"),
+        }
     }
 }

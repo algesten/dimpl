@@ -544,12 +544,13 @@ fn auto_client_poll_output_undersized_buffer() {
     // Poll with a buffer that is too small for the wire packet.
     // Before the fix this would panic with an index-out-of-bounds.
     let mut tiny_buf = [0u8; 4];
+    let tiny_len = tiny_buf.len();
     let output = client.poll_output(&mut tiny_buf);
 
-    // Should return Timeout (packet deferred), not a Packet.
+    // Should return BufferTooSmall (packet deferred), not a Packet or Timeout.
     assert!(
-        matches!(output, Output::Timeout(_)),
-        "undersized buffer should yield Timeout, got: {output:?}"
+        matches!(output, Output::BufferTooSmall { needed } if needed > tiny_len),
+        "undersized buffer should yield BufferTooSmall, got: {output:?}"
     );
 
     // Now poll with a large buffer — the deferred packet should come through.

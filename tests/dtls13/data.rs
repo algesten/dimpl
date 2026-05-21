@@ -97,6 +97,46 @@ fn dtls13_application_data_exchange() {
 
 #[test]
 #[cfg(feature = "rcgen")]
+fn dtls13_poll_output_small_buffers_defer_packet_and_app_data() {
+    let _ = env_logger::try_init();
+
+    let now = Instant::now();
+    let (mut client, mut server, _) = setup_connected_13_pair(now);
+
+    client.send_application_data(b"hello").expect("client send");
+
+    let mut tiny_packet_buf = [0u8; 4];
+    let tiny_packet_len = tiny_packet_buf.len();
+    let output = client.poll_output(&mut tiny_packet_buf);
+    assert!(
+        matches!(output, Output::BufferTooSmall { needed } if needed > tiny_packet_len),
+        "undersized packet buffer should yield BufferTooSmall, got: {output:?}"
+    );
+
+    let mut packet_buf = vec![0u8; 2048];
+    let packet = match client.poll_output(&mut packet_buf) {
+        Output::Packet(packet) => packet.to_vec(),
+        output => panic!("large buffer should yield Packet, got: {output:?}"),
+    };
+    server.handle_packet(&packet).expect("server handle packet");
+
+    let mut tiny_app_buf = [0u8; 2];
+    let expected_app_len = b"hello".len();
+    let output = server.poll_output(&mut tiny_app_buf);
+    assert!(
+        matches!(output, Output::BufferTooSmall { needed } if needed == expected_app_len),
+        "undersized app-data buffer should yield BufferTooSmall, got: {output:?}"
+    );
+
+    let mut app_buf = [0u8; 64];
+    match server.poll_output(&mut app_buf) {
+        Output::ApplicationData(data) => assert_eq!(data, b"hello"),
+        output => panic!("large buffer should yield ApplicationData, got: {output:?}"),
+    }
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
 fn dtls13_multiple_application_data_messages() {
     use dimpl::certificate::generate_self_signed_certificate;
 
