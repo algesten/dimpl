@@ -174,12 +174,16 @@ impl Record {
             return Ok(None);
         }
 
+        let explicit_nonce_len = decrypt.explicit_nonce_len();
+        if (dtls.length as usize) < decrypt.aead_overhead() {
+            return Ok(None);
+        }
+
         // Get a reference to the buffer
         let (aad, nonce) = decrypt.decryption_aad_and_nonce(dtls, &record.buffer);
 
         // Extract the buffer for decryption
         let mut buffer = record.buffer;
-        let explicit_nonce_len = decrypt.explicit_nonce_len();
 
         // Local shorthand for where the encrypted ciphertext starts
         let ciph = DTLSRecord::HEADER_LEN + explicit_nonce_len;
@@ -292,6 +296,7 @@ pub trait RecordHandler {
     fn replay_update(&mut self, seq: Sequence);
     fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord, buf: &[u8]) -> (Aad, Nonce);
     fn explicit_nonce_len(&self) -> usize;
+    fn aead_overhead(&self) -> usize;
     fn decrypt_data(
         &mut self,
         ciphertext: &mut TmpBuf,
@@ -408,6 +413,10 @@ mod tests {
 
         fn explicit_nonce_len(&self) -> usize {
             panic!("explicit_nonce_len should not be called for plaintext tests");
+        }
+
+        fn aead_overhead(&self) -> usize {
+            panic!("aead_overhead should not be called for plaintext tests");
         }
 
         fn decrypt_data(

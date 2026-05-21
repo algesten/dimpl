@@ -1212,6 +1212,10 @@ impl RecordHandler for Engine {
         self.explicit_nonce_len
     }
 
+    fn aead_overhead(&self) -> usize {
+        Engine::aead_overhead(self)
+    }
+
     fn decrypt_data(
         &mut self,
         ciphertext: &mut TmpBuf,
