@@ -123,7 +123,18 @@ impl ServerHello {
                     current_offset += parsed_len;
                     // Only keep supported extension types
                     if ext.extension_type.is_supported() {
-                        extensions_vec.push(ext);
+                        if extensions_vec
+                            .iter()
+                            .any(|existing| existing.extension_type == ext.extension_type)
+                        {
+                            return Err(Err::Failure(Error::new(
+                                current_input,
+                                ErrorKind::LengthValue,
+                            )));
+                        }
+                        extensions_vec.try_push(ext).map_err(|_| {
+                            Err::Failure(Error::new(current_input, ErrorKind::LengthValue))
+                        })?;
                     }
                     current_input = new_rest;
                 }
@@ -218,5 +229,28 @@ mod test {
 
         let result = ServerHello::parse(&message, 0);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn duplicate_supported_extensions_are_rejected() {
+        for count in [2, 9] {
+            let mut message = MESSAGE[..39].to_vec();
+            message.extend_from_slice(&(count as u16 * 4).to_be_bytes());
+            for _ in 0..count {
+                message
+                    .extend_from_slice(&ExtensionType::ExtendedMasterSecret.as_u16().to_be_bytes());
+                message.extend_from_slice(&0u16.to_be_bytes());
+            }
+
+            let result = ServerHello::parse(&message, 0);
+            assert!(
+                matches!(
+                    result,
+                    Err(nom::Err::Failure(error))
+                        if error.code == nom::error::ErrorKind::LengthValue
+                ),
+                "duplicate supported extensions should fail with LengthValue"
+            );
+        }
     }
 }

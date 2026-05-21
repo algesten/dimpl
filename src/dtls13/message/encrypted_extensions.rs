@@ -1,8 +1,10 @@
 use super::Extension;
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
+use nom::Err;
 use nom::IResult;
 use nom::bytes::complete::take;
+use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u16;
 
 /// EncryptedExtensions message (RFC 8446 Section 4.3.1).
@@ -30,7 +32,15 @@ impl EncryptedExtensions {
             current_offset += parsed_len;
 
             if ext.extension_type.is_supported() {
-                extensions.push(ext);
+                if extensions
+                    .iter()
+                    .any(|existing: &Extension| existing.extension_type == ext.extension_type)
+                {
+                    return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
+                }
+                extensions
+                    .try_push(ext)
+                    .map_err(|_| Err::Failure(Error::new(rest, ErrorKind::LengthValue)))?;
             }
             rest = new_rest;
         }
@@ -55,6 +65,7 @@ impl EncryptedExtensions {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ExtensionType;
     use super::*;
     use crate::buffer::Buf;
 
@@ -73,5 +84,46 @@ mod tests {
         let mut serialized = Buf::new();
         parsed.serialize(MESSAGE, &mut serialized);
         assert_eq!(&*serialized, MESSAGE);
+    }
+
+    #[test]
+    fn duplicate_supported_extensions_are_rejected() {
+        let mut message = Vec::new();
+        let count = 2;
+        message.extend_from_slice(&(count as u16 * 4).to_be_bytes());
+        for _ in 0..count {
+            message.extend_from_slice(&ExtensionType::Cookie.as_u16().to_be_bytes());
+            message.extend_from_slice(&0u16.to_be_bytes());
+        }
+
+        let result = EncryptedExtensions::parse(&message, 0);
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "duplicate supported extensions should fail with LengthValue"
+        );
+    }
+
+    #[test]
+    fn too_many_distinct_supported_extensions_are_rejected() {
+        let mut message = Vec::new();
+        message.extend_from_slice(&(ExtensionType::supported().len() as u16 * 4).to_be_bytes());
+        for extension_type in ExtensionType::supported() {
+            message.extend_from_slice(&extension_type.as_u16().to_be_bytes());
+            message.extend_from_slice(&0u16.to_be_bytes());
+        }
+
+        let result = EncryptedExtensions::parse(&message, 0);
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "too many distinct supported extensions should fail with LengthValue"
+        );
     }
 }
