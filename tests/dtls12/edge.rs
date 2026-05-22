@@ -52,7 +52,7 @@ fn dtls12_config_for_suite(suite: Dtls12CipherSuite) -> Arc<Config> {
     )
 }
 
-fn dtls12_aead_overhead(suite: Dtls12CipherSuite) -> usize {
+fn dtls12_min_protected_fragment_len(suite: Dtls12CipherSuite) -> usize {
     match suite {
         Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
         | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 24,
@@ -297,7 +297,7 @@ fn dtls12_short_encrypted_records_do_not_panic() {
 
         now = complete_dtls12_handshake(&mut client, &mut server, now);
 
-        for len in 0..dtls12_aead_overhead(suite) {
+        for len in 0..dtls12_min_protected_fragment_len(suite) {
             let short = dtls12_epoch1_record(0x100 + len as u64, len);
             client
                 .handle_packet(&short)

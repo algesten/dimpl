@@ -1,6 +1,6 @@
 # Unreleased
 
-  * Discard short DTLS 1.2 encrypted records #112
+  * Discard short DTLS 1.2 and 1.3 encrypted records #112
 
 # 0.6.1
 

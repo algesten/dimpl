@@ -175,7 +175,7 @@ impl Record {
         }
 
         let explicit_nonce_len = decrypt.explicit_nonce_len();
-        if (dtls.length as usize) < decrypt.aead_overhead() {
+        if (dtls.length as usize) < decrypt.min_protected_fragment_len() {
             return Ok(None);
         }
 
@@ -296,7 +296,7 @@ pub trait RecordHandler {
     fn replay_update(&mut self, seq: Sequence);
     fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord, buf: &[u8]) -> (Aad, Nonce);
     fn explicit_nonce_len(&self) -> usize;
-    fn aead_overhead(&self) -> usize;
+    fn min_protected_fragment_len(&self) -> usize;
     fn decrypt_data(
         &mut self,
         ciphertext: &mut TmpBuf,
@@ -415,8 +415,8 @@ mod tests {
             panic!("explicit_nonce_len should not be called for plaintext tests");
         }
 
-        fn aead_overhead(&self) -> usize {
-            panic!("aead_overhead should not be called for plaintext tests");
+        fn min_protected_fragment_len(&self) -> usize {
+            panic!("min_protected_fragment_len should not be called for plaintext tests");
         }
 
         fn decrypt_data(

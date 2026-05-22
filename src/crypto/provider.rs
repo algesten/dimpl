@@ -254,6 +254,16 @@ pub trait SupportedDtls12CipherSuite: CryptoSafe {
     /// AEAD authentication tag length in bytes.
     fn tag_len(&self) -> usize;
 
+    /// Minimum length, in bytes, of a protected record's encrypted fragment.
+    ///
+    /// For AEAD suites this equals explicit nonce + authentication tag; a CBC
+    /// suite would override this to `IV + MAC + 1` (one padding byte). Records
+    /// shorter than this cannot be valid regardless of cipher mode and are
+    /// rejected at the record boundary.
+    fn min_protected_fragment_len(&self) -> usize {
+        self.explicit_nonce_len() + self.tag_len()
+    }
+
     /// Create a cipher instance with the given key.
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String>;
 }
@@ -426,6 +436,14 @@ pub trait SupportedDtls13CipherSuite: CryptoSafe {
 
     /// AEAD tag length in bytes.
     fn tag_len(&self) -> usize;
+
+    /// Minimum length, in bytes, of a protected record's encrypted fragment.
+    /// DTLS 1.3 has no explicit nonce in the record, so this equals
+    /// [`Self::tag_len`]. Records shorter than this cannot hold a valid
+    /// ciphertext + tag and are rejected at the record boundary.
+    fn min_protected_fragment_len(&self) -> usize {
+        self.tag_len()
+    }
 
     /// Create a cipher instance with the given key.
     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String>;

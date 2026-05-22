@@ -1142,7 +1142,9 @@ impl Engine {
         } else {
             0
         };
-        let aead_overhead = if epoch >= 2 { tag_len + 1 } else { 0 }; // +1 for inner content type
+        // Per-record protection overhead on the wire: tag + 1 byte inner
+        // content type (the DTLS 1.3 record protection layer's expansion).
+        let protection_overhead = if epoch >= 2 { tag_len + 1 } else { 0 };
 
         while offset < total_len || (total_len == 0 && offset == 0) {
             let already_used_in_current = self.queue_tx.back().map(|b| b.len()).unwrap_or(0);
@@ -1154,7 +1156,7 @@ impl Engine {
                 5 // unified header: flags(1) + seq(2) + length(2)
             };
 
-            let fixed_overhead = record_header_len + handshake_header_len + aead_overhead;
+            let fixed_overhead = record_header_len + handshake_header_len + protection_overhead;
 
             let available_for_body = if available_in_current > fixed_overhead {
                 available_in_current - fixed_overhead
@@ -2387,6 +2389,10 @@ impl RecordHandler for Engine {
                 }
             }
         }
+    }
+
+    fn min_protected_fragment_len(&self) -> usize {
+        self.suite_provider().min_protected_fragment_len()
     }
 
     fn decrypt_record(

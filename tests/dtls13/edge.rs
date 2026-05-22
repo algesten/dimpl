@@ -103,20 +103,21 @@ fn dtls13_discards_too_short_ciphertext_record() {
 
     now = complete_dtls13_handshake(&mut client, &mut server, now);
 
-    // Craft a DTLS 1.3 ciphertext record with length < 16 bytes.
+    // Every length in [0, AEAD overhead) must be rejected at the record boundary.
+    // For the default DTLS 1.3 suites the AEAD overhead is the tag length (16).
     // Header: fixed bits 001, C=0, S=1 (16-bit seq), L=1 (length), epoch_bits=3
     // => 0b0010_1111 = 0x2F
-    let bogus = vec![
-        0x2F, // unified header byte
-        0x00, 0x01, // encrypted sequence bits
-        0x00, 0x01, // length = 1
-        0x00, // 1 byte ciphertext (too short)
-    ];
+    for len in 0..16u16 {
+        let mut bogus = Vec::with_capacity(5 + len as usize);
+        bogus.push(0x2F);
+        bogus.extend_from_slice(&(0x0100 + len).to_be_bytes()); // encrypted seq bits
+        bogus.extend_from_slice(&len.to_be_bytes());
+        bogus.resize(5 + len as usize, 0);
 
-    // Should be silently discarded (no error)
-    client
-        .handle_packet(&bogus)
-        .expect("too-short ciphertext record should be discarded");
+        client
+            .handle_packet(&bogus)
+            .expect("short ciphertext record should be silently discarded");
+    }
 
     // Verify we can still exchange application data.
     client.send_application_data(b"ping").expect("send app");
