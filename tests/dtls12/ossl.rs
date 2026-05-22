@@ -797,14 +797,12 @@ fn dtls12_ossl_server_bidirectional_data() {
                 Output::Connected => {
                     server_connected = true;
                 }
-                Output::KeyingMaterial(_km, _profile) => {
+                Output::KeyingMaterial(_km, _profile) if !server_first_sent => {
                     // Server handshake complete -- send first message
-                    if !server_first_sent {
-                        server
-                            .send_application_data(server_test_data)
-                            .expect("Server failed to send app data");
-                        server_first_sent = true;
-                    }
+                    server
+                        .send_application_data(server_test_data)
+                        .expect("Server failed to send app data");
+                    server_first_sent = true;
                 }
                 Output::ApplicationData(data) => {
                     server_received_data.extend_from_slice(data);
