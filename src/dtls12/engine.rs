@@ -527,19 +527,36 @@ impl Engine {
 
     fn flight_resend(&mut self, reason: &str) -> Result<(), Error> {
         debug!("Resending flight due to {}", reason);
+
+        let replace_pending_handshake_output = !self.release_app_data;
+
+        if replace_pending_handshake_output {
+            self.queue_tx.clear();
+        }
+
         // For lifetime issues, we take the entries out of self
         let records = mem::take(&mut self.flight_saved_records);
 
-        for entry in &records {
-            self.create_record(entry.content_type, entry.epoch, false, |fragment| {
-                fragment.extend_from_slice(&entry.fragment);
-            })?;
+        let mut result = Ok(());
+        for (index, entry) in records.iter().enumerate() {
+            result = self.create_record_inner(
+                entry.content_type,
+                entry.epoch,
+                false,
+                replace_pending_handshake_output && index == 0,
+                |fragment| {
+                    fragment.extend_from_slice(&entry.fragment);
+                },
+            );
+            if result.is_err() {
+                break;
+            }
         }
 
         // Put the entries back into self
         self.flight_saved_records = records;
 
-        Ok(())
+        result
     }
 
     pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
@@ -671,6 +688,20 @@ impl Engine {
     where
         F: FnOnce(&mut Buf),
     {
+        self.create_record_inner(content_type, epoch, save_fragment, false, f)
+    }
+
+    fn create_record_inner<F>(
+        &mut self,
+        content_type: ContentType,
+        epoch: u16,
+        save_fragment: bool,
+        force_new_datagram: bool,
+        f: F,
+    ) -> Result<(), Error>
+    where
+        F: FnOnce(&mut Buf),
+    {
         let maybe_suite =
             if epoch >= 1 {
                 Some(self.cipher_suite().ok_or_else(|| {
@@ -712,7 +743,7 @@ impl Engine {
         let can_append = self
             .queue_tx
             .back()
-            .map(|b| b.len() + record_wire_len <= self.config.mtu())
+            .map(|b| !force_new_datagram && b.len() + record_wire_len <= self.config.mtu())
             .unwrap_or(false);
 
         // If we cannot append, ensure we have space for a new datagram
