@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Reject malformed DTLS signature_algorithms vectors #111
+
 # 0.6.1
 
   * Fix auto-sense server falling back to DTLS 1.2 on non-ClientHello parse errors #106
