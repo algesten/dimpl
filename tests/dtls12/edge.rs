@@ -625,6 +625,150 @@ fn dtls12_mixed_datagram_valid_first_then_bogus() {
 
 #[test]
 #[cfg(feature = "rcgen")]
+fn dtls12_bad_encrypted_prefix_does_not_drop_valid_tail() {
+    let _ = env_logger::try_init();
+    let now = Instant::now();
+    let (mut client, mut server, now) = setup_connected_12_pair(now);
+
+    client
+        .send_application_data(b"bad-prefix-clean-resend")
+        .expect("send first application data");
+    client.handle_timeout(now).expect("client timeout");
+    let first_out = drain_outputs(&mut client);
+    let first_packet = first_out
+        .packets
+        .first()
+        .expect("first application data packet")
+        .clone();
+
+    client
+        .send_application_data(b"valid-tail")
+        .expect("send second application data");
+    client.handle_timeout(now).expect("client timeout");
+    let second_out = drain_outputs(&mut client);
+    let second_packet = second_out
+        .packets
+        .first()
+        .expect("second application data packet")
+        .clone();
+
+    let mut corrupted_first = first_packet.clone();
+    *corrupted_first
+        .last_mut()
+        .expect("encrypted packet has ciphertext") ^= 0x55;
+
+    let mut mixed_datagram = corrupted_first;
+    mixed_datagram.extend_from_slice(&second_packet);
+
+    server
+        .handle_packet(&mixed_datagram)
+        .expect("bad encrypted prefix should be discarded without dropping valid tail");
+    let server_out = drain_outputs(&mut server);
+    assert_eq!(
+        server_out.app_data,
+        vec![b"valid-tail".to_vec()],
+        "valid tail record should be delivered despite bad encrypted prefix"
+    );
+
+    server
+        .handle_packet(&first_packet)
+        .expect("clean first packet should remain replay-acceptable");
+    let server_out = drain_outputs(&mut server);
+    assert_eq!(
+        server_out.app_data,
+        vec![b"bad-prefix-clean-resend".to_vec()]
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_relabelled_encrypted_handshake_failure_is_not_silently_discarded() {
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let config = dtls12_config();
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+
+    client.handle_timeout(now).expect("client timeout start");
+    client.handle_timeout(now).expect("client arm flight 1");
+    let f1 = collect_packets(&mut client);
+    for p in &f1 {
+        server.handle_packet(p).expect("server recv ClientHello");
+    }
+
+    server.handle_timeout(now).expect("server arm flight 2");
+    let f2 = collect_packets(&mut server);
+    for p in &f2 {
+        client
+            .handle_packet(p)
+            .expect("client recv HelloVerifyRequest");
+    }
+
+    client.handle_timeout(now).expect("client arm flight 3");
+    let f3 = collect_packets(&mut client);
+    for p in &f3 {
+        server
+            .handle_packet(p)
+            .expect("server recv ClientHello with cookie");
+    }
+
+    server.handle_timeout(now).expect("server arm flight 4");
+    let f4 = collect_packets(&mut server);
+    for p in &f4 {
+        client.handle_packet(p).expect("client recv server flight");
+    }
+
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client arm flight 5");
+    let mut f5 = collect_packets(&mut client);
+    assert!(!f5.is_empty(), "client should emit flight 5");
+
+    let mut relabelled = false;
+    let mut observed_error = None;
+    for p in &mut f5 {
+        let mut offset = 0;
+        while offset + 13 <= p.len() {
+            let epoch = u16::from_be_bytes([p[offset + 3], p[offset + 4]]);
+            let len = u16::from_be_bytes([p[offset + 11], p[offset + 12]]) as usize;
+            if p[offset] == 22 && epoch >= 1 {
+                p[offset] = 23;
+                relabelled = true;
+                break;
+            }
+            offset += 13 + len;
+        }
+
+        match server.handle_packet(p) {
+            Ok(()) => {}
+            Err(e) => {
+                observed_error = Some(e);
+                break;
+            }
+        }
+    }
+
+    assert!(
+        relabelled,
+        "flight 5 should contain an encrypted Handshake record"
+    );
+    assert!(
+        matches!(
+            observed_error,
+            Some(dimpl::Error::CryptoError(_) | dimpl::Error::SecurityError(_))
+        ),
+        "relabeled encrypted handshake must remain fatal, got {observed_error:?}"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
 fn dtls12_app_data_after_close_notify_is_ignored() {
     //! Simulate UDP reordering: the client sends app data, then close_notify,
     //! but the close_notify datagram arrives at the server first. The app data

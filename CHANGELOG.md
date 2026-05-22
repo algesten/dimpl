@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Discard bad protected DTLS 1.2 records after handshake #115
   * Reject oversized DTLS certificate lists #113
   * Reject duplicate supported DTLS extensions #114
   * Reject malformed DTLS signature_algorithms vectors #111

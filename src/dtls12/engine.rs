@@ -1300,4 +1300,8 @@ impl RecordHandler for Engine {
     ) -> Result<(), Error> {
         Engine::decrypt_data(self, ciphertext, aad, nonce)
     }
+
+    fn can_discard_bad_protected_record(&self) -> bool {
+        self.release_app_data
+    }
 }
