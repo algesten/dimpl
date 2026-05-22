@@ -7,7 +7,7 @@ use nom::number::complete::{be_u8, be_u16};
 use nom::{Err, IResult};
 
 use crate::buffer::Buf;
-use crate::util::many1;
+use crate::util::{many0, many1};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ClientHello {
@@ -41,15 +41,36 @@ impl ClientHello {
     }
 
     pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], ClientHello> {
+        Self::parse_with_options(input, base_offset, false)
+    }
+
+    pub(crate) fn parse_allow_unknown_suites(
+        input: &[u8],
+        base_offset: usize,
+    ) -> IResult<&[u8], ClientHello> {
+        Self::parse_with_options(input, base_offset, true)
+    }
+
+    fn parse_with_options(
+        input: &[u8],
+        base_offset: usize,
+        allow_unknown_suites: bool,
+    ) -> IResult<&[u8], ClientHello> {
         let original_input = input;
         let (input, legacy_version) = ProtocolVersion::parse(input)?;
         let (input, random) = Random::parse(input)?;
         let (input, legacy_session_id) = SessionId::parse(input)?;
         let (input, legacy_cookie) = Cookie::parse(input)?;
         let (input, cipher_suites_len) = be_u16(input)?;
+        if cipher_suites_len == 0 || cipher_suites_len % 2 != 0 {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
         let (input, input_cipher) = take(cipher_suites_len)(input)?;
-        let (rest, cipher_suites) =
-            many1(Dtls13CipherSuite::parse, Dtls13CipherSuite::is_supported)(input_cipher)?;
+        let (rest, cipher_suites) = if allow_unknown_suites {
+            many0(Dtls13CipherSuite::parse, Dtls13CipherSuite::is_supported)(input_cipher)?
+        } else {
+            many1(Dtls13CipherSuite::parse, Dtls13CipherSuite::is_supported)(input_cipher)?
+        };
         if !rest.is_empty() {
             return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
         }
@@ -213,6 +234,50 @@ mod tests {
         assert_eq!(parsed, client_hello);
 
         assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn dtls12_only_cipher_suites_parse_for_auto_detection() {
+        let mut message = MESSAGE.to_vec();
+        // DTLS 1.2 ECDHE_ECDSA AES-GCM suites are intentionally unknown to
+        // the DTLS 1.3 suite filter, but the ClientHello is structurally valid.
+        message[40..44].copy_from_slice(&[0xC0, 0x2B, 0xC0, 0x2C]);
+
+        let (rest, parsed) = ClientHello::parse_allow_unknown_suites(&message, 0).unwrap();
+
+        assert!(rest.is_empty());
+        assert!(parsed.cipher_suites.is_empty());
+    }
+
+    #[test]
+    fn dtls12_only_cipher_suites_are_rejected_by_normal_parse() {
+        let mut message = MESSAGE.to_vec();
+        message[40..44].copy_from_slice(&[0xC0, 0x2B, 0xC0, 0x2C]);
+
+        assert!(ClientHello::parse(&message, 0).is_err());
+    }
+
+    #[test]
+    fn empty_cipher_suites_is_malformed_in_both_modes() {
+        let mut message = Vec::new();
+        message.extend_from_slice(&MESSAGE[..38]);
+        message.extend_from_slice(&[0x00, 0x00]);
+        message.extend_from_slice(&MESSAGE[44..]);
+
+        assert!(ClientHello::parse(&message, 0).is_err());
+        assert!(ClientHello::parse_allow_unknown_suites(&message, 0).is_err());
+    }
+
+    #[test]
+    fn odd_cipher_suites_is_malformed_in_both_modes() {
+        let mut message = Vec::new();
+        message.extend_from_slice(&MESSAGE[..38]);
+        message.extend_from_slice(&[0x00, 0x03]);
+        message.extend_from_slice(&[0x13, 0x01, 0x13]);
+        message.extend_from_slice(&MESSAGE[44..]);
+
+        assert!(ClientHello::parse(&message, 0).is_err());
+        assert!(ClientHello::parse_allow_unknown_suites(&message, 0).is_err());
     }
 
     #[test]
