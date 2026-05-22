@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "rcgen")]
 use dimpl::certificate::generate_self_signed_certificate;
-use dimpl::{Dtls, Output};
+use dimpl::crypto::Dtls12CipherSuite;
+use dimpl::{Config, Dtls, Output};
 
 use crate::common::*;
 
@@ -18,6 +19,47 @@ fn dtls12_alert_record(seq: u64, level: u8, description: u8) -> Vec<u8> {
     out.extend_from_slice(&2u16.to_be_bytes()); // alert payload length
     out.extend_from_slice(&[level, description]);
     out
+}
+
+fn dtls12_epoch1_record(seq: u64, len: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(13 + len);
+    out.push(23); // ApplicationData
+    out.extend_from_slice(&[0xFE, 0xFD]); // DTLS 1.2
+    out.extend_from_slice(&1u16.to_be_bytes()); // epoch 1
+    out.extend_from_slice(&seq.to_be_bytes()[2..]); // u48 sequence number
+    out.extend_from_slice(&(len as u16).to_be_bytes());
+    out.resize(13 + len, 0);
+    out
+}
+
+fn dtls12_config_for_suite(suite: Dtls12CipherSuite) -> Arc<Config> {
+    let mut provider = Config::default().crypto_provider().clone();
+    let selected = provider
+        .cipher_suites
+        .iter()
+        .copied()
+        .find(|cs| cs.suite() == suite)
+        .unwrap_or_else(|| panic!("suite {:?} not found in provider", suite));
+
+    let suites = Box::leak(Box::new([selected]));
+    provider.cipher_suites = suites;
+
+    Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider)
+            .build()
+            .expect("build config for single suite"),
+    )
+}
+
+fn dtls12_min_protected_fragment_len(suite: Dtls12CipherSuite) -> usize {
+    match suite {
+        Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
+        | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 24,
+        Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256 => 16,
+        Dtls12CipherSuite::PSK_AES128_CCM_8 => 16,
+        Dtls12CipherSuite::Unknown(_) => panic!("unknown cipher suite"),
+    }
 }
 
 #[test]
@@ -230,6 +272,55 @@ fn dtls12_discards_wrong_epoch_record() {
         server_out.app_data.iter().any(|d| d.as_slice() == b"ping"),
         "Server should receive application data after wrong-epoch bogus packet"
     );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_short_encrypted_records_do_not_panic() {
+    let _ = env_logger::try_init();
+
+    for suite in [
+        Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
+        Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256,
+    ] {
+        let client_cert = generate_self_signed_certificate().expect("gen client cert");
+        let server_cert = generate_self_signed_certificate().expect("gen server cert");
+        let config = dtls12_config_for_suite(suite);
+
+        let mut now = Instant::now();
+
+        let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+        client.set_active(true);
+
+        let mut server = Dtls::new_12(config, server_cert, now);
+        server.set_active(false);
+
+        now = complete_dtls12_handshake(&mut client, &mut server, now);
+
+        for len in 0..dtls12_min_protected_fragment_len(suite) {
+            let short = dtls12_epoch1_record(0x100 + len as u64, len);
+            client
+                .handle_packet(&short)
+                .expect("short encrypted record should be silently discarded");
+        }
+
+        server
+            .send_application_data(b"still alive")
+            .expect("server send app data");
+        server.handle_timeout(now).expect("server timeout");
+        let server_out = drain_outputs(&mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        client.handle_timeout(now).expect("client timeout");
+        let client_out = drain_outputs(&mut client);
+        assert!(
+            client_out
+                .app_data
+                .iter()
+                .any(|d| d.as_slice() == b"still alive"),
+            "client should receive application data after short encrypted {suite:?} records"
+        );
+    }
 }
 
 #[test]

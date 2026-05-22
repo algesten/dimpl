@@ -251,6 +251,14 @@ impl Record {
         // Save the raw header bytes for AAD before mutating the buffer.
         // Max unified header without CID: flags(1) + seq(2) + length(2) = 5 bytes.
         let header_end = record.record().fragment_range.start;
+
+        // Reject protected records whose encrypted fragment is shorter than
+        // the per-suite minimum — they cannot hold a valid ciphertext + tag,
+        // so decryption would necessarily fail. Catching it here keeps the
+        // cipher impls' bounds-checking from being the only line of defence.
+        if record.buffer.len() - header_end < decrypt.min_protected_fragment_len() {
+            return Ok(None);
+        }
         let mut header_buf = [0u8; 5];
         header_buf[..header_end].copy_from_slice(&record.buffer[..header_end]);
 
@@ -402,6 +410,12 @@ pub trait RecordHandler {
     fn resolve_sequence(&self, epoch: u16, seq_bits: u64, s_flag: bool) -> u64;
     fn replay_check(&self, seq: Sequence) -> bool;
     fn replay_update(&mut self, seq: Sequence);
+
+    /// Minimum length of a protected record's encrypted fragment for the
+    /// negotiated suite (tag length in DTLS 1.3). Used to reject records that
+    /// cannot possibly contain a valid ciphertext + tag.
+    fn min_protected_fragment_len(&self) -> usize;
+
     fn decrypt_record(
         &mut self,
         header: &[u8],
@@ -552,6 +566,12 @@ mod tests {
 
         fn replay_update(&mut self, _seq: Sequence) {
             panic!("replay_update should not be called when peer encryption is disabled");
+        }
+
+        fn min_protected_fragment_len(&self) -> usize {
+            panic!(
+                "min_protected_fragment_len should not be called when peer encryption is disabled"
+            );
         }
 
         fn decrypt_record(

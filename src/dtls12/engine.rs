@@ -45,11 +45,16 @@ pub struct Engine {
     /// The cipher suite in use. Set by ServerHello.
     cipher_suite: Option<Dtls12CipherSuite>,
 
-    /// Per-record explicit nonce length (from provider). 0 for ChaCha20, 8 for AES-GCM.
+    /// Per-record explicit nonce length, cached from the provider suite at
+    /// `set_cipher_suite` time. 0 for ChaCha20-Poly1305, 8 for AES-GCM.
     explicit_nonce_len: usize,
 
-    /// AEAD tag length (from provider).
-    tag_len: usize,
+    /// Minimum length of a protected record's encrypted fragment, cached from
+    /// the provider suite. See
+    /// [`crate::crypto::SupportedDtls12CipherSuite::min_protected_fragment_len`].
+    /// For AEAD suites this is `explicit_nonce + tag`; used both to reject
+    /// short incoming records and to size outgoing record overhead.
+    min_protected_fragment_len: usize,
 
     /// Cryptographic context for handling encryption/decryption
     pub(crate) crypto_context: CryptoContext,
@@ -129,7 +134,7 @@ impl Engine {
             queue_tx: QueueTx::new(),
             cipher_suite: None,
             explicit_nonce_len: 0,
-            tag_len: 0,
+            min_protected_fragment_len: 0,
             crypto_context,
             peer_encryption_enabled: false,
             is_client: false,
@@ -176,9 +181,11 @@ impl Engine {
         self.cipher_suite
     }
 
-    /// Total per-record AEAD overhead: explicit_nonce_len + tag_len.
-    pub fn aead_overhead(&self) -> usize {
-        self.explicit_nonce_len + self.tag_len
+    /// Minimum length of a protected record's encrypted fragment for the
+    /// negotiated suite. See
+    /// [`crate::crypto::SupportedDtls12CipherSuite::min_protected_fragment_len`].
+    pub fn min_protected_fragment_len(&self) -> usize {
+        self.min_protected_fragment_len
     }
 
     /// Is the given cipher suite allowed by configuration
@@ -259,6 +266,13 @@ impl Engine {
             return Ok(());
         }
 
+        if self.peer_encryption_enabled && first_record.record().sequence.epoch == 0 {
+            // Keep old plaintext handshake records available long enough to
+            // trigger flight resends above, but never queue or process them as
+            // new messages after peer encryption is enabled.
+            return Ok(());
+        }
+
         // Reject new handshakes after initial handshake is complete (renegotiation not supported).
         if self.release_app_data && handshake.header.message_seq >= self.peer_handshake_seq_no {
             return Err(Error::RenegotiationAttempt);
@@ -290,6 +304,29 @@ impl Engine {
     fn insert_incoming_non_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
         let first = incoming.first();
         let seq_current = first.record().sequence;
+
+        if self.peer_encryption_enabled
+            && seq_current.epoch == 0
+            && first.record().content_type == ContentType::Handshake
+        {
+            return Ok(());
+        }
+
+        if self.peer_encryption_enabled {
+            for record in incoming.records().iter() {
+                if record.record().sequence.epoch == 0
+                    && record.record().content_type == ContentType::Handshake
+                {
+                    if record.handshakes().is_empty() {
+                        record.set_handled();
+                    } else {
+                        for handshake in record.handshakes() {
+                            handshake.set_handled();
+                        }
+                    }
+                }
+            }
+        }
 
         let search_result = self
             .queue_rx
@@ -660,10 +697,12 @@ impl Engine {
             });
         }
 
-        // Compute wire length of the record if serialized into a datagram
-        // Record header (13) + handshake/change/app data bytes + AEAD overhead (if epoch >= 1)
+        // Compute wire length of the record if serialized into a datagram.
+        // Record header (13) + handshake/change/app data bytes + per-suite
+        // protection overhead (if epoch >= 1). For AEAD suites the protection
+        // overhead equals the min-protected-fragment-len.
         let overhead = if maybe_suite.is_some() {
-            self.aead_overhead()
+            self.min_protected_fragment_len()
         } else {
             0
         };
@@ -823,10 +862,12 @@ impl Engine {
 
         // Handshake header is 12 bytes
         let handshake_header_len = 12usize;
-        let aead_overhead = if epoch >= 1 {
+        // Per-record protection overhead on the wire (for AEAD suites this is
+        // explicit_nonce + tag). Used to size fragments to fit the MTU.
+        let protection_overhead = if epoch >= 1 {
             self.cipher_suite()
                 .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
-            self.aead_overhead()
+            self.min_protected_fragment_len()
         } else {
             0
         };
@@ -838,8 +879,9 @@ impl Engine {
             let available_in_current = self.config.mtu().saturating_sub(already_used_in_current);
 
             // Fixed overhead per handshake record on the wire:
-            // DTLS record header + handshake header + AEAD overhead (if epoch >= 1)
-            let fixed_overhead = DTLSRecord::HEADER_LEN + handshake_header_len + aead_overhead;
+            // DTLS record header + handshake header + protection overhead (if epoch >= 1)
+            let fixed_overhead =
+                DTLSRecord::HEADER_LEN + handshake_header_len + protection_overhead;
 
             // Prefer to pack into the current datagram. If the current one cannot fit even
             // the fixed overhead, we will start a fresh datagram and compute space again.
@@ -1016,7 +1058,9 @@ impl Engine {
     }
 
     pub fn set_cipher_suite(&mut self, cipher_suite: Dtls12CipherSuite) {
-        // Look up AEAD record parameters from the provider (single source of truth)
+        // Cache AEAD record parameters from the provider suite. The formula
+        // (explicit_nonce + tag) lives on the suite trait; Engine just stores
+        // the resolved values for hot-path access.
         let provider_suite = self
             .crypto_context
             .provider()
@@ -1025,7 +1069,7 @@ impl Engine {
             .find(|cs| cs.suite() == cipher_suite)
             .expect("cipher suite must be in provider");
         self.explicit_nonce_len = provider_suite.explicit_nonce_len();
-        self.tag_len = provider_suite.tag_len();
+        self.min_protected_fragment_len = provider_suite.min_protected_fragment_len();
         self.cipher_suite = Some(cipher_suite);
     }
 
@@ -1073,7 +1117,9 @@ impl Engine {
     pub fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord, buf: &[u8]) -> (Aad, Nonce) {
         // DTLS 1.2 AEAD: AAD uses the plaintext length. Recover plaintext length
         // from the record header by subtracting this suite's wire overhead.
-        let plaintext_len = dtls.length.saturating_sub(self.aead_overhead() as u16);
+        let plaintext_len = dtls
+            .length
+            .saturating_sub(self.min_protected_fragment_len() as u16);
         let aad = Aad::new_dtls12(dtls.content_type, dtls.sequence, plaintext_len);
         let iv = self.peer_iv();
         let seq64 = ((dtls.sequence.epoch as u64) << 48) | dtls.sequence.sequence_number;
@@ -1126,8 +1172,38 @@ impl Engine {
 
 impl RecordHandler for Engine {
     fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
+        let epoch = record.record().sequence.epoch;
+
+        if record.record().content_type == ContentType::ChangeCipherSpec
+            && epoch == 0
+            && self.peer_encryption_enabled
+        {
+            // DTLS 1.2 peers may retransmit their last handshake flight after
+            // we have already enabled peer encryption. A late plaintext CCS is
+            // no longer actionable; queuing it would leave an unhandled control
+            // record in queue_rx and prevent handled app-data records behind it
+            // from being purged.
+            self.push_buffer(record.into_buffer());
+            return Ok(None);
+        }
+
+        if record.record().content_type == ContentType::Handshake
+            && epoch == 0
+            && self.peer_encryption_enabled
+            && record
+                .first_handshake()
+                .and_then(|handshake| handshake.dupe_triggers_resend())
+                .is_none()
+        {
+            // Stale plaintext handshakes must still be visible to
+            // insert_incoming_handshake when they can trigger final-flight
+            // retransmission. Other post-encryption epoch-0 handshakes are
+            // unauthenticated and no longer actionable.
+            self.push_buffer(record.into_buffer());
+            return Ok(None);
+        }
+
         if record.record().content_type == ContentType::Alert {
-            let epoch = record.record().sequence.epoch;
             if epoch == 0 {
                 if self.peer_encryption_enabled {
                     // Post-handshake: epoch 0 alerts are unauthenticated, discard.
@@ -1210,6 +1286,10 @@ impl RecordHandler for Engine {
 
     fn explicit_nonce_len(&self) -> usize {
         self.explicit_nonce_len
+    }
+
+    fn min_protected_fragment_len(&self) -> usize {
+        self.min_protected_fragment_len
     }
 
     fn decrypt_data(

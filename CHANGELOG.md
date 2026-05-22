@@ -1,6 +1,8 @@
 # Unreleased
 
   * Reject malformed DTLS signature_algorithms vectors #111
+  * Discard short DTLS 1.2 and 1.3 encrypted records #112
+  * Drop late retransmitted DTLS 1.2 CCS after handshake #110
 
 # 0.6.1
 
