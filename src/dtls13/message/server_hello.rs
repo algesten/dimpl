@@ -82,7 +82,18 @@ impl ServerHello {
                     let parsed_len = before_len - new_rest.len();
                     current_offset += parsed_len;
                     if ext.extension_type.is_supported() {
-                        extensions_vec.push(ext);
+                        if extensions_vec
+                            .iter()
+                            .any(|existing| existing.extension_type == ext.extension_type)
+                        {
+                            return Err(Err::Failure(Error::new(
+                                current_input,
+                                ErrorKind::LengthValue,
+                            )));
+                        }
+                        extensions_vec.try_push(ext).map_err(|_| {
+                            Err::Failure(Error::new(current_input, ErrorKind::LengthValue))
+                        })?;
                     }
                     current_input = new_rest;
                 }
@@ -132,6 +143,7 @@ impl ServerHello {
 
 #[cfg(test)]
 mod test {
+    use super::super::ExtensionType;
     use super::*;
     use crate::buffer::Buf;
 
@@ -193,5 +205,46 @@ mod test {
     fn normal_server_hello_not_hrr() {
         let (_, parsed) = ServerHello::parse(MESSAGE, 0).unwrap();
         assert!(!parsed.is_hello_retry_request());
+    }
+
+    #[test]
+    fn duplicate_supported_extensions_are_rejected() {
+        let mut message = MESSAGE[..39].to_vec();
+        let count = 2;
+        message.extend_from_slice(&(count as u16 * 4).to_be_bytes());
+        for _ in 0..count {
+            message.extend_from_slice(&ExtensionType::Cookie.as_u16().to_be_bytes());
+            message.extend_from_slice(&0u16.to_be_bytes());
+        }
+
+        let result = ServerHello::parse(&message, 0);
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "duplicate supported extensions should fail with LengthValue"
+        );
+    }
+
+    #[test]
+    fn too_many_distinct_supported_extensions_are_rejected() {
+        let mut message = MESSAGE[..39].to_vec();
+        message.extend_from_slice(&(ExtensionType::supported().len() as u16 * 4).to_be_bytes());
+        for extension_type in ExtensionType::supported() {
+            message.extend_from_slice(&extension_type.as_u16().to_be_bytes());
+            message.extend_from_slice(&0u16.to_be_bytes());
+        }
+
+        let result = ServerHello::parse(&message, 0);
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "too many distinct supported extensions should fail with LengthValue"
+        );
     }
 }

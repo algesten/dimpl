@@ -111,7 +111,18 @@ impl ClientHello {
             current_offset += parsed_len;
 
             if extension.extension_type.is_supported() {
-                extensions.push(extension);
+                if extensions
+                    .iter()
+                    .any(|existing| existing.extension_type == extension.extension_type)
+                {
+                    return Err(Err::Failure(Error::new(
+                        extensions_rest,
+                        ErrorKind::LengthValue,
+                    )));
+                }
+                extensions.try_push(extension).map_err(|_| {
+                    Err::Failure(Error::new(extensions_rest, ErrorKind::LengthValue))
+                })?;
             }
             extensions_rest = rest;
         }
@@ -257,5 +268,27 @@ mod tests {
             client_hello.extensions.capacity() >= ExtensionType::supported().len(),
             "extensions ArrayVec capacity must fit all supported ExtensionTypes"
         );
+    }
+
+    #[test]
+    fn duplicate_supported_extensions_are_rejected() {
+        for count in [2, 9] {
+            let mut message = MESSAGE.to_vec();
+            message.extend_from_slice(&(count as u16 * 4).to_be_bytes());
+            for _ in 0..count {
+                message.extend_from_slice(&ExtensionType::Cookie.as_u16().to_be_bytes());
+                message.extend_from_slice(&0u16.to_be_bytes());
+            }
+
+            let result = ClientHello::parse(&message, 0);
+            assert!(
+                matches!(
+                    result,
+                    Err(nom::Err::Failure(error))
+                        if error.code == nom::error::ErrorKind::LengthValue
+                ),
+                "duplicate supported extensions should fail with LengthValue"
+            );
+        }
     }
 }
