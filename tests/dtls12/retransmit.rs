@@ -662,6 +662,188 @@ fn dtls12_late_epoch0_handshake_trailing_app_data_does_not_pin_receive_queue() {
 
 #[test]
 #[cfg(feature = "rcgen")]
+fn dtls12_late_epoch0_handshake_prefix_does_not_drop_trailing_app_data() {
+    //! A stale epoch-0 handshake can arrive before a valid encrypted record in
+    //! the same datagram. The stale plaintext handshake may trigger a final
+    //! flight resend, but it must not make the valid encrypted tail vanish.
+
+    const RX_QUEUE_LIMIT: usize = 8;
+
+    let FinalFlightResend {
+        mut client,
+        mut server,
+        f6_init,
+        f6_resend: _,
+        stale_epoch0_handshake,
+    } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    deliver_packets(&f6_init, &mut client);
+    let client_connected = drain_outputs(&mut client).connected;
+    assert!(
+        client_connected,
+        "client should connect after initial flight 6"
+    );
+
+    for i in 0..=RX_QUEUE_LIMIT {
+        let msg = format!("post-handshake app data {i}");
+        server
+            .send_application_data(msg.as_bytes())
+            .expect("send app data");
+
+        let server_out = drain_outputs(&mut server);
+        assert!(
+            !server_out.packets.is_empty(),
+            "server should emit app-data packets"
+        );
+
+        for packet in server_out.packets {
+            let packet = if i == 0 {
+                append_record(stale_epoch0_handshake.clone(), &packet)
+            } else {
+                packet
+            };
+            client
+                .handle_packet(&packet)
+                .expect("prefix late epoch-0 handshake must not drop encrypted tail");
+        }
+
+        let client_out = drain_outputs(&mut client);
+        assert!(
+            client_out
+                .app_data
+                .iter()
+                .any(|received| received == msg.as_bytes()),
+            "client should receive app data after prefix late epoch-0 handshake"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_stale_epoch0_resend_backpressure_does_not_drop_trailing_app_data() {
+    //! If a stale epoch-0 handshake prefixes valid encrypted app data after the
+    //! handshake has completed, failed courtesy resends must not make the
+    //! authenticated tail vanish.
+
+    const RX_QUEUE_LIMIT: usize = 8;
+
+    let FinalFlightResend {
+        mut client,
+        mut server,
+        f6_init,
+        f6_resend: _,
+        stale_epoch0_handshake,
+    } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    deliver_packets(&f6_init, &mut client);
+    let client_connected = drain_outputs(&mut client).connected;
+    assert!(
+        client_connected,
+        "client should connect after initial flight 6"
+    );
+
+    let filler = vec![0x77; 50];
+    for i in 0..Config::default().max_queue_tx() {
+        client
+            .send_application_data(&filler)
+            .unwrap_or_else(|err| panic!("queue client filler app data {i}: {err:?}"));
+    }
+    assert!(
+        matches!(
+            client.send_application_data(b"tx queue should be full"),
+            Err(dimpl::Error::TransmitQueueFull)
+        ),
+        "client transmit queue should be full before stale handshake triggers resend"
+    );
+
+    server
+        .send_application_data(b"tail survives backpressure")
+        .expect("server send tail");
+    let server_out = drain_outputs(&mut server);
+    assert!(
+        !server_out.packets.is_empty(),
+        "server should emit app data"
+    );
+
+    for packet in server_out.packets {
+        let packet = append_record(stale_epoch0_handshake.clone(), &packet);
+        client
+            .handle_packet(&packet)
+            .expect("stale resend backpressure must not drop encrypted tail");
+    }
+
+    let client_out = drain_outputs(&mut client);
+    assert!(
+        client_out
+            .app_data
+            .iter()
+            .any(|received| received == b"tail survives backpressure"),
+        "client should receive encrypted tail despite stale-prefix resend backpressure"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_late_epoch0_handshake_prefix_with_duplicate_finished_does_not_pin_receive_queue() {
+    //! A stale epoch-0 handshake can also prefix a duplicate encrypted Finished
+    //! resend. The duplicate Finished should be dropped as stale, not queued in
+    //! front of later app data forever.
+
+    const RX_QUEUE_LIMIT: usize = 8;
+
+    let FinalFlightResend {
+        mut client,
+        mut server,
+        f6_init,
+        f6_resend,
+        stale_epoch0_handshake,
+    } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    deliver_packets(&f6_init, &mut client);
+    let client_connected = drain_outputs(&mut client).connected;
+    assert!(
+        client_connected,
+        "client should connect after initial flight 6"
+    );
+
+    for packet in &f6_resend {
+        let prefixed = append_record(stale_epoch0_handshake.clone(), packet);
+        client
+            .handle_packet(&prefixed)
+            .expect("prefix stale handshake plus duplicate final flight should be tolerated");
+    }
+
+    for i in 0..=RX_QUEUE_LIMIT {
+        let msg = format!("post-duplicate-finished app data {i}");
+        server
+            .send_application_data(msg.as_bytes())
+            .expect("send app data");
+
+        let server_out = drain_outputs(&mut server);
+        assert!(
+            !server_out.packets.is_empty(),
+            "server should emit app-data packets"
+        );
+
+        for packet in &server_out.packets {
+            client
+                .handle_packet(packet)
+                .expect("duplicate Finished tail must not make receive queue fill");
+        }
+
+        let client_out = drain_outputs(&mut client);
+        assert!(
+            client_out
+                .app_data
+                .iter()
+                .any(|received| received == msg.as_bytes()),
+            "client should receive app data after prefixed duplicate final flight"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
 fn dtls12_handshake_completes_after_packet_loss() {
     use dimpl::certificate::generate_self_signed_certificate;
 

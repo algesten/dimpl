@@ -1221,15 +1221,28 @@ impl RecordHandler for Engine {
         if record.record().content_type == ContentType::Handshake
             && epoch == 0
             && self.peer_encryption_enabled
-            && record
+        {
+            if let Some(dupe_seq) = record
                 .first_handshake()
                 .and_then(|handshake| handshake.dupe_triggers_resend())
-                .is_none()
-        {
-            // Stale plaintext handshakes must still be visible to
-            // insert_incoming_handshake when they can trigger final-flight
-            // retransmission. Other post-encryption epoch-0 handshakes are
-            // unauthenticated and no longer actionable.
+            {
+                if dupe_seq < self.peer_handshake_seq_no {
+                    match self.flight_resend("dupe triggers resend") {
+                        Ok(()) => {}
+                        Err(Error::TransmitQueueFull) if self.release_app_data => {
+                            debug!(
+                                "Dropping stale epoch-0 handshake after resend hit transmit backpressure"
+                            );
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+
+            // Post-encryption epoch-0 handshakes are unauthenticated and no
+            // longer actionable after any duplicate-triggered resend above.
+            // Dropping them here also prevents a stale plaintext prefix from
+            // deciding how later encrypted records in the datagram are queued.
             self.push_buffer(record.into_buffer());
             return Ok(None);
         }

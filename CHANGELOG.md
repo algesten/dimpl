@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Preserve DTLS 1.2 encrypted record tails after stale handshakes #117
   * Replace pending DTLS 1.2 handshake output on resend #116
   * Discard bad protected DTLS 1.2 records after handshake #115
   * Reject oversized DTLS certificate lists #113
