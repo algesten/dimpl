@@ -36,6 +36,11 @@ const MAX_DEFRAGMENT_PACKETS: usize = 50;
 /// implementations MUST NOT allow the sequence number to wrap.
 const MAX_SEQUENCE_NUMBER: u64 = (1u64 << 48) - 1;
 
+struct FlightResendError {
+    error: Error,
+    queued_any: bool,
+}
+
 pub struct Engine {
     /// Configuration options.
     config: Arc<Config>,
@@ -57,6 +62,10 @@ pub struct Engine {
 
     /// Queue of outgoing packets.
     queue_tx: QueueTx,
+
+    /// Deferred tail datagrams split after KeyUpdate records. They are parsed
+    /// after the state machine installs the next receive keys.
+    deferred_packets: ArrayVec<Buf, 4>,
 
     /// The cipher suite in use. Set by ServerHello.
     cipher_suite: Option<Dtls13CipherSuite>,
@@ -193,8 +202,26 @@ struct Entry {
     content_type: ContentType,
     epoch: u16,
     send_seq: u64,
+    send_seq_history: Vec<u64>,
     fragment: Buf,
     acked: bool,
+}
+
+impl Entry {
+    fn remember_current_send_seq(&mut self, history_limit: usize) {
+        if self.send_seq_history.contains(&self.send_seq) {
+            return;
+        }
+        let history_limit = history_limit.max(1);
+        if self.send_seq_history.len() == history_limit {
+            self.send_seq_history.remove(0);
+        }
+        self.send_seq_history.push(self.send_seq);
+    }
+
+    fn is_acked_by(&self, epoch: u64, seq: u64) -> bool {
+        self.epoch as u64 == epoch && (self.send_seq == seq || self.send_seq_history.contains(&seq))
+    }
 }
 
 impl Engine {
@@ -221,6 +248,7 @@ impl Engine {
             sequence_epoch_0: Sequence::new(0),
             queue_rx: QueueRx::new(),
             queue_tx: QueueTx::new(),
+            deferred_packets: ArrayVec::new(),
             cipher_suite: None,
             hs_send_keys: None,
             hs_recv_keys: None,
@@ -305,14 +333,9 @@ impl Engine {
     }
 
     /// Returns true if the AEAD encryption limit has been reached and a
-    /// KeyUpdate should be initiated. Clears the flag after returning true.
-    pub fn needs_key_update(&mut self) -> bool {
-        if self.needs_key_update {
-            self.needs_key_update = false;
-            true
-        } else {
-            false
-        }
+    /// KeyUpdate should be initiated.
+    pub fn needs_key_update(&self) -> bool {
+        self.needs_key_update
     }
 
     pub fn is_cipher_suite_allowed(&self, suite: Dtls13CipherSuite) -> bool {
@@ -330,13 +353,33 @@ impl Engine {
     }
 
     pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+        self.parse_packet_once(packet)
+    }
+
+    fn parse_packet_once(&mut self, packet: &[u8]) -> Result<(), Error> {
         let cs = self.cipher_suite;
-        let incoming = Incoming::parse_packet(packet, self, cs)?;
-        if let Some(incoming) = incoming {
+        let parsed = Incoming::parse_packet_defer_after_key_update(packet, self, cs)?;
+        if let Some(incoming) = parsed.incoming {
             self.insert_incoming(incoming)?;
+        }
+        if let Some(deferred_tail) = parsed.deferred_tail {
+            self.deferred_packets
+                .try_push(deferred_tail)
+                .map_err(|_| Error::TooManyRecords)?;
         }
 
         Ok(())
+    }
+
+    pub fn parse_next_deferred_packet(&mut self) -> Result<bool, Error> {
+        if self.deferred_packets.is_empty() {
+            return Ok(false);
+        }
+
+        let packet = self.deferred_packets.remove(0);
+        self.parse_packet_once(&packet)?;
+
+        Ok(true)
     }
 
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
@@ -376,7 +419,11 @@ impl Engine {
 
         if let Some(dupe_seq) = maybe_dupe_seq {
             if dupe_seq < self.peer_handshake_seq_no {
+                for seq in incoming.ackable_record_numbers() {
+                    let _ = self.received_record_numbers.try_push(seq);
+                }
                 self.flight_resend("dupe triggers resend")?;
+                self.send_ack()?;
             }
         }
 
@@ -442,8 +489,9 @@ impl Engine {
                     for record in incoming.records().iter() {
                         let seq = record.record().sequence;
                         if seq.epoch >= 2 {
-                            self.received_record_numbers
-                                .push((seq.epoch as u64, seq.sequence_number));
+                            let _ = self
+                                .received_record_numbers
+                                .try_push((seq.epoch as u64, seq.sequence_number));
                         }
                     }
                     self.queue_rx[index] = incoming;
@@ -504,14 +552,15 @@ impl Engine {
 
         if now >= flight_timeout {
             if self.flight_backoff.can_retry() {
-                self.flight_backoff.attempt(&mut self.rng);
-                debug!(
-                    "Re-arm flight timeout due to resend in {}",
-                    self.flight_backoff.rto().as_secs_f32()
-                );
-                let timeout = now + self.flight_backoff.rto();
-                self.flight_timeout = Timeout::Armed(timeout);
-                self.flight_resend("flight timeout")?;
+                match self.flight_resend_with_progress("flight timeout") {
+                    Ok(_) => self.rearm_flight_timeout_after_resend(now),
+                    Err(error)
+                        if error.queued_any && matches!(error.error, Error::TransmitQueueFull) =>
+                    {
+                        self.rearm_flight_timeout_after_resend(now);
+                    }
+                    Err(error) => return Err(error.error),
+                }
             } else {
                 return Err(Error::Timeout("handshake"));
             }
@@ -522,6 +571,16 @@ impl Engine {
         self.maybe_flush_handshake_ack(now)?;
 
         Ok(())
+    }
+
+    fn rearm_flight_timeout_after_resend(&mut self, now: Instant) {
+        self.flight_backoff.attempt(&mut self.rng);
+        debug!(
+            "Re-arm flight timeout due to resend in {}",
+            self.flight_backoff.rto().as_secs_f32()
+        );
+        let timeout = now + self.flight_backoff.rto();
+        self.flight_timeout = Timeout::Armed(timeout);
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8], now: Instant) -> Output<'a> {
@@ -546,6 +605,10 @@ impl Engine {
         let next_timeout = self.poll_timeout(now);
 
         Output::Timeout(next_timeout)
+    }
+
+    pub(crate) fn has_pending_post_handshake_ack(&self) -> bool {
+        self.release_app_data && !self.received_record_numbers.is_empty()
     }
 
     fn poll_app_data<'a>(&mut self, buf: &'a mut [u8]) -> Result<&'a [u8], &'a mut [u8]> {
@@ -671,14 +734,22 @@ impl Engine {
     }
 
     pub fn flight_resend(&mut self, reason: &str) -> Result<(), Error> {
+        self.flight_resend_with_progress(reason)
+            .map(|_| ())
+            .map_err(|error| error.error)
+    }
+
+    fn flight_resend_with_progress(&mut self, reason: &str) -> Result<bool, FlightResendError> {
         debug!("Resending flight due to {}", reason);
         let mut records = mem::take(&mut self.flight_saved_records);
+        let mut queued_any = false;
 
         // Mark the current last datagram as "sealed" so resent records
         // go into fresh datagrams. Without this, can_append would pack
         // resent records into the same datagram as the original flight,
         // which causes duplicate handshake fragments at the receiver.
         self.seal_current_datagram();
+        let send_seq_history_limit = self.config.flight_retries().saturating_add(1);
 
         for entry in &mut records {
             // Selective retransmission: skip records that have been ACKed
@@ -689,9 +760,15 @@ impl Engine {
             if entry.epoch == 0 {
                 // Capture the sequence number the retransmitted record will use
                 let new_seq = self.sequence_epoch_0.sequence_number;
-                self.create_plaintext_record(entry.content_type, false, |fragment| {
+                let result = self.create_plaintext_record(entry.content_type, false, |fragment| {
                     fragment.extend_from_slice(&entry.fragment);
-                })?;
+                });
+                if let Err(error) = result {
+                    self.flight_saved_records = records;
+                    return Err(FlightResendError { error, queued_any });
+                }
+                queued_any = true;
+                entry.remember_current_send_seq(send_seq_history_limit);
                 entry.send_seq = new_seq;
             } else {
                 // Capture the sequence number the retransmitted record will use
@@ -704,21 +781,27 @@ impl Engine {
                 } else {
                     self.app_send_seq
                 };
-                self.create_ciphertext_record(
+                let result = self.create_ciphertext_record(
                     entry.content_type,
                     entry.epoch,
                     false,
                     |fragment| {
                         fragment.extend_from_slice(&entry.fragment);
                     },
-                )?;
+                );
+                if let Err(error) = result {
+                    self.flight_saved_records = records;
+                    return Err(FlightResendError { error, queued_any });
+                }
+                queued_any = true;
+                entry.remember_current_send_seq(send_seq_history_limit);
                 entry.send_seq = new_seq;
             }
         }
 
         self.flight_saved_records = records;
 
-        Ok(())
+        Ok(queued_any)
     }
 
     pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
@@ -856,16 +939,9 @@ impl Engine {
 
         let current_seq = self.sequence_epoch_0.sequence_number;
 
-        if save_fragment {
-            let mut clone = self.buffers_free.pop();
-            clone.extend_from_slice(&fragment);
-            self.flight_saved_records.push(Entry {
-                content_type,
-                epoch: 0,
-                send_seq: current_seq,
-                fragment: clone,
-                acked: false,
-            });
+        if save_fragment && self.flight_saved_records.is_full() {
+            self.buffers_free.push(fragment);
+            return Err(Error::TransmitQueueFull);
         }
 
         let record_wire_len = Dtls13Record::PLAINTEXT_HEADER_LEN + fragment.len();
@@ -883,6 +959,7 @@ impl Engine {
                 self.config.max_queue_tx(),
                 self.queue_tx
             );
+            self.buffers_free.push(fragment);
             return Err(Error::TransmitQueueFull);
         }
 
@@ -896,10 +973,25 @@ impl Engine {
         };
 
         if self.sequence_epoch_0.sequence_number >= MAX_SEQUENCE_NUMBER {
+            self.buffers_free.push(fragment);
             return Err(Error::CryptoError(
                 "Epoch 0 sequence number exhausted".to_string(),
             ));
         }
+
+        if save_fragment {
+            let mut clone = self.buffers_free.pop();
+            clone.extend_from_slice(&fragment);
+            self.flight_saved_records.push(Entry {
+                content_type,
+                epoch: 0,
+                send_seq: current_seq,
+                send_seq_history: Vec::new(),
+                fragment: clone,
+                acked: false,
+            });
+        }
+
         self.sequence_epoch_0.sequence_number += 1;
 
         if can_append {
@@ -935,6 +1027,11 @@ impl Engine {
         let mut fragment = self.buffers_free.pop();
         f(&mut fragment);
 
+        if save_fragment && self.flight_saved_records.is_full() {
+            self.buffers_free.push(fragment);
+            return Err(Error::TransmitQueueFull);
+        }
+
         // Determine sequence number for this record
         let seq = if epoch == 2 {
             self.hs_send_seq
@@ -944,20 +1041,15 @@ impl Engine {
             self.app_send_seq
         };
 
+        // Build DTLSInnerPlaintext: content || content_type(1)
+        // (no zero padding for now)
+        let mut saved_fragment = None;
         if save_fragment {
             let mut clone = self.buffers_free.pop();
             clone.extend_from_slice(&fragment);
-            self.flight_saved_records.push(Entry {
-                content_type,
-                epoch,
-                send_seq: seq,
-                fragment: clone,
-                acked: false,
-            });
+            saved_fragment = Some(clone);
         }
 
-        // Build DTLSInnerPlaintext: content || content_type(1)
-        // (no zero padding for now)
         fragment.push(content_type.as_u8());
 
         let suite = self.suite_provider();
@@ -973,6 +1065,10 @@ impl Engine {
         };
 
         let Some(keys) = keys else {
+            if let Some(clone) = saved_fragment {
+                self.buffers_free.push(clone);
+            }
+            self.buffers_free.push(fragment);
             return Err(Error::CryptoError(format!(
                 "Send keys not available for epoch {}",
                 epoch
@@ -1005,9 +1101,13 @@ impl Engine {
         sn_key[..sn_key_len].copy_from_slice(&keys.sn_key);
 
         // Encrypt in place (appends tag)
-        keys.cipher
-            .encrypt(&mut fragment, aad, nonce)
-            .map_err(|e| Error::CryptoError(format!("Encryption failed: {}", e)))?;
+        if let Err(error) = keys.cipher.encrypt(&mut fragment, aad, nonce) {
+            if let Some(clone) = saved_fragment {
+                self.buffers_free.push(clone);
+            }
+            self.buffers_free.push(fragment);
+            return Err(Error::CryptoError(format!("Encryption failed: {}", error)));
+        }
 
         // Record number encryption (RFC 9147 Section 4.2.3):
         // mask = AES-ECB(sn_key, ciphertext_sample)
@@ -1036,6 +1136,10 @@ impl Engine {
                 self.config.max_queue_tx(),
                 self.queue_tx
             );
+            if let Some(clone) = saved_fragment {
+                self.buffers_free.push(clone);
+            }
+            self.buffers_free.push(fragment);
             return Err(Error::TransmitQueueFull);
         }
 
@@ -1053,6 +1157,10 @@ impl Engine {
         // Increment send sequence, guarding against 48-bit overflow (RFC 9147 §4.2)
         if epoch == 2 {
             if self.hs_send_seq >= MAX_SEQUENCE_NUMBER {
+                if let Some(clone) = saved_fragment {
+                    self.buffers_free.push(clone);
+                }
+                self.buffers_free.push(fragment);
                 return Err(Error::CryptoError(
                     "Handshake epoch sequence number exhausted".to_string(),
                 ));
@@ -1060,6 +1168,10 @@ impl Engine {
             self.hs_send_seq += 1;
         } else if self.prev_app_send_keys.is_some() && epoch == self.prev_app_send_epoch {
             if self.prev_app_send_seq >= MAX_SEQUENCE_NUMBER {
+                if let Some(clone) = saved_fragment {
+                    self.buffers_free.push(clone);
+                }
+                self.buffers_free.push(fragment);
                 return Err(Error::CryptoError(
                     "Previous epoch sequence number exhausted".to_string(),
                 ));
@@ -1067,6 +1179,10 @@ impl Engine {
             self.prev_app_send_seq += 1;
         } else {
             if self.app_send_seq >= MAX_SEQUENCE_NUMBER {
+                if let Some(clone) = saved_fragment {
+                    self.buffers_free.push(clone);
+                }
+                self.buffers_free.push(fragment);
                 return Err(Error::CryptoError(
                     "Application epoch sequence number exhausted".to_string(),
                 ));
@@ -1080,6 +1196,17 @@ impl Engine {
                     self.needs_key_update = true;
                 }
             }
+        }
+
+        if let Some(fragment) = saved_fragment {
+            self.flight_saved_records.push(Entry {
+                content_type,
+                epoch,
+                send_seq: seq,
+                send_seq_history: Vec::new(),
+                fragment,
+                acked: false,
+            });
         }
 
         if can_append {
@@ -1252,16 +1379,29 @@ impl Engine {
     ///
     /// ACK format: record_numbers_length(2) + N * (epoch(8) + sequence(8))
     pub fn send_ack(&mut self) -> Result<(), Error> {
-        if self.received_record_numbers.is_empty() {
-            return Ok(());
-        }
-
-        let entries = mem::take(&mut self.received_record_numbers);
         let epoch = if self.app_send_keys.is_some() {
             self.app_send_epoch
         } else {
             2
         };
+
+        self.send_ack_with_epoch(epoch)
+    }
+
+    pub(crate) fn send_ack_with_previous_app_epoch(&mut self) -> Result<(), Error> {
+        if self.prev_app_send_keys.is_some() {
+            self.send_ack_with_epoch(self.prev_app_send_epoch)
+        } else {
+            self.send_ack()
+        }
+    }
+
+    fn send_ack_with_epoch(&mut self, epoch: u16) -> Result<(), Error> {
+        if self.received_record_numbers.is_empty() {
+            return Ok(());
+        }
+
+        let entries = self.received_record_numbers.clone();
 
         self.create_ciphertext_record(ContentType::Ack, epoch, false, |fragment| {
             // record_numbers_length: 2 bytes, value = entries.len() * 16
@@ -1272,6 +1412,7 @@ impl Engine {
                 fragment.extend_from_slice(&seq.to_be_bytes());
             }
         })?;
+        self.received_record_numbers.clear();
 
         Ok(())
     }
@@ -1306,7 +1447,7 @@ impl Engine {
 
             // Mark matching flight entries as acknowledged
             for entry in &mut self.flight_saved_records {
-                if entry.epoch as u64 == ack_epoch && entry.send_seq == ack_seq {
+                if entry.is_acked_by(ack_epoch, ack_seq) {
                     entry.acked = true;
                 }
             }
@@ -1792,15 +1933,19 @@ impl Engine {
         Ok(next)
     }
 
-    /// Rotate send keys: move current app send keys → prev, derive new ones.
-    fn update_send_keys(&mut self) -> Result<(), Error> {
+    fn next_send_keys(&self) -> Result<EpochKeys, Error> {
+        let current_keys = self.app_send_keys.as_ref().ok_or_else(|| {
+            Error::CryptoError("No current app send keys for KeyUpdate".to_string())
+        })?;
+        let next_secret = self.derive_next_traffic_secret(&current_keys.traffic_secret)?;
+        self.derive_epoch_keys(&next_secret)
+    }
+
+    /// Rotate send keys: move current app send keys → prev, install prederived new keys.
+    fn update_send_keys(&mut self, new_keys: EpochKeys) -> Result<(), Error> {
         let current_keys = self.app_send_keys.take().ok_or_else(|| {
             Error::CryptoError("No current app send keys for KeyUpdate".to_string())
         })?;
-
-        let next_secret = self.derive_next_traffic_secret(&current_keys.traffic_secret)?;
-        let new_keys = self.derive_epoch_keys(&next_secret)?;
-
         // Save old keys for retransmission
         self.prev_app_send_keys = Some(current_keys);
         self.prev_app_send_epoch = self.app_send_epoch;
@@ -1856,31 +2001,49 @@ impl Engine {
     /// the current app epoch, then send keys are rotated (old keys saved
     /// in `prev_app_send_*` for retransmission).
     pub fn create_key_update(&mut self, request: KeyUpdateRequest) -> Result<(), Error> {
-        // Set up retransmission
-        self.flight_backoff.reset(&mut self.rng);
-        self.flight_clear_resends();
-        self.flight_timeout = Timeout::Unarmed;
+        if self.is_key_update_in_flight() {
+            return Err(Error::CryptoError(
+                "KeyUpdate already in flight".to_string(),
+            ));
+        }
+
+        let new_send_keys = self.next_send_keys()?;
+        let old_saved_records = mem::take(&mut self.flight_saved_records);
 
         let msg_seq = self.next_handshake_seq_no;
-        self.next_handshake_seq_no += 1;
 
         let epoch = self.app_send_epoch;
 
         // Build the handshake message manually (12-byte DTLS header + 1-byte body)
-        self.create_ciphertext_record(ContentType::Handshake, epoch, true, |fragment| {
-            // DTLS handshake header (12 bytes):
-            // msg_type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3)
-            fragment.push(MessageType::KeyUpdate.as_u8());
-            fragment.extend_from_slice(&1u32.to_be_bytes()[1..]); // length = 1
-            fragment.extend_from_slice(&msg_seq.to_be_bytes()); // message_seq
-            fragment.extend_from_slice(&0u32.to_be_bytes()[1..]); // fragment_offset = 0
-            fragment.extend_from_slice(&1u32.to_be_bytes()[1..]); // fragment_length = 1
-            // Body: 1 byte
-            fragment.push(request.as_u8());
-        })?;
+        let result =
+            self.create_ciphertext_record(ContentType::Handshake, epoch, true, |fragment| {
+                // DTLS handshake header (12 bytes):
+                // msg_type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3)
+                fragment.push(MessageType::KeyUpdate.as_u8());
+                fragment.extend_from_slice(&1u32.to_be_bytes()[1..]); // length = 1
+                fragment.extend_from_slice(&msg_seq.to_be_bytes()); // message_seq
+                fragment.extend_from_slice(&0u32.to_be_bytes()[1..]); // fragment_offset = 0
+                fragment.extend_from_slice(&1u32.to_be_bytes()[1..]); // fragment_length = 1
+                // Body: 1 byte
+                fragment.push(request.as_u8());
+            });
+        if let Err(error) = result {
+            self.flight_saved_records = old_saved_records;
+            return Err(error);
+        }
+
+        for entry in old_saved_records {
+            self.buffers_free.push(entry.fragment);
+        }
+
+        // Set up retransmission for the newly saved KeyUpdate flight only
+        // after the packet has been queued successfully.
+        self.flight_backoff.reset(&mut self.rng);
+        self.flight_timeout = Timeout::Unarmed;
+        self.next_handshake_seq_no += 1;
 
         // Now rotate send keys (saves old keys for retransmission)
-        self.update_send_keys()?;
+        self.update_send_keys(new_send_keys)?;
 
         debug!(
             "KeyUpdate sent (request={:?}) on epoch {}, new send epoch {}",
@@ -2338,7 +2501,13 @@ impl RecordHandler for Engine {
         epoch_bits
     }
 
-    fn resolve_sequence(&self, epoch: u16, seq_bits: u64, s_flag: bool) -> u64 {
+    fn resolve_sequence(
+        &self,
+        epoch: u16,
+        seq_bits: u64,
+        s_flag: bool,
+        expected_override: Option<u64>,
+    ) -> u64 {
         let expected = if epoch == 2 {
             self.hs_expected_recv_seq
         } else {
@@ -2348,6 +2517,9 @@ impl RecordHandler for Engine {
                 .map(|e| e.expected_recv_seq)
                 .unwrap_or(0)
         };
+        let expected = expected_override
+            .map(|override_expected| expected.max(override_expected))
+            .unwrap_or(expected);
 
         let bits: u32 = if s_flag { 16 } else { 8 };
         reconstruct_sequence(seq_bits, expected, bits)
@@ -2473,6 +2645,162 @@ mod tests {
         Engine::new(config, cert)
     }
 
+    #[cfg(feature = "rcgen")]
+    fn test_engine_with_config(config: Config) -> Engine {
+        let cert = generate_self_signed_certificate().expect("gen cert");
+        Engine::new(Arc::new(config), cert)
+    }
+
+    #[cfg(feature = "rcgen")]
+    fn install_test_app_send_keys(engine: &mut Engine) {
+        engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+
+        let mut traffic_secret = Buf::new();
+        traffic_secret.extend_from_slice(&vec![0x42; engine.hash_algorithm().output_len()]);
+        engine.app_send_keys = Some(
+            engine
+                .derive_epoch_keys(&traffic_secret)
+                .expect("derive app send keys"),
+        );
+    }
+
+    fn saved_record_snapshot(engine: &Engine) -> Vec<(ContentType, u16, u64, Vec<u8>, bool)> {
+        engine
+            .flight_saved_records
+            .iter()
+            .map(|entry| {
+                (
+                    entry.content_type,
+                    entry.epoch,
+                    entry.send_seq,
+                    entry.fragment.as_ref().to_vec(),
+                    entry.acked,
+                )
+            })
+            .collect()
+    }
+
+    fn push_dummy_saved_record(engine: &mut Engine, index: usize) {
+        let mut fragment = Buf::new();
+        fragment.extend_from_slice(&[index as u8]);
+        engine.flight_saved_records.push(Entry {
+            content_type: ContentType::Handshake,
+            epoch: 3,
+            send_seq: index as u64,
+            send_seq_history: Vec::new(),
+            fragment,
+            acked: false,
+        });
+    }
+
+    fn push_saved_app_record(engine: &mut Engine, send_seq: u64, byte: u8, len: usize) {
+        let mut fragment = Buf::new();
+        fragment.extend_from_slice(&vec![byte; len]);
+        engine.flight_saved_records.push(Entry {
+            content_type: ContentType::ApplicationData,
+            epoch: engine.app_send_epoch,
+            send_seq,
+            send_seq_history: Vec::new(),
+            fragment,
+            acked: false,
+        });
+    }
+
+    fn ack_record_number(epoch: u64, sequence: u64) -> Vec<u8> {
+        let mut ack = Vec::new();
+        ack.extend_from_slice(&16u16.to_be_bytes());
+        ack.extend_from_slice(&epoch.to_be_bytes());
+        ack.extend_from_slice(&sequence.to_be_bytes());
+        ack
+    }
+
+    struct PassthroughRecordHandler;
+
+    impl RecordHandler for PassthroughRecordHandler {
+        fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
+            Ok(Some(record))
+        }
+
+        fn is_peer_encryption_enabled(&self) -> bool {
+            true
+        }
+
+        fn resolve_epoch(&self, _epoch_bits: u8) -> u16 {
+            2
+        }
+
+        fn resolve_sequence(
+            &self,
+            _epoch: u16,
+            seq_bits: u64,
+            _s_flag: bool,
+            _expected_override: Option<u64>,
+        ) -> u64 {
+            seq_bits
+        }
+
+        fn replay_check(&self, _seq: Sequence) -> bool {
+            true
+        }
+
+        fn replay_update(&mut self, _seq: Sequence) {}
+
+        fn min_protected_fragment_len(&self) -> usize {
+            0
+        }
+
+        fn decrypt_record(
+            &mut self,
+            _header: &[u8],
+            _seq: Sequence,
+            _ciphertext: &mut TmpBuf,
+        ) -> Result<(), Error> {
+            Ok(())
+        }
+
+        fn decrypt_sequence_number(
+            &self,
+            _epoch: u16,
+            _seq_bytes: &mut [u8],
+            _ciphertext_sample: &[u8; 16],
+        ) {
+        }
+    }
+
+    fn encrypted_key_update_record(seq: u16) -> Vec<u8> {
+        let mut fragment = Vec::new();
+        fragment.push(MessageType::KeyUpdate.as_u8());
+        fragment.extend_from_slice(&1u32.to_be_bytes()[1..]);
+        fragment.extend_from_slice(&0u16.to_be_bytes());
+        fragment.extend_from_slice(&0u32.to_be_bytes()[1..]);
+        fragment.extend_from_slice(&1u32.to_be_bytes()[1..]);
+        fragment.push(KeyUpdateRequest::UpdateRequested.as_u8());
+        fragment.push(ContentType::Handshake.as_u8());
+
+        let mut packet = Vec::new();
+        packet.push(
+            0b0010_0000
+                | 0b0000_1000 // 2-byte sequence number.
+                | 0b0000_0100 // explicit length.
+                | 0b0000_0010, // epoch bits resolved by PassthroughRecordHandler.
+        );
+        packet.extend_from_slice(&seq.to_be_bytes());
+        packet.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+        packet.extend_from_slice(&fragment);
+        packet
+    }
+
+    fn parsed_key_update(seq: u16) -> Incoming {
+        Incoming::parse_packet_defer_after_key_update(
+            &encrypted_key_update_record(seq),
+            &mut PassthroughRecordHandler,
+            Some(Dtls13CipherSuite::AES_128_GCM_SHA256),
+        )
+        .expect("parse key update packet")
+        .incoming
+        .expect("packet contains a record")
+    }
+
     /// Issue 2: Epoch-0 sequence number must have an overflow guard.
     ///
     /// Per RFC 9147 §4.2, implementations MUST NOT allow the sequence number
@@ -2569,6 +2897,499 @@ mod tests {
         assert!(
             early_secret.into_vec().capacity() >= 256,
             "derive_early_secret must use the buffer pool, returning a buffer with pooled capacity"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn peer_key_update_response_does_not_replace_in_flight_local_update() {
+        let mut engine = test_engine();
+        install_test_app_send_keys(&mut engine);
+
+        engine
+            .create_key_update(KeyUpdateRequest::UpdateRequested)
+            .expect("create local KeyUpdate");
+
+        let prev_epoch = engine.prev_app_send_epoch;
+        let prev_seq = engine.prev_app_send_seq;
+        let saved_records: Vec<_> = engine
+            .flight_saved_records
+            .iter()
+            .map(|entry| {
+                (
+                    entry.content_type,
+                    entry.epoch,
+                    entry.send_seq,
+                    entry.fragment.as_ref().to_vec(),
+                    entry.acked,
+                )
+            })
+            .collect();
+        let send_epoch = engine.app_send_epoch;
+        let send_seq = engine.app_send_seq;
+
+        let result = engine.create_key_update(KeyUpdateRequest::UpdateNotRequested);
+        assert!(
+            result.is_err(),
+            "a peer-requested KeyUpdate response must wait while a local KeyUpdate is in flight"
+        );
+
+        assert_eq!(engine.prev_app_send_epoch, prev_epoch);
+        assert_eq!(engine.prev_app_send_seq, prev_seq);
+        assert_eq!(engine.app_send_epoch, send_epoch);
+        assert_eq!(engine.app_send_seq, send_seq);
+        assert_eq!(engine.flight_saved_records.len(), saved_records.len());
+        for (entry, saved) in engine.flight_saved_records.iter().zip(saved_records) {
+            assert_eq!(entry.content_type, saved.0);
+            assert_eq!(entry.epoch, saved.1);
+            assert_eq!(entry.send_seq, saved.2);
+            assert_eq!(entry.fragment.as_ref(), saved.3.as_slice());
+            assert_eq!(entry.acked, saved.4);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn ack_tracking_full_does_not_panic_on_handshake_replacement() {
+        let mut engine = test_engine();
+
+        let first = parsed_key_update(0);
+        engine
+            .insert_incoming(first)
+            .expect("insert initial key update");
+        engine.queue_rx[0]
+            .first()
+            .first_handshake()
+            .expect("initial key update handshake")
+            .set_handled();
+
+        engine.received_record_numbers.clear();
+        for sequence in 0..engine.received_record_numbers.capacity() {
+            engine.received_record_numbers.push((2, sequence as u64));
+        }
+
+        let replacement = parsed_key_update(1);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine
+                .insert_incoming(replacement)
+                .expect("replace handled key update")
+        }));
+
+        assert!(
+            result.is_ok(),
+            "full ACK bookkeeping must not panic when a handled handshake is replaced"
+        );
+        assert_eq!(engine.queue_rx.len(), 1);
+        assert_eq!(
+            engine.queue_rx[0].first().record().sequence.sequence_number,
+            1
+        );
+        assert_eq!(
+            engine.received_record_numbers.len(),
+            engine.received_record_numbers.capacity(),
+            "overflowing ACK bookkeeping should keep existing entries and drop the extra one"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn key_update_transmit_queue_full_does_not_save_unsent_flight() {
+        let config = Config::builder()
+            .max_queue_tx(1)
+            .build()
+            .expect("build config");
+        let mut engine = test_engine_with_config(config);
+        install_test_app_send_keys(&mut engine);
+
+        let mut occupied = Buf::new();
+        occupied.resize(engine.config.mtu(), 0);
+        engine.queue_tx.push_back(occupied);
+
+        let next_handshake_seq = engine.next_handshake_seq_no;
+        let app_send_epoch = engine.app_send_epoch;
+        let app_send_seq = engine.app_send_seq;
+        let result = engine.create_key_update(KeyUpdateRequest::UpdateRequested);
+
+        assert!(matches!(result, Err(Error::TransmitQueueFull)));
+        assert!(engine.flight_saved_records.is_empty());
+        assert!(engine.prev_app_send_keys.is_none());
+        assert_eq!(engine.next_handshake_seq_no, next_handshake_seq);
+        assert_eq!(engine.app_send_epoch, app_send_epoch);
+        assert_eq!(engine.app_send_seq, app_send_seq);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn key_update_transmit_queue_full_preserves_existing_saved_flight() {
+        let config = Config::builder()
+            .max_queue_tx(1)
+            .build()
+            .expect("build config");
+        let mut engine = test_engine_with_config(config);
+        install_test_app_send_keys(&mut engine);
+
+        engine
+            .create_ciphertext_record(
+                ContentType::Handshake,
+                engine.app_send_epoch(),
+                true,
+                |fragment| {
+                    fragment.extend_from_slice(b"old-flight");
+                },
+            )
+            .expect("save existing flight");
+        let saved_records = saved_record_snapshot(&engine);
+
+        engine.queue_tx.clear();
+        let mut occupied = Buf::new();
+        occupied.resize(engine.config.mtu(), 0);
+        engine.queue_tx.push_back(occupied);
+
+        engine.flight_backoff.attempt(&mut engine.rng);
+        let now = Instant::now();
+        engine.flight_timeout = Timeout::Armed(now + Duration::from_secs(123));
+        let flight_timeout = engine.flight_timeout;
+        let flight_rto = engine.flight_backoff.rto();
+        let flight_can_retry = engine.flight_backoff.can_retry();
+        let next_handshake_seq = engine.next_handshake_seq_no;
+        let app_send_epoch = engine.app_send_epoch;
+        let app_send_seq = engine.app_send_seq;
+        let result = engine.create_key_update(KeyUpdateRequest::UpdateRequested);
+
+        assert!(matches!(result, Err(Error::TransmitQueueFull)));
+        assert_eq!(saved_record_snapshot(&engine), saved_records);
+        assert!(engine.prev_app_send_keys.is_none());
+        assert_eq!(engine.next_handshake_seq_no, next_handshake_seq);
+        assert_eq!(engine.app_send_epoch, app_send_epoch);
+        assert_eq!(engine.app_send_seq, app_send_seq);
+        assert_eq!(engine.flight_timeout, flight_timeout);
+        assert_eq!(engine.flight_backoff.rto(), flight_rto);
+        assert_eq!(engine.flight_backoff.can_retry(), flight_can_retry);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn needs_key_update_survives_transmit_queue_full() {
+        let config = Config::builder()
+            .max_queue_tx(1)
+            .build()
+            .expect("build config");
+        let mut engine = test_engine_with_config(config);
+        install_test_app_send_keys(&mut engine);
+        engine.needs_key_update = true;
+
+        assert!(engine.needs_key_update());
+
+        let mut occupied = Buf::new();
+        occupied.resize(engine.config.mtu(), 0);
+        engine.queue_tx.push_back(occupied);
+
+        let result = engine.create_key_update(KeyUpdateRequest::UpdateRequested);
+
+        assert!(matches!(result, Err(Error::TransmitQueueFull)));
+        assert!(engine.needs_key_update());
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn flight_timeout_transmit_queue_full_preserves_retry_state() {
+        let config = Config::builder()
+            .max_queue_tx(1)
+            .build()
+            .expect("build config");
+        let mut engine = test_engine_with_config(config);
+        install_test_app_send_keys(&mut engine);
+
+        engine
+            .create_key_update(KeyUpdateRequest::UpdateRequested)
+            .expect("initial KeyUpdate fits empty queue");
+        assert_eq!(engine.queue_tx.len(), engine.config.max_queue_tx());
+
+        engine.flight_backoff.attempt(&mut engine.rng);
+        let now = Instant::now();
+        let expired = now - Duration::from_millis(1);
+        engine.flight_timeout = Timeout::Armed(expired);
+
+        let saved_records = saved_record_snapshot(&engine);
+        let flight_timeout = engine.flight_timeout;
+        let flight_rto = engine.flight_backoff.rto();
+        let flight_can_retry = engine.flight_backoff.can_retry();
+        let app_send_epoch = engine.app_send_epoch;
+        let app_send_seq = engine.app_send_seq;
+        let prev_app_send_epoch = engine.prev_app_send_epoch;
+        let prev_app_send_seq = engine.prev_app_send_seq;
+
+        let result = engine.handle_timeout(now);
+
+        assert!(matches!(result, Err(Error::TransmitQueueFull)));
+        assert_eq!(saved_record_snapshot(&engine), saved_records);
+        assert_eq!(engine.flight_timeout, flight_timeout);
+        assert_eq!(engine.flight_backoff.rto(), flight_rto);
+        assert_eq!(engine.flight_backoff.can_retry(), flight_can_retry);
+        assert_eq!(engine.app_send_epoch, app_send_epoch);
+        assert_eq!(engine.app_send_seq, app_send_seq);
+        assert_eq!(engine.prev_app_send_epoch, prev_app_send_epoch);
+        assert_eq!(engine.prev_app_send_seq, prev_app_send_seq);
+
+        engine.queue_tx.clear();
+        engine
+            .handle_timeout(now)
+            .expect("retry should succeed after transmit queue drains");
+        assert_eq!(engine.queue_tx.len(), 1);
+        assert!(
+            engine.flight_backoff.rto() > flight_rto,
+            "successful retransmit should consume backoff only after queueing output"
+        );
+        assert!(matches!(engine.flight_timeout, Timeout::Armed(deadline) if deadline > now));
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn send_ack_transmit_queue_full_preserves_ack_entries() {
+        let config = Config::builder()
+            .max_queue_tx(1)
+            .build()
+            .expect("build config");
+        let mut engine = test_engine_with_config(config);
+        install_test_app_send_keys(&mut engine);
+
+        engine.received_record_numbers.push((3, 7));
+        engine.received_record_numbers.push((3, 8));
+        let ack_entries = engine.received_record_numbers.clone();
+        let app_send_seq = engine.app_send_seq;
+
+        let mut occupied = Buf::new();
+        occupied.resize(engine.config.mtu(), 0);
+        engine.queue_tx.push_back(occupied);
+
+        let result = engine.send_ack();
+
+        assert!(matches!(result, Err(Error::TransmitQueueFull)));
+        assert_eq!(engine.received_record_numbers, ack_entries);
+        assert_eq!(engine.app_send_seq, app_send_seq);
+
+        engine.queue_tx.clear();
+        engine
+            .send_ack()
+            .expect("ACK should send after transmit queue drains");
+        assert!(engine.received_record_numbers.is_empty());
+        assert_eq!(engine.app_send_seq, app_send_seq + 1);
+        assert_eq!(engine.queue_tx.len(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn saved_flight_capacity_error_does_not_advance_ciphertext_sequence() {
+        let mut engine = test_engine();
+        install_test_app_send_keys(&mut engine);
+        for index in 0..engine.flight_saved_records.capacity() {
+            push_dummy_saved_record(&mut engine, index);
+        }
+
+        let app_send_seq = engine.app_send_seq;
+        let saved_records = saved_record_snapshot(&engine);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.create_ciphertext_record(
+                ContentType::Handshake,
+                engine.app_send_epoch(),
+                true,
+                |fragment| {
+                    fragment.extend_from_slice(b"overflow");
+                },
+            )
+        }));
+
+        assert!(result.is_ok(), "saved-flight capacity must not panic");
+        assert!(matches!(result.unwrap(), Err(Error::TransmitQueueFull)));
+        assert_eq!(engine.app_send_seq, app_send_seq);
+        assert_eq!(saved_record_snapshot(&engine), saved_records);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn saved_flight_capacity_error_does_not_advance_plaintext_sequence() {
+        let mut engine = test_engine();
+        for index in 0..engine.flight_saved_records.capacity() {
+            push_dummy_saved_record(&mut engine, index);
+        }
+
+        let epoch0_seq = engine.sequence_epoch_0.sequence_number;
+        let saved_records = saved_record_snapshot(&engine);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.create_plaintext_record(ContentType::Handshake, true, |fragment| {
+                fragment.extend_from_slice(b"overflow");
+            })
+        }));
+
+        assert!(result.is_ok(), "saved-flight capacity must not panic");
+        assert!(matches!(result.unwrap(), Err(Error::TransmitQueueFull)));
+        assert_eq!(engine.sequence_epoch_0.sequence_number, epoch0_seq);
+        assert_eq!(saved_record_snapshot(&engine), saved_records);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn flight_resend_transmit_queue_full_restores_saved_records() {
+        let config = Config::builder()
+            .max_queue_tx(1)
+            .build()
+            .expect("build config");
+        let mut engine = test_engine_with_config(config);
+        install_test_app_send_keys(&mut engine);
+
+        engine
+            .create_key_update(KeyUpdateRequest::UpdateRequested)
+            .expect("initial KeyUpdate fits empty queue");
+        let saved_records: Vec<_> = engine
+            .flight_saved_records
+            .iter()
+            .map(|entry| {
+                (
+                    entry.content_type,
+                    entry.epoch,
+                    entry.send_seq,
+                    entry.fragment.as_ref().to_vec(),
+                    entry.acked,
+                )
+            })
+            .collect();
+
+        let result = engine.flight_resend("test queue full");
+
+        assert!(matches!(result, Err(Error::TransmitQueueFull)));
+        assert_eq!(engine.flight_saved_records.len(), saved_records.len());
+        for (entry, saved) in engine.flight_saved_records.iter().zip(saved_records) {
+            assert_eq!(entry.content_type, saved.0);
+            assert_eq!(entry.epoch, saved.1);
+            assert_eq!(entry.send_seq, saved.2);
+            assert_eq!(entry.fragment.as_ref(), saved.3.as_slice());
+            assert_eq!(entry.acked, saved.4);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn flight_resend_partial_queue_full_preserves_ackable_prefix_and_resumable_tail() {
+        let config = Config::builder()
+            .max_queue_tx(1)
+            .mtu(80)
+            .build()
+            .expect("build config");
+        let mut engine = test_engine_with_config(config);
+        install_test_app_send_keys(&mut engine);
+        engine.app_send_seq = 100;
+
+        push_saved_app_record(&mut engine, 7, 0xA7, 40);
+        push_saved_app_record(&mut engine, 8, 0xB8, 40);
+
+        let result = engine.flight_resend("test partial queue full");
+
+        assert!(matches!(result, Err(Error::TransmitQueueFull)));
+        assert_eq!(engine.queue_tx.len(), 1);
+        assert_eq!(engine.app_send_seq, 101);
+        assert_eq!(engine.flight_saved_records.len(), 2);
+        assert_eq!(engine.flight_saved_records[0].send_seq, 100);
+        assert_eq!(engine.flight_saved_records[1].send_seq, 8);
+        assert!(!engine.flight_saved_records[0].acked);
+        assert!(!engine.flight_saved_records[1].acked);
+
+        engine.queue_tx.clear();
+        let result = engine.flight_resend("second partial retry before late ACK");
+
+        assert!(matches!(result, Err(Error::TransmitQueueFull)));
+        assert_eq!(engine.queue_tx.len(), 1);
+        assert_eq!(engine.app_send_seq, 102);
+        assert_eq!(engine.flight_saved_records[0].send_seq, 101);
+        assert_eq!(engine.flight_saved_records[1].send_seq, 8);
+        assert!(!engine.flight_saved_records[0].acked);
+        assert!(!engine.flight_saved_records[1].acked);
+
+        engine.process_ack(&ack_record_number(3, 100));
+        assert!(engine.flight_saved_records[0].acked);
+        assert!(!engine.flight_saved_records[1].acked);
+
+        engine.queue_tx.clear();
+        engine
+            .flight_resend("retry after partial queue full")
+            .expect("unsent tail should resend after queue drains");
+
+        assert_eq!(engine.queue_tx.len(), 1);
+        assert_eq!(engine.app_send_seq, 103);
+        assert_eq!(engine.flight_saved_records[0].send_seq, 101);
+        assert_eq!(engine.flight_saved_records[1].send_seq, 102);
+        assert!(engine.flight_saved_records[0].acked);
+        assert!(!engine.flight_saved_records[1].acked);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn flight_timeout_partial_resend_rearms_before_tail_retry() {
+        let config = Config::builder()
+            .max_queue_tx(1)
+            .mtu(80)
+            .build()
+            .expect("build config");
+        let mut engine = test_engine_with_config(config);
+        install_test_app_send_keys(&mut engine);
+        engine.app_send_seq = 100;
+
+        push_saved_app_record(&mut engine, 7, 0xA7, 40);
+        push_saved_app_record(&mut engine, 8, 0xB8, 40);
+
+        let now = Instant::now();
+        let expired = now - Duration::from_millis(1);
+        engine.flight_timeout = Timeout::Armed(expired);
+        let initial_rto = engine.flight_backoff.rto();
+
+        engine
+            .handle_timeout(now)
+            .expect("partial resend queues progress and rearms timeout");
+
+        assert_eq!(engine.queue_tx.len(), 1);
+        assert_eq!(engine.app_send_seq, 101);
+        assert_eq!(engine.flight_saved_records[0].send_seq, 100);
+        assert_eq!(engine.flight_saved_records[1].send_seq, 8);
+        assert!(
+            engine.flight_backoff.rto() > initial_rto,
+            "partial progress should still consume resend backoff"
+        );
+        assert!(matches!(engine.flight_timeout, Timeout::Armed(deadline) if deadline > now));
+
+        engine.queue_tx.clear();
+        engine
+            .handle_timeout(now)
+            .expect("same instant should not immediately retry the same prefix");
+        assert!(
+            engine.queue_tx.is_empty(),
+            "rearmed timeout should prevent duplicate prefix output before the peer can ACK it"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn flight_resend_late_ack_history_scales_with_configured_retry_budget() {
+        let config = Config::builder()
+            .flight_retries(12)
+            .build()
+            .expect("build config");
+        let mut engine = test_engine_with_config(config);
+        install_test_app_send_keys(&mut engine);
+        engine.app_send_seq = 100;
+
+        push_saved_app_record(&mut engine, 7, 0xA7, 16);
+
+        for _ in 0..10 {
+            engine.queue_tx.clear();
+            engine
+                .flight_resend("configured retry budget preserves old ACKs")
+                .expect("single saved record should resend");
+        }
+
+        assert_eq!(engine.flight_saved_records[0].send_seq, 109);
+        engine.process_ack(&ack_record_number(3, 100));
+        assert!(
+            engine.flight_saved_records[0].acked,
+            "late ACK for first retransmitted copy should still match after more than eight retries"
         );
     }
 }
