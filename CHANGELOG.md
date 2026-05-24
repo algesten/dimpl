@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Drop plaintext DTLS 1.3 ACKs and alerts after peer encryption #118
   * Replace pending DTLS 1.2 handshake output on resend #116
   * Discard bad protected DTLS 1.2 records after handshake #115
   * Reject oversized DTLS certificate lists #113

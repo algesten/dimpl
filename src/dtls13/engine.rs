@@ -2267,6 +2267,20 @@ impl RecordHandler for Engine {
             }
         }
 
+        let epoch = record.record().sequence.epoch;
+        if epoch == 0
+            && self.peer_encryption_enabled
+            && matches!(
+                record.record().content_type,
+                ContentType::Ack | ContentType::Alert
+            )
+        {
+            // Plaintext ACKs and alerts after peer encryption is enabled are
+            // unauthenticated and must not be acted on. Mirrors DTLS 1.2.
+            self.push_buffer(record.into_buffer());
+            return Ok(None);
+        }
+
         match record.record().content_type {
             ContentType::Ack => {
                 let fragment = record.record().fragment(record.buffer());

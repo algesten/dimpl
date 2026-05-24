@@ -31,6 +31,25 @@ fn dtls13_ack_record(seq: u64) -> Vec<u8> {
     out
 }
 
+fn dtls13_ack_record_for_records(seq: u64, records: &[(u64, u64)]) -> Vec<u8> {
+    let record_numbers_len = (records.len() * 16) as u16;
+    let mut fragment = Vec::with_capacity(2 + records.len() * 16);
+    fragment.extend_from_slice(&record_numbers_len.to_be_bytes());
+    for &(epoch, record_seq) in records {
+        fragment.extend_from_slice(&epoch.to_be_bytes());
+        fragment.extend_from_slice(&record_seq.to_be_bytes());
+    }
+
+    let mut out = Vec::new();
+    out.push(26); // Ack
+    out.extend_from_slice(&[0xFE, 0xFD]); // legacy DTLS record version
+    out.extend_from_slice(&0u16.to_be_bytes()); // epoch 0 plaintext
+    out.extend_from_slice(&seq.to_be_bytes()[2..]); // u48 sequence number
+    out.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+    out.extend_from_slice(&fragment);
+    out
+}
+
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_malformed_datagram_does_not_process_alerts_before_parse_completes() {
@@ -682,6 +701,186 @@ fn dtls13_discards_plaintext_after_handshake() {
             .iter()
             .any(|d| d.as_slice() == b"after-plaintext"),
         "Server should receive application data after plaintext bogus packet"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_post_encryption_plaintext_close_notify_is_ignored() {
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls13_config();
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
+
+    server
+        .handle_packet(&dtls13_alert_record(0x100, 1, 0))
+        .expect("post-encryption plaintext close_notify should be ignored");
+
+    let after_plaintext_alert = drain_outputs(&mut server);
+    assert!(
+        !after_plaintext_alert.close_notify,
+        "plaintext close_notify after encryption must not close the connection"
+    );
+
+    client
+        .send_application_data(b"after-plaintext-close-notify")
+        .expect("send app data");
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    deliver_packets(&client_out.packets, &mut server);
+
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+    assert!(
+        server_out
+            .app_data
+            .iter()
+            .any(|d| d.as_slice() == b"after-plaintext-close-notify"),
+        "server should accept encrypted app data after plaintext close_notify"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_post_encryption_plaintext_fatal_alert_is_ignored() {
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls13_config();
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    now = complete_dtls13_handshake(&mut client, &mut server, now);
+
+    server
+        .handle_packet(&dtls13_alert_record(0x101, 2, 40))
+        .expect("post-encryption plaintext fatal alert should be ignored");
+
+    client
+        .send_application_data(b"after-plaintext-fatal-alert")
+        .expect("send app data");
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    deliver_packets(&client_out.packets, &mut server);
+
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = drain_outputs(&mut server);
+    assert!(
+        server_out
+            .app_data
+            .iter()
+            .any(|d| d.as_slice() == b"after-plaintext-fatal-alert"),
+        "server should accept encrypted app data after plaintext fatal alert"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_post_encryption_plaintext_ack_does_not_stop_retransmit() {
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = Arc::new(
+        Config::builder()
+            .flight_start_rto(Duration::from_millis(100))
+            .build()
+            .expect("build config"),
+    );
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    client.handle_timeout(now).expect("client timeout");
+    let client_hello = collect_packets(&mut client);
+    assert!(!client_hello.is_empty(), "client should emit ClientHello");
+
+    deliver_packets(&client_hello, &mut server);
+    server.handle_timeout(now).expect("server timeout");
+    let first_server_flight = collect_packets(&mut server);
+    assert!(
+        !first_server_flight.is_empty(),
+        "server should emit first flight"
+    );
+
+    // If this unauthenticated plaintext ACK reaches process_ack, it can mark
+    // the saved epoch-2 handshake flight as fully acknowledged and disable
+    // retransmission. The classify_record guard must discard it first.
+    let acked_records: Vec<(u64, u64)> = (0..64).map(|seq| (2, seq)).collect();
+    server
+        .handle_packet(&dtls13_ack_record_for_records(0x200, &acked_records))
+        .expect("post-encryption plaintext ACK should be ignored");
+
+    now += Duration::from_millis(150);
+    server.handle_timeout(now).expect("server timeout");
+    let retransmit = collect_packets(&mut server);
+    assert!(
+        !retransmit.is_empty(),
+        "forged plaintext ACK must not stop server flight retransmission"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_duplicate_client_hello_still_triggers_retransmit_after_peer_encryption() {
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = dtls13_config();
+
+    let now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    client.handle_timeout(now).expect("client timeout");
+    let client_hello = collect_packets(&mut client);
+    assert!(!client_hello.is_empty(), "client should emit ClientHello");
+
+    deliver_packets(&client_hello, &mut server);
+    server.handle_timeout(now).expect("server timeout");
+    let first_server_flight = collect_packets(&mut server);
+    assert!(
+        !first_server_flight.is_empty(),
+        "server should emit ServerHello plus encrypted handshake flight"
+    );
+
+    deliver_packets(&client_hello, &mut server);
+    let retransmit = collect_packets(&mut server);
+    assert!(
+        !retransmit.is_empty(),
+        "duplicate plaintext ClientHello should still trigger server flight retransmission"
     );
 }
 
