@@ -325,7 +325,17 @@ impl Engine {
         // so it has received our final flight. This is the server's signal that
         // the client completed (the client itself confirms at completion, in
         // flight_stop_resend_timers).
-        if !self.peer_handshake_confirmed
+        //
+        // The release_app_data guard is what makes this authenticated: a DTLS
+        // 1.2 record advertises its content type in the cleartext header, and
+        // epoch-1 records that arrive before peer encryption is enabled are
+        // queued undecrypted. Without the guard a forged epoch-1 record with an
+        // ApplicationData header could set this off unauthenticated data. Once
+        // release_app_data is set, peer encryption is on, so any epoch-1 record
+        // that reaches here was decrypted (a forgery fails AEAD in Record::parse
+        // and never arrives).
+        if self.release_app_data
+            && !self.peer_handshake_confirmed
             && incoming.records().iter().any(|r| {
                 r.record().sequence.epoch >= 1
                     && r.record().content_type == ContentType::ApplicationData
