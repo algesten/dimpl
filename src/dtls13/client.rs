@@ -107,6 +107,9 @@ pub struct Client {
     /// Whether we need to respond with our own KeyUpdate
     pending_key_update_response: bool,
 
+    /// Whether a peer KeyUpdate ACK needs to be retried.
+    pending_key_update_ack: bool,
+
     /// Active key exchange state (ECDHE)
     active_key_exchange: Option<Box<dyn ActiveKeyExchange>>,
 
@@ -153,6 +156,7 @@ impl Client {
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
             pending_key_update_response: false,
+            pending_key_update_ack: false,
             active_key_exchange: None,
             hello_retry: false,
             hrr_selected_group: None,
@@ -198,6 +202,7 @@ impl Client {
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
             pending_key_update_response: false,
+            pending_key_update_ack: false,
             active_key_exchange: Some(hybrid.active_key_exchange),
             hello_retry: false,
             hrr_selected_group: None,
@@ -219,10 +224,7 @@ impl Client {
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         self.engine.parse_packet(packet)?;
-        self.make_progress()?;
-        while self.engine.parse_next_deferred_packet()? {
-            self.make_progress()?;
-        }
+        self.make_progress_and_drain_deferred()?;
         Ok(())
     }
 
@@ -230,7 +232,13 @@ impl Client {
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.server_certificates);
         }
-        self.engine.poll_output(buf, self.last_now)
+
+        match self.engine.poll_output(buf, self.last_now) {
+            Output::Timeout(_) if self.has_pending_local_progress() => {
+                Output::Timeout(self.last_now)
+            }
+            output => output,
+        }
     }
 
     /// Explicitly start the handshake process by sending a ClientHello
@@ -240,8 +248,22 @@ impl Client {
             self.random = Some(self.engine.random());
         }
         self.engine.handle_timeout(now)?;
-        self.make_progress()?;
+        self.make_progress_and_drain_deferred()?;
         Ok(())
+    }
+
+    fn make_progress_and_drain_deferred(&mut self) -> Result<(), Error> {
+        self.make_progress()?;
+        while self.engine.parse_next_deferred_packet()? {
+            self.make_progress()?;
+        }
+        Ok(())
+    }
+
+    fn has_pending_local_progress(&self) -> bool {
+        self.pending_key_update_ack
+            || self.engine.has_pending_post_handshake_ack()
+            || (self.pending_key_update_response && !self.engine.is_key_update_in_flight())
     }
 
     fn initiate_key_update(&mut self) -> Result<(), Error> {
@@ -259,6 +281,22 @@ impl Client {
         Ok(())
     }
 
+    fn send_pending_key_update_ack(&mut self) -> Result<(), Error> {
+        if !self.pending_key_update_ack && !self.engine.has_pending_post_handshake_ack() {
+            return Ok(());
+        }
+
+        let result = if self.engine.is_key_update_in_flight() {
+            self.engine.send_ack_with_previous_app_epoch()
+        } else {
+            self.engine.send_ack()
+        };
+
+        result?;
+        self.pending_key_update_ack = false;
+        Ok(())
+    }
+
     fn handle_incoming_key_update(&mut self) -> Result<(), Error> {
         if self.engine.has_complete_handshake(MessageType::KeyUpdate) {
             let maybe = self.engine.next_handshake_no_transcript(
@@ -273,21 +311,15 @@ impl Client {
 
                 // Install new recv keys
                 self.engine.update_recv_keys()?;
+                self.engine.advance_peer_handshake_seq();
+                self.pending_key_update_ack = true;
 
                 // If peer requested us to update, schedule our own KeyUpdate
-                let local_key_update_in_flight = self.engine.is_key_update_in_flight();
                 if request == KeyUpdateRequest::UpdateRequested {
                     self.pending_key_update_response = true;
-                    if local_key_update_in_flight {
-                        self.engine.send_ack_with_previous_app_epoch()?;
-                    } else {
-                        self.engine.send_ack()?;
-                    }
-                } else {
-                    self.engine.send_ack()?;
                 }
+                self.send_pending_key_update_ack()?;
 
-                self.engine.advance_peer_handshake_seq();
                 debug!("Received KeyUpdate (request={:?})", request);
 
                 // Drain a fresh peer-requested response in the same progress
@@ -1104,6 +1136,7 @@ impl State {
         // Incoming peer requests require an update_not_requested response. They
         // take priority over local AEAD-limit updates and queued app data.
         client.handle_incoming_key_update()?;
+        client.send_pending_key_update_ack()?;
         client.send_pending_key_update_response()?;
 
         // Auto-trigger KeyUpdate when AEAD encryption limit is reached

@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Restore DTLS 1.3 saved flights on resend backpressure #124
   * Preserve overlapping DTLS 1.3 KeyUpdate flights #123
   * Preserve DTLS 1.3 app data following KeyUpdate in one datagram #122
   * Fix malformed datagrams consuming DTLS replay-window state #121
