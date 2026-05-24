@@ -471,8 +471,9 @@ impl Engine {
                     for record in incoming.records().iter() {
                         let seq = record.record().sequence;
                         if seq.epoch >= 2 {
-                            self.received_record_numbers
-                                .push((seq.epoch as u64, seq.sequence_number));
+                            let _ = self
+                                .received_record_numbers
+                                .try_push((seq.epoch as u64, seq.sequence_number));
                         }
                     }
                     self.queue_rx[index] = incoming;
@@ -2543,6 +2544,93 @@ mod tests {
         );
     }
 
+    struct PassthroughRecordHandler;
+
+    impl RecordHandler for PassthroughRecordHandler {
+        fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
+            Ok(Some(record))
+        }
+
+        fn is_peer_encryption_enabled(&self) -> bool {
+            true
+        }
+
+        fn resolve_epoch(&self, _epoch_bits: u8) -> u16 {
+            2
+        }
+
+        fn resolve_sequence(
+            &self,
+            _epoch: u16,
+            seq_bits: u64,
+            _s_flag: bool,
+            _expected_override: Option<u64>,
+        ) -> u64 {
+            seq_bits
+        }
+
+        fn replay_check(&self, _seq: Sequence) -> bool {
+            true
+        }
+
+        fn replay_update(&mut self, _seq: Sequence) {}
+
+        fn min_protected_fragment_len(&self) -> usize {
+            0
+        }
+
+        fn decrypt_record(
+            &mut self,
+            _header: &[u8],
+            _seq: Sequence,
+            _ciphertext: &mut TmpBuf,
+        ) -> Result<(), Error> {
+            Ok(())
+        }
+
+        fn decrypt_sequence_number(
+            &self,
+            _epoch: u16,
+            _seq_bytes: &mut [u8],
+            _ciphertext_sample: &[u8; 16],
+        ) {
+        }
+    }
+
+    fn encrypted_key_update_record(seq: u16) -> Vec<u8> {
+        let mut fragment = Vec::new();
+        fragment.push(MessageType::KeyUpdate.as_u8());
+        fragment.extend_from_slice(&1u32.to_be_bytes()[1..]);
+        fragment.extend_from_slice(&0u16.to_be_bytes());
+        fragment.extend_from_slice(&0u32.to_be_bytes()[1..]);
+        fragment.extend_from_slice(&1u32.to_be_bytes()[1..]);
+        fragment.push(KeyUpdateRequest::UpdateRequested.as_u8());
+        fragment.push(ContentType::Handshake.as_u8());
+
+        let mut packet = Vec::new();
+        packet.push(
+            0b0010_0000
+                | 0b0000_1000 // 2-byte sequence number.
+                | 0b0000_0100 // explicit length.
+                | 0b0000_0010, // epoch bits resolved by PassthroughRecordHandler.
+        );
+        packet.extend_from_slice(&seq.to_be_bytes());
+        packet.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+        packet.extend_from_slice(&fragment);
+        packet
+    }
+
+    fn parsed_key_update(seq: u16) -> Incoming {
+        Incoming::parse_packet_defer_after_key_update(
+            &encrypted_key_update_record(seq),
+            &mut PassthroughRecordHandler,
+            Some(Dtls13CipherSuite::AES_128_GCM_SHA256),
+        )
+        .expect("parse key update packet")
+        .incoming
+        .expect("packet contains a record")
+    }
+
     /// Issue 2: Epoch-0 sequence number must have an overflow guard.
     ///
     /// Per RFC 9147 §4.2, implementations MUST NOT allow the sequence number
@@ -2688,5 +2776,48 @@ mod tests {
             assert_eq!(entry.fragment.as_ref(), saved.3.as_slice());
             assert_eq!(entry.acked, saved.4);
         }
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn ack_tracking_full_does_not_panic_on_handshake_replacement() {
+        let mut engine = test_engine();
+
+        let first = parsed_key_update(0);
+        engine
+            .insert_incoming(first)
+            .expect("insert initial key update");
+        engine.queue_rx[0]
+            .first()
+            .first_handshake()
+            .expect("initial key update handshake")
+            .set_handled();
+
+        engine.received_record_numbers.clear();
+        for sequence in 0..engine.received_record_numbers.capacity() {
+            engine.received_record_numbers.push((2, sequence as u64));
+        }
+
+        let replacement = parsed_key_update(1);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine
+                .insert_incoming(replacement)
+                .expect("replace handled key update")
+        }));
+
+        assert!(
+            result.is_ok(),
+            "full ACK bookkeeping must not panic when a handled handshake is replaced"
+        );
+        assert_eq!(engine.queue_rx.len(), 1);
+        assert_eq!(
+            engine.queue_rx[0].first().record().sequence.sequence_number,
+            1
+        );
+        assert_eq!(
+            engine.received_record_numbers.len(),
+            engine.received_record_numbers.capacity(),
+            "overflowing ACK bookkeeping should keep existing entries and drop the extra one"
+        );
     }
 }
