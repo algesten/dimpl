@@ -37,6 +37,15 @@ impl Incoming {
     pub fn into_records(self) -> impl Iterator<Item = Record> {
         self.records.records.into_iter()
     }
+
+    pub(crate) fn ackable_record_numbers(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        self.records
+            .records
+            .iter()
+            .map(|record| record.record().sequence)
+            .filter(|seq| seq.epoch >= 2)
+            .map(|seq| (seq.epoch as u64, seq.sequence_number))
+    }
 }
 
 impl Incoming {

@@ -401,7 +401,11 @@ impl Engine {
 
         if let Some(dupe_seq) = maybe_dupe_seq {
             if dupe_seq < self.peer_handshake_seq_no {
+                for seq in incoming.ackable_record_numbers() {
+                    let _ = self.received_record_numbers.try_push(seq);
+                }
                 self.flight_resend("dupe triggers resend")?;
+                self.send_ack()?;
             }
         }
 
@@ -1277,16 +1281,29 @@ impl Engine {
     ///
     /// ACK format: record_numbers_length(2) + N * (epoch(8) + sequence(8))
     pub fn send_ack(&mut self) -> Result<(), Error> {
-        if self.received_record_numbers.is_empty() {
-            return Ok(());
-        }
-
-        let entries = mem::take(&mut self.received_record_numbers);
         let epoch = if self.app_send_keys.is_some() {
             self.app_send_epoch
         } else {
             2
         };
+
+        self.send_ack_with_epoch(epoch)
+    }
+
+    pub(crate) fn send_ack_with_previous_app_epoch(&mut self) -> Result<(), Error> {
+        if self.prev_app_send_keys.is_some() {
+            self.send_ack_with_epoch(self.prev_app_send_epoch)
+        } else {
+            self.send_ack()
+        }
+    }
+
+    fn send_ack_with_epoch(&mut self, epoch: u16) -> Result<(), Error> {
+        if self.received_record_numbers.is_empty() {
+            return Ok(());
+        }
+
+        let entries = mem::take(&mut self.received_record_numbers);
 
         self.create_ciphertext_record(ContentType::Ack, epoch, false, |fragment| {
             // record_numbers_length: 2 bytes, value = entries.len() * 16
@@ -1881,6 +1898,12 @@ impl Engine {
     /// the current app epoch, then send keys are rotated (old keys saved
     /// in `prev_app_send_*` for retransmission).
     pub fn create_key_update(&mut self, request: KeyUpdateRequest) -> Result<(), Error> {
+        if self.is_key_update_in_flight() {
+            return Err(Error::CryptoError(
+                "KeyUpdate already in flight".to_string(),
+            ));
+        }
+
         // Set up retransmission
         self.flight_backoff.reset(&mut self.rng);
         self.flight_clear_resends();
@@ -2507,6 +2530,19 @@ mod tests {
         Engine::new(config, cert)
     }
 
+    #[cfg(feature = "rcgen")]
+    fn install_test_app_send_keys(engine: &mut Engine) {
+        engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+
+        let mut traffic_secret = Buf::new();
+        traffic_secret.extend_from_slice(&vec![0x42; engine.hash_algorithm().output_len()]);
+        engine.app_send_keys = Some(
+            engine
+                .derive_epoch_keys(&traffic_secret)
+                .expect("derive app send keys"),
+        );
+    }
+
     /// Issue 2: Epoch-0 sequence number must have an overflow guard.
     ///
     /// Per RFC 9147 §4.2, implementations MUST NOT allow the sequence number
@@ -2604,5 +2640,53 @@ mod tests {
             early_secret.into_vec().capacity() >= 256,
             "derive_early_secret must use the buffer pool, returning a buffer with pooled capacity"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn peer_key_update_response_does_not_replace_in_flight_local_update() {
+        let mut engine = test_engine();
+        install_test_app_send_keys(&mut engine);
+
+        engine
+            .create_key_update(KeyUpdateRequest::UpdateRequested)
+            .expect("create local KeyUpdate");
+
+        let prev_epoch = engine.prev_app_send_epoch;
+        let prev_seq = engine.prev_app_send_seq;
+        let saved_records: Vec<_> = engine
+            .flight_saved_records
+            .iter()
+            .map(|entry| {
+                (
+                    entry.content_type,
+                    entry.epoch,
+                    entry.send_seq,
+                    entry.fragment.as_ref().to_vec(),
+                    entry.acked,
+                )
+            })
+            .collect();
+        let send_epoch = engine.app_send_epoch;
+        let send_seq = engine.app_send_seq;
+
+        let result = engine.create_key_update(KeyUpdateRequest::UpdateNotRequested);
+        assert!(
+            result.is_err(),
+            "a peer-requested KeyUpdate response must wait while a local KeyUpdate is in flight"
+        );
+
+        assert_eq!(engine.prev_app_send_epoch, prev_epoch);
+        assert_eq!(engine.prev_app_send_seq, prev_seq);
+        assert_eq!(engine.app_send_epoch, send_epoch);
+        assert_eq!(engine.app_send_seq, send_seq);
+        assert_eq!(engine.flight_saved_records.len(), saved_records.len());
+        for (entry, saved) in engine.flight_saved_records.iter().zip(saved_records) {
+            assert_eq!(entry.content_type, saved.0);
+            assert_eq!(entry.epoch, saved.1);
+            assert_eq!(entry.send_seq, saved.2);
+            assert_eq!(entry.fragment.as_ref(), saved.3.as_slice());
+            assert_eq!(entry.acked, saved.4);
+        }
     }
 }

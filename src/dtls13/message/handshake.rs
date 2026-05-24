@@ -223,7 +223,8 @@ impl Handshake {
 
         let qualifies = matches!(
             self.header.msg_type,
-            MessageType::ClientHello // flight 1
+            MessageType::ClientHello | // flight 1
+            MessageType::KeyUpdate // post-handshake flight
         );
 
         qualifies.then_some(self.header.message_seq)
