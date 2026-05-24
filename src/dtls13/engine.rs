@@ -58,6 +58,10 @@ pub struct Engine {
     /// Queue of outgoing packets.
     queue_tx: QueueTx,
 
+    /// Deferred tail datagrams split after KeyUpdate records. They are parsed
+    /// after the state machine installs the next receive keys.
+    deferred_packets: ArrayVec<Buf, 4>,
+
     /// The cipher suite in use. Set by ServerHello.
     cipher_suite: Option<Dtls13CipherSuite>,
 
@@ -221,6 +225,7 @@ impl Engine {
             sequence_epoch_0: Sequence::new(0),
             queue_rx: QueueRx::new(),
             queue_tx: QueueTx::new(),
+            deferred_packets: ArrayVec::new(),
             cipher_suite: None,
             hs_send_keys: None,
             hs_recv_keys: None,
@@ -330,13 +335,33 @@ impl Engine {
     }
 
     pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+        self.parse_packet_once(packet)
+    }
+
+    fn parse_packet_once(&mut self, packet: &[u8]) -> Result<(), Error> {
         let cs = self.cipher_suite;
-        let incoming = Incoming::parse_packet(packet, self, cs)?;
-        if let Some(incoming) = incoming {
+        let parsed = Incoming::parse_packet_defer_after_key_update(packet, self, cs)?;
+        if let Some(incoming) = parsed.incoming {
             self.insert_incoming(incoming)?;
+        }
+        if let Some(deferred_tail) = parsed.deferred_tail {
+            self.deferred_packets
+                .try_push(deferred_tail)
+                .map_err(|_| Error::TooManyRecords)?;
         }
 
         Ok(())
+    }
+
+    pub fn parse_next_deferred_packet(&mut self) -> Result<bool, Error> {
+        if self.deferred_packets.is_empty() {
+            return Ok(false);
+        }
+
+        let packet = self.deferred_packets.remove(0);
+        self.parse_packet_once(&packet)?;
+
+        Ok(true)
     }
 
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
