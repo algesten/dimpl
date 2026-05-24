@@ -1040,3 +1040,86 @@ fn dtls12_handshake_timeout_aborts() {
         "Client should report a timeout error when handshake_timeout is exceeded"
     );
 }
+
+/// Before the peer is confirmed (the legitimate retransmission window), a stale
+/// plaintext ClientHello still triggers a flight-6 resend, so a lost flight 6
+/// recovers. This is the contrast case to the post-confirmation suppression
+/// below: the gate must not break legitimate retransmission.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_stale_client_hello_before_peer_confirmed_triggers_resend() {
+    let _ = env_logger::try_init();
+
+    const RX_QUEUE_LIMIT: usize = 8;
+    let FinalFlightResend {
+        mut server,
+        stale_epoch0_handshake,
+        ..
+    } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    // The server has sent flight 6 but has no confirmation the client received
+    // it (no authenticated application data has arrived). A stale ClientHello
+    // here means "peer still needs my flight" and must drive a resend.
+    server
+        .handle_packet(&stale_epoch0_handshake)
+        .expect("stale ClientHello must be tolerated");
+    let resend = collect_packets(&mut server);
+
+    assert!(
+        !resend.is_empty(),
+        "server must resend flight 6 on a stale ClientHello while the peer is unconfirmed"
+    );
+}
+
+/// Once the peer is confirmed to have completed the handshake (the server has
+/// received authenticated application data from the client), a replayed
+/// plaintext ClientHello is unauthenticated noise and must not trigger a flight
+/// retransmission. This closes the resend-amplification window that an attacker
+/// could otherwise drive with spoofed epoch-0 handshakes.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_stale_client_hello_after_peer_confirmed_triggers_no_resend() {
+    let _ = env_logger::try_init();
+
+    const RX_QUEUE_LIMIT: usize = 8;
+    let FinalFlightResend {
+        mut client,
+        mut server,
+        f6_resend,
+        stale_epoch0_handshake,
+        ..
+    } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    // Finish the handshake: deliver the server's resent flight 6 to the client.
+    deliver_packets(&f6_resend, &mut client);
+    assert!(
+        drain_outputs(&mut client).connected,
+        "client should connect once it receives flight 6"
+    );
+
+    // Client application data is the server's signal that the client completed
+    // (it could only send it after receiving flight 6).
+    client
+        .send_application_data(b"client-app-data")
+        .expect("client sends application data");
+    let client_app = collect_packets(&mut client);
+    assert!(!client_app.is_empty(), "client should emit app-data packet");
+    deliver_packets(&client_app, &mut server);
+    let server_out = drain_outputs(&mut server);
+    assert_eq!(
+        server_out.app_data,
+        vec![b"client-app-data".to_vec()],
+        "server should receive the client's application data"
+    );
+
+    // Replay the stale plaintext ClientHello at the now-confirmed server.
+    server
+        .handle_packet(&stale_epoch0_handshake)
+        .expect("stale ClientHello must be tolerated");
+    let resend = collect_packets(&mut server);
+
+    assert!(
+        resend.is_empty(),
+        "server must not resend its flight after the client is confirmed connected"
+    );
+}
