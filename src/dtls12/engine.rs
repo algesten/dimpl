@@ -321,29 +321,6 @@ impl Engine {
         let first = incoming.first();
         let seq_current = first.record().sequence;
 
-        // Authenticated application data proves the peer is past its handshake,
-        // so it has received our final flight. This is the server's signal that
-        // the client completed (the client itself confirms at completion, in
-        // flight_stop_resend_timers).
-        //
-        // The release_app_data guard is what makes this authenticated: a DTLS
-        // 1.2 record advertises its content type in the cleartext header, and
-        // epoch-1 records that arrive before peer encryption is enabled are
-        // queued undecrypted. Without the guard a forged epoch-1 record with an
-        // ApplicationData header could set this off unauthenticated data. Once
-        // release_app_data is set, peer encryption is on, so any epoch-1 record
-        // that reaches here was decrypted (a forgery fails AEAD in Record::parse
-        // and never arrives).
-        if self.release_app_data
-            && !self.peer_handshake_confirmed
-            && incoming.records().iter().any(|r| {
-                r.record().sequence.epoch >= 1
-                    && r.record().content_type == ContentType::ApplicationData
-            })
-        {
-            self.peer_handshake_confirmed = true;
-        }
-
         if self.peer_encryption_enabled
             && seq_current.epoch == 0
             && first.record().content_type == ContentType::Handshake
@@ -1358,6 +1335,17 @@ impl RecordHandler for Engine {
 
     fn replay_update(&mut self, seq: Sequence) {
         self.replay.update(seq.sequence_number);
+    }
+
+    fn note_decrypted_record(&mut self, content_type: ContentType) {
+        // A decrypted (so authenticated) application-data record proves the peer
+        // is past its handshake, which means it received our final flight. Once
+        // that's known, a stale plaintext handshake (unauthenticated, replayable)
+        // must no longer drive a courtesy flight retransmission. The client
+        // confirms separately at its own completion (flight_stop_resend_timers).
+        if content_type == ContentType::ApplicationData {
+            self.peer_handshake_confirmed = true;
+        }
     }
 
     fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord, buf: &[u8]) -> (Aad, Nonce) {

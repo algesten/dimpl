@@ -168,6 +168,7 @@ impl Record {
         // We need to decrypt the record and redo the parsing.
         let dtls = record.record();
         let sequence = dtls.sequence;
+        let content_type = dtls.content_type;
 
         // Anti-replay check (read-only, does not update window)
         if !decrypt.replay_check(sequence) {
@@ -213,6 +214,10 @@ impl Record {
         // RFC 6347 §4.1.2.6: "The receive window is updated only if the
         // MAC verification succeeds."
         decrypt.replay_update(sequence);
+
+        // The record is now authenticated. Tell the handler so it can act on a
+        // confirmed-genuine record (e.g. mark the peer past its handshake).
+        decrypt.note_decrypted_record(content_type);
 
         // Update the length of the record.
         buffer[11] = (new_len >> 8) as u8;
@@ -314,6 +319,11 @@ pub trait RecordHandler {
     fn can_discard_bad_protected_record(&self) -> bool {
         false
     }
+
+    /// Called once a record has been successfully decrypted, i.e. authenticated.
+    /// Lets the handler react to a confirmed-genuine record (e.g. note that the
+    /// peer is past its handshake). The default does nothing.
+    fn note_decrypted_record(&mut self, _content_type: ContentType) {}
 }
 
 fn parse_handshakes(
