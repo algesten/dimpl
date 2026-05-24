@@ -94,6 +94,18 @@ pub struct Engine {
     /// Whether we are ready to release application data from poll_output.
     release_app_data: bool,
 
+    /// Whether we have confirmation that the peer completed the handshake, i.e.
+    /// that the peer received our final flight. Once set, a stale plaintext
+    /// handshake (which is unauthenticated and replayable after encryption is
+    /// enabled) no longer triggers a courtesy flight retransmission.
+    ///
+    /// This is set from two signals, each meaningful for one role:
+    /// - the client stops its resend timer when it completes, which means the
+    ///   server received our final flight (the client confirms at completion);
+    /// - receiving authenticated application data, which means the peer is past
+    ///   its handshake (the server's only proof the client received flight 6).
+    peer_handshake_confirmed: bool,
+
     /// Whether a close_notify alert has been received from the peer.
     close_notify_received: bool,
 
@@ -147,6 +159,7 @@ impl Engine {
             flight_timeout: Timeout::Unarmed,
             connect_timeout: Timeout::Unarmed,
             release_app_data: false,
+            peer_handshake_confirmed: false,
             close_notify_received: false,
             close_notify_reported: false,
         }
@@ -254,9 +267,12 @@ impl Engine {
             .next();
 
         // Some MessageType when resent, means we must trigger
-        // an immediate resend of the entire flight.
+        // an immediate resend of the entire flight. Once the peer is confirmed
+        // to have completed the handshake, a stale plaintext handshake is just
+        // unauthenticated noise (or a replay/amplification attempt) and must not
+        // drive a resend.
         if let Some(dupe_seq) = maybe_dupe_seq {
-            if dupe_seq < self.peer_handshake_seq_no {
+            if dupe_seq < self.peer_handshake_seq_no && !self.peer_handshake_confirmed {
                 self.flight_resend("dupe triggers resend")?;
             }
         }
@@ -517,6 +533,16 @@ impl Engine {
         debug!("Stop connect and flight timeouts");
         self.flight_timeout = Timeout::Disabled;
         self.connect_timeout = Timeout::Disabled;
+
+        // The client stops its resend timer only once it has received the
+        // server's final flight, which proves the server received the client's
+        // final flight — so the peer is confirmed. The server, by contrast,
+        // stops its timer right after sending flight 6, before the client has
+        // confirmed anything, so it must NOT confirm here (it relies on later
+        // authenticated application data instead).
+        if self.is_client {
+            self.peer_handshake_confirmed = true;
+        }
     }
 
     fn flight_clear_resends(&mut self) {
@@ -1309,6 +1335,17 @@ impl RecordHandler for Engine {
 
     fn replay_update(&mut self, seq: Sequence) {
         self.replay.update(seq.sequence_number);
+    }
+
+    fn note_decrypted_record(&mut self, content_type: ContentType) {
+        // A decrypted (so authenticated) application-data record proves the peer
+        // is past its handshake, which means it received our final flight. Once
+        // that's known, a stale plaintext handshake (unauthenticated, replayable)
+        // must no longer drive a courtesy flight retransmission. The client
+        // confirms separately at its own completion (flight_stop_resend_timers).
+        if content_type == ContentType::ApplicationData {
+            self.peer_handshake_confirmed = true;
+        }
     }
 
     fn decryption_aad_and_nonce(&self, dtls: &DTLSRecord, buf: &[u8]) -> (Aad, Nonce) {

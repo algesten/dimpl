@@ -1040,3 +1040,189 @@ fn dtls12_handshake_timeout_aborts() {
         "Client should report a timeout error when handshake_timeout is exceeded"
     );
 }
+
+/// Before the peer is confirmed (the legitimate retransmission window), a stale
+/// plaintext ClientHello still triggers a flight-6 resend, so a lost flight 6
+/// recovers. This is the contrast case to the post-confirmation suppression
+/// below: the gate must not break legitimate retransmission.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_stale_client_hello_before_peer_confirmed_triggers_resend() {
+    let _ = env_logger::try_init();
+
+    const RX_QUEUE_LIMIT: usize = 8;
+    let FinalFlightResend {
+        mut server,
+        stale_epoch0_handshake,
+        ..
+    } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    // The server has sent flight 6 but has no confirmation the client received
+    // it (no authenticated application data has arrived). A stale ClientHello
+    // here means "peer still needs my flight" and must drive a resend.
+    server
+        .handle_packet(&stale_epoch0_handshake)
+        .expect("stale ClientHello must be tolerated");
+    let resend = collect_packets(&mut server);
+
+    assert!(
+        !resend.is_empty(),
+        "server must resend flight 6 on a stale ClientHello while the peer is unconfirmed"
+    );
+}
+
+/// Once the peer is confirmed to have completed the handshake (the server has
+/// received authenticated application data from the client), a replayed
+/// plaintext ClientHello is unauthenticated noise and must not trigger a flight
+/// retransmission. This closes the resend-amplification window that an attacker
+/// could otherwise drive with spoofed epoch-0 handshakes.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_stale_client_hello_after_peer_confirmed_triggers_no_resend() {
+    let _ = env_logger::try_init();
+
+    const RX_QUEUE_LIMIT: usize = 8;
+    let FinalFlightResend {
+        mut client,
+        mut server,
+        f6_resend,
+        stale_epoch0_handshake,
+        ..
+    } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    // Finish the handshake: deliver the server's resent flight 6 to the client.
+    deliver_packets(&f6_resend, &mut client);
+    assert!(
+        drain_outputs(&mut client).connected,
+        "client should connect once it receives flight 6"
+    );
+
+    // Client application data is the server's signal that the client completed
+    // (it could only send it after receiving flight 6).
+    client
+        .send_application_data(b"client-app-data")
+        .expect("client sends application data");
+    let client_app = collect_packets(&mut client);
+    assert!(!client_app.is_empty(), "client should emit app-data packet");
+    deliver_packets(&client_app, &mut server);
+    let server_out = drain_outputs(&mut server);
+    assert_eq!(
+        server_out.app_data,
+        vec![b"client-app-data".to_vec()],
+        "server should receive the client's application data"
+    );
+
+    // Replay the stale plaintext ClientHello at the now-confirmed server.
+    server
+        .handle_packet(&stale_epoch0_handshake)
+        .expect("stale ClientHello must be tolerated");
+    let resend = collect_packets(&mut server);
+
+    assert!(
+        resend.is_empty(),
+        "server must not resend its flight after the client is confirmed connected"
+    );
+}
+
+#[cfg(feature = "rcgen")]
+fn forged_epoch1_app_data() -> Vec<u8> {
+    // A DTLS 1.2 record header advertising epoch-1 ApplicationData with a
+    // garbage (undecryptable) body. The content type lives in the cleartext
+    // header, so this looks like app data before anything is decrypted.
+    let mut rec = Vec::new();
+    rec.push(23); // ContentType::ApplicationData
+    rec.extend_from_slice(&[0xFE, 0xFD]); // DTLS 1.2
+    rec.extend_from_slice(&1u16.to_be_bytes()); // epoch 1
+    rec.extend_from_slice(&[0, 0, 0, 0, 0, 1]); // 48-bit sequence number
+    rec.extend_from_slice(&2u16.to_be_bytes()); // fragment length
+    rec.extend_from_slice(&[0xAA, 0xBB]); // garbage fragment
+    rec
+}
+
+/// A forged epoch-1 application-data record arriving before peer encryption is
+/// enabled must not confirm the peer handshake. The record advertises
+/// ApplicationData in its cleartext header and is queued undecrypted, so without
+/// the authentication guard it would falsely mark the peer confirmed and suppress
+/// the flight-6 resend that a genuinely lost flight needs.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_forged_epoch1_appdata_before_encryption_does_not_confirm_peer() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let mut now = Instant::now();
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let config_client = Arc::new(Config::builder().mtu(115).build().expect("config"));
+    let config_server = Arc::new(Config::builder().mtu(115).build().expect("config"));
+
+    let mut client = Dtls::new_12(config_client, client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_12(config_server, server_cert, now);
+    server.set_active(false);
+
+    // Flight 1: ClientHello.
+    client.handle_timeout(now).expect("client timeout start");
+    client.handle_timeout(now).expect("client arm flight 1");
+    let f1 = collect_packets(&mut client);
+    for packet in &f1 {
+        server.handle_packet(packet).expect("server recv f1");
+    }
+
+    // Flight 2: HelloVerifyRequest.
+    server.handle_timeout(now).expect("server arm flight 2");
+    let f2 = collect_packets(&mut server);
+    assert!(!f2.is_empty(), "server should emit flight 2");
+    for packet in &f2 {
+        client.handle_packet(packet).expect("client recv f2");
+    }
+
+    // Flight 3: ClientHello with cookie.
+    client.handle_timeout(now).expect("client arm flight 3");
+    let f3 = collect_packets(&mut client);
+    assert!(!f3.is_empty(), "client should emit flight 3");
+    for packet in &f3 {
+        server.handle_packet(packet).expect("server recv f3");
+    }
+
+    // Flight 4: server hello flight.
+    server.handle_timeout(now).expect("server arm flight 4");
+    let f4 = collect_packets(&mut server);
+    assert!(!f4.is_empty(), "server should emit flight 4");
+    for packet in &f4 {
+        client.handle_packet(packet).expect("client recv f4");
+    }
+
+    // Inject the forged epoch-1 app-data record while the server still has peer
+    // encryption disabled (it has not seen the client CCS yet).
+    let _ = server.handle_packet(&forged_epoch1_app_data());
+    let _ = drain_outputs(&mut server);
+
+    // Flight 5: CKE, CCS, Finished. Server completes and emits flight 6.
+    client.handle_timeout(now).expect("client arm flight 5");
+    let f5 = collect_packets(&mut client);
+    assert!(!f5.is_empty(), "client should emit flight 5");
+    for packet in &f5 {
+        server.handle_packet(packet).expect("server recv f5");
+    }
+    server.handle_timeout(now).expect("server arm flight 6");
+    let f6_init = collect_packets(&mut server);
+    assert!(!f6_init.is_empty(), "server should emit flight 6");
+
+    // Drop flight 6. The client retransmits flight 5 on timeout.
+    trigger_timeout(&mut client, &mut now);
+    let f5_resend = collect_packets(&mut client);
+    assert!(!f5_resend.is_empty(), "client should resend flight 5");
+    for packet in &f5_resend {
+        server.handle_packet(packet).expect("server recv f5 resend");
+    }
+
+    // The forged record must not have confirmed the peer, so the duplicate
+    // flight 5 still drives a flight-6 resend.
+    let f6_resend = collect_packets(&mut server);
+    assert!(
+        !f6_resend.is_empty(),
+        "forged pre-encryption app data must not confirm the peer; flight 6 must still resend"
+    );
+}
