@@ -249,6 +249,9 @@ impl Server {
 
         self.engine.parse_packet(packet)?;
         self.make_progress()?;
+        while self.engine.parse_next_deferred_packet()? {
+            self.make_progress()?;
+        }
 
         // Once past AwaitClientHello, DTLS 1.3 is committed — free the buffer.
         if self.auto_mode && self.state != State::AwaitClientHello {
@@ -280,6 +283,56 @@ impl Server {
     fn initiate_key_update(&mut self) -> Result<(), Error> {
         self.engine
             .create_key_update(KeyUpdateRequest::UpdateRequested)
+    }
+
+    fn send_pending_key_update_response(&mut self) -> Result<(), Error> {
+        if self.pending_key_update_response && !self.engine.is_key_update_in_flight() {
+            self.engine.send_ack()?;
+            self.engine
+                .create_key_update(KeyUpdateRequest::UpdateNotRequested)?;
+            self.pending_key_update_response = false;
+        }
+        Ok(())
+    }
+
+    fn handle_incoming_key_update(&mut self) -> Result<(), Error> {
+        if self.engine.has_complete_handshake(MessageType::KeyUpdate) {
+            let maybe = self.engine.next_handshake_no_transcript(
+                MessageType::KeyUpdate,
+                &mut self.defragment_buffer,
+            )?;
+
+            if let Some(handshake) = maybe {
+                let Body::KeyUpdate(request) = handshake.body else {
+                    unreachable!()
+                };
+
+                // Install new recv keys
+                self.engine.update_recv_keys()?;
+
+                // If peer requested us to update, schedule our own KeyUpdate
+                let local_key_update_in_flight = self.engine.is_key_update_in_flight();
+                if request == KeyUpdateRequest::UpdateRequested {
+                    self.pending_key_update_response = true;
+                    if local_key_update_in_flight {
+                        self.engine.send_ack_with_previous_app_epoch()?;
+                    } else {
+                        self.engine.send_ack()?;
+                    }
+                } else {
+                    self.engine.send_ack()?;
+                }
+
+                self.engine.advance_peer_handshake_seq();
+                debug!("Received KeyUpdate (request={:?})", request);
+
+                // Drain a fresh peer-requested response in the same progress
+                // pass when no local KeyUpdate is in flight.
+                self.send_pending_key_update_response()?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Send application data when the server is connected.
@@ -1119,8 +1172,13 @@ impl State {
     }
 
     fn await_application_data(self, server: &mut Server) -> Result<Self, Error> {
+        // Incoming peer requests require an update_not_requested response. They
+        // take priority over local AEAD-limit updates and queued app data.
+        server.handle_incoming_key_update()?;
+        server.send_pending_key_update_response()?;
+
         // Auto-trigger KeyUpdate when AEAD encryption limit is reached
-        if server.engine.needs_key_update() && !server.engine.is_key_update_in_flight() {
+        if !server.engine.is_key_update_in_flight() && server.engine.needs_key_update() {
             server.initiate_key_update()?;
         }
 
@@ -1140,42 +1198,6 @@ impl State {
                         body.extend_from_slice(&data);
                     },
                 )?;
-            }
-        }
-
-        // Send pending KeyUpdate response before processing new KeyUpdates
-        if server.pending_key_update_response {
-            server
-                .engine
-                .create_key_update(KeyUpdateRequest::UpdateNotRequested)?;
-            server.pending_key_update_response = false;
-        }
-
-        // Check for incoming KeyUpdate
-        if server.engine.has_complete_handshake(MessageType::KeyUpdate) {
-            let maybe = server.engine.next_handshake_no_transcript(
-                MessageType::KeyUpdate,
-                &mut server.defragment_buffer,
-            )?;
-
-            if let Some(handshake) = maybe {
-                let Body::KeyUpdate(request) = handshake.body else {
-                    unreachable!()
-                };
-
-                // Install new recv keys
-                server.engine.update_recv_keys()?;
-
-                // ACK the KeyUpdate record
-                server.engine.send_ack()?;
-
-                // If peer requested us to update, schedule our own KeyUpdate
-                if request == KeyUpdateRequest::UpdateRequested {
-                    server.pending_key_update_response = true;
-                }
-
-                server.engine.advance_peer_handshake_seq();
-                debug!("Received KeyUpdate (request={:?})", request);
             }
         }
 
@@ -1450,5 +1472,128 @@ fn serialize_certificate_authorities(
         let data = dn.as_slice(buf);
         output.extend_from_slice(&(data.len() as u16).to_be_bytes());
         output.extend_from_slice(data);
+    }
+}
+
+#[cfg(all(test, feature = "rcgen"))]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::certificate::generate_self_signed_certificate;
+    use crate::dtls13::client::Client;
+    use crate::dtls13::engine::Engine;
+
+    fn collect_client(client: &mut Client) -> (Vec<Vec<u8>>, bool) {
+        let mut packets = Vec::new();
+        let mut connected = false;
+        let mut buf = vec![0u8; 2048];
+
+        loop {
+            match client.poll_output(&mut buf) {
+                Output::Packet(packet) => packets.push(packet.to_vec()),
+                Output::Connected => connected = true,
+                Output::Timeout(_) => break,
+                _ => {}
+            }
+        }
+
+        (packets, connected)
+    }
+
+    fn collect_server(server: &mut Server) -> (Vec<Vec<u8>>, bool) {
+        let mut packets = Vec::new();
+        let mut connected = false;
+        let mut buf = vec![0u8; 2048];
+
+        loop {
+            match server.poll_output(&mut buf) {
+                Output::Packet(packet) => packets.push(packet.to_vec()),
+                Output::Connected => connected = true,
+                Output::Timeout(_) => break,
+                _ => {}
+            }
+        }
+
+        (packets, connected)
+    }
+
+    fn deliver_to_server(packets: &[Vec<u8>], server: &mut Server) {
+        for packet in packets {
+            server.handle_packet(packet).expect("server handles packet");
+        }
+    }
+
+    fn deliver_to_client(packets: &[Vec<u8>], client: &mut Client) {
+        for packet in packets {
+            client.handle_packet(packet).expect("client handles packet");
+        }
+    }
+
+    fn complete_handshake(client: &mut Client, server: &mut Server, mut now: Instant) -> Instant {
+        let mut client_connected = false;
+        let mut server_connected = false;
+
+        for _ in 0..40 {
+            client.handle_timeout(now).expect("client timeout");
+            server.handle_timeout(now).expect("server timeout");
+
+            let (client_packets, client_event) = collect_client(client);
+            let (server_packets, server_event) = collect_server(server);
+
+            client_connected |= client_event;
+            server_connected |= server_event;
+
+            deliver_to_server(&client_packets, server);
+            deliver_to_client(&server_packets, client);
+
+            if client_connected && server_connected {
+                return now;
+            }
+
+            now += Duration::from_millis(10);
+        }
+
+        panic!("DTLS 1.3 handshake did not complete");
+    }
+
+    #[test]
+    fn pending_key_update_response_does_not_replace_server_local_key_update() {
+        let _ = env_logger::try_init();
+
+        let config = Arc::new(
+            Config::builder()
+                .aead_encryption_limit(16)
+                .build()
+                .expect("build config"),
+        );
+        let client_cert = generate_self_signed_certificate().expect("gen client cert");
+        let server_cert = generate_self_signed_certificate().expect("gen server cert");
+        let now = Instant::now();
+
+        let client_engine = Engine::new(Arc::clone(&config), client_cert);
+        let mut client = Client::new_with_engine(client_engine, now);
+        let mut server = Server::new(config, server_cert, now);
+
+        let _now = complete_handshake(&mut client, &mut server, now);
+
+        server
+            .engine
+            .create_key_update(KeyUpdateRequest::UpdateRequested)
+            .expect("server creates local KeyUpdate");
+        let (server_key_update, _) = collect_server(&mut server);
+        assert!(!server_key_update.is_empty());
+        assert!(server.engine.is_key_update_in_flight());
+
+        server.pending_key_update_response = true;
+        server
+            .send_pending_key_update_response()
+            .expect("pending response check while server KeyUpdate is in flight");
+        let (early_response, _) = collect_server(&mut server);
+        assert!(
+            early_response.is_empty(),
+            "server must not replace an in-flight local KeyUpdate with a peer-requested response"
+        );
     }
 }
