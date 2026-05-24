@@ -682,6 +682,78 @@ fn dtls12_bad_encrypted_prefix_does_not_drop_valid_tail() {
 
 #[test]
 #[cfg(feature = "rcgen")]
+fn dtls12_malformed_trailing_record_does_not_consume_replay_window() {
+    let _ = env_logger::try_init();
+    let now = Instant::now();
+    let (mut client, mut server, now) = setup_connected_12_pair(now);
+
+    client
+        .send_application_data(b"replay-atomic")
+        .expect("send application data");
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    let valid_packet = client_out
+        .packets
+        .first()
+        .expect("application data packet")
+        .clone();
+
+    let mut malformed_packet = valid_packet.clone();
+    malformed_packet.push(0xff);
+
+    let err = server
+        .handle_packet(&malformed_packet)
+        .expect_err("trailing partial record must reject the datagram");
+    assert!(
+        matches!(err, dimpl::Error::ParseIncomplete),
+        "expected ParseIncomplete, got {err:?}"
+    );
+
+    let server_out = drain_outputs(&mut server);
+    assert!(
+        server_out.app_data.is_empty(),
+        "malformed datagram must not deliver application data"
+    );
+
+    server
+        .handle_packet(&valid_packet)
+        .expect("valid packet must still pass replay checks");
+    let server_out = drain_outputs(&mut server);
+
+    assert_eq!(server_out.app_data, vec![b"replay-atomic".to_vec()]);
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_same_datagram_duplicate_encrypted_record_delivers_once() {
+    let _ = env_logger::try_init();
+    let now = Instant::now();
+    let (mut client, mut server, now) = setup_connected_12_pair(now);
+
+    client
+        .send_application_data(b"duplicate-once")
+        .expect("send application data");
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    let valid_packet = client_out
+        .packets
+        .first()
+        .expect("application data packet")
+        .clone();
+
+    let mut duplicate_datagram = valid_packet.clone();
+    duplicate_datagram.extend_from_slice(&valid_packet);
+
+    server
+        .handle_packet(&duplicate_datagram)
+        .expect("duplicate datagram should parse");
+    let server_out = drain_outputs(&mut server);
+
+    assert_eq!(server_out.app_data, vec![b"duplicate-once".to_vec()]);
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
 fn dtls12_relabelled_encrypted_handshake_failure_is_not_silently_discarded() {
     let _ = env_logger::try_init();
 
@@ -765,6 +837,39 @@ fn dtls12_relabelled_encrypted_handshake_failure_is_not_silently_discarded() {
         ),
         "relabeled encrypted handshake must remain fatal, got {observed_error:?}"
     );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_same_datagram_window_shift_drops_now_too_old_record() {
+    let _ = env_logger::try_init();
+    let now = Instant::now();
+    let (mut client, mut server, now) = setup_connected_12_pair(now);
+
+    let mut packets = Vec::new();
+    for i in 0..66 {
+        client
+            .send_application_data(format!("msg-{i}").as_bytes())
+            .expect("send application data");
+        client.handle_timeout(now).expect("client timeout");
+        let out = drain_outputs(&mut client);
+        let packet = out
+            .packets
+            .first()
+            .expect("application data packet")
+            .clone();
+        packets.push(packet);
+    }
+
+    let mut shifted_datagram = packets[65].clone();
+    shifted_datagram.extend_from_slice(&packets[0]);
+
+    server
+        .handle_packet(&shifted_datagram)
+        .expect("window-shift datagram should parse");
+    let server_out = drain_outputs(&mut server);
+
+    assert_eq!(server_out.app_data, vec![b"msg-65".to_vec()]);
 }
 
 #[test]

@@ -220,6 +220,9 @@ impl Client {
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         self.engine.parse_packet(packet)?;
         self.make_progress()?;
+        while self.engine.parse_next_deferred_packet()? {
+            self.make_progress()?;
+        }
         Ok(())
     }
 

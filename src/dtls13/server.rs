@@ -249,6 +249,9 @@ impl Server {
 
         self.engine.parse_packet(packet)?;
         self.make_progress()?;
+        while self.engine.parse_next_deferred_packet()? {
+            self.make_progress()?;
+        }
 
         // Once past AwaitClientHello, DTLS 1.3 is committed — free the buffer.
         if self.auto_mode && self.state != State::AwaitClientHello {
