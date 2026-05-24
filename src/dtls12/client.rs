@@ -552,7 +552,7 @@ impl State {
         };
 
         if certificate.certificate_list.is_empty() {
-            return Err(Error::UnexpectedMessage(
+            return Err(Error::CertificateError(
                 "No server certificate received".to_string(),
             ));
         }
@@ -585,7 +585,7 @@ impl State {
         let cipher_suite = client
             .engine
             .cipher_suite()
-            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
 
         if cipher_suite.is_psk() {
             self.await_server_key_exchange_psk(client)
@@ -669,7 +669,7 @@ impl State {
         let cipher_suite = client
             .engine
             .cipher_suite()
-            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
 
         // Ensure the server's (hash, signature) pair was offered by the client
         let offered = SignatureAndHashAlgorithm::supported().contains(&signature_algorithm);
@@ -843,7 +843,7 @@ impl State {
         let cipher_suite = client
             .engine
             .cipher_suite()
-            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
 
         if cipher_suite.is_psk() {
             // PSK: no certificates involved
@@ -905,7 +905,7 @@ impl State {
         let cipher_suite = client
             .engine
             .cipher_suite()
-            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
 
         let suite_hash = cipher_suite.hash_algorithm();
         let mut buf = Buf::new();
@@ -949,15 +949,13 @@ impl State {
     fn derive_keys(client: &mut Client) -> Result<(), Error> {
         trace!("Deriving keys");
         let Some(cipher_suite) = client.engine.cipher_suite() else {
-            return Err(Error::UnexpectedMessage(
-                "No cipher suite selected".to_string(),
-            ));
+            return Err(Error::InvalidState("No cipher suite selected".to_string()));
         };
 
         trace!("Using cipher suite for key derivation: {:?}", cipher_suite);
 
         let Some(server_random) = &client.server_random else {
-            return Err(Error::UnexpectedMessage(
+            return Err(Error::InvalidState(
                 "No server random available".to_string(),
             ));
         };
@@ -978,7 +976,7 @@ impl State {
 
         // Use the captured session hash from when ServerHelloDone was received
         let session_hash = client.captured_session_hash.as_ref().ok_or_else(|| {
-            Error::CryptoError(
+            Error::InvalidState(
                 "Extended Master Secret negotiated but session hash not captured".to_string(),
             )
         })?;
@@ -1256,9 +1254,7 @@ fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(
 fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
     // Just check that a cipher suite exists without binding to unused variable
     let Some(cipher_suite) = engine.cipher_suite() else {
-        return Err(Error::UnexpectedMessage(
-            "No cipher suite selected".to_string(),
-        ));
+        return Err(Error::InvalidState("No cipher suite selected".to_string()));
     };
     let key_exchange_algorithm = cipher_suite.as_key_exchange_algorithm();
 
@@ -1382,5 +1378,75 @@ impl LocalEvent {
                 Output::KeyingMaterial(KeyingMaterial::new(&m), profile)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn psk_client() -> Client {
+        let engine = Engine::new(Arc::new(Config::default()), AuthMode::Psk);
+        Client::new_with_engine(engine, Instant::now())
+    }
+
+    fn epoch0_handshake_packet(msg_type: MessageType, message_seq: u16, body: &[u8]) -> Vec<u8> {
+        let handshake_len = 12 + body.len();
+        let mut packet = Vec::new();
+        packet.push(ContentType::Handshake.as_u8());
+        packet.extend_from_slice(&[0xfe, 0xfd]);
+        packet.extend_from_slice(&0u16.to_be_bytes());
+        packet.extend_from_slice(&0u64.to_be_bytes()[2..]);
+        packet.extend_from_slice(&(handshake_len as u16).to_be_bytes());
+        packet.push(msg_type.as_u8());
+        packet.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
+        packet.extend_from_slice(&message_seq.to_be_bytes());
+        packet.extend_from_slice(&0u32.to_be_bytes()[1..]);
+        packet.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
+        packet.extend_from_slice(body);
+        packet
+    }
+
+    #[test]
+    fn empty_server_certificate_is_certificate_error() {
+        let mut client = psk_client();
+        client
+            .engine
+            .parse_packet(&epoch0_handshake_packet(
+                MessageType::Certificate,
+                0,
+                &[0, 0, 0],
+            ))
+            .expect("queue empty Certificate");
+
+        let err = State::AwaitCertificate
+            .await_certificate(&mut client)
+            .expect_err("empty server Certificate should fail");
+
+        assert!(matches!(err, Error::CertificateError(_)));
+    }
+
+    #[test]
+    fn derive_keys_without_cipher_suite_is_invalid_state() {
+        let mut client = psk_client();
+
+        let err = State::derive_keys(&mut client)
+            .expect_err("derive_keys requires negotiated cipher suite");
+
+        assert!(matches!(err, Error::InvalidState(_)));
+    }
+
+    #[test]
+    fn derive_keys_without_server_random_is_invalid_state() {
+        let mut client = psk_client();
+        client
+            .engine
+            .set_cipher_suite(Dtls12CipherSuite::PSK_AES128_CCM_8);
+
+        let err = State::derive_keys(&mut client).expect_err("derive_keys requires server random");
+
+        assert!(matches!(err, Error::InvalidState(_)));
     }
 }

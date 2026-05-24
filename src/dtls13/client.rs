@@ -615,7 +615,7 @@ impl State {
         let key_exchange = client
             .active_key_exchange
             .take()
-            .ok_or_else(|| Error::CryptoError("No active key exchange".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No active key exchange".to_string()))?;
 
         if key_exchange.group() != server_group {
             return Err(Error::SecurityError(format!(
@@ -751,7 +751,7 @@ impl State {
         }
 
         if certificate.certificate_list.is_empty() {
-            return Err(Error::UnexpectedMessage(
+            return Err(Error::CertificateError(
                 "No server certificate received".to_string(),
             ));
         }
@@ -864,7 +864,7 @@ impl State {
         let server_hs_secret = client
             .server_hs_traffic_secret
             .as_ref()
-            .ok_or_else(|| Error::CryptoError("No server handshake traffic secret".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No server handshake traffic secret".to_string()))?;
         let expected_verify_data = client.engine.compute_verify_data(server_hs_secret)?;
 
         let maybe = client
@@ -903,7 +903,7 @@ impl State {
 
         // Derive application secrets from handshake secret + transcript through server Finished
         let handshake_secret = client.handshake_secret.as_ref().ok_or_else(|| {
-            Error::CryptoError("No handshake secret for application key derivation".to_string())
+            Error::InvalidState("No handshake secret for application key derivation".to_string())
         })?;
 
         let (c_ap_traffic, s_ap_traffic) =
@@ -997,7 +997,7 @@ impl State {
         }
 
         let client_hs_secret = client.client_hs_traffic_secret.as_ref().ok_or_else(|| {
-            Error::CryptoError("No client handshake traffic secret for Finished".to_string())
+            Error::InvalidState("No client handshake traffic secret for Finished".to_string())
         })?;
         let mut client_hs_secret_copy = Buf::new();
         client_hs_secret_copy.extend_from_slice(client_hs_secret);
@@ -1524,5 +1524,59 @@ impl LocalEvent {
                 Output::KeyingMaterial(KeyingMaterial::new(&m), profile)
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "rcgen"))]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::Config;
+    use crate::certificate::generate_self_signed_certificate;
+
+    fn client() -> Client {
+        let cert = generate_self_signed_certificate().expect("generate cert");
+        let engine = Engine::new(Arc::new(Config::default()), cert);
+        Client::new_with_engine(engine, Instant::now())
+    }
+
+    fn epoch0_handshake_packet(msg_type: MessageType, message_seq: u16, body: &[u8]) -> Vec<u8> {
+        let handshake_len = 12 + body.len();
+        let mut packet = Vec::new();
+        packet.push(ContentType::Handshake.as_u8());
+        packet.extend_from_slice(&[0xfe, 0xfd]);
+        packet.extend_from_slice(&0u16.to_be_bytes());
+        packet.extend_from_slice(&0u64.to_be_bytes()[2..]);
+        packet.extend_from_slice(&(handshake_len as u16).to_be_bytes());
+        packet.push(msg_type.as_u8());
+        packet.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
+        packet.extend_from_slice(&message_seq.to_be_bytes());
+        packet.extend_from_slice(&0u32.to_be_bytes()[1..]);
+        packet.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
+        packet.extend_from_slice(body);
+        packet
+    }
+
+    #[test]
+    fn empty_server_certificate_is_certificate_error() {
+        let mut client = client();
+        client.engine.advance_peer_handshake_seq(); // ServerHello
+        client.engine.advance_peer_handshake_seq(); // EncryptedExtensions
+
+        client
+            .engine
+            .parse_packet(&epoch0_handshake_packet(
+                MessageType::Certificate,
+                2,
+                &[0, 0, 0, 0],
+            ))
+            .expect("queue empty Certificate");
+
+        let err = State::AwaitCertificate
+            .await_certificate(&mut client)
+            .expect_err("empty server Certificate should fail");
+
+        assert!(matches!(err, Error::CertificateError(_)));
     }
 }

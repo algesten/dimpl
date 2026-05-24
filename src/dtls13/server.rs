@@ -788,7 +788,7 @@ impl State {
 
         // Derive handshake secrets
         let shared_secret = server.shared_secret.take().ok_or_else(|| {
-            Error::CryptoError("No shared secret for handshake key derivation".to_string())
+            Error::InvalidState("No shared secret for handshake key derivation".to_string())
         })?;
 
         let (c_hs_traffic, s_hs_traffic, handshake_secret) =
@@ -878,7 +878,7 @@ impl State {
         trace!("Sending server Finished message");
 
         let server_hs_secret = server.server_hs_traffic_secret.as_ref().ok_or_else(|| {
-            Error::CryptoError("No server handshake traffic secret for Finished".to_string())
+            Error::InvalidState("No server handshake traffic secret for Finished".to_string())
         })?;
         let mut server_hs_secret_copy = Buf::new();
         server_hs_secret_copy.extend_from_slice(server_hs_secret);
@@ -894,7 +894,7 @@ impl State {
 
         // Derive application secrets from handshake secret + transcript through server Finished
         let handshake_secret = server.handshake_secret.as_ref().ok_or_else(|| {
-            Error::CryptoError("No handshake secret for application key derivation".to_string())
+            Error::InvalidState("No handshake secret for application key derivation".to_string())
         })?;
 
         let (c_ap_traffic, s_ap_traffic) =
@@ -1053,7 +1053,7 @@ impl State {
         let client_hs_secret = server
             .client_hs_traffic_secret
             .as_ref()
-            .ok_or_else(|| Error::CryptoError("No client handshake traffic secret".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No client handshake traffic secret".to_string()))?;
         let expected_verify_data = server.engine.compute_verify_data(client_hs_secret)?;
 
         let maybe = server
