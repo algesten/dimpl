@@ -1124,6 +1124,58 @@ fn dtls12_stale_client_hello_after_peer_confirmed_triggers_no_resend() {
     );
 }
 
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_malformed_appdata_datagram_does_not_confirm_peer() {
+    let _ = env_logger::try_init();
+
+    const RX_QUEUE_LIMIT: usize = 8;
+    let FinalFlightResend {
+        mut client,
+        mut server,
+        f6_resend,
+        stale_epoch0_handshake,
+        ..
+    } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    deliver_packets(&f6_resend, &mut client);
+    assert!(
+        drain_outputs(&mut client).connected,
+        "client should connect once it receives flight 6"
+    );
+
+    client
+        .send_application_data(b"malformed-confirmation")
+        .expect("client sends application data");
+    let client_app = collect_packets(&mut client);
+    assert!(!client_app.is_empty(), "client should emit app-data packet");
+
+    let mut malformed_app = client_app.first().expect("client app-data packet").clone();
+    malformed_app.push(0xff);
+
+    let err = server
+        .handle_packet(&malformed_app)
+        .expect_err("trailing partial record must reject the datagram");
+    assert!(
+        matches!(err, dimpl::Error::ParseIncomplete),
+        "expected ParseIncomplete, got {err:?}"
+    );
+    assert!(
+        drain_outputs(&mut server).app_data.is_empty(),
+        "malformed datagram must not deliver application data"
+    );
+
+    server
+        .handle_packet(&stale_epoch0_handshake)
+        .expect("stale ClientHello must be tolerated");
+    let resend = collect_packets(&mut server);
+
+    assert!(
+        !resend.is_empty(),
+        "malformed authenticated app-data datagram must not confirm the peer"
+    );
+}
+
 #[cfg(feature = "rcgen")]
 fn forged_epoch1_app_data() -> Vec<u8> {
     // A DTLS 1.2 record header advertising epoch-1 ApplicationData with a

@@ -8,6 +8,7 @@ use crate::Error;
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake, Sequence};
+use crate::window::ReplayWindow;
 
 /// Holds both the UDP packet and the parsed result of that packet.
 pub struct Incoming {
@@ -67,12 +68,15 @@ pub struct Records {
 }
 
 impl Records {
-    pub fn parse(
+    fn parse(
         mut packet: &[u8],
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls12CipherSuite>,
     ) -> Result<Records, Error> {
         let mut parsed_records: ArrayVec<Record, 8> = ArrayVec::new();
+        let mut replay_updates: ArrayVec<Sequence, 8> = ArrayVec::new();
+        let mut authenticated_content_types: ArrayVec<ContentType, 8> = ArrayVec::new();
+        let mut pending_replay = ReplayWindow::new();
 
         // Find record boundaries and copy each record ONCE from the packet
         while !packet.is_empty() {
@@ -91,19 +95,50 @@ impl Records {
             // This is the ONLY copy: packet -> record buffer
             let record_slice = &packet[..record_end];
             match Record::parse(record_slice, decrypt, cs) {
-                Ok(record) => {
-                    if let Some(record) = record {
+                Ok(parsed) => {
+                    if let Some(sequence) = parsed.replay_sequence {
+                        if !pending_replay.check(sequence.sequence_number) {
+                            trace!("Discarding duplicate rec in same datagram");
+                            packet = &packet[record_end..];
+                            continue;
+                        }
+                    }
+
+                    if let Some(record) = parsed.record {
                         if parsed_records.try_push(record).is_err() {
                             return Err(Error::TooManyRecords);
                         }
-                    } else {
+                    } else if parsed.replay_sequence.is_none() {
                         trace!("Discarding replayed rec");
+                    }
+
+                    if let Some(sequence) = parsed.replay_sequence {
+                        pending_replay.update(sequence.sequence_number);
+                        if replay_updates.try_push(sequence).is_err() {
+                            return Err(Error::TooManyRecords);
+                        }
+                        if let Some(content_type) = parsed.authenticated_content_type {
+                            authenticated_content_types
+                                .try_push(content_type)
+                                .expect("authenticated records cannot exceed replay updates");
+                        }
                     }
                 }
                 Err(e) => return Err(e),
             }
 
             packet = &packet[record_end..];
+        }
+
+        // Commit replay state and authenticated-record notifications only after
+        // the whole UDP datagram has parsed successfully. A malformed trailing
+        // record must not consume replay state or publish side effects for an
+        // earlier authenticated record in the same datagram.
+        for sequence in replay_updates {
+            decrypt.replay_update(sequence);
+        }
+        for content_type in authenticated_content_types {
+            decrypt.note_decrypted_record(content_type);
         }
 
         let mut records = ArrayVec::new();
@@ -134,14 +169,20 @@ pub struct Record {
     parsed: Box<ParsedRecord>,
 }
 
+struct RecordParse {
+    record: Option<Record>,
+    replay_sequence: Option<Sequence>,
+    authenticated_content_type: Option<ContentType>,
+}
+
 impl Record {
     /// The first parse pass only parses the DTLSRecord header which is unencrypted.
     /// Copies record data from UDP packet ONCE into a pooled buffer.
-    pub fn parse(
+    fn parse(
         record_slice: &[u8],
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls12CipherSuite>,
-    ) -> Result<Option<Record>, Error> {
+    ) -> Result<RecordParse, Error> {
         // ONLY COPY: UDP packet slice -> pooled buffer
         let mut buffer = Buf::new();
         buffer.extend_from_slice(record_slice);
@@ -151,7 +192,11 @@ impl Record {
                 // RFC 6347 §4.1.2.7: Invalid records SHOULD be silently discarded.
                 // This includes epoch 0 records with invalid ContentType.
                 trace!("Discarding record: parse failed: {}", e);
-                return Ok(None);
+                return Ok(RecordParse {
+                    record: None,
+                    replay_sequence: None,
+                    authenticated_content_type: None,
+                });
             }
         };
         let parsed = Box::new(parsed);
@@ -162,7 +207,11 @@ impl Record {
         // packet loss, we can end up seeing epoch 1 records before we can decrypt them.
         let is_epoch_0 = record.record().sequence.epoch == 0;
         if is_epoch_0 || !decrypt.is_peer_encryption_enabled() {
-            return Ok(Some(record));
+            return Ok(RecordParse {
+                record: Some(record),
+                replay_sequence: None,
+                authenticated_content_type: None,
+            });
         }
 
         // We need to decrypt the record and redo the parsing.
@@ -172,12 +221,20 @@ impl Record {
 
         // Anti-replay check (read-only, does not update window)
         if !decrypt.replay_check(sequence) {
-            return Ok(None);
+            return Ok(RecordParse {
+                record: None,
+                replay_sequence: None,
+                authenticated_content_type: None,
+            });
         }
 
         let explicit_nonce_len = decrypt.explicit_nonce_len();
         if (dtls.length as usize) < decrypt.min_protected_fragment_len() {
-            return Ok(None);
+            return Ok(RecordParse {
+                record: None,
+                replay_sequence: None,
+                authenticated_content_type: None,
+            });
         }
 
         // Get a reference to the buffer
@@ -204,29 +261,38 @@ impl Record {
                 }
 
                 trace!("Discarding record: decrypt failed: {}", e);
-                return Ok(None);
+                return Ok(RecordParse {
+                    record: None,
+                    replay_sequence: None,
+                    authenticated_content_type: None,
+                });
             }
 
             buffer.len()
         };
 
-        // Decryption succeeded — now commit the replay window update.
-        // RFC 6347 §4.1.2.6: "The receive window is updated only if the
-        // MAC verification succeeds."
-        decrypt.replay_update(sequence);
-
-        // The record is now authenticated. Tell the handler so it can act on a
-        // confirmed-genuine record (e.g. mark the peer past its handshake).
-        decrypt.note_decrypted_record(content_type);
-
         // Update the length of the record.
         buffer[11] = (new_len >> 8) as u8;
         buffer[12] = new_len as u8;
 
-        let parsed = ParsedRecord::parse(&buffer, cs, explicit_nonce_len)?;
+        let parsed = match ParsedRecord::parse(&buffer, cs, explicit_nonce_len) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                trace!("Discarding authenticated record: parse failed: {}", e);
+                return Ok(RecordParse {
+                    record: None,
+                    replay_sequence: Some(sequence),
+                    authenticated_content_type: Some(content_type),
+                });
+            }
+        };
         let parsed = Box::new(parsed);
 
-        Ok(Some(Record { buffer, parsed }))
+        Ok(RecordParse {
+            record: Some(Record { buffer, parsed }),
+            replay_sequence: Some(sequence),
+            authenticated_content_type: Some(content_type),
+        })
     }
 
     pub fn record(&self) -> &DTLSRecord {

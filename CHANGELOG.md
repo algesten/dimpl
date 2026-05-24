@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Fix malformed datagrams consuming DTLS replay-window state #121
   * Stop DTLS 1.2 flight resends once the peer handshake is confirmed #125
   * Drop plaintext DTLS 1.3 ACKs and alerts after peer encryption #118
   * Replace pending DTLS 1.2 handshake output on resend #116
