@@ -2338,7 +2338,13 @@ impl RecordHandler for Engine {
         epoch_bits
     }
 
-    fn resolve_sequence(&self, epoch: u16, seq_bits: u64, s_flag: bool) -> u64 {
+    fn resolve_sequence(
+        &self,
+        epoch: u16,
+        seq_bits: u64,
+        s_flag: bool,
+        expected_override: Option<u64>,
+    ) -> u64 {
         let expected = if epoch == 2 {
             self.hs_expected_recv_seq
         } else {
@@ -2348,6 +2354,9 @@ impl RecordHandler for Engine {
                 .map(|e| e.expected_recv_seq)
                 .unwrap_or(0)
         };
+        let expected = expected_override
+            .map(|override_expected| expected.max(override_expected))
+            .unwrap_or(expected);
 
         let bits: u32 = if s_flag { 16 } else { 8 };
         reconstruct_sequence(seq_bits, expected, bits)
