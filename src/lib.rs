@@ -898,6 +898,17 @@ mod test {
         Dtls::new_12(config, client_cert, Instant::now())
     }
 
+    fn new_instance_12_no_cookie() -> Dtls {
+        let cert = generate_self_signed_certificate().expect("Failed to generate cert");
+        let config = Arc::new(
+            Config::builder()
+                .use_server_cookie(false)
+                .build()
+                .expect("config"),
+        );
+        Dtls::new_12(config, cert, Instant::now())
+    }
+
     fn new_instance_13() -> Dtls {
         let cert = generate_self_signed_certificate().expect("Failed to generate cert");
         let config = Arc::new(Config::default());
@@ -1120,6 +1131,45 @@ mod test {
         body
     }
 
+    fn dtls13_ch_body_with_extension(extension_type: u16, extension_data: &[u8]) -> Vec<u8> {
+        let mut extensions = Vec::new();
+        extensions.extend_from_slice(&extension_type.to_be_bytes());
+        extensions.extend_from_slice(&(extension_data.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(extension_data);
+        dtls13_ch_body_with_extensions(&extensions)
+    }
+
+    fn dtls13_ch_body_with_extensions(extensions: &[u8]) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0xFE, 0xFD]); // legacy_version
+        body.extend_from_slice(&[0u8; 32]); // random
+        body.push(0); // legacy_session_id length
+        body.push(0); // legacy_cookie length
+        body.extend_from_slice(&[0x00, 0x02]); // cipher_suites length
+        body.extend_from_slice(&[0x13, 0x01]); // TLS_AES_128_GCM_SHA256
+        body.push(1); // compression_methods length
+        body.push(0); // null compression
+
+        body.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
+        body.extend_from_slice(extensions);
+        body
+    }
+
+    fn dtls12_ch_body_with_extensions(extensions: &[u8]) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0xFE, 0xFD]); // client_version
+        body.extend_from_slice(&[0u8; 32]); // random
+        body.push(0); // session_id length
+        body.push(0); // cookie length
+        body.extend_from_slice(&[0x00, 0x02]); // cipher_suites length
+        body.extend_from_slice(&[0xC0, 0x2B]); // ECDHE_ECDSA_AES128_GCM_SHA256
+        body.push(1); // compression_methods length
+        body.push(0); // null compression
+        body.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
+        body.extend_from_slice(extensions);
+        body
+    }
+
     #[test]
     fn looks_like_client_hello_accepts_minimum_shape_ch() {
         let body = min_ch_body();
@@ -1279,6 +1329,148 @@ mod test {
             fell_back,
             "auto-sense server must fall back to DTLS 1.2 on a CH-shaped malformed packet"
         );
+    }
+
+    #[test]
+    fn dtls13_server_accepts_distinct_supported_key_shares_before_cookie_hrr() {
+        let supported_versions = [
+            0x02, // One protocol version.
+            0xFE, 0xFC, // DTLS 1.3.
+        ];
+
+        let mut supported_groups = Vec::new();
+        supported_groups
+            .extend_from_slice(&(NamedGroup::supported().len() as u16 * 2).to_be_bytes());
+        for group in NamedGroup::supported() {
+            supported_groups.extend_from_slice(&group.as_u16().to_be_bytes());
+        }
+
+        let mut key_share = Vec::new();
+        key_share.extend_from_slice(&(NamedGroup::supported().len() as u16 * 5).to_be_bytes());
+        for group in NamedGroup::supported() {
+            key_share.extend_from_slice(&group.as_u16().to_be_bytes());
+            key_share.extend_from_slice(&1u16.to_be_bytes());
+            key_share.push(0x42);
+        }
+
+        let mut extensions = Vec::new();
+        extensions.extend_from_slice(&0x002Bu16.to_be_bytes()); // supported_versions
+        extensions.extend_from_slice(&(supported_versions.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(&supported_versions);
+        extensions.extend_from_slice(&0x000Au16.to_be_bytes()); // supported_groups
+        extensions.extend_from_slice(&(supported_groups.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(&supported_groups);
+        extensions.extend_from_slice(&0x0033u16.to_be_bytes()); // key_share
+        extensions.extend_from_slice(&(key_share.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(&key_share);
+
+        let body = dtls13_ch_body_with_extensions(&extensions);
+        let len = body.len() as u32;
+        let hs = make_handshake(0x01, len, 0, len, &body);
+        let pkt = make_record(0x16, &hs);
+
+        let mut dtls = new_instance_13();
+        dtls.handle_packet(&pkt).expect(
+            "all distinct supported key shares should fit server-side parsing before cookie HRR",
+        );
+    }
+
+    #[test]
+    fn dtls13_server_accepts_unknown_supported_versions_before_cookie_hrr() {
+        let supported_versions = [
+            0x08, // Four protocol versions.
+            0xFE, 0xFE, // Unknown/GREASE-like value.
+            0xFE, 0xFC, // DTLS 1.3.
+            0xFE, 0xFD, // DTLS 1.2.
+            0xFE, 0xFF, // DTLS 1.0.
+        ];
+        let body = dtls13_ch_body_with_extension(0x002B, &supported_versions);
+        let len = body.len() as u32;
+        let hs = make_handshake(0x01, len, 0, len, &body);
+        let pkt = make_record(0x16, &hs);
+
+        let mut dtls = new_instance_13();
+        dtls.handle_packet(&pkt)
+            .expect("unknown supported_versions values should not overflow server-side parsing");
+    }
+
+    #[test]
+    fn dtls12_server_rejects_oversized_ec_point_formats_extension() {
+        let mut extensions = Vec::new();
+        extensions.extend_from_slice(&[0x00, 0x0B]); // ec_point_formats
+        extensions.extend_from_slice(&[0x00, 0x05]); // extension body length
+        extensions.extend_from_slice(&[
+            0x04, // Four point formats.
+            0x00, // Uncompressed.
+            0x00, // Uncompressed.
+            0x00, // Uncompressed.
+            0x00, // Uncompressed.
+        ]);
+        extensions.extend_from_slice(&[0x00, 0x17]); // extended_master_secret
+        extensions.extend_from_slice(&[0x00, 0x00]); // empty extension body
+
+        let body = dtls12_ch_body_with_extensions(&extensions);
+        let len = body.len() as u32;
+        let hs = make_handshake(0x01, len, 0, len, &body);
+        let pkt = make_record(0x16, &hs);
+
+        let mut dtls = new_instance_12_no_cookie();
+        let err = dtls.handle_packet(&pkt).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ParseError(nom::error::ErrorKind::LengthValue)
+        ));
+    }
+
+    #[test]
+    fn dtls12_server_rejects_trailing_ec_point_formats_extension() {
+        let mut extensions = Vec::new();
+        extensions.extend_from_slice(&[0x00, 0x0B]); // ec_point_formats
+        extensions.extend_from_slice(&[0x00, 0x03]); // extension body length
+        extensions.extend_from_slice(&[
+            0x01, // One point format.
+            0x00, // Uncompressed.
+            0xFF, // Trailing extension body byte beyond the inner vector.
+        ]);
+        extensions.extend_from_slice(&[0x00, 0x17]); // extended_master_secret
+        extensions.extend_from_slice(&[0x00, 0x00]); // empty extension body
+
+        let body = dtls12_ch_body_with_extensions(&extensions);
+        let len = body.len() as u32;
+        let hs = make_handshake(0x01, len, 0, len, &body);
+        let pkt = make_record(0x16, &hs);
+
+        let mut dtls = new_instance_12_no_cookie();
+        let err = dtls.handle_packet(&pkt).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ParseError(nom::error::ErrorKind::LengthValue)
+        ));
+    }
+
+    #[test]
+    fn dtls12_server_accepts_unknown_ec_point_formats_extension() {
+        let mut extensions = Vec::new();
+        extensions.extend_from_slice(&[0x00, 0x0B]); // ec_point_formats
+        extensions.extend_from_slice(&[0x00, 0x04]); // extension body length
+        extensions.extend_from_slice(&[
+            0x03, // Three point formats.
+            0x02, // ANSI X9.62 compressed char2.
+            0x00, // Uncompressed.
+            0xFF, // Unknown/private point format.
+        ]);
+        extensions.extend_from_slice(&[0x00, 0x17]); // extended_master_secret
+        extensions.extend_from_slice(&[0x00, 0x00]); // empty extension body
+
+        let body = dtls12_ch_body_with_extensions(&extensions);
+        let len = body.len() as u32;
+        let hs = make_handshake(0x01, len, 0, len, &body);
+        let pkt = make_record(0x16, &hs);
+
+        let mut dtls = new_instance_12_no_cookie();
+        dtls.handle_timeout(Instant::now()).unwrap();
+        dtls.handle_packet(&pkt)
+            .expect("unknown ec_point_formats values should not fail server-side parsing");
     }
 
     #[test]

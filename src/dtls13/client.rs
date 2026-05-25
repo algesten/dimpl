@@ -682,14 +682,13 @@ impl State {
         for ext in &ee.extensions {
             if ext.extension_type == ExtensionType::UseSrtp {
                 let ext_data = ext.extension_data(&client.defragment_buffer);
-                if let Ok((_, use_srtp)) = UseSrtpExtension::parse(ext_data) {
-                    if !use_srtp.profiles.is_empty() {
-                        client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
-                        trace!(
-                            "EncryptedExtensions UseSRTP; selected profile: {:?}",
-                            client.negotiated_srtp_profile
-                        );
-                    }
+                let (_, use_srtp) = UseSrtpExtension::parse(ext_data).map_err(Error::from)?;
+                if !use_srtp.profiles.is_empty() {
+                    client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
+                    trace!(
+                        "EncryptedExtensions UseSRTP; selected profile: {:?}",
+                        client.negotiated_srtp_profile
+                    );
                 }
             }
         }

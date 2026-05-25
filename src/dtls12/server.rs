@@ -25,6 +25,7 @@ use crate::dtls12::Client;
 use crate::dtls12::client::LocalEvent;
 use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
+use crate::dtls12::message::ECPointFormatsExtension;
 use crate::dtls12::message::PskParams;
 use crate::dtls12::message::{Body, CertificateRequest, CertificateTypeVec, Dtls12CipherSuite};
 use crate::dtls12::message::{ClientCertificateType, CompressionMethod, ContentType};
@@ -412,22 +413,21 @@ impl State {
             match ext.extension_type {
                 ExtensionType::UseSrtp => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
-                    if let Ok((_, use_srtp)) = UseSrtpExtension::parse(ext_data) {
-                        client_srtp_profiles = Some(use_srtp.profiles);
-                    } else {
-                        warn!("Failed to parse UseSrtp extension");
-                    }
+                    let (_, use_srtp) = UseSrtpExtension::parse(ext_data).map_err(Error::from)?;
+                    client_srtp_profiles = Some(use_srtp.profiles);
                 }
                 ExtensionType::ExtendedMasterSecret => {
                     client_offers_ems = true;
                 }
                 ExtensionType::SupportedGroups => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
-                    if let Ok((_, groups)) = SupportedGroupsExtension::parse(ext_data) {
-                        client_supported_groups = Some(groups.groups);
-                    } else {
-                        warn!("Failed to parse SupportedGroups extension");
-                    }
+                    let (_, groups) =
+                        SupportedGroupsExtension::parse(ext_data).map_err(Error::from)?;
+                    client_supported_groups = Some(groups.groups);
+                }
+                ExtensionType::EcPointFormats => {
+                    let ext_data = ext.extension_data(&server.defragment_buffer);
+                    let _ = ECPointFormatsExtension::parse(ext_data).map_err(Error::from)?;
                 }
                 ExtensionType::SignatureAlgorithms => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);

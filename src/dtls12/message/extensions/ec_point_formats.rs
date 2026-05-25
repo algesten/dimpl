@@ -1,6 +1,8 @@
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
-use nom::{IResult, number::complete::be_u8};
+use nom::bytes::complete::take;
+use nom::error::{Error, ErrorKind};
+use nom::{Err, IResult, number::complete::be_u8};
 
 /// EC Point Format as defined in RFC 4492 Section 5.1.2
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -54,15 +56,31 @@ impl ECPointFormatsExtension {
     #[allow(unused)]
     pub fn parse(input: &[u8]) -> IResult<&[u8], ECPointFormatsExtension> {
         let (input, list_len) = be_u8(input)?;
-        let mut formats = ArrayVec::new();
-        let mut remaining = list_len as usize;
-        let mut current_input = input;
+        let (input, formats_data) = take(list_len)(input)?;
+        if !input.is_empty() {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
 
-        while remaining > 0 {
-            let (rest, format) = ECPointFormat::parse(current_input)?;
-            formats.push(format);
+        let mut formats = ArrayVec::new();
+        let mut current_input = formats_data;
+
+        while !current_input.is_empty() {
+            let format_input = current_input;
+            let (rest, format) = be_u8(current_input)?;
+            let Some(format) = (match format {
+                0x00 => Some(ECPointFormat::Uncompressed),
+                0x01 => Some(ECPointFormat::AnsiX962CompressedPrime),
+                0x02 => Some(ECPointFormat::AnsiX962CompressedChar2),
+                _ => None,
+            }) else {
+                current_input = rest;
+                continue;
+            };
+
+            formats
+                .try_push(format)
+                .map_err(|_| Err::Failure(Error::new(format_input, ErrorKind::LengthValue)))?;
             current_input = rest;
-            remaining -= 1; // Each format is 1 byte
         }
 
         Ok((current_input, ECPointFormatsExtension { formats }))
@@ -106,5 +124,63 @@ mod tests {
         let (_, parsed) = ECPointFormatsExtension::parse(&serialized).unwrap();
 
         assert_eq!(parsed.formats.as_slice(), ext.formats.as_slice());
+    }
+
+    #[test]
+    fn too_many_ec_point_formats_are_rejected() {
+        let bytes = [
+            0x04, // Four point formats.
+            0x00, // Uncompressed.
+            0x00, // Uncompressed.
+            0x00, // Uncompressed.
+            0x00, // Uncompressed.
+        ];
+
+        let err = ECPointFormatsExtension::parse(&bytes).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Err::Failure(Error {
+                code: ErrorKind::LengthValue,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn unknown_ec_point_formats_are_ignored() {
+        let (rest, parsed) = ECPointFormatsExtension::parse(&[
+            0x03, // Three point formats.
+            0x02, // ANSI X9.62 compressed char2.
+            0x00, // Uncompressed.
+            0xFF, // Unknown/private point format.
+        ])
+        .unwrap();
+
+        assert!(rest.is_empty());
+        assert_eq!(
+            parsed.formats.as_slice(),
+            &[
+                ECPointFormat::AnsiX962CompressedChar2,
+                ECPointFormat::Uncompressed,
+            ]
+        );
+    }
+
+    #[test]
+    fn trailing_ec_point_format_bytes_are_rejected() {
+        let result = ECPointFormatsExtension::parse(&[
+            0x01, // One point format.
+            0x00, // Uncompressed.
+            0xFF, // Extension body has a trailing byte beyond the vector.
+        ]);
+
+        assert!(matches!(
+            result,
+            Err(Err::Failure(Error {
+                code: ErrorKind::LengthValue,
+                ..
+            }))
+        ));
     }
 }

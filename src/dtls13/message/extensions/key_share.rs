@@ -1,8 +1,10 @@
 use crate::buffer::Buf;
 use crate::types::NamedGroup;
 use arrayvec::ArrayVec;
+use nom::Err;
 use nom::IResult;
 use nom::bytes::complete::take;
+use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u16;
 use std::ops::Range;
 
@@ -48,7 +50,7 @@ impl KeyShareEntry {
 /// KeyShare extension in ClientHello (RFC 8446 Section 4.2.8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyShareClientHello {
-    pub entries: ArrayVec<KeyShareEntry, 2>,
+    pub entries: ArrayVec<KeyShareEntry, { NamedGroup::supported().len() }>,
 }
 
 impl KeyShareClientHello {
@@ -56,6 +58,9 @@ impl KeyShareClientHello {
         let original_input = input;
         let (input, list_len) = be_u16(input)?;
         let (input, entries_data) = take(list_len)(input)?;
+        if !input.is_empty() {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
 
         let entries_base_offset =
             base_offset + (entries_data.as_ptr() as usize - original_input.as_ptr() as usize);
@@ -67,7 +72,9 @@ impl KeyShareClientHello {
                 entries_base_offset + (rest.as_ptr() as usize - entries_data.as_ptr() as usize);
             let (r, entry) = KeyShareEntry::parse(rest, entry_offset)?;
             if entry.group.is_supported() {
-                entries.push(entry);
+                entries
+                    .try_push(entry)
+                    .map_err(|_| Err::Failure(Error::new(rest, ErrorKind::LengthValue)))?;
             }
             rest = r;
         }
@@ -99,6 +106,10 @@ pub struct KeyShareServerHello {
 impl KeyShareServerHello {
     pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], KeyShareServerHello> {
         let (input, entry) = KeyShareEntry::parse(input, base_offset)?;
+        if !input.is_empty() {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
+
         Ok((input, KeyShareServerHello { entry }))
     }
 
@@ -116,6 +127,10 @@ pub struct KeyShareHelloRetryRequest {
 impl KeyShareHelloRetryRequest {
     pub fn parse(input: &[u8]) -> IResult<&[u8], KeyShareHelloRetryRequest> {
         let (input, selected_group) = NamedGroup::parse(input)?;
+        if !input.is_empty() {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
+
         Ok((input, KeyShareHelloRetryRequest { selected_group }))
     }
 
@@ -174,5 +189,108 @@ mod tests {
         let mut serialized = Buf::new();
         parsed.serialize(&mut serialized);
         assert_eq!(&*serialized, message);
+    }
+
+    #[test]
+    fn distinct_supported_key_shares_are_accepted() {
+        let mut message = Vec::new();
+        message.extend_from_slice(&(NamedGroup::supported().len() as u16 * 5).to_be_bytes());
+        for group in NamedGroup::supported() {
+            message.extend_from_slice(&group.as_u16().to_be_bytes());
+            message.extend_from_slice(&1u16.to_be_bytes());
+            message.push(0x42);
+        }
+
+        let (rest, parsed) = KeyShareClientHello::parse(&message, 0).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(parsed.entries.len(), NamedGroup::supported().len());
+
+        let mut serialized = Buf::new();
+        parsed.serialize(&message, &mut serialized);
+        assert_eq!(&*serialized, message);
+    }
+
+    #[test]
+    fn too_many_duplicate_supported_key_shares_are_rejected() {
+        let mut message = Vec::new();
+        let count = NamedGroup::supported().len() + 1;
+        message.extend_from_slice(&(count as u16 * 5).to_be_bytes());
+        for _ in 0..count {
+            message.extend_from_slice(&NamedGroup::X25519.as_u16().to_be_bytes());
+            message.extend_from_slice(&1u16.to_be_bytes());
+            message.push(0x42);
+        }
+
+        let result = KeyShareClientHello::parse(&message, 0);
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "too many duplicate key shares should fail with LengthValue"
+        );
+    }
+
+    #[test]
+    fn trailing_client_key_share_bytes_are_rejected() {
+        let result = KeyShareClientHello::parse(
+            &[
+                0x00, 0x08, // client_shares length (8)
+                0x00, 0x1D, // NamedGroup::X25519
+                0x00, 0x04, // key_exchange length
+                0x01, 0x02, 0x03, 0x04, // key_exchange data
+                0xFF, // Extension body has a trailing byte beyond the vector.
+            ],
+            0,
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "trailing key_share client bytes should fail with LengthValue"
+        );
+    }
+
+    #[test]
+    fn trailing_server_key_share_bytes_are_rejected() {
+        let result = KeyShareServerHello::parse(
+            &[
+                0x00, 0x1D, // NamedGroup::X25519
+                0x00, 0x04, // key_exchange length
+                0x01, 0x02, 0x03, 0x04, // key_exchange data
+                0xFF, // Extension body has a trailing byte after the entry.
+            ],
+            0,
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "trailing key_share server bytes should fail with LengthValue"
+        );
+    }
+
+    #[test]
+    fn trailing_hello_retry_request_key_share_bytes_are_rejected() {
+        let result = KeyShareHelloRetryRequest::parse(&[
+            0x00, 0x1D, // NamedGroup::X25519
+            0xFF, // Extension body has a trailing byte after selected_group.
+        ]);
+
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "trailing key_share HRR bytes should fail with LengthValue"
+        );
     }
 }
