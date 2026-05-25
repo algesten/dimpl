@@ -1,7 +1,10 @@
 use crate::buffer::Buf;
 use crate::types::NamedGroup;
 use arrayvec::ArrayVec;
+use nom::Err;
 use nom::IResult;
+use nom::bytes::complete::take;
+use nom::error::{Error, ErrorKind};
 
 /// SupportedGroups extension as defined in RFC 8422
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,18 +14,28 @@ pub struct SupportedGroupsExtension {
 
 impl SupportedGroupsExtension {
     pub fn parse(input: &[u8]) -> IResult<&[u8], SupportedGroupsExtension> {
-        let (mut input, list_len) = nom::number::complete::be_u16(input)?;
+        let (input, list_len) = nom::number::complete::be_u16(input)?;
+        if list_len % 2 != 0 {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
+
+        let (input, mut current_input) = take(list_len)(input)?;
+        if !input.is_empty() {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
+
         let mut groups: ArrayVec<NamedGroup, 4> = ArrayVec::new();
-        let mut remaining = list_len as usize;
 
         // Parse groups; only include supported groups (skip Unknown and unsupported)
-        while remaining >= 2 {
-            let (rest, group) = NamedGroup::parse(input)?;
-            input = rest;
-            remaining -= 2;
+        while !current_input.is_empty() {
+            let group_input = current_input;
+            let (rest, group) = NamedGroup::parse(group_input)?;
+            current_input = rest;
             // Only add supported groups
             if group.is_supported() {
-                groups.push(group);
+                groups
+                    .try_push(group)
+                    .map_err(|_| Err::Failure(Error::new(group_input, ErrorKind::LengthValue)))?;
             }
         }
 
@@ -96,6 +109,61 @@ mod tests {
             ext.groups.capacity(),
             NamedGroup::supported().len(),
             "SupportedGroupsExtension capacity must match all supported NamedGroups"
+        );
+    }
+
+    #[test]
+    fn too_many_supported_groups_are_rejected() {
+        let mut bytes = Vec::new();
+        let count = NamedGroup::supported().len() + 1;
+        bytes.extend_from_slice(&(count as u16 * 2).to_be_bytes());
+        for _ in 0..count {
+            bytes.extend_from_slice(&NamedGroup::X25519.as_u16().to_be_bytes());
+        }
+
+        let result = SupportedGroupsExtension::parse(&bytes);
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "too many supported groups should fail with LengthValue"
+        );
+    }
+
+    #[test]
+    fn odd_supported_groups_vector_is_rejected() {
+        let result = SupportedGroupsExtension::parse(&[
+            0x00, 0x03, // Declared vector length is not divisible by 2.
+            0x00, 0x1D, 0xFF,
+        ]);
+
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "odd supported_groups vector should fail with LengthValue"
+        );
+    }
+
+    #[test]
+    fn trailing_supported_groups_bytes_are_rejected() {
+        let result = SupportedGroupsExtension::parse(&[
+            0x00, 0x02, // One named group.
+            0x00, 0x1D, // X25519.
+            0xFF, // Extension body has a trailing byte beyond the vector.
+        ]);
+
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "trailing supported_groups bytes should fail with LengthValue"
         );
     }
 }

@@ -498,17 +498,14 @@ impl State {
             if extension.extension_type == ExtensionType::UseSrtp {
                 // Parse the use_srtp extension to get the selected profile
                 let extension_data = extension.extension_data(&client.defragment_buffer);
-                if let Ok((_, use_srtp)) = UseSrtpExtension::parse(extension_data) {
-                    // Store the first profile as our negotiated profile
-                    if !use_srtp.profiles.is_empty() {
-                        client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
-                        trace!(
-                            "ServerHello UseSRTP extension processed; selected profile: {:?}",
-                            client.negotiated_srtp_profile
-                        );
-                    }
-                } else {
-                    warn!("Failed to parse UseSrtp extension");
+                let (_, use_srtp) = UseSrtpExtension::parse(extension_data).map_err(Error::from)?;
+                // Store the first profile as our negotiated profile
+                if !use_srtp.profiles.is_empty() {
+                    client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
+                    trace!(
+                        "ServerHello UseSRTP extension processed; selected profile: {:?}",
+                        client.negotiated_srtp_profile
+                    );
                 }
             }
 

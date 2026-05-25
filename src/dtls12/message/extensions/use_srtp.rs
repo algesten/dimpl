@@ -1,9 +1,10 @@
 use crate::SrtpProfile;
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
-use nom::IResult;
 use nom::bytes::complete::take;
+use nom::error::{Error, ErrorKind};
 use nom::number::complete::{be_u8, be_u16};
+use nom::{Err, IResult};
 
 pub type SrtpProfileVec = ArrayVec<SrtpProfileId, { SrtpProfileId::supported().len() }>;
 
@@ -110,21 +111,37 @@ impl UseSrtpExtension {
         let mut profiles_rest = profiles_data;
 
         while profiles_rest.len() >= 2 {
-            let (rest, value) = be_u16(profiles_rest)?;
+            let profile_input = profiles_rest;
+            let (rest, value) = be_u16(profile_input)?;
             profiles_rest = rest;
             match value {
-                0x0001 => profiles.push(SrtpProfileId::SRTP_AES128_CM_SHA1_80),
-                0x0007 => profiles.push(SrtpProfileId::SRTP_AEAD_AES_128_GCM),
-                0x0008 => profiles.push(SrtpProfileId::SRTP_AEAD_AES_256_GCM),
+                0x0001 => profiles
+                    .try_push(SrtpProfileId::SRTP_AES128_CM_SHA1_80)
+                    .map_err(|_| Err::Failure(Error::new(profile_input, ErrorKind::LengthValue)))?,
+                0x0007 => profiles
+                    .try_push(SrtpProfileId::SRTP_AEAD_AES_128_GCM)
+                    .map_err(|_| Err::Failure(Error::new(profile_input, ErrorKind::LengthValue)))?,
+                0x0008 => profiles
+                    .try_push(SrtpProfileId::SRTP_AEAD_AES_256_GCM)
+                    .map_err(|_| Err::Failure(Error::new(profile_input, ErrorKind::LengthValue)))?,
                 _ => {
                     // Unknown SRTP profile: skip
                 }
             }
         }
+        if !profiles_rest.is_empty() {
+            return Err(Err::Failure(Error::new(
+                profiles_rest,
+                ErrorKind::LengthValue,
+            )));
+        }
 
         // Parse MKI
         let (input, mki_length) = be_u8(input)?;
         let (input, mki) = take(mki_length)(input)?;
+        if !input.is_empty() {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
 
         Ok((
             input,
@@ -210,5 +227,67 @@ mod tests {
             ]
         );
         assert_eq!(parsed.mki, ArrayVec::<u8, 255>::new());
+    }
+
+    #[test]
+    fn too_many_supported_srtp_profiles_are_rejected() {
+        let bytes = [
+            0x00, 0x08, // Four profile IDs.
+            0x00, 0x01, // SRTP_AES128_CM_SHA1_80.
+            0x00, 0x01, // SRTP_AES128_CM_SHA1_80.
+            0x00, 0x01, // SRTP_AES128_CM_SHA1_80.
+            0x00, 0x01, // SRTP_AES128_CM_SHA1_80.
+            0x00, // Empty MKI.
+        ];
+
+        let err = UseSrtpExtension::parse(&bytes).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Err::Failure(Error {
+                code: ErrorKind::LengthValue,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn odd_srtp_profile_vector_is_rejected() {
+        let bytes = [
+            0x00, 0x03, // Odd profile vector length.
+            0x00, 0x01, // SRTP_AES128_CM_SHA1_80.
+            0x00, // Dangling byte in profile vector.
+            0x00, // Empty MKI.
+        ];
+
+        let err = UseSrtpExtension::parse(&bytes).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Err::Failure(Error {
+                code: ErrorKind::LengthValue,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn trailing_mki_bytes_are_rejected() {
+        let bytes = [
+            0x00, 0x02, // One profile ID.
+            0x00, 0x01, // SRTP_AES128_CM_SHA1_80.
+            0x00, // Empty MKI.
+            0xFF, // Trailing extension-body byte.
+        ];
+
+        let err = UseSrtpExtension::parse(&bytes).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Err::Failure(Error {
+                code: ErrorKind::LengthValue,
+                ..
+            })
+        ));
     }
 }

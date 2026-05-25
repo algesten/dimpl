@@ -416,7 +416,9 @@ impl State {
 
         // Parse extensions
         let mut supported_versions_ok = false;
-        let mut client_key_shares: Option<ArrayVec<(NamedGroup, std::ops::Range<usize>), 2>> = None;
+        let mut client_key_shares: Option<
+            ArrayVec<(NamedGroup, std::ops::Range<usize>), { NamedGroup::supported().len() }>,
+        > = None;
         let mut client_supported_groups: Option<ArrayVec<NamedGroup, 4>> = None;
         let mut client_srtp_profiles: Option<ArrayVec<crate::dtls13::message::SrtpProfileId, 3>> =
             None;
@@ -426,30 +428,31 @@ impl State {
             match ext.extension_type {
                 ExtensionType::SupportedVersions => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
-                    if let Ok((_, sv)) = SupportedVersionsClientHello::parse(ext_data) {
-                        for v in &sv.versions {
-                            if *v == ProtocolVersion::DTLS1_3 {
-                                supported_versions_ok = true;
-                            }
+                    let (_, sv) =
+                        SupportedVersionsClientHello::parse(ext_data).map_err(Error::from)?;
+                    for v in &sv.versions {
+                        if *v == ProtocolVersion::DTLS1_3 {
+                            supported_versions_ok = true;
                         }
                     }
                 }
                 ExtensionType::KeyShare => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let ext_data_start = ext.extension_data_range.start;
-                    if let Ok((_, ks)) = KeyShareClientHello::parse(ext_data, ext_data_start) {
-                        let mut entries = ArrayVec::new();
-                        for entry in &ks.entries {
-                            entries.push((entry.group, entry.key_exchange_range.clone()));
-                        }
-                        client_key_shares = Some(entries);
+                    let (_, ks) = KeyShareClientHello::parse(ext_data, ext_data_start)
+                        .map_err(Error::from)?;
+                    let mut entries = ArrayVec::new();
+                    for entry in &ks.entries {
+                        entries
+                            .try_push((entry.group, entry.key_exchange_range.clone()))
+                            .map_err(|_| Error::ParseError(nom::error::ErrorKind::LengthValue))?;
                     }
+                    client_key_shares = Some(entries);
                 }
                 ExtensionType::SupportedGroups => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
-                    if let Ok((_, sg)) = SupportedGroupsExtension::parse(ext_data) {
-                        client_supported_groups = Some(sg.groups);
-                    }
+                    let (_, sg) = SupportedGroupsExtension::parse(ext_data).map_err(Error::from)?;
+                    client_supported_groups = Some(sg.groups);
                 }
                 ExtensionType::SignatureAlgorithms => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
@@ -458,9 +461,8 @@ impl State {
                 }
                 ExtensionType::UseSrtp => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
-                    if let Ok((_, use_srtp)) = UseSrtpExtension::parse(ext_data) {
-                        client_srtp_profiles = Some(use_srtp.profiles);
-                    }
+                    let (_, use_srtp) = UseSrtpExtension::parse(ext_data).map_err(Error::from)?;
+                    client_srtp_profiles = Some(use_srtp.profiles);
                 }
                 ExtensionType::Cookie => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
