@@ -64,7 +64,9 @@ impl CertificateRequest {
             let offset =
                 auths_base_offset + (rest.as_ptr() as usize - input_auths.as_ptr() as usize);
             let (new_rest, auth) = DistinguishedName::parse(rest, offset)?;
-            certificate_authorities.push(auth);
+            certificate_authorities
+                .try_push(auth)
+                .map_err(|_| Err::Failure(Error::new(rest, ErrorKind::LengthValue)))?;
             rest = new_rest;
         }
 
@@ -176,6 +178,32 @@ mod test {
                 super::super::HashAlgorithm::SHA256,
                 super::super::SignatureAlgorithm::ECDSA
             )
+        );
+    }
+
+    #[test]
+    fn too_many_certificate_authorities_are_rejected() {
+        let mut message = Vec::new();
+        message.push(1); // Certificate types length
+        message.push(ClientCertificateType::ECDSA_SIGN.as_u8());
+        message.extend_from_slice(&0u16.to_be_bytes()); // Signature algorithms length
+
+        let count = 33;
+        let cert_auths_len = count * 3;
+        message.extend_from_slice(&(cert_auths_len as u16).to_be_bytes());
+        for _ in 0..count {
+            message.extend_from_slice(&1u16.to_be_bytes());
+            message.push(0xAA);
+        }
+
+        let result = CertificateRequest::parse(&message, 0);
+        assert!(
+            matches!(
+                result,
+                Err(nom::Err::Failure(error))
+                    if error.code == nom::error::ErrorKind::LengthValue
+            ),
+            "too many certificate authorities should fail with LengthValue"
         );
     }
 }
