@@ -132,10 +132,29 @@ impl Handshake {
 
     #[allow(private_interfaces)]
     pub fn defragment<'b>(
+        iter: impl Iterator<Item = (&'b Handshake, &'b [u8])>,
+        buffer: &mut Buf,
+        cipher_suite: Option<Dtls13CipherSuite>,
+        transcript: Option<&mut Buf>,
+    ) -> Result<Handshake, crate::Error> {
+        Self::defragment_with_options(iter, buffer, cipher_suite, transcript, false)
+    }
+
+    pub(crate) fn defragment_allow_unknown_client_hello_suites<'b>(
+        iter: impl Iterator<Item = (&'b Handshake, &'b [u8])>,
+        buffer: &mut Buf,
+        cipher_suite: Option<Dtls13CipherSuite>,
+        transcript: Option<&mut Buf>,
+    ) -> Result<Handshake, crate::Error> {
+        Self::defragment_with_options(iter, buffer, cipher_suite, transcript, true)
+    }
+
+    fn defragment_with_options<'b>(
         mut iter: impl Iterator<Item = (&'b Handshake, &'b [u8])>,
         buffer: &mut Buf,
         cipher_suite: Option<Dtls13CipherSuite>,
         transcript: Option<&mut Buf>,
+        allow_unknown_client_hello_suites: bool,
     ) -> Result<Handshake, crate::Error> {
         buffer.clear();
 
@@ -189,7 +208,16 @@ impl Handshake {
             transcript.extend_from_slice(&buffer[..first_handshake.header.length as usize]);
         }
 
-        let (rest, body) = Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?;
+        let (rest, body) = if allow_unknown_client_hello_suites {
+            Body::parse_allow_unknown_client_hello_suites(
+                buffer,
+                0,
+                first_handshake.header.msg_type,
+                cipher_suite,
+            )?
+        } else {
+            Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?
+        };
 
         if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
@@ -345,9 +373,32 @@ impl Body {
         m: MessageType,
         c: Option<Dtls13CipherSuite>,
     ) -> IResult<&[u8], Body> {
+        Self::parse_with_options(input, base_offset, m, c, false)
+    }
+
+    pub(crate) fn parse_allow_unknown_client_hello_suites(
+        input: &[u8],
+        base_offset: usize,
+        m: MessageType,
+        c: Option<Dtls13CipherSuite>,
+    ) -> IResult<&[u8], Body> {
+        Self::parse_with_options(input, base_offset, m, c, true)
+    }
+
+    fn parse_with_options(
+        input: &[u8],
+        base_offset: usize,
+        m: MessageType,
+        c: Option<Dtls13CipherSuite>,
+        allow_unknown_client_hello_suites: bool,
+    ) -> IResult<&[u8], Body> {
         match m {
             MessageType::ClientHello => {
-                let (input, client_hello) = ClientHello::parse(input, base_offset)?;
+                let (input, client_hello) = if allow_unknown_client_hello_suites {
+                    ClientHello::parse_allow_unknown_suites(input, base_offset)?
+                } else {
+                    ClientHello::parse(input, base_offset)?
+                };
                 Ok((input, Body::ClientHello(client_hello)))
             }
             MessageType::ServerHello => {

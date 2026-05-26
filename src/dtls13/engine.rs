@@ -782,6 +782,22 @@ impl Engine {
         wanted: MessageType,
         defragment_buffer: &mut Buf,
     ) -> Result<Option<Handshake>, Error> {
+        self.next_handshake_with_options(wanted, defragment_buffer, false)
+    }
+
+    pub(crate) fn next_client_hello_for_auto_sense(
+        &mut self,
+        defragment_buffer: &mut Buf,
+    ) -> Result<Option<Handshake>, Error> {
+        self.next_handshake_with_options(MessageType::ClientHello, defragment_buffer, true)
+    }
+
+    fn next_handshake_with_options(
+        &mut self,
+        wanted: MessageType,
+        defragment_buffer: &mut Buf,
+        allow_unknown_client_hello_suites: bool,
+    ) -> Result<Option<Handshake>, Error> {
         if !self.has_complete_handshake(wanted) {
             return Ok(None);
         }
@@ -794,12 +810,21 @@ impl Engine {
             .flat_map(|r| r.handshakes().iter().map(move |h| (h, r.buffer())))
             .skip_while(|(h, _)| h.is_handled());
 
-        let handshake = Handshake::defragment(
-            iter,
-            defragment_buffer,
-            self.cipher_suite,
-            Some(&mut self.transcript),
-        )?;
+        let handshake = if allow_unknown_client_hello_suites {
+            Handshake::defragment_allow_unknown_client_hello_suites(
+                iter,
+                defragment_buffer,
+                self.cipher_suite,
+                Some(&mut self.transcript),
+            )
+        } else {
+            Handshake::defragment(
+                iter,
+                defragment_buffer,
+                self.cipher_suite,
+                Some(&mut self.transcript),
+            )
+        }?;
 
         Ok(Some(handshake))
     }

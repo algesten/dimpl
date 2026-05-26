@@ -386,9 +386,15 @@ impl State {
         // arrives after HelloRetryRequest (no cookie → must discard).
         let transcript_len_before = server.engine.transcript.len();
 
-        let maybe = server
-            .engine
-            .next_handshake(MessageType::ClientHello, &mut server.defragment_buffer)?;
+        let maybe = if server.auto_mode {
+            server
+                .engine
+                .next_client_hello_for_auto_sense(&mut server.defragment_buffer)?
+        } else {
+            server
+                .engine
+                .next_handshake(MessageType::ClientHello, &mut server.defragment_buffer)?
+        };
 
         let Some(handshake) = maybe else {
             return Ok(self);
