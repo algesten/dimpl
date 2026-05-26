@@ -66,6 +66,7 @@ use crate::dtls13::message::SupportedGroupsExtension;
 use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
+use crate::dtls13::message::parse_cookie_extension;
 use crate::{Config, DtlsCertificate, Error, Output};
 
 /// Magic random value indicating HelloRetryRequest (RFC 8446 Section 4.1.3).
@@ -466,15 +467,10 @@ impl State {
                 }
                 ExtensionType::Cookie => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
-                    // Cookie extension format: cookie<1..2^16-1>
-                    // Length-prefixed with u16
-                    if ext_data.len() >= 2 {
-                        let cookie_len = u16::from_be_bytes([ext_data[0], ext_data[1]]) as usize;
-                        if ext_data.len() >= 2 + cookie_len {
-                            client_cookie_data =
-                                ArrayVec::try_from(&ext_data[2..2 + cookie_len]).ok();
-                        }
-                    }
+                    let (_, cookie) = parse_cookie_extension(ext_data).map_err(Error::from)?;
+                    client_cookie_data = Some(ArrayVec::try_from(cookie).map_err(|_| {
+                        Error::SecurityError("Invalid cookie in ClientHello".to_string())
+                    })?);
                 }
                 _ => {}
             }
