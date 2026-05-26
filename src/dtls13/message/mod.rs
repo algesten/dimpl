@@ -23,6 +23,7 @@ pub use client_hello::ClientHello;
 pub use digitally_signed::DigitallySigned;
 pub use encrypted_extensions::EncryptedExtensions;
 pub use extension::{Extension, ExtensionType};
+pub(crate) use extensions::cookie::parse_cookie_extension;
 pub use extensions::key_share::{
     KeyShareClientHello, KeyShareEntry, KeyShareHelloRetryRequest, KeyShareServerHello,
 };

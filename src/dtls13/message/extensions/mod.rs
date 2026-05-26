@@ -1,3 +1,4 @@
+pub mod cookie;
 pub mod key_share;
 pub mod signature_algorithms;
 pub mod supported_groups;

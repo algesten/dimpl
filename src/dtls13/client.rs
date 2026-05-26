@@ -58,6 +58,7 @@ use crate::dtls13::message::SupportedGroupsExtension;
 use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
+use crate::dtls13::message::parse_cookie_extension;
 use crate::{Error, KeyingMaterial, Output};
 
 /// DTLS 1.3 client
@@ -473,16 +474,10 @@ impl State {
                         }
                         ExtensionType::Cookie => {
                             let ext_data = ext.extension_data(&client.defragment_buffer);
-                            // Cookie extension format: cookie<1..2^16-1> (u16 length prefix)
-                            if ext_data.len() >= 2 {
-                                let cookie_len =
-                                    u16::from_be_bytes([ext_data[0], ext_data[1]]) as usize;
-                                if ext_data.len() >= 2 + cookie_len {
-                                    let mut cookie = Buf::new();
-                                    cookie.extend_from_slice(&ext_data[..2 + cookie_len]);
-                                    client.saved_cookie = Some(cookie);
-                                }
-                            }
+                            parse_cookie_extension(ext_data).map_err(Error::from)?;
+                            let mut cookie = Buf::new();
+                            cookie.extend_from_slice(ext_data);
+                            client.saved_cookie = Some(cookie);
                         }
                         _ => {}
                     }
