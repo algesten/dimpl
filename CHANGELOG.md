@@ -1,6 +1,7 @@
 # Unreleased
 
   * Reject malformed DTLS 1.3 Cookie extension bodies #128
+  * Reject oversized DTLS 1.2 CertificateRequest certificate authorities #127
   * Bound DTLS 1.3 ACK tracking during handshake replacement #120
   * Stop DTLS 1.2 flight resends once the peer handshake is confirmed #125
   * Drop plaintext DTLS 1.3 ACKs and alerts after peer encryption #118
