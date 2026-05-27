@@ -837,7 +837,9 @@ fn dtls13_post_encryption_plaintext_ack_does_not_stop_retransmit() {
         .handle_packet(&dtls13_ack_record_for_records(0x200, &acked_records))
         .expect("post-encryption plaintext ACK should be ignored");
 
-    now += Duration::from_millis(150);
+    // The flight timer jitter is absolute (+/-250 ms), so wait past the
+    // maximum possible jitter for a 100 ms start RTO.
+    now += Duration::from_millis(400);
     server.handle_timeout(now).expect("server timeout");
     let retransmit = collect_packets(&mut server);
     assert!(
