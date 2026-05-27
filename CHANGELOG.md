@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Reject malformed DTLS 1.3 ClientHello extension vectors #133
   * Reject malformed DTLS 1.3 KeyUpdate bodies #131
   * Reject malformed DTLS 1.3 ACK record-number vectors #130
   * Parse DTLS 1.2-only ClientHellos for auto-sense fallback #129

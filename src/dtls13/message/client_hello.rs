@@ -114,11 +114,10 @@ impl ClientHello {
         let original_input = input;
         let (remaining, extensions_len) = be_u16(input)?;
 
-        if extensions_len == 0 {
-            return Ok((remaining, extensions));
-        }
-
         let (remaining, extensions_data) = take(extensions_len)(remaining)?;
+        if !remaining.is_empty() {
+            return Err(Err::Failure(Error::new(remaining, ErrorKind::LengthValue)));
+        }
 
         let consumed = extensions_data.as_ptr() as usize - original_input.as_ptr() as usize;
         let data_base_offset = base_offset + consumed;
@@ -355,5 +354,32 @@ mod tests {
                 "duplicate supported extensions should fail with LengthValue"
             );
         }
+    }
+
+    #[test]
+    fn zero_length_extension_vector_rejects_trailing_bytes() {
+        let mut message = MESSAGE.to_vec();
+        message.extend_from_slice(&0u16.to_be_bytes());
+        message.extend_from_slice(&ExtensionType::Cookie.as_u16().to_be_bytes());
+        message.extend_from_slice(&0u16.to_be_bytes());
+
+        assert!(
+            ClientHello::parse(&message, 0).is_err(),
+            "extension vector length 0 must consume the remaining ClientHello body"
+        );
+    }
+
+    #[test]
+    fn underdeclared_extension_vector_rejects_trailing_bytes() {
+        let mut message = MESSAGE.to_vec();
+        message.extend_from_slice(&4u16.to_be_bytes());
+        message.extend_from_slice(&ExtensionType::Cookie.as_u16().to_be_bytes());
+        message.extend_from_slice(&0u16.to_be_bytes());
+        message.push(0);
+
+        assert!(
+            ClientHello::parse(&message, 0).is_err(),
+            "declared extension vector length must consume the remaining ClientHello body"
+        );
     }
 }
