@@ -1311,7 +1311,7 @@ impl Engine {
         let record_numbers_len = u16::from_be_bytes([ack_data[0], ack_data[1]]) as usize;
         let entries_data = &ack_data[2..];
 
-        if entries_data.len() < record_numbers_len {
+        if entries_data.len() != record_numbers_len || record_numbers_len % 16 != 0 {
             return;
         }
 
@@ -2732,6 +2732,32 @@ mod tests {
             engine.received_record_numbers.len(),
             engine.received_record_numbers.capacity(),
             "overflowing ACK bookkeeping should keep existing entries and drop the extra one"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn malformed_ack_record_number_vector_is_ignored() {
+        let mut engine = test_engine();
+        engine.flight_saved_records.push(Entry {
+            content_type: ContentType::Handshake,
+            epoch: 2,
+            send_seq: 7,
+            fragment: Buf::new(),
+            acked: false,
+        });
+
+        let mut malformed_ack = Vec::new();
+        malformed_ack.extend_from_slice(&17u16.to_be_bytes());
+        malformed_ack.extend_from_slice(&2u64.to_be_bytes());
+        malformed_ack.extend_from_slice(&7u64.to_be_bytes());
+        malformed_ack.push(0);
+
+        engine.process_ack(&malformed_ack);
+
+        assert!(
+            !engine.flight_saved_records[0].acked,
+            "malformed ACK vector length must not partially acknowledge records"
         );
     }
 }
