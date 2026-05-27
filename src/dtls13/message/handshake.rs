@@ -429,6 +429,9 @@ impl Body {
             }
             MessageType::KeyUpdate => {
                 let (input, byte) = be_u8(input)?;
+                if !input.is_empty() {
+                    return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+                }
                 let request = KeyUpdateRequest::from_u8(byte)
                     .ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
                 Ok((input, Body::KeyUpdate(request)))
@@ -565,5 +568,31 @@ mod tests {
         assert_eq!(parsed, handshake);
 
         assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn key_update_body_rejects_trailing_bytes() {
+        let source = [KeyUpdateRequest::UpdateRequested.as_u8(), 0];
+        let handshake = Handshake::new(
+            MessageType::KeyUpdate,
+            source.len() as u32,
+            0,
+            0,
+            source.len() as u32,
+            Body::Fragment(0..source.len()),
+        );
+
+        let mut buffer = Buf::new();
+        let result = Handshake::defragment(
+            std::iter::once((&handshake, source.as_slice())),
+            &mut buffer,
+            None,
+            None,
+        );
+
+        assert!(
+            result.is_err(),
+            "KeyUpdate bodies with trailing bytes must be rejected"
+        );
     }
 }
