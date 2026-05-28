@@ -506,7 +506,7 @@ impl State {
         let cs = server
             .engine
             .cipher_suite()
-            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
 
         // PSK suites skip Certificate
         if cs.is_psk() {
@@ -532,7 +532,7 @@ impl State {
         let cs = server
             .engine
             .cipher_suite()
-            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
 
         if cs.is_psk() {
             return self.send_server_key_exchange_psk(server);
@@ -540,7 +540,7 @@ impl State {
 
         let client_random = server
             .client_random
-            .ok_or_else(|| Error::UnexpectedMessage("No client random".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No client random".to_string()))?;
         // unwrap: is ok because we set the random in handle_timeout
         let server_random = server.random.unwrap();
 
@@ -668,7 +668,7 @@ impl State {
         let cs = server
             .engine
             .cipher_suite()
-            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
 
         // PSK: no client certificates
         if cs.is_psk() {
@@ -747,7 +747,7 @@ impl State {
         let suite = server
             .engine
             .cipher_suite()
-            .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
 
         if suite.is_psk() {
             // Extract PSK identity range before dropping handshake
@@ -839,7 +839,7 @@ impl State {
         };
 
         let session_hash = server.captured_session_hash.as_ref().ok_or_else(|| {
-            Error::CryptoError(
+            Error::InvalidState(
                 "Extended Master Secret negotiated but session hash not captured".to_string(),
             )
         })?;
@@ -1189,7 +1189,7 @@ fn handshake_create_server_hello(
 
     let cs = engine
         .cipher_suite()
-        .ok_or_else(|| Error::UnexpectedMessage("No cipher suite".to_string()))?;
+        .ok_or_else(|| Error::InvalidState("No cipher suite".to_string()))?;
 
     let srtp_pid = negotiated_srtp_profile.map(|p| match p {
         SrtpProfile::AEAD_AES_256_GCM => SrtpProfileId::SRTP_AEAD_AES_256_GCM,
@@ -1220,9 +1220,7 @@ fn handshake_create_server_key_exchange(
     algorithm: SignatureAndHashAlgorithm,
 ) -> Result<(), Error> {
     let Some(cipher_suite) = engine.cipher_suite() else {
-        return Err(Error::UnexpectedMessage(
-            "No cipher suite selected".to_string(),
-        ));
+        return Err(Error::InvalidState("No cipher suite selected".to_string()));
     };
 
     let key_exchange_algorithm = cipher_suite.as_key_exchange_algorithm();

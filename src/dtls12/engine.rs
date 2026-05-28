@@ -728,14 +728,14 @@ impl Engine {
     where
         F: FnOnce(&mut Buf),
     {
-        let maybe_suite =
-            if epoch >= 1 {
-                Some(self.cipher_suite().ok_or_else(|| {
-                    Error::UnexpectedMessage("No cipher suite selected".to_string())
-                })?)
-            } else {
-                None
-            };
+        let maybe_suite = if epoch >= 1 {
+            Some(
+                self.cipher_suite()
+                    .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?,
+            )
+        } else {
+            None
+        };
 
         // Prepare the plaintext fragment
         let mut fragment = self.buffers_free.pop();
@@ -923,7 +923,7 @@ impl Engine {
         // explicit_nonce + tag). Used to size fragments to fit the MTU.
         let protection_overhead = if epoch >= 1 {
             self.cipher_suite()
-                .ok_or_else(|| Error::UnexpectedMessage("No cipher suite selected".to_string()))?;
+                .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
             self.min_protected_fragment_len()
         } else {
             0
@@ -1190,9 +1190,7 @@ impl Engine {
 
     pub fn generate_verify_data(&mut self, is_client: bool) -> Result<[u8; 12], Error> {
         let Some(suite) = self.cipher_suite() else {
-            return Err(Error::UnexpectedMessage(
-                "No cipher suite selected".to_string(),
-            ));
+            return Err(Error::InvalidState("No cipher suite selected".to_string()));
         };
         let algorithm = suite.hash_algorithm();
         let mut handshake_hash = self.buffers_free.pop();

@@ -10,6 +10,8 @@ pub enum Error {
     ParseError(nom::error::ErrorKind),
     /// Unexpected DTLS message
     UnexpectedMessage(String),
+    /// Local state was missing data required for the requested operation
+    InvalidState(String),
     /// Cryptographic operation failed
     CryptoError(String),
     /// Certificate validation failed
@@ -72,6 +74,7 @@ impl std::fmt::Display for Error {
             Error::ParseIncomplete => write!(f, "parse incomplete"),
             Error::ParseError(kind) => write!(f, "parse error: {:?}", kind),
             Error::UnexpectedMessage(msg) => write!(f, "unexpected message: {}", msg),
+            Error::InvalidState(msg) => write!(f, "invalid state: {}", msg),
             Error::CryptoError(msg) => write!(f, "crypto error: {}", msg),
             Error::CertificateError(msg) => write!(f, "certificate error: {}", msg),
             Error::SecurityError(msg) => write!(f, "security error: {}", msg),

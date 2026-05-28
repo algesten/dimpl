@@ -1821,7 +1821,7 @@ impl Engine {
     /// Rotate send keys: move current app send keys → prev, derive new ones.
     fn update_send_keys(&mut self) -> Result<(), Error> {
         let current_keys = self.app_send_keys.take().ok_or_else(|| {
-            Error::CryptoError("No current app send keys for KeyUpdate".to_string())
+            Error::InvalidState("No current app send keys for KeyUpdate".to_string())
         })?;
 
         let next_secret = self.derive_next_traffic_secret(&current_keys.traffic_secret)?;
@@ -1852,7 +1852,7 @@ impl Engine {
     pub fn update_recv_keys(&mut self) -> Result<u16, Error> {
         // Find the latest recv epoch entry
         let latest = self.app_recv_keys.last().ok_or_else(|| {
-            Error::CryptoError("No current app recv keys for KeyUpdate".to_string())
+            Error::InvalidState("No current app recv keys for KeyUpdate".to_string())
         })?;
 
         let next_secret = self.derive_next_traffic_secret(&latest.keys.traffic_secret)?;
