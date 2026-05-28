@@ -59,7 +59,7 @@ use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
 use crate::dtls13::message::parse_cookie_extension;
-use crate::{Error, KeyingMaterial, Output};
+use crate::{Error, InternalError, KeyingMaterial, Output};
 
 /// DTLS 1.3 client
 pub struct Client {
@@ -225,8 +225,7 @@ impl Client {
             .and_then(|_| self.make_progress())
         {
             Ok(()) => Ok(()),
-            Err(e) if e.is_transient() => Ok(()),
-            Err(e) => Err(e),
+            Err(e) => e.into_public_error().map_or(Ok(()), Err),
         }
     }
 
@@ -244,8 +243,10 @@ impl Client {
             self.random = Some(self.engine.random());
         }
         self.engine.handle_timeout(now)?;
-        self.make_progress()?;
-        Ok(())
+        match self.make_progress() {
+            Ok(()) => Ok(()),
+            Err(e) => e.into_public_error().map_or(Ok(()), Err),
+        }
     }
 
     fn initiate_key_update(&mut self) -> Result<(), Error> {
@@ -298,7 +299,7 @@ impl Client {
         Ok(())
     }
 
-    fn make_progress(&mut self) -> Result<(), Error> {
+    fn make_progress(&mut self) -> Result<(), InternalError> {
         loop {
             let prev_state = self.state;
 
@@ -350,7 +351,7 @@ impl State {
         }
     }
 
-    fn make_progress(self, client: &mut Client) -> Result<Self, Error> {
+    fn make_progress(self, client: &mut Client) -> Result<Self, InternalError> {
         match self {
             State::SendClientHello => self.send_client_hello(client),
             State::AwaitServerHello => self.await_server_hello(client),
@@ -368,7 +369,7 @@ impl State {
         }
     }
 
-    fn send_client_hello(self, client: &mut Client) -> Result<Self, Error> {
+    fn send_client_hello(self, client: &mut Client) -> Result<Self, InternalError> {
         // unwrap: is ok because we set the random in handle_timeout
         let random = client.random.unwrap();
 
@@ -437,7 +438,7 @@ impl State {
         Ok(Self::AwaitServerHello)
     }
 
-    fn await_server_hello(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_server_hello(self, client: &mut Client) -> Result<Self, InternalError> {
         // Save transcript length so we can roll back if a stale HRR
         // retransmission arrives after we already processed one.
         let transcript_len_before = client.engine.transcript.len();
@@ -480,7 +481,7 @@ impl State {
                         }
                         ExtensionType::Cookie => {
                             let ext_data = ext.extension_data(&client.defragment_buffer);
-                            parse_cookie_extension(ext_data).map_err(Error::from)?;
+                            parse_cookie_extension(ext_data).map_err(InternalError::from)?;
                             let mut cookie = Buf::new();
                             cookie.extend_from_slice(ext_data);
                             client.saved_cookie = Some(cookie);
@@ -495,9 +496,9 @@ impl State {
                 .engine
                 .is_cipher_suite_allowed(server_hello.cipher_suite)
             {
-                return Err(Error::SecurityError(
-                    "HRR selected disallowed cipher suite".into(),
-                ));
+                return Err(
+                    (Error::SecurityError("HRR selected disallowed cipher suite".into())).into(),
+                );
             }
             client.engine.set_cipher_suite(server_hello.cipher_suite);
 
@@ -514,7 +515,7 @@ impl State {
                 }
             }
             if !hrr_version_ok {
-                return Err(Error::SecurityError("HRR did not select DTLS 1.3".into()));
+                return Err((Error::SecurityError("HRR did not select DTLS 1.3".into())).into());
             }
 
             // Replace transcript with message_hash per RFC 8446 Section 4.4.1.
@@ -535,16 +536,17 @@ impl State {
 
         // Validate legacy_version (must be DTLS 1.2)
         if server_hello.legacy_version != ProtocolVersion::DTLS1_2 {
-            return Err(Error::SecurityError(
+            return Err((Error::SecurityError(
                 "ServerHello legacy_version must be DTLS 1.2".into(),
-            ));
+            ))
+            .into());
         }
 
         // Validate legacy_compression_method (must be null)
         if server_hello.legacy_compression_method != CompressionMethod::Null {
-            return Err(Error::SecurityError(
-                "ServerHello compression must be null".into(),
-            ));
+            return Err(
+                (Error::SecurityError("ServerHello compression must be null".into())).into(),
+            );
         }
 
         debug!(
@@ -555,16 +557,17 @@ impl State {
         // Validate cipher suite
         let cs = server_hello.cipher_suite;
         if matches!(cs, Dtls13CipherSuite::Unknown(_)) {
-            return Err(Error::SecurityError(
-                "Server selected unknown cipher suite".to_string(),
-            ));
+            return Err(
+                (Error::SecurityError("Server selected unknown cipher suite".to_string())).into(),
+            );
         }
 
         if !client.engine.is_cipher_suite_allowed(cs) {
-            return Err(Error::SecurityError(format!(
+            return Err((Error::SecurityError(format!(
                 "Server selected disallowed cipher suite: {:?}",
                 cs
-            )));
+            )))
+            .into());
         }
 
         client.engine.set_cipher_suite(cs);
@@ -575,7 +578,7 @@ impl State {
         let mut server_key_share: Option<(NamedGroup, std::ops::Range<usize>)> = None;
 
         let Some(ref extensions) = server_hello.extensions else {
-            return Err(Error::IncompleteServerHello);
+            return Err((Error::IncompleteServerHello).into());
         };
 
         for ext in extensions {
@@ -606,15 +609,17 @@ impl State {
         }
 
         if !supported_version_ok {
-            return Err(Error::SecurityError(
+            return Err((Error::SecurityError(
                 "Server did not negotiate DTLS 1.3 via supported_versions".to_string(),
-            ));
+            ))
+            .into());
         }
 
         let Some((server_group, ke_range)) = server_key_share else {
-            return Err(Error::SecurityError(
+            return Err((Error::SecurityError(
                 "Server did not provide key_share extension".to_string(),
-            ));
+            ))
+            .into());
         };
 
         // Complete ECDHE key exchange
@@ -624,11 +629,12 @@ impl State {
             .ok_or_else(|| Error::InvalidState("No active key exchange".to_string()))?;
 
         if key_exchange.group() != server_group {
-            return Err(Error::SecurityError(format!(
+            return Err((Error::SecurityError(format!(
                 "Server key share group mismatch: {:?} != {:?}",
                 server_group,
                 key_exchange.group()
-            )));
+            )))
+            .into());
         }
 
         let peer_pub_key = &client.extension_data[ke_range];
@@ -665,7 +671,7 @@ impl State {
         Ok(Self::AwaitEncryptedExtensions)
     }
 
-    fn await_encrypted_extensions(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_encrypted_extensions(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client.engine.next_handshake(
             MessageType::EncryptedExtensions,
             &mut client.defragment_buffer,
@@ -683,7 +689,8 @@ impl State {
         for ext in &ee.extensions {
             if ext.extension_type == ExtensionType::UseSrtp {
                 let ext_data = ext.extension_data(&client.defragment_buffer);
-                let (_, use_srtp) = UseSrtpExtension::parse(ext_data).map_err(Error::from)?;
+                let (_, use_srtp) =
+                    UseSrtpExtension::parse(ext_data).map_err(InternalError::from)?;
                 if !use_srtp.profiles.is_empty() {
                     client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
                     trace!(
@@ -698,7 +705,7 @@ impl State {
         Ok(Self::AwaitCertificateRequest)
     }
 
-    fn await_certificate_request(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_certificate_request(self, client: &mut Client) -> Result<Self, InternalError> {
         // CertificateRequest is optional. Check if Certificate is available instead.
         let has_cert = client
             .engine
@@ -737,7 +744,7 @@ impl State {
         Ok(Self::AwaitCertificate)
     }
 
-    fn await_certificate(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_certificate(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client
             .engine
             .next_handshake(MessageType::Certificate, &mut client.defragment_buffer)?;
@@ -751,15 +758,15 @@ impl State {
         };
 
         if !certificate.context_range.is_empty() {
-            return Err(Error::SecurityError(
-                "Server certificate context must be empty".into(),
-            ));
+            return Err(
+                (Error::SecurityError("Server certificate context must be empty".into())).into(),
+            );
         }
 
         if certificate.certificate_list.is_empty() {
-            return Err(Error::CertificateError(
-                "No server certificate received".to_string(),
-            ));
+            return Err(
+                (Error::CertificateError("No server certificate received".to_string())).into(),
+            );
         }
 
         debug!(
@@ -792,7 +799,7 @@ impl State {
         Ok(Self::AwaitCertificateVerify)
     }
 
-    fn await_certificate_verify(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_certificate_verify(self, client: &mut Client) -> Result<Self, InternalError> {
         // Compute transcript hash BEFORE consuming CertificateVerify.
         // Per RFC 8446 §4.4.3, the hash covers all messages up to but NOT
         // including CertificateVerify. next_handshake() will append CV to
@@ -819,10 +826,11 @@ impl State {
         // RFC 8446 §4.4.3: The receiver MUST verify that the signature algorithm
         // is one that was offered in the signature_algorithms extension.
         if !SignatureScheme::supported().contains(&scheme) {
-            return Err(Error::SecurityError(format!(
+            return Err((Error::SecurityError(format!(
                 "Server used un-offered signature scheme: {:?}",
                 scheme
-            )));
+            )))
+            .into());
         }
 
         // Build the signed content per RFC 8446 Section 4.4.3:
@@ -864,7 +872,7 @@ impl State {
         Ok(Self::AwaitFinished)
     }
 
-    fn await_finished(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_finished(self, client: &mut Client) -> Result<Self, InternalError> {
         // Compute expected verify_data BEFORE consuming Finished
         // (verify_data uses transcript hash up to but not including Finished)
         let server_hs_secret = client
@@ -896,9 +904,9 @@ impl State {
         // Constant-time comparison
         let is_eq: bool = verify_data.ct_eq(&*expected_verify_data).into();
         if !is_eq {
-            return Err(Error::SecurityError(
-                "Server Finished verification failed".to_string(),
-            ));
+            return Err(
+                (Error::SecurityError("Server Finished verification failed".to_string())).into(),
+            );
         }
 
         trace!("Server Finished verified successfully");
@@ -931,7 +939,7 @@ impl State {
         }
     }
 
-    fn send_certificate(self, client: &mut Client) -> Result<Self, Error> {
+    fn send_certificate(self, client: &mut Client) -> Result<Self, InternalError> {
         debug!("Sending Certificate");
 
         // Start a new flight for the client's Certificate/CertificateVerify/Finished.
@@ -975,7 +983,7 @@ impl State {
         }
     }
 
-    fn send_certificate_verify(self, client: &mut Client) -> Result<Self, Error> {
+    fn send_certificate_verify(self, client: &mut Client) -> Result<Self, InternalError> {
         debug!("Sending CertificateVerify");
 
         client
@@ -991,7 +999,7 @@ impl State {
         Ok(Self::SendFinished)
     }
 
-    fn send_finished(self, client: &mut Client) -> Result<Self, Error> {
+    fn send_finished(self, client: &mut Client) -> Result<Self, InternalError> {
         trace!("Sending Finished message to complete handshake");
 
         // When the server did NOT request client authentication, we skip
@@ -1047,7 +1055,7 @@ impl State {
         Ok(Self::AwaitApplicationData)
     }
 
-    fn await_application_data(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_application_data(self, client: &mut Client) -> Result<Self, InternalError> {
         // Auto-trigger KeyUpdate when AEAD encryption limit is reached
         if client.engine.needs_key_update() && !client.engine.is_key_update_in_flight() {
             client.initiate_key_update()?;
@@ -1111,7 +1119,7 @@ impl State {
         Ok(self)
     }
 
-    fn half_closed_local(self, client: &mut Client) -> Result<Self, Error> {
+    fn half_closed_local(self, client: &mut Client) -> Result<Self, InternalError> {
         // Write half is closed: drain incoming KeyUpdate to keep recv keys in sync,
         // but do not send our own KeyUpdate response.
         if client.engine.has_complete_handshake(MessageType::KeyUpdate) {
@@ -1583,6 +1591,9 @@ mod tests {
             .await_certificate(&mut client)
             .expect_err("empty server Certificate should fail");
 
-        assert!(matches!(err, Error::CertificateError(_)));
+        assert!(matches!(
+            err,
+            crate::InternalError::Fatal(Error::CertificateError(_))
+        ));
     }
 }

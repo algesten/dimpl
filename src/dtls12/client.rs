@@ -29,7 +29,7 @@ use crate::dtls12::message::{CompressionMethod, ContentType, Cookie};
 use crate::dtls12::message::{DigitallySigned, Dtls12CipherSuite};
 use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
-use crate::{Config, DtlsCertificate, Error, KeyingMaterial, Output};
+use crate::{Config, DtlsCertificate, Error, InternalError, KeyingMaterial, Output};
 
 /// DTLS client
 pub struct Client {
@@ -193,8 +193,7 @@ impl Client {
             .and_then(|_| self.make_progress())
         {
             Ok(()) => Ok(()),
-            Err(e) if e.is_transient() => Ok(()),
-            Err(e) => Err(e),
+            Err(e) => e.into_public_error().map_or(Ok(()), Err),
         }
     }
 
@@ -212,8 +211,10 @@ impl Client {
             self.random = Some(Random::new_with_time(now, &mut self.engine.rng));
         }
         self.engine.handle_timeout(now)?;
-        self.make_progress()?;
-        Ok(())
+        match self.make_progress() {
+            Ok(()) => Ok(()),
+            Err(e) => e.into_public_error().map_or(Ok(()), Err),
+        }
     }
 
     /// Send application data when the client is in the Running state
@@ -259,7 +260,7 @@ impl Client {
         Ok(())
     }
 
-    fn make_progress(&mut self) -> Result<(), Error> {
+    fn make_progress(&mut self) -> Result<(), InternalError> {
         loop {
             let prev_state = self.state;
 
@@ -319,7 +320,7 @@ impl State {
         }
     }
 
-    fn make_progress(self, client: &mut Client) -> Result<Self, Error> {
+    fn make_progress(self, client: &mut Client) -> Result<Self, InternalError> {
         match self {
             State::SendClientHello => self.send_client_hello(client),
             State::AwaitHelloVerifyRequest => self.await_hello_verify_request(client),
@@ -341,7 +342,7 @@ impl State {
         }
     }
 
-    fn send_client_hello(self, client: &mut Client) -> Result<Self, Error> {
+    fn send_client_hello(self, client: &mut Client) -> Result<Self, InternalError> {
         let session_id = client.session_id.unwrap_or_else(SessionId::empty);
         let cookie = client.cookie.unwrap_or_else(Cookie::empty);
         // unwrap: is ok because we set the random in handle_timeout
@@ -373,7 +374,7 @@ impl State {
         }
     }
 
-    fn await_hello_verify_request(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_hello_verify_request(self, client: &mut Client) -> Result<Self, InternalError> {
         let has_hello = client
             .engine
             .has_complete_handshake(MessageType::ServerHello);
@@ -402,10 +403,11 @@ impl State {
         if h.server_version != ProtocolVersion::DTLS1_2
             && h.server_version != ProtocolVersion::DTLS1_0
         {
-            return Err(Error::SecurityError(format!(
+            return Err((Error::SecurityError(format!(
                 "Unsupported DTLS version in HelloVerifyRequest: {:?}",
                 h.server_version
-            )));
+            )))
+            .into());
         }
 
         debug!(
@@ -425,7 +427,7 @@ impl State {
         Ok(Self::SendClientHello)
     }
 
-    fn await_server_hello(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_server_hello(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client
             .engine
             .next_handshake(MessageType::ServerHello, &mut client.defragment_buffer)?;
@@ -446,26 +448,28 @@ impl State {
 
         // Enforce DTLS version
         if server_hello.server_version != ProtocolVersion::DTLS1_2 {
-            return Err(Error::SecurityError(format!(
+            return Err((Error::SecurityError(format!(
                 "Unsupported DTLS version from server: {:?}",
                 server_hello.server_version
-            )));
+            )))
+            .into());
         }
 
         // Enforce Null compression only
         if server_hello.compression_method != CompressionMethod::Null {
-            return Err(Error::SecurityError(format!(
+            return Err((Error::SecurityError(format!(
                 "Unsupported compression from server: {:?}",
                 server_hello.compression_method
-            )));
+            )))
+            .into());
         }
 
         // Enforce cipher suite is known and allowed
         let cs = server_hello.cipher_suite;
         if matches!(cs, Dtls12CipherSuite::Unknown(_)) {
-            return Err(Error::SecurityError(
-                "Server selected unknown cipher suite".to_string(),
-            ));
+            return Err(
+                (Error::SecurityError("Server selected unknown cipher suite".to_string())).into(),
+            );
         }
 
         // Enforce cipher suite is compatible with our private key and allowed by config
@@ -475,17 +479,19 @@ impl State {
             .is_cipher_suite_compatible(cs);
 
         if !is_compatible {
-            return Err(Error::SecurityError(format!(
+            return Err((Error::SecurityError(format!(
                 "Server selected incompatible cipher suite: {:?}",
                 cs
-            )));
+            )))
+            .into());
         }
 
         if !client.engine.is_cipher_suite_allowed(cs) {
-            return Err(Error::SecurityError(format!(
+            return Err((Error::SecurityError(format!(
                 "Server selected disallowed cipher suite: {:?}",
                 cs
-            )));
+            )))
+            .into());
         }
 
         // Note: we keep offered suites local; we don't enforce echo here
@@ -497,14 +503,15 @@ impl State {
 
         // Check for use_srtp and extended_master_secret extensions
         let Some(extensions) = &server_hello.extensions else {
-            return Err(Error::IncompleteServerHello);
+            return Err((Error::IncompleteServerHello).into());
         };
 
         for extension in extensions {
             if extension.extension_type == ExtensionType::UseSrtp {
                 // Parse the use_srtp extension to get the selected profile
                 let extension_data = extension.extension_data(&client.defragment_buffer);
-                let (_, use_srtp) = UseSrtpExtension::parse(extension_data).map_err(Error::from)?;
+                let (_, use_srtp) =
+                    UseSrtpExtension::parse(extension_data).map_err(InternalError::from)?;
                 // Store the first profile as our negotiated profile
                 if !use_srtp.profiles.is_empty() {
                     client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
@@ -525,9 +532,10 @@ impl State {
         // Without extended master secret, in DTLS1.2 a security attack
         // reusing the same master secret is possible.
         if !extended_master_secret {
-            return Err(Error::SecurityError(
+            return Err((Error::SecurityError(
                 "Extended Master Secret not negotiated".to_string(),
-            ));
+            ))
+            .into());
         }
 
         if let Some(profile) = client.negotiated_srtp_profile {
@@ -543,7 +551,7 @@ impl State {
         }
     }
 
-    fn await_certificate(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_certificate(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client
             .engine
             .next_handshake(MessageType::Certificate, &mut client.defragment_buffer)?;
@@ -558,9 +566,9 @@ impl State {
         };
 
         if certificate.certificate_list.is_empty() {
-            return Err(Error::CertificateError(
-                "No server certificate received".to_string(),
-            ));
+            return Err(
+                (Error::CertificateError("No server certificate received".to_string())).into(),
+            );
         }
 
         debug!(
@@ -587,7 +595,7 @@ impl State {
         Ok(Self::AwaitServerKeyExchange)
     }
 
-    fn await_server_key_exchange(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_server_key_exchange(self, client: &mut Client) -> Result<Self, InternalError> {
         let cipher_suite = client
             .engine
             .cipher_suite()
@@ -600,7 +608,7 @@ impl State {
         }
     }
 
-    fn await_server_key_exchange_ecdhe(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_server_key_exchange_ecdhe(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client.engine.next_handshake(
             MessageType::ServerKeyExchange,
             &mut client.defragment_buffer,
@@ -620,9 +628,10 @@ impl State {
 
             let Some(d_signed) = server_key_exchange.signature() else {
                 // We do not support anonymous key exchange
-                return Err(Error::UnexpectedMessage(
+                return Err((Error::UnexpectedMessage(
                     "ServerKeyExchange without signature".to_string(),
-                ));
+                ))
+                .into());
             };
 
             let signature_range = d_signed.signature_range.clone();
@@ -636,9 +645,10 @@ impl State {
                     ecdh.public_key_range.clone(),
                 ),
                 ServerKeyExchangeParams::Psk(_) => {
-                    return Err(Error::UnexpectedMessage(
+                    return Err((Error::UnexpectedMessage(
                         "PSK ServerKeyExchange in ECDHE path".to_string(),
-                    ));
+                    ))
+                    .into());
                 }
             };
 
@@ -680,18 +690,20 @@ impl State {
         // Ensure the server's (hash, signature) pair was offered by the client
         let offered = SignatureAndHashAlgorithm::supported().contains(&signature_algorithm);
         if !offered {
-            return Err(Error::CryptoError(
+            return Err((Error::CryptoError(
                 "Signature algorithm not offered by client".to_string(),
-            ));
+            ))
+            .into());
         }
 
         // Ensure the signature algorithm is compatible with the cipher suite
         if let Some(expected_sig) = cipher_suite.signature_algorithm() {
             if signature_algorithm.signature != expected_sig {
-                return Err(Error::CryptoError(format!(
+                return Err((Error::CryptoError(format!(
                     "Signature algorithm mismatch: {:?} != {:?}",
                     signature_algorithm.signature, expected_sig
-                )));
+                )))
+                .into());
             }
         }
 
@@ -737,7 +749,7 @@ impl State {
 
     /// PSK ServerKeyExchange carries only an optional identity hint (no signature).
     /// Per RFC 4279 §2, ServerKeyExchange is omitted when the server has no hint.
-    fn await_server_key_exchange_psk(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_server_key_exchange_psk(self, client: &mut Client) -> Result<Self, InternalError> {
         // If the server skipped ServerKeyExchange (no hint), go straight to ServerHelloDone
         let has_done = client
             .engine
@@ -764,9 +776,10 @@ impl State {
         let hint_range = match &ske.params {
             ServerKeyExchangeParams::Psk(psk) => psk.hint_range.clone(),
             _ => {
-                return Err(Error::UnexpectedMessage(
+                return Err((Error::UnexpectedMessage(
                     "ECDHE ServerKeyExchange in PSK path".to_string(),
-                ));
+                ))
+                .into());
             }
         };
 
@@ -780,7 +793,7 @@ impl State {
         Ok(Self::AwaitServerHelloDone)
     }
 
-    fn await_certificate_request(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_certificate_request(self, client: &mut Client) -> Result<Self, InternalError> {
         let has_done = client
             .engine
             .has_complete_handshake(MessageType::ServerHelloDone);
@@ -813,10 +826,11 @@ impl State {
             .unwrap();
 
         if !cr.supports_hash_algorithm(hash_algorithm) {
-            return Err(Error::CertificateError(format!(
+            return Err((Error::CertificateError(format!(
                 "Unsupported hash algorithm: {:?}",
                 hash_algorithm
-            )));
+            )))
+            .into());
         }
 
         debug!(
@@ -830,7 +844,7 @@ impl State {
         Ok(Self::AwaitServerHelloDone)
     }
 
-    fn await_server_hello_done(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_server_hello_done(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client
             .engine
             .next_handshake(MessageType::ServerHelloDone, &mut client.defragment_buffer)?;
@@ -858,9 +872,9 @@ impl State {
 
         // Validate the server certificate
         if client.server_certificates.is_empty() {
-            return Err(Error::CertificateError(
-                "No server certificate received".to_string(),
-            ));
+            return Err(
+                (Error::CertificateError("No server certificate received".to_string())).into(),
+            );
         }
 
         // Send the server certificate as an event
@@ -875,7 +889,7 @@ impl State {
         }
     }
 
-    fn send_certificate(self, client: &mut Client) -> Result<Self, Error> {
+    fn send_certificate(self, client: &mut Client) -> Result<Self, InternalError> {
         debug!("Sending Certificate");
 
         // Start/restart flight timer for client Flight 5
@@ -889,7 +903,7 @@ impl State {
         Ok(Self::SendClientKeyExchange)
     }
 
-    fn send_client_key_exchange(self, client: &mut Client) -> Result<Self, Error> {
+    fn send_client_key_exchange(self, client: &mut Client) -> Result<Self, InternalError> {
         trace!("Sending ClientKeyExchange");
 
         // Start/restart flight timer only if this flight did not start with Certificate
@@ -925,7 +939,7 @@ impl State {
         }
     }
 
-    fn send_certificate_verify(self, client: &mut Client) -> Result<Self, Error> {
+    fn send_certificate_verify(self, client: &mut Client) -> Result<Self, InternalError> {
         debug!("Sending CertificateVerify");
 
         // Send the certificate verify message
@@ -937,7 +951,7 @@ impl State {
         Ok(Self::SendChangeCipherSpec)
     }
 
-    fn send_change_cipher_spec(self, client: &mut Client) -> Result<Self, Error> {
+    fn send_change_cipher_spec(self, client: &mut Client) -> Result<Self, InternalError> {
         Self::derive_keys(client)?;
 
         // Send change cipher spec
@@ -1019,7 +1033,7 @@ impl State {
         Ok(())
     }
 
-    fn send_finished(self, client: &mut Client) -> Result<Self, Error> {
+    fn send_finished(self, client: &mut Client) -> Result<Self, InternalError> {
         trace!("Sending Finished message to complete handshake");
 
         client
@@ -1038,7 +1052,7 @@ impl State {
         Ok(Self::AwaitChangeCipherSpec)
     }
 
-    fn await_change_cipher_spec(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_change_cipher_spec(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client.engine.next_record(ContentType::ChangeCipherSpec);
 
         let Some(_) = maybe else {
@@ -1057,7 +1071,7 @@ impl State {
         Ok(Self::AwaitNewSessionTicket)
     }
 
-    fn await_new_session_ticket(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_new_session_ticket(self, client: &mut Client) -> Result<Self, InternalError> {
         let has_finished = client.engine.has_complete_handshake(MessageType::Finished);
 
         if has_finished {
@@ -1084,7 +1098,7 @@ impl State {
         Ok(Self::AwaitFinished)
     }
 
-    fn await_finished(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_finished(self, client: &mut Client) -> Result<Self, InternalError> {
         // Generate expected verify data based on current transcript.
         // This must be done before next_handshake() below since
         // it should not include Finished itself.
@@ -1123,9 +1137,9 @@ impl State {
         // Use constant-time comparison to prevent timing attacks
         let is_eq: bool = verify_data.ct_eq(expected.as_slice()).into();
         if !is_eq {
-            return Err(Error::SecurityError(
-                "Server Finished verification failed".to_string(),
-            ));
+            return Err(
+                (Error::SecurityError("Server Finished verification failed".to_string())).into(),
+            );
         }
 
         trace!("Server Finished verified successfully");
@@ -1175,7 +1189,7 @@ impl State {
         Ok(Self::AwaitApplicationData)
     }
 
-    fn await_application_data(self, client: &mut Client) -> Result<Self, Error> {
+    fn await_application_data(self, client: &mut Client) -> Result<Self, InternalError> {
         if client.engine.close_notify_received() {
             // RFC 5246 §7.2.1: respond with a reciprocal close_notify and
             // close down immediately, discarding any pending writes.
@@ -1431,7 +1445,10 @@ mod tests {
             .await_certificate(&mut client)
             .expect_err("empty server Certificate should fail");
 
-        assert!(matches!(err, Error::CertificateError(_)));
+        assert!(matches!(
+            err,
+            crate::InternalError::Fatal(Error::CertificateError(_))
+        ));
     }
 
     #[test]

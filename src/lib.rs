@@ -228,6 +228,7 @@ mod util;
 
 mod error;
 pub use error::Error;
+pub(crate) use error::InternalError;
 
 mod config;
 pub use config::{Config, ConfigBuilder, Psk, PskResolver};

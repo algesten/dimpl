@@ -28,7 +28,7 @@ use crate::dtls13::message::Sequence;
 use crate::timer::ExponentialBackoff;
 use crate::types::{HashAlgorithm, Random};
 use crate::window::ReplayWindow;
-use crate::{Config, DtlsCertificate, Error, Output, SeededRng};
+use crate::{Config, DtlsCertificate, Error, InternalError, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
@@ -329,7 +329,7 @@ impl Engine {
         &mut *self.signing_key
     }
 
-    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), InternalError> {
         let cs = self.cipher_suite;
         let incoming = Incoming::parse_packet(packet, self, cs)?;
         if let Some(incoming) = incoming {
@@ -781,14 +781,14 @@ impl Engine {
         &mut self,
         wanted: MessageType,
         defragment_buffer: &mut Buf,
-    ) -> Result<Option<Handshake>, Error> {
+    ) -> Result<Option<Handshake>, InternalError> {
         self.next_handshake_with_options(wanted, defragment_buffer, false)
     }
 
     pub(crate) fn next_client_hello_for_auto_sense(
         &mut self,
         defragment_buffer: &mut Buf,
-    ) -> Result<Option<Handshake>, Error> {
+    ) -> Result<Option<Handshake>, InternalError> {
         self.next_handshake_with_options(MessageType::ClientHello, defragment_buffer, true)
     }
 
@@ -797,7 +797,7 @@ impl Engine {
         wanted: MessageType,
         defragment_buffer: &mut Buf,
         allow_unknown_client_hello_suites: bool,
-    ) -> Result<Option<Handshake>, Error> {
+    ) -> Result<Option<Handshake>, InternalError> {
         if !self.has_complete_handshake(wanted) {
             return Ok(None);
         }
@@ -835,7 +835,7 @@ impl Engine {
         &mut self,
         wanted: MessageType,
         defragment_buffer: &mut Buf,
-    ) -> Result<Option<Handshake>, Error> {
+    ) -> Result<Option<Handshake>, InternalError> {
         if !self.has_complete_handshake(wanted) {
             return Ok(None);
         }
@@ -2102,7 +2102,7 @@ impl Engine {
     // Peer Encryption Management
     // =========================================================================
 
-    pub fn enable_peer_encryption(&mut self) -> Result<(), Error> {
+    pub fn enable_peer_encryption(&mut self) -> Result<(), InternalError> {
         debug!("Peer encryption enabled");
         self.peer_encryption_enabled = true;
 

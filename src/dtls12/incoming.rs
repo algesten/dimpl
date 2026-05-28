@@ -4,10 +4,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use arrayvec::ArrayVec;
 use std::fmt;
 
-use crate::Error;
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake, Sequence};
+use crate::{Error, InternalError};
 
 /// Holds both the UDP packet and the parsed result of that packet.
 pub struct Incoming {
@@ -44,7 +44,7 @@ impl Incoming {
         packet: &[u8],
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls12CipherSuite>,
-    ) -> Result<Option<Self>, Error> {
+    ) -> Result<Option<Self>, InternalError> {
         // Parse records directly from packet, copying each record ONCE into its own buffer
         let records = Records::parse(packet, decrypt, cs)?;
 
@@ -71,13 +71,13 @@ impl Records {
         mut packet: &[u8],
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls12CipherSuite>,
-    ) -> Result<Records, Error> {
+    ) -> Result<Records, InternalError> {
         let mut parsed_records: ArrayVec<Record, 8> = ArrayVec::new();
 
         // Find record boundaries and copy each record ONCE from the packet
         while !packet.is_empty() {
             if packet.len() < DTLSRecord::HEADER_LEN {
-                return Err(Error::ParseIncomplete);
+                return Err(InternalError::parse_incomplete());
             }
 
             let length_bytes: [u8; 2] = packet[DTLSRecord::LENGTH_OFFSET].try_into().unwrap();
@@ -85,7 +85,7 @@ impl Records {
             let record_end = DTLSRecord::HEADER_LEN + length;
 
             if packet.len() < record_end {
-                return Err(Error::ParseIncomplete);
+                return Err(InternalError::parse_incomplete());
             }
 
             // This is the ONLY copy: packet -> record buffer
@@ -94,7 +94,7 @@ impl Records {
                 Ok(record) => {
                     if let Some(record) = record {
                         if parsed_records.try_push(record).is_err() {
-                            return Err(Error::TooManyRecords);
+                            return Err(InternalError::too_many_records());
                         }
                     } else {
                         trace!("Discarding replayed rec");
@@ -141,7 +141,7 @@ impl Record {
         record_slice: &[u8],
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls12CipherSuite>,
-    ) -> Result<Option<Record>, Error> {
+    ) -> Result<Option<Record>, InternalError> {
         // ONLY COPY: UDP packet slice -> pooled buffer
         let mut buffer = Buf::new();
         buffer.extend_from_slice(record_slice);
@@ -200,7 +200,7 @@ impl Record {
             // This decrypts in place.
             if let Err(e) = decrypt.decrypt_data(&mut buffer, aad, nonce) {
                 if !decrypt.can_discard_bad_protected_record() {
-                    return Err(e);
+                    return Err(e.into());
                 }
 
                 trace!("Discarding record: decrypt failed: {}", e);
@@ -276,7 +276,7 @@ impl ParsedRecord {
         input: &[u8],
         cipher_suite: Option<Dtls12CipherSuite>,
         offset: usize,
-    ) -> Result<ParsedRecord, Error> {
+    ) -> Result<ParsedRecord, InternalError> {
         let (_, record) = DTLSRecord::parse(input, 0, offset)?;
 
         let handshakes = if record.content_type == ContentType::Handshake {

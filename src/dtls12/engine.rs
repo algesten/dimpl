@@ -12,7 +12,7 @@ use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolV
 use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
 use crate::timer::ExponentialBackoff;
 use crate::window::ReplayWindow;
-use crate::{Config, Error, Output, SeededRng};
+use crate::{Config, Error, InternalError, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
@@ -218,7 +218,7 @@ impl Engine {
         &mut self.crypto_context
     }
 
-    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), InternalError> {
         let cs = self.cipher_suite;
         let incoming = Incoming::parse_packet(packet, self, cs)?;
         if let Some(incoming) = incoming {
@@ -644,7 +644,7 @@ impl Engine {
         &mut self,
         wanted: MessageType,
         defragment_buffer: &mut Buf,
-    ) -> Result<Option<Handshake>, Error> {
+    ) -> Result<Option<Handshake>, InternalError> {
         if !self.has_complete_handshake(wanted) {
             return Ok(None);
         }
@@ -1130,7 +1130,7 @@ impl Engine {
         self.cipher_suite = Some(cipher_suite);
     }
 
-    pub fn enable_peer_encryption(&mut self) -> Result<(), Error> {
+    pub fn enable_peer_encryption(&mut self) -> Result<(), InternalError> {
         debug!("Peer encryption enabled");
         self.peer_encryption_enabled = true;
 

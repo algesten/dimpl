@@ -48,37 +48,78 @@ pub enum Error {
     /// value to communicate from dtls13/server.rs to lib.rs
     #[doc(hidden)]
     Dtls12Fallback,
-    /// Parser requested more data
-    #[doc(hidden)]
+}
+
+#[derive(Debug)]
+pub(crate) enum InternalError {
+    Transient(TransientError),
+    Fatal(Error),
+}
+
+#[derive(Debug)]
+pub(crate) enum TransientError {
     ParseIncomplete,
-    /// Parser encountered an error kind from nom
-    #[doc(hidden)]
-    ParseError(nom::error::ErrorKind),
-    /// Too many records in a single packet
-    #[doc(hidden)]
+    Parse(nom::error::ErrorKind),
     TooManyRecords,
 }
 
-impl Error {
-    pub(crate) fn is_transient(&self) -> bool {
-        matches!(
-            self,
-            Error::ParseIncomplete | Error::ParseError(_) | Error::TooManyRecords
-        )
+impl InternalError {
+    pub(crate) fn parse_incomplete() -> Self {
+        Self::Transient(TransientError::ParseIncomplete)
+    }
+
+    pub(crate) fn parse(kind: nom::error::ErrorKind) -> Self {
+        Self::Transient(TransientError::Parse(kind))
+    }
+
+    pub(crate) fn too_many_records() -> Self {
+        Self::Transient(TransientError::TooManyRecords)
+    }
+
+    pub(crate) fn into_public_error(self) -> Option<Error> {
+        match self {
+            Self::Transient(_) => None,
+            Self::Fatal(err) => Some(err),
+        }
     }
 }
 
-impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {
+impl From<Error> for InternalError {
+    fn from(value: Error) -> Self {
+        Self::Fatal(value)
+    }
+}
+
+impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for InternalError {
     fn from(value: nom::Err<nom::error::Error<&'a [u8]>>) -> Self {
         match value {
-            nom::Err::Incomplete(_) => Error::ParseIncomplete,
-            nom::Err::Error(x) => Error::ParseError(x.code),
-            nom::Err::Failure(x) => Error::ParseError(x.code),
+            nom::Err::Incomplete(_) => InternalError::parse_incomplete(),
+            nom::Err::Error(x) => InternalError::parse(x.code),
+            nom::Err::Failure(x) => InternalError::parse(x.code),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+impl std::fmt::Display for InternalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InternalError::Transient(err) => err.fmt(f),
+            InternalError::Fatal(err) => err.fmt(f),
+        }
+    }
+}
+
+impl std::fmt::Display for TransientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransientError::ParseIncomplete => write!(f, "parse incomplete"),
+            TransientError::Parse(kind) => write!(f, "parse error: {:?}", kind),
+            TransientError::TooManyRecords => write!(f, "too many records in packet"),
+        }
+    }
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -103,9 +144,6 @@ impl std::fmt::Display for Error {
             Error::Dtls12Fallback => {
                 write!(f, "dtls 1.2 fallback (internal)")
             }
-            Error::ParseIncomplete => write!(f, "parse incomplete"),
-            Error::ParseError(kind) => write!(f, "parse error: {:?}", kind),
-            Error::TooManyRecords => write!(f, "too many records in packet"),
         }
     }
 }
