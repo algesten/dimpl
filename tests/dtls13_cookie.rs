@@ -128,13 +128,9 @@ fn dtls13_client_rejects_hrr_cookie_extension_trailing_bytes() {
         "fixture should contain a Cookie extension"
     );
 
-    let err = client
+    client
         .handle_packet(&hrr)
-        .expect_err("malformed HRR Cookie extension must be rejected");
-    assert!(matches!(
-        err,
-        dimpl::Error::ParseError(nom::error::ErrorKind::LengthValue)
-    ));
+        .expect("malformed HRR Cookie extension should be discarded");
 
     client
         .handle_timeout(now)
@@ -192,11 +188,7 @@ fn dtls13_server_rejects_clienthello_cookie_extension_trailing_bytes() {
         "fixture should contain a Cookie extension"
     );
 
-    let err = server
+    server
         .handle_packet(&ch2)
-        .expect_err("malformed ClientHello Cookie extension must be rejected");
-    assert!(matches!(
-        err,
-        dimpl::Error::ParseError(nom::error::ErrorKind::LengthValue)
-    ));
+        .expect("malformed ClientHello Cookie extension should be discarded");
 }

@@ -4,10 +4,6 @@
 #[non_exhaustive]
 /// Errors returned by DTLS processing functions.
 pub enum Error {
-    /// Parser requested more data
-    ParseIncomplete,
-    /// Parser encountered an error kind from nom
-    ParseError(nom::error::ErrorKind),
     /// Unexpected DTLS message
     UnexpectedMessage(String),
     /// Local state was missing data required for the requested operation
@@ -30,8 +26,6 @@ pub enum Error {
     Timeout(&'static str),
     /// Configuration error (e.g., invalid crypto provider)
     ConfigError(String),
-    /// Too many records in a single packet
-    TooManyRecords,
     /// Peer attempted renegotiation (not supported)
     RenegotiationAttempt,
     /// Application data cannot be sent because the handshake is not yet complete.
@@ -54,6 +48,24 @@ pub enum Error {
     /// value to communicate from dtls13/server.rs to lib.rs
     #[doc(hidden)]
     Dtls12Fallback,
+    /// Parser requested more data
+    #[doc(hidden)]
+    ParseIncomplete,
+    /// Parser encountered an error kind from nom
+    #[doc(hidden)]
+    ParseError(nom::error::ErrorKind),
+    /// Too many records in a single packet
+    #[doc(hidden)]
+    TooManyRecords,
+}
+
+impl Error {
+    pub(crate) fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Error::ParseIncomplete | Error::ParseError(_) | Error::TooManyRecords
+        )
+    }
 }
 
 impl<'a> From<nom::Err<nom::error::Error<&'a [u8]>>> for Error {
@@ -71,8 +83,6 @@ impl std::error::Error for Error {}
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::ParseIncomplete => write!(f, "parse incomplete"),
-            Error::ParseError(kind) => write!(f, "parse error: {:?}", kind),
             Error::UnexpectedMessage(msg) => write!(f, "unexpected message: {}", msg),
             Error::InvalidState(msg) => write!(f, "invalid state: {}", msg),
             Error::CryptoError(msg) => write!(f, "crypto error: {}", msg),
@@ -84,7 +94,6 @@ impl std::fmt::Display for Error {
             Error::IncompleteServerHello => write!(f, "incomplete ServerHello"),
             Error::Timeout(what) => write!(f, "timeout: {}", what),
             Error::ConfigError(msg) => write!(f, "config error: {}", msg),
-            Error::TooManyRecords => write!(f, "too many records in packet"),
             Error::RenegotiationAttempt => write!(f, "peer attempted renegotiation"),
             Error::HandshakePending => {
                 write!(f, "handshake pending: cannot send application data yet")
@@ -94,6 +103,9 @@ impl std::fmt::Display for Error {
             Error::Dtls12Fallback => {
                 write!(f, "dtls 1.2 fallback (internal)")
             }
+            Error::ParseIncomplete => write!(f, "parse incomplete"),
+            Error::ParseError(kind) => write!(f, "parse error: {:?}", kind),
+            Error::TooManyRecords => write!(f, "too many records in packet"),
         }
     }
 }

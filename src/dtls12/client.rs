@@ -187,9 +187,15 @@ impl Client {
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        self.engine.parse_packet(packet)?;
-        self.make_progress()?;
-        Ok(())
+        match self
+            .engine
+            .parse_packet(packet)
+            .and_then(|_| self.make_progress())
+        {
+            Ok(()) => Ok(()),
+            Err(e) if e.is_transient() => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
