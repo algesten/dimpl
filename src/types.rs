@@ -570,83 +570,69 @@ impl PartialOrd for Sequence {
 /// In TLS 1.3, signature schemes combine the signature algorithm with the
 /// hash algorithm into a single identifier, unlike TLS 1.2 where they were
 /// separate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-#[non_exhaustive]
-pub enum SignatureScheme {
-    /// ECDSA with P-256 and SHA-256.
-    ECDSA_SECP256R1_SHA256,
-    /// ECDSA with P-384 and SHA-384.
-    ECDSA_SECP384R1_SHA384,
-    /// ECDSA with P-521 and SHA-512.
-    ECDSA_SECP521R1_SHA512,
-    /// Ed25519.
-    ED25519,
-    /// Ed448.
-    ED448,
-    /// RSA-PSS with SHA-256 (rsaEncryption OID).
-    RSA_PSS_RSAE_SHA256,
-    /// RSA-PSS with SHA-384 (rsaEncryption OID).
-    RSA_PSS_RSAE_SHA384,
-    /// RSA-PSS with SHA-512 (rsaEncryption OID).
-    RSA_PSS_RSAE_SHA512,
-    /// RSA-PSS with SHA-256 (id-rsassa-pss OID).
-    RSA_PSS_PSS_SHA256,
-    /// RSA-PSS with SHA-384 (id-rsassa-pss OID).
-    RSA_PSS_PSS_SHA384,
-    /// RSA-PSS with SHA-512 (id-rsassa-pss OID).
-    RSA_PSS_PSS_SHA512,
-    /// RSA PKCS#1 v1.5 with SHA-256 (legacy).
-    RSA_PKCS1_SHA256,
-    /// RSA PKCS#1 v1.5 with SHA-384 (legacy).
-    RSA_PKCS1_SHA384,
-    /// RSA PKCS#1 v1.5 with SHA-512 (legacy).
-    RSA_PKCS1_SHA512,
-    /// Unknown or unsupported signature scheme.
-    Unknown(u16),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct SignatureScheme(u16);
 
 impl SignatureScheme {
+    /// ECDSA with P-256 and SHA-256.
+    pub const ECDSA_SECP256R1_SHA256: Self = Self(0x0403);
+    /// ECDSA with P-384 and SHA-384.
+    pub const ECDSA_SECP384R1_SHA384: Self = Self(0x0503);
+    /// ECDSA with P-521 and SHA-512.
+    pub const ECDSA_SECP521R1_SHA512: Self = Self(0x0603);
+    /// Ed25519.
+    pub const ED25519: Self = Self(0x0807);
+    /// Ed448.
+    pub const ED448: Self = Self(0x0808);
+    /// RSA-PSS with SHA-256 (rsaEncryption OID).
+    pub const RSA_PSS_RSAE_SHA256: Self = Self(0x0804);
+    /// RSA-PSS with SHA-384 (rsaEncryption OID).
+    pub const RSA_PSS_RSAE_SHA384: Self = Self(0x0805);
+    /// RSA-PSS with SHA-512 (rsaEncryption OID).
+    pub const RSA_PSS_RSAE_SHA512: Self = Self(0x0806);
+    /// RSA-PSS with SHA-256 (id-rsassa-pss OID).
+    pub const RSA_PSS_PSS_SHA256: Self = Self(0x0809);
+    /// RSA-PSS with SHA-384 (id-rsassa-pss OID).
+    pub const RSA_PSS_PSS_SHA384: Self = Self(0x080a);
+    /// RSA-PSS with SHA-512 (id-rsassa-pss OID).
+    pub const RSA_PSS_PSS_SHA512: Self = Self(0x080b);
+    /// RSA PKCS#1 v1.5 with SHA-256 (legacy).
+    pub const RSA_PKCS1_SHA256: Self = Self(0x0401);
+    /// RSA PKCS#1 v1.5 with SHA-384 (legacy).
+    pub const RSA_PKCS1_SHA384: Self = Self(0x0501);
+    /// RSA PKCS#1 v1.5 with SHA-512 (legacy).
+    pub const RSA_PKCS1_SHA512: Self = Self(0x0601);
+
     /// Convert a wire format u16 value to a `SignatureScheme`.
-    pub fn from_u16(value: u16) -> Self {
-        match value {
-            0x0403 => SignatureScheme::ECDSA_SECP256R1_SHA256,
-            0x0503 => SignatureScheme::ECDSA_SECP384R1_SHA384,
-            0x0603 => SignatureScheme::ECDSA_SECP521R1_SHA512,
-            0x0807 => SignatureScheme::ED25519,
-            0x0808 => SignatureScheme::ED448,
-            0x0804 => SignatureScheme::RSA_PSS_RSAE_SHA256,
-            0x0805 => SignatureScheme::RSA_PSS_RSAE_SHA384,
-            0x0806 => SignatureScheme::RSA_PSS_RSAE_SHA512,
-            0x0809 => SignatureScheme::RSA_PSS_PSS_SHA256,
-            0x080a => SignatureScheme::RSA_PSS_PSS_SHA384,
-            0x080b => SignatureScheme::RSA_PSS_PSS_SHA512,
-            0x0401 => SignatureScheme::RSA_PKCS1_SHA256,
-            0x0501 => SignatureScheme::RSA_PKCS1_SHA384,
-            0x0601 => SignatureScheme::RSA_PKCS1_SHA512,
-            _ => SignatureScheme::Unknown(value),
-        }
+    pub const fn from_u16(value: u16) -> Self {
+        Self(value)
     }
 
     /// Convert this `SignatureScheme` to its wire format u16 value.
-    pub fn as_u16(&self) -> u16 {
-        match self {
-            SignatureScheme::ECDSA_SECP256R1_SHA256 => 0x0403,
-            SignatureScheme::ECDSA_SECP384R1_SHA384 => 0x0503,
-            SignatureScheme::ECDSA_SECP521R1_SHA512 => 0x0603,
-            SignatureScheme::ED25519 => 0x0807,
-            SignatureScheme::ED448 => 0x0808,
-            SignatureScheme::RSA_PSS_RSAE_SHA256 => 0x0804,
-            SignatureScheme::RSA_PSS_RSAE_SHA384 => 0x0805,
-            SignatureScheme::RSA_PSS_RSAE_SHA512 => 0x0806,
-            SignatureScheme::RSA_PSS_PSS_SHA256 => 0x0809,
-            SignatureScheme::RSA_PSS_PSS_SHA384 => 0x080a,
-            SignatureScheme::RSA_PSS_PSS_SHA512 => 0x080b,
-            SignatureScheme::RSA_PKCS1_SHA256 => 0x0401,
-            SignatureScheme::RSA_PKCS1_SHA384 => 0x0501,
-            SignatureScheme::RSA_PKCS1_SHA512 => 0x0601,
-            SignatureScheme::Unknown(value) => *value,
-        }
+    pub const fn as_u16(&self) -> u16 {
+        self.0
+    }
+
+    /// Returns true if this is not a known TLS signature scheme wire value.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(
+            *self,
+            SignatureScheme::ECDSA_SECP256R1_SHA256
+                | SignatureScheme::ECDSA_SECP384R1_SHA384
+                | SignatureScheme::ECDSA_SECP521R1_SHA512
+                | SignatureScheme::ED25519
+                | SignatureScheme::ED448
+                | SignatureScheme::RSA_PSS_RSAE_SHA256
+                | SignatureScheme::RSA_PSS_RSAE_SHA384
+                | SignatureScheme::RSA_PSS_RSAE_SHA512
+                | SignatureScheme::RSA_PSS_PSS_SHA256
+                | SignatureScheme::RSA_PSS_PSS_SHA384
+                | SignatureScheme::RSA_PSS_PSS_SHA512
+                | SignatureScheme::RSA_PKCS1_SHA256
+                | SignatureScheme::RSA_PKCS1_SHA384
+                | SignatureScheme::RSA_PKCS1_SHA512
+        )
     }
 
     /// Parse a `SignatureScheme` from wire format.
@@ -661,7 +647,7 @@ impl SignatureScheme {
     }
 
     /// All recognized signature schemes (every non-`Unknown` variant).
-    pub fn all() -> &'static [SignatureScheme] {
+    pub const fn all() -> &'static [SignatureScheme] {
         &[
             SignatureScheme::ECDSA_SECP256R1_SHA256,
             SignatureScheme::ECDSA_SECP384R1_SHA384,
@@ -698,7 +684,7 @@ impl SignatureScheme {
     /// In DTLS 1.3, ECDSA signature schemes encode the expected curve.
     /// Returns `None` for non-ECDSA schemes.
     pub fn named_group(&self) -> Option<NamedGroup> {
-        match self {
+        match *self {
             SignatureScheme::ECDSA_SECP256R1_SHA256 => Some(NamedGroup::SECP256R1),
             SignatureScheme::ECDSA_SECP384R1_SHA384 => Some(NamedGroup::SECP384R1),
             _ => None,
@@ -707,7 +693,7 @@ impl SignatureScheme {
 
     /// Returns the hash algorithm associated with this signature scheme.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
-        match self {
+        match *self {
             SignatureScheme::ECDSA_SECP256R1_SHA256
             | SignatureScheme::RSA_PSS_RSAE_SHA256
             | SignatureScheme::RSA_PSS_PSS_SHA256
@@ -722,7 +708,29 @@ impl SignatureScheme {
             | SignatureScheme::RSA_PKCS1_SHA512 => HashAlgorithm::SHA512,
             // Ed25519 and Ed448 have intrinsic hash algorithms
             SignatureScheme::ED25519 | SignatureScheme::ED448 => HashAlgorithm::NONE,
-            SignatureScheme::Unknown(_) => HashAlgorithm::UNKNOWN_DERIVED,
+            _ => HashAlgorithm::UNKNOWN_DERIVED,
+        }
+    }
+}
+
+impl fmt::Debug for SignatureScheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            SignatureScheme::ECDSA_SECP256R1_SHA256 => f.write_str("ECDSA_SECP256R1_SHA256"),
+            SignatureScheme::ECDSA_SECP384R1_SHA384 => f.write_str("ECDSA_SECP384R1_SHA384"),
+            SignatureScheme::ECDSA_SECP521R1_SHA512 => f.write_str("ECDSA_SECP521R1_SHA512"),
+            SignatureScheme::ED25519 => f.write_str("ED25519"),
+            SignatureScheme::ED448 => f.write_str("ED448"),
+            SignatureScheme::RSA_PSS_RSAE_SHA256 => f.write_str("RSA_PSS_RSAE_SHA256"),
+            SignatureScheme::RSA_PSS_RSAE_SHA384 => f.write_str("RSA_PSS_RSAE_SHA384"),
+            SignatureScheme::RSA_PSS_RSAE_SHA512 => f.write_str("RSA_PSS_RSAE_SHA512"),
+            SignatureScheme::RSA_PSS_PSS_SHA256 => f.write_str("RSA_PSS_PSS_SHA256"),
+            SignatureScheme::RSA_PSS_PSS_SHA384 => f.write_str("RSA_PSS_PSS_SHA384"),
+            SignatureScheme::RSA_PSS_PSS_SHA512 => f.write_str("RSA_PSS_PSS_SHA512"),
+            SignatureScheme::RSA_PKCS1_SHA256 => f.write_str("RSA_PKCS1_SHA256"),
+            SignatureScheme::RSA_PKCS1_SHA384 => f.write_str("RSA_PKCS1_SHA384"),
+            SignatureScheme::RSA_PKCS1_SHA512 => f.write_str("RSA_PKCS1_SHA512"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
         }
     }
 }
@@ -1144,6 +1152,36 @@ mod tests {
     }
 
     #[test]
+    fn signature_scheme_newtype_shape() {
+        assert_eq!(std::mem::size_of::<SignatureScheme>(), 2);
+        assert!(SignatureScheme::default().is_unknown());
+    }
+
+    #[test]
+    fn signature_scheme_wire_roundtrip() {
+        for scheme in SignatureScheme::all() {
+            assert_eq!(SignatureScheme::from_u16(scheme.as_u16()), *scheme);
+            assert!(!scheme.is_unknown());
+        }
+
+        let unknown = SignatureScheme::from_u16(0xFFFF);
+        assert_eq!(unknown.as_u16(), 0xFFFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn signature_scheme_debug_stays_enum_like() {
+        assert_eq!(
+            format!("{:?}", SignatureScheme::ECDSA_SECP256R1_SHA256),
+            "ECDSA_SECP256R1_SHA256"
+        );
+        assert_eq!(
+            format!("{:?}", SignatureScheme::from_u16(0xFFFF)),
+            "Unknown(65535)"
+        );
+    }
+
+    #[test]
     fn random_parse() {
         let data = [
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
@@ -1200,7 +1238,7 @@ mod tests {
         assert_eq!(SignatureScheme::RSA_PSS_RSAE_SHA256.named_group(), None);
         assert_eq!(SignatureScheme::ED25519.named_group(), None);
         assert_eq!(SignatureScheme::ECDSA_SECP521R1_SHA512.named_group(), None);
-        assert_eq!(SignatureScheme::Unknown(0xFFFF).named_group(), None);
+        assert_eq!(SignatureScheme::from_u16(0xFFFF).named_group(), None);
     }
 
     #[test]
