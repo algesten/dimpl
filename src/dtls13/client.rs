@@ -478,13 +478,13 @@ impl State {
             if let Some(ref extensions) = server_hello.extensions {
                 for ext in extensions {
                     match ext.extension_type {
-                        ExtensionType::KeyShare => {
+                        ExtensionType::KEY_SHARE => {
                             let ext_data = ext.extension_data(&client.defragment_buffer);
                             if let Ok((_, hrr_ks)) = KeyShareHelloRetryRequest::parse(ext_data) {
                                 client.hrr_selected_group = Some(hrr_ks.selected_group);
                             }
                         }
-                        ExtensionType::Cookie => {
+                        ExtensionType::COOKIE => {
                             let ext_data = ext.extension_data(&client.defragment_buffer);
                             parse_cookie_extension(ext_data).map_err(InternalError::from)?;
                             let mut cookie = Buf::new();
@@ -512,7 +512,7 @@ impl State {
             let mut hrr_version_ok = false;
             if let Some(ref extensions) = server_hello.extensions {
                 for ext in extensions {
-                    if ext.extension_type == ExtensionType::SupportedVersions {
+                    if ext.extension_type == ExtensionType::SUPPORTED_VERSIONS {
                         let ext_data = ext.extension_data(&client.defragment_buffer);
                         if let Ok((_, sv)) = SupportedVersionsServerHello::parse(ext_data) {
                             hrr_version_ok = sv.selected_version == ProtocolVersion::DTLS1_3;
@@ -592,7 +592,7 @@ impl State {
 
         for ext in extensions {
             match ext.extension_type {
-                ExtensionType::SupportedVersions => {
+                ExtensionType::SUPPORTED_VERSIONS => {
                     let ext_data = ext.extension_data(&client.defragment_buffer);
                     if let Ok((_, sv)) = SupportedVersionsServerHello::parse(ext_data) {
                         if sv.selected_version == ProtocolVersion::DTLS1_3 {
@@ -600,7 +600,7 @@ impl State {
                         }
                     }
                 }
-                ExtensionType::KeyShare => {
+                ExtensionType::KEY_SHARE => {
                     let ext_data = ext.extension_data(&client.defragment_buffer);
                     if let Ok((_, ks)) = KeyShareServerHello::parse(ext_data, 0) {
                         // The key_exchange data is at offset 0 within ext_data, but
@@ -695,7 +695,7 @@ impl State {
 
         // Process extensions
         for ext in &ee.extensions {
-            if ext.extension_type == ExtensionType::UseSrtp {
+            if ext.extension_type == ExtensionType::USE_SRTP {
                 let ext_data = ext.extension_data(&client.defragment_buffer);
                 let (_, use_srtp) =
                     UseSrtpExtension::parse(ext_data).map_err(InternalError::from)?;
@@ -1210,7 +1210,7 @@ fn handshake_create_client_hello(
     sv.serialize(&mut ext_buf);
     let sv_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::SupportedVersions,
+        extension_type: ExtensionType::SUPPORTED_VERSIONS,
         extension_data_range: sv_start..sv_end,
     });
 
@@ -1221,7 +1221,7 @@ fn handshake_create_client_hello(
     sg.serialize(&mut ext_buf);
     let sg_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::SupportedGroups,
+        extension_type: ExtensionType::SUPPORTED_GROUPS,
         extension_data_range: sg_start..sg_end,
     });
 
@@ -1236,7 +1236,7 @@ fn handshake_create_client_hello(
     ks.serialize(extension_data, &mut ext_buf);
     let ks_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::KeyShare,
+        extension_type: ExtensionType::KEY_SHARE,
         extension_data_range: ks_start..ks_end,
     });
 
@@ -1246,7 +1246,7 @@ fn handshake_create_client_hello(
     sa.serialize(&mut ext_buf);
     let sa_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::SignatureAlgorithms,
+        extension_type: ExtensionType::SIGNATURE_ALGORITHMS,
         extension_data_range: sa_start..sa_end,
     });
 
@@ -1256,7 +1256,7 @@ fn handshake_create_client_hello(
     use_srtp.serialize(&mut ext_buf);
     let srtp_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::UseSrtp,
+        extension_type: ExtensionType::USE_SRTP,
         extension_data_range: srtp_start..srtp_end,
     });
 
@@ -1267,7 +1267,7 @@ fn handshake_create_client_hello(
         ext_buf.extend_from_slice(&extension_data[cookie_range]);
         let cookie_end = ext_buf.len();
         extensions.push(Extension {
-            extension_type: ExtensionType::Cookie,
+            extension_type: ExtensionType::COOKIE,
             extension_data_range: cookie_start..cookie_end,
         });
     }
@@ -1296,7 +1296,7 @@ fn handshake_create_client_hello(
         }
         let pad_end = ext_buf.len();
         extensions.push(Extension {
-            extension_type: ExtensionType::Padding,
+            extension_type: ExtensionType::PADDING,
             extension_data_range: pad_start..pad_end,
         });
     }
@@ -1515,7 +1515,7 @@ fn parse_certificate_request(cr_data: &[u8], base_offset: usize) -> Result<Optio
             break;
         }
 
-        if ext_type == ExtensionType::CertificateAuthorities.as_u16() {
+        if ext_type == ExtensionType::CERTIFICATE_AUTHORITIES.as_u16() {
             // Parse certificate_authorities: DistinguishedName<3..2^16-1>
             let ca_data = &cr_data[pos..pos + ext_data_len];
             if ca_data.len() >= 2 {
@@ -1624,10 +1624,10 @@ mod tests {
         key_share.push(0);
 
         let mut extensions = Vec::new();
-        extensions.extend_from_slice(&ExtensionType::SupportedVersions.as_u16().to_be_bytes());
+        extensions.extend_from_slice(&ExtensionType::SUPPORTED_VERSIONS.as_u16().to_be_bytes());
         extensions.extend_from_slice(&2u16.to_be_bytes());
         extensions.extend_from_slice(&ProtocolVersion::DTLS1_3.as_u16().to_be_bytes());
-        extensions.extend_from_slice(&ExtensionType::KeyShare.as_u16().to_be_bytes());
+        extensions.extend_from_slice(&ExtensionType::KEY_SHARE.as_u16().to_be_bytes());
         extensions.extend_from_slice(&(key_share.len() as u16).to_be_bytes());
         extensions.extend_from_slice(&key_share);
 

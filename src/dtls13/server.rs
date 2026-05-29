@@ -448,7 +448,7 @@ impl State {
 
         for ext in &client_hello.extensions {
             match ext.extension_type {
-                ExtensionType::SupportedVersions => {
+                ExtensionType::SUPPORTED_VERSIONS => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let (_, sv) = SupportedVersionsClientHello::parse(ext_data)
                         .map_err(InternalError::from)?;
@@ -458,7 +458,7 @@ impl State {
                         }
                     }
                 }
-                ExtensionType::KeyShare => {
+                ExtensionType::KEY_SHARE => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let ext_data_start = ext.extension_data_range.start;
                     let (_, ks) = KeyShareClientHello::parse(ext_data, ext_data_start)
@@ -473,24 +473,24 @@ impl State {
                     }
                     client_key_shares = Some(entries);
                 }
-                ExtensionType::SupportedGroups => {
+                ExtensionType::SUPPORTED_GROUPS => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let (_, sg) =
                         SupportedGroupsExtension::parse(ext_data).map_err(InternalError::from)?;
                     client_supported_groups = Some(sg.groups);
                 }
-                ExtensionType::SignatureAlgorithms => {
+                ExtensionType::SIGNATURE_ALGORITHMS => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     // Parse but we don't currently filter by signature algorithms
                     let _ = SignatureAlgorithmsExtension::parse(ext_data);
                 }
-                ExtensionType::UseSrtp => {
+                ExtensionType::USE_SRTP => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let (_, use_srtp) =
                         UseSrtpExtension::parse(ext_data).map_err(InternalError::from)?;
                     client_srtp_profiles = Some(use_srtp.profiles);
                 }
-                ExtensionType::Cookie => {
+                ExtensionType::COOKIE => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let (_, cookie) =
                         parse_cookie_extension(ext_data).map_err(InternalError::from)?;
@@ -1288,7 +1288,7 @@ fn send_hello_retry_request(
     sv.serialize(&mut ext_buf);
     let sv_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::SupportedVersions,
+        extension_type: ExtensionType::SUPPORTED_VERSIONS,
         extension_data_range: sv_start..sv_end,
     });
 
@@ -1301,7 +1301,7 @@ fn send_hello_retry_request(
         hrr_ks.serialize(&mut ext_buf);
         let ks_end = ext_buf.len();
         extensions.push(Extension {
-            extension_type: ExtensionType::KeyShare,
+            extension_type: ExtensionType::KEY_SHARE,
             extension_data_range: ks_start..ks_end,
         });
     }
@@ -1313,7 +1313,7 @@ fn send_hello_retry_request(
     ext_buf.extend_from_slice(cookie);
     let cookie_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::Cookie,
+        extension_type: ExtensionType::COOKIE,
         extension_data_range: cookie_start..cookie_end,
     });
 
@@ -1360,7 +1360,7 @@ fn handshake_create_server_hello(
     sv.serialize(&mut ext_buf);
     let sv_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::SupportedVersions,
+        extension_type: ExtensionType::SUPPORTED_VERSIONS,
         extension_data_range: sv_start..sv_end,
     });
 
@@ -1375,7 +1375,7 @@ fn handshake_create_server_hello(
     ks.serialize(extension_data, &mut ext_buf);
     let ks_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::KeyShare,
+        extension_type: ExtensionType::KEY_SHARE,
         extension_data_range: ks_start..ks_end,
     });
 
@@ -1409,7 +1409,7 @@ fn handshake_create_encrypted_extensions(
         use_srtp.serialize(&mut ext_buf);
         let srtp_end = ext_buf.len();
         extensions.push(Extension {
-            extension_type: ExtensionType::UseSrtp,
+            extension_type: ExtensionType::USE_SRTP,
             extension_data_range: srtp_start..srtp_end,
         });
     }
@@ -1445,7 +1445,7 @@ fn handshake_create_certificate_request(body: &mut Buf) -> Result<(), Error> {
     sa.serialize(&mut ext_buf);
     let sa_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::SignatureAlgorithms,
+        extension_type: ExtensionType::SIGNATURE_ALGORITHMS,
         extension_data_range: sa_start..sa_end,
     });
 
@@ -1455,7 +1455,7 @@ fn handshake_create_certificate_request(body: &mut Buf) -> Result<(), Error> {
     serialize_certificate_authorities(&cas, &[], &mut ext_buf);
     let ca_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::CertificateAuthorities,
+        extension_type: ExtensionType::CERTIFICATE_AUTHORITIES,
         extension_data_range: ca_start..ca_end,
     });
 
