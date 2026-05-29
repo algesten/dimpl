@@ -507,7 +507,7 @@ impl State {
         };
 
         for extension in extensions {
-            if extension.extension_type == ExtensionType::UseSrtp {
+            if extension.extension_type == ExtensionType::USE_SRTP {
                 // Parse the use_srtp extension to get the selected profile
                 let extension_data = extension.extension_data(&client.defragment_buffer);
                 let (_, use_srtp) =
@@ -523,7 +523,7 @@ impl State {
             }
 
             // We are to use extended master secret
-            if extension.extension_type == ExtensionType::ExtendedMasterSecret {
+            if extension.extension_type == ExtensionType::EXTENDED_MASTER_SECRET {
                 extended_master_secret = true;
                 trace!("Server negotiated Extended Master Secret");
             }

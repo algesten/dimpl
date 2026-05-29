@@ -421,27 +421,27 @@ impl State {
         let mut client_signature_algorithms: Option<SignatureAndHashAlgorithmVec> = None;
         for ext in ch.extensions {
             match ext.extension_type {
-                ExtensionType::UseSrtp => {
+                ExtensionType::USE_SRTP => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let (_, use_srtp) =
                         UseSrtpExtension::parse(ext_data).map_err(InternalError::from)?;
                     client_srtp_profiles = Some(use_srtp.profiles);
                 }
-                ExtensionType::ExtendedMasterSecret => {
+                ExtensionType::EXTENDED_MASTER_SECRET => {
                     client_offers_ems = true;
                 }
-                ExtensionType::SupportedGroups => {
+                ExtensionType::SUPPORTED_GROUPS => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let (_, groups) =
                         SupportedGroupsExtension::parse(ext_data).map_err(InternalError::from)?;
                     client_supported_groups = Some(groups.groups);
                 }
-                ExtensionType::EcPointFormats => {
+                ExtensionType::EC_POINT_FORMATS => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let _ =
                         ECPointFormatsExtension::parse(ext_data).map_err(InternalError::from)?;
                 }
-                ExtensionType::SignatureAlgorithms => {
+                ExtensionType::SIGNATURE_ALGORITHMS => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     if let Ok((_, sigs)) = SignatureAlgorithmsExtension::parse(ext_data) {
                         client_signature_algorithms = Some(sigs.supported_signature_algorithms);

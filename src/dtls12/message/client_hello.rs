@@ -65,31 +65,31 @@ impl ClientHello {
             let supported_groups = SupportedGroupsExtension { groups };
             let start_pos = buf.len();
             supported_groups.serialize(buf);
-            ranges.push((ExtensionType::SupportedGroups, start_pos, buf.len()));
+            ranges.push((ExtensionType::SUPPORTED_GROUPS, start_pos, buf.len()));
 
             // Add EC point formats extension
             let ec_point_formats = ECPointFormatsExtension::default();
             let start_pos = buf.len();
             ec_point_formats.serialize(buf);
-            ranges.push((ExtensionType::EcPointFormats, start_pos, buf.len()));
+            ranges.push((ExtensionType::EC_POINT_FORMATS, start_pos, buf.len()));
         }
 
         // Add signature algorithms extension (required for TLS 1.2+)
         let signature_algorithms = SignatureAlgorithmsExtension::default();
         let start_pos = buf.len();
         signature_algorithms.serialize(buf);
-        ranges.push((ExtensionType::SignatureAlgorithms, start_pos, buf.len()));
+        ranges.push((ExtensionType::SIGNATURE_ALGORITHMS, start_pos, buf.len()));
 
         // Add use_srtp extension for DTLS-SRTP support
         let use_srtp = UseSrtpExtension::default();
         let start_pos = buf.len();
         use_srtp.serialize(buf);
-        ranges.push((ExtensionType::UseSrtp, start_pos, buf.len()));
+        ranges.push((ExtensionType::USE_SRTP, start_pos, buf.len()));
 
         // // Add session_ticket extension (empty)
         // let start_pos = buf.len();
         // buf.extend_from_slice(&[0x00]); // Empty extension data
-        // ranges.push((ExtensionType::SessionTicket, start_pos, buf.len()));
+        // ranges.push((ExtensionType::SESSION_TICKET, start_pos, buf.len()));
 
         let need_etm = self
             .cipher_suites
@@ -99,12 +99,12 @@ impl ClientHello {
             // Add encrypt_then_mac extension (empty)
             let start_pos = buf.len();
             buf.extend_from_slice(&[0x00]); // Empty extension data
-            ranges.push((ExtensionType::EncryptThenMac, start_pos, buf.len()));
+            ranges.push((ExtensionType::ENCRYPT_THEN_MAC, start_pos, buf.len()));
         }
 
         let start_pos = buf.len();
         ranges.push((
-            ExtensionType::ExtendedMasterSecret,
+            ExtensionType::EXTENDED_MASTER_SECRET,
             start_pos,
             start_pos, // No data at all
         ));
@@ -333,8 +333,9 @@ mod tests {
             let mut message = MESSAGE.to_vec();
             message.extend_from_slice(&(count as u16 * 4).to_be_bytes());
             for _ in 0..count {
-                message
-                    .extend_from_slice(&ExtensionType::ExtendedMasterSecret.as_u16().to_be_bytes());
+                message.extend_from_slice(
+                    &ExtensionType::EXTENDED_MASTER_SECRET.as_u16().to_be_bytes(),
+                );
                 message.extend_from_slice(&0u16.to_be_bytes());
             }
 

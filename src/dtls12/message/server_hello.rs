@@ -58,17 +58,17 @@ impl ServerHello {
             profiles.push(pid);
             let ext = UseSrtpExtension::new(profiles, ArrayVec::new());
             ext.serialize(buf);
-            ranges.push((ExtensionType::UseSrtp, start, buf.len()));
+            ranges.push((ExtensionType::USE_SRTP, start, buf.len()));
         }
 
         // Extended Master Secret (mandatory)
         let start = buf.len();
-        ranges.push((ExtensionType::ExtendedMasterSecret, start, start));
+        ranges.push((ExtensionType::EXTENDED_MASTER_SECRET, start, start));
 
         // Renegotiation Info (RFC 5746) - empty for initial handshake
         let start = buf.len();
         buf.push(0); // renegotiated_connection length = 0
-        ranges.push((ExtensionType::RenegotiationInfo, start, buf.len()));
+        ranges.push((ExtensionType::RENEGOTIATION_INFO, start, buf.len()));
 
         let mut extensions = ExtensionVec::new();
         for (t, s, e) in ranges {
@@ -202,7 +202,7 @@ mod test {
         0xC0, 0x2B, // Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
         0x00, // CompressionMethod::NULL
         0x00, 0x0C, // Extensions length (12 bytes total: 2 type + 2 length + 8 data)
-        0x00, 0x0A, // ExtensionType::SupportedGroups
+        0x00, 0x0A, // ExtensionType::SUPPORTED_GROUPS
         0x00, 0x08, // Extension data length (8 bytes)
         0x00, 0x06, // Extension data
         0x00, 0x17, // NamedGroup::SECP256R1
@@ -237,8 +237,9 @@ mod test {
             let mut message = MESSAGE[..39].to_vec();
             message.extend_from_slice(&(count as u16 * 4).to_be_bytes());
             for _ in 0..count {
-                message
-                    .extend_from_slice(&ExtensionType::ExtendedMasterSecret.as_u16().to_be_bytes());
+                message.extend_from_slice(
+                    &ExtensionType::EXTENDED_MASTER_SECRET.as_u16().to_be_bytes(),
+                );
                 message.extend_from_slice(&0u16.to_be_bytes());
             }
 
