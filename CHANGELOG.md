@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Make public errors structured and fatal-only (breaking) #134
+
 # 0.6.2
 
   * Split local DTLS invalid-state errors from peer-input errors #126
