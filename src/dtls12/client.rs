@@ -467,7 +467,7 @@ impl State {
 
         // Enforce cipher suite is known and allowed
         let cs = server_hello.cipher_suite;
-        if matches!(cs, Dtls12CipherSuite::Unknown(_)) {
+        if cs.is_unknown() {
             return Err((Error::SecurityError(
                 crate::SecurityError::ServerSelectedUnknownCipherSuite,
             ))
