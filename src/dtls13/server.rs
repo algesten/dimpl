@@ -419,9 +419,9 @@ impl State {
 
         // Validate legacy_version
         if client_hello.legacy_version != ProtocolVersion::DTLS1_2 {
-            return Err((Error::SecurityError(
-                "ClientHello legacy_version must be DTLS 1.2".to_string(),
-            ))
+            return Err(Error::SecurityError(
+                crate::SecurityError::ClientHelloLegacyVersionNotDtls12,
+            )
             .into());
         }
 
@@ -430,9 +430,9 @@ impl State {
             .legacy_compression_methods
             .contains(&CompressionMethod::Null);
         if !has_null_compression {
-            return Err((Error::SecurityError(
-                "ClientHello must offer null compression".to_string(),
-            ))
+            return Err(Error::SecurityError(
+                crate::SecurityError::ClientHelloMustOfferNullCompression,
+            )
             .into());
         }
 
@@ -495,7 +495,7 @@ impl State {
                     let (_, cookie) =
                         parse_cookie_extension(ext_data).map_err(InternalError::from)?;
                     client_cookie_data = Some(ArrayVec::try_from(cookie).map_err(|_| {
-                        Error::SecurityError("Invalid cookie in ClientHello".to_string())
+                        Error::SecurityError(crate::SecurityError::InvalidCookieInClientHello)
                     })?);
                 }
                 _ => {}
@@ -506,9 +506,9 @@ impl State {
             if server.auto_mode {
                 return Err((Error::Dtls12Fallback).into());
             }
-            return Err((Error::SecurityError(
-                "ClientHello must include DTLS 1.3 in supported_versions".to_string(),
-            ))
+            return Err(Error::SecurityError(
+                crate::SecurityError::ClientHelloMissingDtls13SupportedVersions,
+            )
             .into());
         }
 
@@ -518,7 +518,9 @@ impl State {
             .iter()
             .find(|cs| server.engine.is_cipher_suite_allowed(**cs))
             .copied()
-            .ok_or_else(|| Error::SecurityError("No common cipher suite found".to_string()))?;
+            .ok_or(Error::SecurityError(
+                crate::SecurityError::NoCommonCipherSuite,
+            ))?;
 
         // Save the client random and session_id early so HRR can use them
         let client_random = client_hello.random;
@@ -568,9 +570,9 @@ impl State {
                 // Validate the cookie
                 let is_valid: bool = cookie_bytes.as_slice().ct_eq(&expected_cookie).into();
                 if !is_valid {
-                    return Err((Error::SecurityError(
-                        "Invalid cookie in ClientHello".to_string(),
-                    ))
+                    return Err(Error::SecurityError(
+                        crate::SecurityError::InvalidCookieInClientHello,
+                    )
                     .into());
                 }
                 debug!("Cookie validated successfully");
@@ -618,9 +620,10 @@ impl State {
             );
             let is_valid: bool = cookie_bytes.as_slice().ct_eq(&expected_cookie).into();
             if !is_valid {
-                return Err(
-                    (Error::SecurityError("Invalid cookie in ClientHello".to_string())).into(),
-                );
+                return Err((Error::SecurityError(
+                    crate::SecurityError::InvalidCookieInClientHello,
+                ))
+                .into());
             }
         }
 
@@ -643,9 +646,9 @@ impl State {
             return if let Some(group) = common_group {
                 // Need HRR for key exchange
                 if server.hello_retry {
-                    return Err((Error::SecurityError(
-                        "Cannot send second HelloRetryRequest".to_string(),
-                    ))
+                    return Err(Error::SecurityError(
+                        crate::SecurityError::CannotSendSecondHelloRetryRequest,
+                    )
                     .into());
                 }
 
@@ -679,22 +682,22 @@ impl State {
 
                 Ok(Self::AwaitClientHello)
             } else {
-                Err(Error::SecurityError("No common key exchange group".to_string()).into())
+                Err(Error::SecurityError(crate::SecurityError::NoCommonKeyExchangeGroup).into())
             };
         };
 
         // Start ECDHE key exchange
-        let kx_group = server.engine.find_kx_group(selected_group).ok_or_else(|| {
-            Error::CryptoError(format!(
-                "Key exchange group not found: {:?}",
-                selected_group
-            ))
-        })?;
+        let kx_group = server
+            .engine
+            .find_kx_group(selected_group)
+            .ok_or(Error::CryptoError(
+                crate::CryptoError::KeyExchangeGroupNotFound(selected_group),
+            ))?;
 
         let kx_buf = server.engine.pop_buffer();
         let key_exchange = kx_group
             .start_exchange(kx_buf)
-            .map_err(|e| Error::CryptoError(format!("Failed to start key exchange: {}", e)))?;
+            .map_err(Error::CryptoError)?;
 
         // Store server's public key in extension_data
         server.extension_data.clear();
@@ -708,7 +711,7 @@ impl State {
         let mut shared_secret = server.engine.pop_buffer();
         key_exchange
             .complete(peer_pub_key, &mut shared_secret)
-            .map_err(|e| Error::CryptoError(format!("ECDHE completion failed: {}", e)))?;
+            .map_err(Error::CryptoError)?;
 
         server.shared_secret = Some(shared_secret);
 
@@ -808,9 +811,9 @@ impl State {
             })?;
 
         // Derive handshake secrets
-        let shared_secret = server.shared_secret.take().ok_or_else(|| {
-            Error::InvalidState("No shared secret for handshake key derivation".to_string())
-        })?;
+        let shared_secret = server.shared_secret.take().ok_or(Error::InvalidState(
+            crate::InvalidStateError::NoSharedSecretForHandshakeKeyDerivation,
+        ))?;
 
         let (c_hs_traffic, s_hs_traffic, handshake_secret) =
             server.engine.derive_handshake_secrets(&shared_secret)?;
@@ -898,9 +901,13 @@ impl State {
     fn send_finished(self, server: &mut Server) -> Result<Self, InternalError> {
         trace!("Sending server Finished message");
 
-        let server_hs_secret = server.server_hs_traffic_secret.as_ref().ok_or_else(|| {
-            Error::InvalidState("No server handshake traffic secret for Finished".to_string())
-        })?;
+        let server_hs_secret =
+            server
+                .server_hs_traffic_secret
+                .as_ref()
+                .ok_or(Error::InvalidState(
+                    crate::InvalidStateError::NoServerHandshakeTrafficSecretForFinished,
+                ))?;
         let mut server_hs_secret_copy = Buf::new();
         server_hs_secret_copy.extend_from_slice(server_hs_secret);
         let server_hs_secret = server_hs_secret_copy;
@@ -914,9 +921,9 @@ impl State {
             })?;
 
         // Derive application secrets from handshake secret + transcript through server Finished
-        let handshake_secret = server.handshake_secret.as_ref().ok_or_else(|| {
-            Error::InvalidState("No handshake secret for application key derivation".to_string())
-        })?;
+        let handshake_secret = server.handshake_secret.as_ref().ok_or(Error::InvalidState(
+            crate::InvalidStateError::NoHandshakeSecretForApplicationKeyDerivation,
+        ))?;
 
         let (c_ap_traffic, s_ap_traffic) =
             server.engine.derive_application_secrets(handshake_secret)?;
@@ -1023,11 +1030,10 @@ impl State {
         // RFC 8446 §4.4.3: The signature algorithm MUST be one offered in
         // the signature_algorithms field of the CertificateRequest message.
         if !SignatureScheme::supported().contains(&scheme) {
-            return Err((Error::SecurityError(format!(
-                "Client used un-offered signature scheme: {:?}",
-                scheme
-            )))
-            .into());
+            return Err(
+                Error::SecurityError(crate::SecurityError::SignatureSchemeNotOffered(scheme))
+                    .into(),
+            );
         }
 
         // Build the signed content per RFC 8446 Section 4.4.3:
@@ -1041,14 +1047,17 @@ impl State {
         let mut signature_copy = ArrayVec::<u8, 512>::new();
         signature_copy
             .try_extend_from_slice(signature)
-            .map_err(|_| Error::SecurityError("Signature too large".into()))?;
+            .map_err(|_| Error::SecurityError(crate::SecurityError::SignatureTooLarge))?;
 
         drop(maybe);
 
         // Verify the signature
-        let cert_der = server.client_certificates.first().ok_or_else(|| {
-            Error::CertificateError("No client certificate for verification".to_string())
-        })?;
+        let cert_der = server
+            .client_certificates
+            .first()
+            .ok_or(Error::CertificateError(
+                crate::CertificateError::NoClientCertificateForVerification,
+            ))?;
 
         #[cfg(feature = "_crypto-common")]
         verify_scheme_curve(scheme, cert_der)?;
@@ -1072,10 +1081,13 @@ impl State {
     fn await_finished(self, server: &mut Server) -> Result<Self, InternalError> {
         // Compute expected verify_data BEFORE consuming Finished
         // (verify_data uses transcript hash up to but not including Finished)
-        let client_hs_secret = server
-            .client_hs_traffic_secret
-            .as_ref()
-            .ok_or_else(|| Error::InvalidState("No client handshake traffic secret".to_string()))?;
+        let client_hs_secret =
+            server
+                .client_hs_traffic_secret
+                .as_ref()
+                .ok_or(Error::InvalidState(
+                    crate::InvalidStateError::NoClientHandshakeTrafficSecret,
+                ))?;
         let expected_verify_data = server.engine.compute_verify_data(client_hs_secret)?;
 
         let maybe = server
@@ -1101,9 +1113,10 @@ impl State {
         // Constant-time comparison
         let is_eq: bool = verify_data.ct_eq(&*expected_verify_data).into();
         if !is_eq {
-            return Err(
-                (Error::SecurityError("Client Finished verification failed".to_string())).into(),
-            );
+            return Err((Error::SecurityError(
+                crate::SecurityError::ClientFinishedVerificationFailed,
+            ))
+            .into());
         }
 
         trace!("Client Finished verified successfully");

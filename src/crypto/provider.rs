@@ -70,6 +70,7 @@
 //! ## Example: Custom Cipher Suite
 //!
 //! ```
+//! use dimpl::CryptoError;
 //! use dimpl::crypto::{SupportedDtls12CipherSuite, Cipher, Dtls12CipherSuite, HashAlgorithm};
 //! use dimpl::crypto::{Buf, TmpBuf};
 //! use dimpl::crypto::{Aad, Nonce};
@@ -78,16 +79,16 @@
 //! struct MyCipher;
 //!
 //! impl MyCipher {
-//!     fn new(_key: &[u8]) -> Result<Self, String> {
+//!     fn new(_key: &[u8]) -> Result<Self, CryptoError> {
 //!         Ok(Self)
 //!     }
 //! }
 //!
 //! impl Cipher for MyCipher {
-//!     fn encrypt(&mut self, _: &mut Buf, _: Aad, _: Nonce) -> Result<(), String> {
+//!     fn encrypt(&mut self, _: &mut Buf, _: Aad, _: Nonce) -> Result<(), CryptoError> {
 //!         Ok(())
 //!     }
-//!     fn decrypt(&mut self, _: &mut TmpBuf, _: Aad, _: Nonce) -> Result<(), String> {
+//!     fn decrypt(&mut self, _: &mut TmpBuf, _: Aad, _: Nonce) -> Result<(), CryptoError> {
 //!         Ok(())
 //!     }
 //! }
@@ -116,7 +117,7 @@
 //!         16 // 128-bit authentication tag
 //!     }
 //!
-//!     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+//!     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError> {
 //!         // Create your cipher implementation here
 //!         Ok(Box::new(MyCipher::new(key)?))
 //!     }
@@ -149,6 +150,7 @@ use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
+use crate::{CertificateError, CryptoError};
 
 /// OID for the P-256 elliptic curve (secp256r1 / prime256v1).
 #[cfg(feature = "_crypto-common")]
@@ -183,10 +185,15 @@ impl<T: Send + Sync + Debug + UnwindSafe + RefUnwindSafe> CryptoSafe for T {}
 /// AEAD cipher for in-place encryption/decryption.
 pub trait Cipher: CryptoSafe {
     /// Encrypt plaintext in-place, appending authentication tag.
-    fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String>;
+    fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), CryptoError>;
 
     /// Decrypt ciphertext in-place, verifying and removing authentication tag.
-    fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String>;
+    fn decrypt(
+        &mut self,
+        ciphertext: &mut TmpBuf,
+        aad: Aad,
+        nonce: Nonce,
+    ) -> Result<(), CryptoError>;
 }
 
 /// Stateful hash context for incremental hashing.
@@ -202,7 +209,12 @@ pub trait HashContext: CryptoSafe {
 /// Signing key for generating digital signatures.
 pub trait SigningKey: CryptoSafe {
     /// Sign data using the specified hash algorithm and return the signature.
-    fn sign(&mut self, data: &[u8], hash_alg: HashAlgorithm, out: &mut Buf) -> Result<(), String>;
+    fn sign(
+        &mut self,
+        data: &[u8],
+        hash_alg: HashAlgorithm,
+        out: &mut Buf,
+    ) -> Result<(), CryptoError>;
 
     /// Signature algorithm used by this key.
     fn algorithm(&self) -> SignatureAlgorithm;
@@ -225,7 +237,7 @@ pub trait ActiveKeyExchange: CryptoSafe {
     fn pub_key(&self) -> &[u8];
 
     /// Complete exchange with peer's public key, returning shared secret.
-    fn complete(self: Box<Self>, peer_pub: &[u8], out: &mut Buf) -> Result<(), String>;
+    fn complete(self: Box<Self>, peer_pub: &[u8], out: &mut Buf) -> Result<(), CryptoError>;
 
     /// Get the named group for this exchange.
     fn group(&self) -> NamedGroup;
@@ -265,7 +277,7 @@ pub trait SupportedDtls12CipherSuite: CryptoSafe {
     }
 
     /// Create a cipher instance with the given key.
-    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String>;
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError>;
 }
 
 /// Key exchange group support (factory for ActiveKeyExchange).
@@ -275,7 +287,7 @@ pub trait SupportedKxGroup: CryptoSafe {
 
     /// Start a new key exchange, generating ephemeral keypair.
     /// The provided `buf` will be used to store the public key.
-    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String>;
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, CryptoError>;
 }
 
 /// Signature verification against certificates.
@@ -288,7 +300,7 @@ pub trait SignatureVerifier: CryptoSafe {
         signature: &[u8],
         hash_alg: HashAlgorithm,
         sig_alg: SignatureAlgorithm,
-    ) -> Result<(), String>;
+    ) -> Result<(), CryptoError>;
 }
 
 /// Allow-list of supported (signature, hash, curve) combinations for
@@ -331,17 +343,18 @@ pub fn check_verify_scheme(
     sig_alg: SignatureAlgorithm,
     hash_alg: HashAlgorithm,
     group: NamedGroup,
-) -> Result<(), String> {
+) -> Result<(), CryptoError> {
     if SUPPORTED_VERIFY_SCHEMES
         .iter()
         .any(|(s, h, g)| *s == sig_alg && *h == hash_alg && *g == group)
     {
         Ok(())
     } else {
-        Err(format!(
-            "Unsupported signature verification: {:?} + {:?} + {:?}",
-            sig_alg, hash_alg, group
-        ))
+        Err(CryptoError::UnsupportedSignatureVerification {
+            signature: sig_alg,
+            hash: hash_alg,
+            group,
+        })
     }
 }
 
@@ -350,40 +363,39 @@ pub fn check_verify_scheme(
 /// Used by DTLS 1.3 to verify that the [`SignatureScheme`](crate::types::SignatureScheme)
 /// in `CertificateVerify` is consistent with the peer's certificate key.
 #[cfg(feature = "_crypto-common")]
-pub fn cert_named_group(cert_der: &[u8]) -> Result<NamedGroup, String> {
+pub fn cert_named_group(cert_der: &[u8]) -> Result<NamedGroup, CertificateError> {
     use der::Decode;
     use spki::ObjectIdentifier;
     use x509_cert::Certificate as X509Certificate;
 
-    let cert = X509Certificate::from_der(cert_der)
-        .map_err(|e| format!("Failed to parse certificate: {e}"))?;
+    let cert = X509Certificate::from_der(cert_der).map_err(|_| CertificateError::ParseFailed)?;
     let spki = &cert.tbs_certificate.subject_public_key_info;
 
     let curve_oid: ObjectIdentifier = spki
         .algorithm
         .parameters
         .as_ref()
-        .ok_or("Missing EC curve parameter in certificate")?
+        .ok_or(CertificateError::MissingEcCurveParameter)?
         .decode_as()
-        .map_err(|_| "Invalid EC curve parameter in certificate".to_string())?;
+        .map_err(|_| CertificateError::InvalidEcCurveParameter)?;
 
     match curve_oid {
         OID_P256 => Ok(NamedGroup::Secp256r1),
         OID_P384 => Ok(NamedGroup::Secp384r1),
-        _ => Err(format!("Unsupported EC curve: {}", curve_oid)),
+        _ => Err(CertificateError::UnsupportedEcCurve(curve_oid.to_string())),
     }
 }
 
 /// Private key parser (factory for SigningKey).
 pub trait KeyProvider: CryptoSafe {
     /// Parse and load a private key from DER/PEM bytes.
-    fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKey>, String>;
+    fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKey>, CryptoError>;
 }
 
 /// Secure random number generator.
 pub trait SecureRandom: CryptoSafe {
     /// Fill buffer with cryptographically secure random bytes.
-    fn fill(&self, buf: &mut [u8]) -> Result<(), String>;
+    fn fill(&self, buf: &mut [u8]) -> Result<(), CryptoError>;
 }
 
 /// Hash provider (factory for HashContext).
@@ -395,7 +407,7 @@ pub trait HashProvider: CryptoSafe {
 /// HMAC provider for computing HMAC signatures.
 pub trait HmacProvider: CryptoSafe {
     /// Compute HMAC-SHA256(key, data) and return the result.
-    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], String> {
+    fn hmac_sha256(&self, key: &[u8], data: &[u8]) -> Result<[u8; 32], CryptoError> {
         let mut out = [0u8; 32];
         self.hmac(HashAlgorithm::SHA256, key, data, &mut out)?;
         Ok(out)
@@ -410,7 +422,7 @@ pub trait HmacProvider: CryptoSafe {
         key: &[u8],
         data: &[u8],
         out: &mut [u8],
-    ) -> Result<usize, String>;
+    ) -> Result<usize, CryptoError>;
 }
 
 // ============================================================================
@@ -446,7 +458,7 @@ pub trait SupportedDtls13CipherSuite: CryptoSafe {
     }
 
     /// Create a cipher instance with the given key.
-    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String>;
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError>;
 
     /// Compute a mask for record number encryption (RFC 9147 Section 4.2.3).
     ///

@@ -388,17 +388,22 @@ impl State {
                 .kx_groups()
                 .next()
                 .map(|g| g.name())
-                .ok_or_else(|| Error::CryptoError("No supported key exchange groups".to_string()))?
+                .ok_or(Error::CryptoError(
+                    crate::CryptoError::NoSupportedKeyExchangeGroups,
+                ))?
         };
 
-        let kx_group = client.engine.find_kx_group(group).ok_or_else(|| {
-            Error::CryptoError(format!("Key exchange group not found: {:?}", group))
-        })?;
+        let kx_group = client
+            .engine
+            .find_kx_group(group)
+            .ok_or(Error::CryptoError(
+                crate::CryptoError::KeyExchangeGroupNotFound(group),
+            ))?;
 
         let kx_buf = client.engine.pop_buffer();
         let key_exchange = kx_group
             .start_exchange(kx_buf)
-            .map_err(|e| Error::CryptoError(format!("Failed to start key exchange: {}", e)))?;
+            .map_err(Error::CryptoError)?;
 
         // Build the key_share extension data into extension_data buffer
         client.extension_data.clear();
@@ -496,9 +501,10 @@ impl State {
                 .engine
                 .is_cipher_suite_allowed(server_hello.cipher_suite)
             {
-                return Err(
-                    (Error::SecurityError("HRR selected disallowed cipher suite".into())).into(),
-                );
+                return Err((Error::SecurityError(
+                    crate::SecurityError::HrrSelectedDisallowedCipherSuite,
+                ))
+                .into());
             }
             client.engine.set_cipher_suite(server_hello.cipher_suite);
 
@@ -515,7 +521,9 @@ impl State {
                 }
             }
             if !hrr_version_ok {
-                return Err((Error::SecurityError("HRR did not select DTLS 1.3".into())).into());
+                return Err(
+                    (Error::SecurityError(crate::SecurityError::HrrDidNotSelectDtls13)).into(),
+                );
             }
 
             // Replace transcript with message_hash per RFC 8446 Section 4.4.1.
@@ -536,17 +544,18 @@ impl State {
 
         // Validate legacy_version (must be DTLS 1.2)
         if server_hello.legacy_version != ProtocolVersion::DTLS1_2 {
-            return Err((Error::SecurityError(
-                "ServerHello legacy_version must be DTLS 1.2".into(),
-            ))
+            return Err(Error::SecurityError(
+                crate::SecurityError::ServerHelloLegacyVersionNotDtls12,
+            )
             .into());
         }
 
         // Validate legacy_compression_method (must be null)
         if server_hello.legacy_compression_method != CompressionMethod::Null {
-            return Err(
-                (Error::SecurityError("ServerHello compression must be null".into())).into(),
-            );
+            return Err((Error::SecurityError(
+                crate::SecurityError::ServerHelloCompressionMustBeNull,
+            ))
+            .into());
         }
 
         debug!(
@@ -557,16 +566,16 @@ impl State {
         // Validate cipher suite
         let cs = server_hello.cipher_suite;
         if matches!(cs, Dtls13CipherSuite::Unknown(_)) {
-            return Err(
-                (Error::SecurityError("Server selected unknown cipher suite".to_string())).into(),
-            );
+            return Err((Error::SecurityError(
+                crate::SecurityError::ServerSelectedUnknownCipherSuite,
+            ))
+            .into());
         }
 
         if !client.engine.is_cipher_suite_allowed(cs) {
-            return Err((Error::SecurityError(format!(
-                "Server selected disallowed cipher suite: {:?}",
-                cs
-            )))
+            return Err(Error::SecurityError(
+                crate::SecurityError::ServerSelectedDisallowedDtls13CipherSuite(cs),
+            )
             .into());
         }
 
@@ -609,39 +618,38 @@ impl State {
         }
 
         if !supported_version_ok {
-            return Err((Error::SecurityError(
-                "Server did not negotiate DTLS 1.3 via supported_versions".to_string(),
-            ))
-            .into());
+            return Err(
+                Error::SecurityError(crate::SecurityError::ServerDidNotNegotiateDtls13).into(),
+            );
         }
 
         let Some((server_group, ke_range)) = server_key_share else {
-            return Err((Error::SecurityError(
-                "Server did not provide key_share extension".to_string(),
-            ))
-            .into());
+            return Err(Error::SecurityError(crate::SecurityError::ServerMissingKeyShare).into());
         };
 
         // Complete ECDHE key exchange
         let key_exchange = client
             .active_key_exchange
             .take()
-            .ok_or_else(|| Error::InvalidState("No active key exchange".to_string()))?;
+            .ok_or(Error::InvalidState(
+                crate::InvalidStateError::NoActiveKeyExchange,
+            ))?;
 
         if key_exchange.group() != server_group {
-            return Err((Error::SecurityError(format!(
-                "Server key share group mismatch: {:?} != {:?}",
-                server_group,
-                key_exchange.group()
-            )))
-            .into());
+            return Err(
+                Error::SecurityError(crate::SecurityError::ServerKeyShareGroupMismatch {
+                    selected: server_group,
+                    actual: key_exchange.group(),
+                })
+                .into(),
+            );
         }
 
         let peer_pub_key = &client.extension_data[ke_range];
         let mut shared_secret = client.engine.pop_buffer();
         key_exchange
             .complete(peer_pub_key, &mut shared_secret)
-            .map_err(|e| Error::CryptoError(format!("ECDHE completion failed: {}", e)))?;
+            .map_err(Error::CryptoError)?;
 
         // Derive handshake secrets
         let (c_hs_traffic, s_hs_traffic, handshake_secret) =
@@ -758,15 +766,17 @@ impl State {
         };
 
         if !certificate.context_range.is_empty() {
-            return Err(
-                (Error::SecurityError("Server certificate context must be empty".into())).into(),
-            );
+            return Err(Error::CertificateError(
+                crate::CertificateError::ServerCertificateContextMustBeEmpty,
+            )
+            .into());
         }
 
         if certificate.certificate_list.is_empty() {
-            return Err(
-                (Error::CertificateError("No server certificate received".to_string())).into(),
-            );
+            return Err((Error::CertificateError(
+                crate::CertificateError::NoServerCertificateReceived,
+            ))
+            .into());
         }
 
         debug!(
@@ -826,11 +836,10 @@ impl State {
         // RFC 8446 §4.4.3: The receiver MUST verify that the signature algorithm
         // is one that was offered in the signature_algorithms extension.
         if !SignatureScheme::supported().contains(&scheme) {
-            return Err((Error::SecurityError(format!(
-                "Server used un-offered signature scheme: {:?}",
-                scheme
-            )))
-            .into());
+            return Err(
+                Error::SecurityError(crate::SecurityError::SignatureSchemeNotOffered(scheme))
+                    .into(),
+            );
         }
 
         // Build the signed content per RFC 8446 Section 4.4.3:
@@ -844,14 +853,17 @@ impl State {
         let mut signature_copy = ArrayVec::<u8, 512>::new();
         signature_copy
             .try_extend_from_slice(signature)
-            .map_err(|_| Error::SecurityError("Signature too large".into()))?;
+            .map_err(|_| Error::SecurityError(crate::SecurityError::SignatureTooLarge))?;
 
         drop(maybe);
 
         // Verify the signature
-        let cert_der = client.server_certificates.first().ok_or_else(|| {
-            Error::CertificateError("No server certificate for verification".to_string())
-        })?;
+        let cert_der = client
+            .server_certificates
+            .first()
+            .ok_or(Error::CertificateError(
+                crate::CertificateError::NoServerCertificateForVerification,
+            ))?;
 
         #[cfg(feature = "_crypto-common")]
         verify_scheme_curve(scheme, cert_der)?;
@@ -875,10 +887,13 @@ impl State {
     fn await_finished(self, client: &mut Client) -> Result<Self, InternalError> {
         // Compute expected verify_data BEFORE consuming Finished
         // (verify_data uses transcript hash up to but not including Finished)
-        let server_hs_secret = client
-            .server_hs_traffic_secret
-            .as_ref()
-            .ok_or_else(|| Error::InvalidState("No server handshake traffic secret".to_string()))?;
+        let server_hs_secret =
+            client
+                .server_hs_traffic_secret
+                .as_ref()
+                .ok_or(Error::InvalidState(
+                    crate::InvalidStateError::NoServerHandshakeTrafficSecret,
+                ))?;
         let expected_verify_data = client.engine.compute_verify_data(server_hs_secret)?;
 
         let maybe = client
@@ -904,9 +919,10 @@ impl State {
         // Constant-time comparison
         let is_eq: bool = verify_data.ct_eq(&*expected_verify_data).into();
         if !is_eq {
-            return Err(
-                (Error::SecurityError("Server Finished verification failed".to_string())).into(),
-            );
+            return Err((Error::SecurityError(
+                crate::SecurityError::ServerFinishedVerificationFailed,
+            ))
+            .into());
         }
 
         trace!("Server Finished verified successfully");
@@ -916,9 +932,9 @@ impl State {
         client.engine.advance_peer_handshake_seq();
 
         // Derive application secrets from handshake secret + transcript through server Finished
-        let handshake_secret = client.handshake_secret.as_ref().ok_or_else(|| {
-            Error::InvalidState("No handshake secret for application key derivation".to_string())
-        })?;
+        let handshake_secret = client.handshake_secret.as_ref().ok_or(Error::InvalidState(
+            crate::InvalidStateError::NoHandshakeSecretForApplicationKeyDerivation,
+        ))?;
 
         let (c_ap_traffic, s_ap_traffic) =
             client.engine.derive_application_secrets(handshake_secret)?;
@@ -1010,9 +1026,13 @@ impl State {
             client.engine.flight_begin(5);
         }
 
-        let client_hs_secret = client.client_hs_traffic_secret.as_ref().ok_or_else(|| {
-            Error::InvalidState("No client handshake traffic secret for Finished".to_string())
-        })?;
+        let client_hs_secret =
+            client
+                .client_hs_traffic_secret
+                .as_ref()
+                .ok_or(Error::InvalidState(
+                    crate::InvalidStateError::NoClientHandshakeTrafficSecretForFinished,
+                ))?;
         let mut client_hs_secret_copy = Buf::new();
         client_hs_secret_copy.extend_from_slice(client_hs_secret);
         let client_hs_secret = client_hs_secret_copy;
@@ -1347,7 +1367,7 @@ pub(crate) fn handshake_create_certificate_verify(
     engine
         .signing_key()
         .sign(&signed_content, hash_alg, &mut signature)
-        .map_err(|e| Error::CryptoError(format!("Failed to sign CertificateVerify: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
     // Determine the SignatureScheme from hash_alg + sig_alg
     let scheme = match (sig_alg, hash_alg) {
@@ -1361,10 +1381,12 @@ pub(crate) fn handshake_create_certificate_verify(
             SignatureScheme::RSA_PSS_RSAE_SHA256
         }
         _ => {
-            return Err(Error::CryptoError(format!(
-                "Unsupported signature algorithm: {:?}/{:?}",
-                sig_alg, hash_alg
-            )));
+            return Err(Error::CryptoError(
+                crate::CryptoError::UnsupportedSignaturePair {
+                    signature: sig_alg,
+                    hash: hash_alg,
+                },
+            ));
         }
     };
 
@@ -1399,7 +1421,7 @@ pub(crate) fn signature_scheme_to_components(
             Ok((HashAlgorithm::SHA512, SignatureAlgorithm::ECDSA))
         }
         SignatureScheme::ED25519 => Err(Error::SecurityError(
-            "ED25519 not yet supported by crypto provider".into(),
+            crate::SecurityError::UnsupportedSignatureScheme(scheme),
         )),
         SignatureScheme::RSA_PSS_RSAE_SHA256 => {
             Ok((HashAlgorithm::SHA256, SignatureAlgorithm::RSA))
@@ -1416,12 +1438,11 @@ pub(crate) fn signature_scheme_to_components(
         SignatureScheme::RSA_PKCS1_SHA256
         | SignatureScheme::RSA_PKCS1_SHA384
         | SignatureScheme::RSA_PKCS1_SHA512 => Err(Error::SecurityError(
-            "RSA PKCS1v1.5 not allowed in TLS 1.3".into(),
+            crate::SecurityError::UnsupportedSignatureScheme(scheme),
         )),
-        _ => Err(Error::SecurityError(format!(
-            "Unsupported signature scheme: {:?}",
-            scheme
-        ))),
+        _ => Err(Error::SecurityError(
+            crate::SecurityError::UnsupportedSignatureScheme(scheme),
+        )),
     }
 }
 
@@ -1430,12 +1451,16 @@ pub(crate) fn signature_scheme_to_components(
 #[cfg(feature = "_crypto-common")]
 pub(crate) fn verify_scheme_curve(scheme: SignatureScheme, cert_der: &[u8]) -> Result<(), Error> {
     if let Some(expected_group) = scheme.named_group() {
-        let cert_group = crate::crypto::cert_named_group(cert_der).map_err(Error::SecurityError)?;
+        let cert_group =
+            crate::crypto::cert_named_group(cert_der).map_err(Error::CertificateError)?;
         if expected_group != cert_group {
-            return Err(Error::SecurityError(format!(
-                "SignatureScheme {:?} requires {:?} but certificate uses {:?}",
-                scheme, expected_group, cert_group
-            )));
+            return Err(Error::SecurityError(
+                crate::SecurityError::SignatureSchemeCertificateCurveMismatch {
+                    scheme,
+                    expected: expected_group,
+                    actual: cert_group,
+                },
+            ));
         }
     }
     Ok(())

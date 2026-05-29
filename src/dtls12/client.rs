@@ -403,10 +403,9 @@ impl State {
         if h.server_version != ProtocolVersion::DTLS1_2
             && h.server_version != ProtocolVersion::DTLS1_0
         {
-            return Err((Error::SecurityError(format!(
-                "Unsupported DTLS version in HelloVerifyRequest: {:?}",
-                h.server_version
-            )))
+            return Err(Error::SecurityError(
+                crate::SecurityError::UnsupportedHelloVerifyRequestVersion(h.server_version),
+            )
             .into());
         }
 
@@ -448,28 +447,31 @@ impl State {
 
         // Enforce DTLS version
         if server_hello.server_version != ProtocolVersion::DTLS1_2 {
-            return Err((Error::SecurityError(format!(
-                "Unsupported DTLS version from server: {:?}",
-                server_hello.server_version
-            )))
-            .into());
+            return Err(
+                Error::SecurityError(crate::SecurityError::UnsupportedServerVersion(
+                    server_hello.server_version,
+                ))
+                .into(),
+            );
         }
 
         // Enforce Null compression only
         if server_hello.compression_method != CompressionMethod::Null {
-            return Err((Error::SecurityError(format!(
-                "Unsupported compression from server: {:?}",
-                server_hello.compression_method
-            )))
-            .into());
+            return Err(
+                Error::SecurityError(crate::SecurityError::UnsupportedServerCompression(
+                    server_hello.compression_method,
+                ))
+                .into(),
+            );
         }
 
         // Enforce cipher suite is known and allowed
         let cs = server_hello.cipher_suite;
         if matches!(cs, Dtls12CipherSuite::Unknown(_)) {
-            return Err(
-                (Error::SecurityError("Server selected unknown cipher suite".to_string())).into(),
-            );
+            return Err((Error::SecurityError(
+                crate::SecurityError::ServerSelectedUnknownCipherSuite,
+            ))
+            .into());
         }
 
         // Enforce cipher suite is compatible with our private key and allowed by config
@@ -479,18 +481,16 @@ impl State {
             .is_cipher_suite_compatible(cs);
 
         if !is_compatible {
-            return Err((Error::SecurityError(format!(
-                "Server selected incompatible cipher suite: {:?}",
-                cs
-            )))
+            return Err(Error::SecurityError(
+                crate::SecurityError::ServerSelectedIncompatibleCipherSuite(cs),
+            )
             .into());
         }
 
         if !client.engine.is_cipher_suite_allowed(cs) {
-            return Err((Error::SecurityError(format!(
-                "Server selected disallowed cipher suite: {:?}",
-                cs
-            )))
+            return Err(Error::SecurityError(
+                crate::SecurityError::ServerSelectedDisallowedCipherSuite(cs),
+            )
             .into());
         }
 
@@ -532,9 +532,9 @@ impl State {
         // Without extended master secret, in DTLS1.2 a security attack
         // reusing the same master secret is possible.
         if !extended_master_secret {
-            return Err((Error::SecurityError(
-                "Extended Master Secret not negotiated".to_string(),
-            ))
+            return Err(Error::SecurityError(
+                crate::SecurityError::ExtendedMasterSecretNotNegotiated,
+            )
             .into());
         }
 
@@ -566,9 +566,10 @@ impl State {
         };
 
         if certificate.certificate_list.is_empty() {
-            return Err(
-                (Error::CertificateError("No server certificate received".to_string())).into(),
-            );
+            return Err((Error::CertificateError(
+                crate::CertificateError::NoServerCertificateReceived,
+            ))
+            .into());
         }
 
         debug!(
@@ -596,10 +597,9 @@ impl State {
     }
 
     fn await_server_key_exchange(self, client: &mut Client) -> Result<Self, InternalError> {
-        let cipher_suite = client
-            .engine
-            .cipher_suite()
-            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
+        let cipher_suite = client.engine.cipher_suite().ok_or(Error::InvalidState(
+            crate::InvalidStateError::NoCipherSuiteSelected,
+        ))?;
 
         if cipher_suite.is_psk() {
             self.await_server_key_exchange_psk(client)
@@ -628,9 +628,9 @@ impl State {
 
             let Some(d_signed) = server_key_exchange.signature() else {
                 // We do not support anonymous key exchange
-                return Err((Error::UnexpectedMessage(
-                    "ServerKeyExchange without signature".to_string(),
-                ))
+                return Err(Error::UnexpectedMessage(
+                    crate::UnexpectedMessageError::ServerKeyExchangeWithoutSignature,
+                )
                 .into());
             };
 
@@ -645,9 +645,9 @@ impl State {
                     ecdh.public_key_range.clone(),
                 ),
                 ServerKeyExchangeParams::Psk(_) => {
-                    return Err((Error::UnexpectedMessage(
-                        "PSK ServerKeyExchange in ECDHE path".to_string(),
-                    ))
+                    return Err(Error::UnexpectedMessage(
+                        crate::UnexpectedMessageError::PskServerKeyExchangeInEcdhePath,
+                    )
                     .into());
                 }
             };
@@ -682,28 +682,29 @@ impl State {
         signed_data.push(public_key_vec.len() as u8);
         signed_data.extend_from_slice(public_key_vec);
 
-        let cipher_suite = client
-            .engine
-            .cipher_suite()
-            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
+        let cipher_suite = client.engine.cipher_suite().ok_or(Error::InvalidState(
+            crate::InvalidStateError::NoCipherSuiteSelected,
+        ))?;
 
         // Ensure the server's (hash, signature) pair was offered by the client
         let offered = SignatureAndHashAlgorithm::supported().contains(&signature_algorithm);
         if !offered {
-            return Err((Error::CryptoError(
-                "Signature algorithm not offered by client".to_string(),
-            ))
+            return Err(Error::CryptoError(
+                crate::CryptoError::SignatureAlgorithmNotOfferedByClient,
+            )
             .into());
         }
 
         // Ensure the signature algorithm is compatible with the cipher suite
         if let Some(expected_sig) = cipher_suite.signature_algorithm() {
             if signature_algorithm.signature != expected_sig {
-                return Err((Error::CryptoError(format!(
-                    "Signature algorithm mismatch: {:?} != {:?}",
-                    signature_algorithm.signature, expected_sig
-                )))
-                .into());
+                return Err(
+                    Error::CryptoError(crate::CryptoError::SignatureAlgorithmMismatch {
+                        expected: expected_sig,
+                        actual: signature_algorithm.signature,
+                    })
+                    .into(),
+                );
             }
         }
 
@@ -720,12 +721,7 @@ impl State {
             .engine
             .crypto_context_mut()
             .verify_signature(&signed_data, &temp_signed, signature_bytes, cert_der)
-            .map_err(|e| {
-                Error::CryptoError(format!(
-                    "Failed to verify server key exchange signature: {}",
-                    e
-                ))
-            })?;
+            .map_err(Error::CryptoError)?;
 
         trace!(
             "ServerKeyExchange signature verified: {:?}",
@@ -739,9 +735,7 @@ impl State {
             .engine
             .crypto_context_mut()
             .process_ecdh_params(named_group, public_key_vec, &mut kx_buf)
-            .map_err(|e| {
-                Error::CryptoError(format!("Failed to process server key exchange: {}", e))
-            })?;
+            .map_err(Error::CryptoError)?;
         client.engine.push_buffer(kx_buf);
 
         Ok(Self::AwaitCertificateRequest)
@@ -776,9 +770,9 @@ impl State {
         let hint_range = match &ske.params {
             ServerKeyExchangeParams::Psk(psk) => psk.hint_range.clone(),
             _ => {
-                return Err((Error::UnexpectedMessage(
-                    "ECDHE ServerKeyExchange in PSK path".to_string(),
-                ))
+                return Err(Error::UnexpectedMessage(
+                    crate::UnexpectedMessageError::EcdheServerKeyExchangeInPskPath,
+                )
                 .into());
             }
         };
@@ -826,10 +820,9 @@ impl State {
             .unwrap();
 
         if !cr.supports_hash_algorithm(hash_algorithm) {
-            return Err((Error::CertificateError(format!(
-                "Unsupported hash algorithm: {:?}",
-                hash_algorithm
-            )))
+            return Err(Error::CertificateError(
+                crate::CertificateError::UnsupportedHashAlgorithm(hash_algorithm),
+            )
             .into());
         }
 
@@ -860,10 +853,9 @@ impl State {
 
         trace!("Received ServerHelloDone");
 
-        let cipher_suite = client
-            .engine
-            .cipher_suite()
-            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
+        let cipher_suite = client.engine.cipher_suite().ok_or(Error::InvalidState(
+            crate::InvalidStateError::NoCipherSuiteSelected,
+        ))?;
 
         if cipher_suite.is_psk() {
             // PSK: no certificates involved
@@ -872,9 +864,10 @@ impl State {
 
         // Validate the server certificate
         if client.server_certificates.is_empty() {
-            return Err(
-                (Error::CertificateError("No server certificate received".to_string())).into(),
-            );
+            return Err((Error::CertificateError(
+                crate::CertificateError::NoServerCertificateReceived,
+            ))
+            .into());
         }
 
         // Send the server certificate as an event
@@ -922,10 +915,9 @@ impl State {
         // ServerKeyExchange, CertificateRequest, ServerHelloDone, Certificate, ClientKeyExchange
         // This is correct per RFC 7627 - session hash should include messages
         // up to and including ClientKeyExchange
-        let cipher_suite = client
-            .engine
-            .cipher_suite()
-            .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
+        let cipher_suite = client.engine.cipher_suite().ok_or(Error::InvalidState(
+            crate::InvalidStateError::NoCipherSuiteSelected,
+        ))?;
 
         let suite_hash = cipher_suite.hash_algorithm();
         let mut buf = Buf::new();
@@ -969,14 +961,16 @@ impl State {
     fn derive_keys(client: &mut Client) -> Result<(), Error> {
         trace!("Deriving keys");
         let Some(cipher_suite) = client.engine.cipher_suite() else {
-            return Err(Error::InvalidState("No cipher suite selected".to_string()));
+            return Err(Error::InvalidState(
+                crate::InvalidStateError::NoCipherSuiteSelected,
+            ));
         };
 
         trace!("Using cipher suite for key derivation: {:?}", cipher_suite);
 
         let Some(server_random) = &client.server_random else {
             return Err(Error::InvalidState(
-                "No server random available".to_string(),
+                crate::InvalidStateError::NoServerRandom,
             ));
         };
 
@@ -995,11 +989,12 @@ impl State {
         let suite_hash = cipher_suite.hash_algorithm();
 
         // Use the captured session hash from when ServerHelloDone was received
-        let session_hash = client.captured_session_hash.as_ref().ok_or_else(|| {
-            Error::InvalidState(
-                "Extended Master Secret negotiated but session hash not captured".to_string(),
-            )
-        })?;
+        let session_hash = client
+            .captured_session_hash
+            .as_ref()
+            .ok_or(Error::InvalidState(crate::InvalidStateError::Other(
+                "Extended Master Secret negotiated but session hash not captured",
+            )))?;
         trace!(
             "Using captured session hash for Extended Master Secret (length: {})",
             session_hash.len()
@@ -1010,9 +1005,7 @@ impl State {
             .engine
             .crypto_context_mut()
             .derive_extended_master_secret(session_hash, suite_hash, &mut out, &mut scratch)
-            .map_err(|e| {
-                Error::CryptoError(format!("Failed to derive extended master secret: {}", e))
-            })?;
+            .map_err(Error::CryptoError)?;
 
         // Derive the encryption/decryption keys
         client
@@ -1025,7 +1018,7 @@ impl State {
                 &mut out,
                 &mut scratch,
             )
-            .map_err(|e| Error::CryptoError(format!("Failed to derive keys: {}", e)))?;
+            .map_err(Error::CryptoError)?;
 
         client.engine.push_buffer(out);
         client.engine.push_buffer(scratch);
@@ -1137,9 +1130,10 @@ impl State {
         // Use constant-time comparison to prevent timing attacks
         let is_eq: bool = verify_data.ct_eq(expected.as_slice()).into();
         if !is_eq {
-            return Err(
-                (Error::SecurityError("Server Finished verification failed".to_string())).into(),
-            );
+            return Err((Error::SecurityError(
+                crate::SecurityError::ServerFinishedVerificationFailed,
+            ))
+            .into());
         }
 
         trace!("Server Finished verified successfully");
@@ -1274,7 +1268,9 @@ fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(
 fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
     // Just check that a cipher suite exists without binding to unused variable
     let Some(cipher_suite) = engine.cipher_suite() else {
-        return Err(Error::InvalidState("No cipher suite selected".to_string()));
+        return Err(Error::InvalidState(
+            crate::InvalidStateError::NoCipherSuiteSelected,
+        ));
     };
     let key_exchange_algorithm = cipher_suite.as_key_exchange_algorithm();
 
@@ -1298,9 +1294,7 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
             let public_key = engine
                 .crypto_context_mut()
                 .maybe_init_key_exchange()
-                .map_err(|e| {
-                    Error::CryptoError(format!("Failed to generate key exchange: {}", e))
-                })?;
+                .map_err(Error::CryptoError)?;
 
             trace!("Generated public key size: {} bytes", public_key.len());
             ClientKeyExchange::serialize_from_bytes(public_key, body);
@@ -1309,29 +1303,29 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
             let identity = engine
                 .config()
                 .psk_identity()
-                .ok_or_else(|| Error::PskError("No PSK identity configured".to_string()))?
+                .ok_or(Error::PskError(crate::PskError::NoPskIdentityConfigured))?
                 .to_vec();
 
             // Resolve the PSK via the configured resolver
             let psk = engine
                 .config()
                 .psk_resolver()
-                .ok_or_else(|| Error::PskError("No PSK resolver configured".to_string()))?
+                .ok_or(Error::PskError(crate::PskError::NoPskResolverConfigured))?
                 .resolve(&identity)
-                .ok_or_else(|| Error::PskError("PSK resolver returned no key".to_string()))?;
+                .ok_or(Error::PskError(crate::PskError::ResolverReturnedNoKey))?;
 
             // Set the PSK and compute pre-master secret
             let crypto = engine.crypto_context_mut();
             crypto.set_psk(psk);
             crypto
                 .compute_psk_pre_master_secret()
-                .map_err(|e| Error::CryptoError(format!("Failed to compute PSK PMS: {}", e)))?;
+                .map_err(Error::CryptoError)?;
 
             ClientPskKeys::serialize_from_bytes(&identity, body);
         }
         _ => {
             return Err(Error::SecurityError(
-                "Unsupported key exchange algorithm".to_string(),
+                crate::SecurityError::UnsupportedKeyExchangeAlgorithm,
             ));
         }
     }
@@ -1367,7 +1361,7 @@ fn handshake_create_certificate_verify(body: &mut Buf, engine: &mut Engine) -> R
     engine
         .crypto_context
         .sign_data(handshake_data, hash_alg, &mut signature)
-        .map_err(|e| Error::CryptoError(format!("Failed to sign handshake messages: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
     debug!("Generated signature size: {} bytes", signature.len());
 

@@ -29,7 +29,7 @@ use crate::dtls13::message::SignatureAlgorithmsExtension;
 use crate::dtls13::message::SupportedGroupsExtension;
 use crate::dtls13::message::UseSrtpExtension;
 use crate::types::NamedGroup;
-use crate::{Config, DtlsCertificate, Error, Output, SeededRng};
+use crate::{Config, CryptoError, DtlsCertificate, Error, Output, SeededRng, TimeoutError};
 // Extension type constants
 const EXT_SUPPORTED_GROUPS: u16 = 0x000A;
 const EXT_EC_POINT_FORMATS: u16 = 0x000B;
@@ -80,14 +80,11 @@ impl HybridClientHello {
         let random = Random::new(&mut rng);
 
         // Start ECDHE key exchange with the first supported group (filtered)
-        let group = config
-            .kx_groups()
-            .next()
-            .ok_or_else(|| Error::CryptoError("No supported key exchange groups".into()))?;
+        let group = config.kx_groups().next().ok_or(Error::CryptoError(
+            CryptoError::NoSupportedKeyExchangeGroups,
+        ))?;
         let kx_buf = Buf::new();
-        let key_exchange = group
-            .start_exchange(kx_buf)
-            .map_err(|e| Error::CryptoError(format!("Failed to start key exchange: {}", e)))?;
+        let key_exchange = group.start_exchange(kx_buf).map_err(Error::CryptoError)?;
 
         // ---- Build the ClientHello body ----
         let mut ch_body = Buf::new();
@@ -304,7 +301,7 @@ impl ClientPending {
         if let Some(deadline) = self.retransmit_at {
             if now >= deadline {
                 if self.retransmit_count >= self.config.flight_retries() {
-                    return Err(Error::Timeout("hybrid ClientHello"));
+                    return Err(Error::Timeout(TimeoutError::HybridClientHello));
                 }
                 self.retransmit_count += 1;
                 self.needs_send = true;

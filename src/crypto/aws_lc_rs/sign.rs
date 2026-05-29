@@ -15,6 +15,7 @@ use super::super::{KeyProvider, SignatureVerifier, SigningKey, check_verify_sche
 use super::super::{OID_P256, OID_P384};
 use crate::buffer::Buf;
 use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
+use crate::{CryptoError, CryptoOperation};
 
 /// ECDSA signing key implementation.
 struct EcdsaSigningKey {
@@ -31,19 +32,24 @@ impl std::fmt::Debug for EcdsaSigningKey {
 }
 
 impl SigningKey for EcdsaSigningKey {
-    fn sign(&mut self, data: &[u8], hash_alg: HashAlgorithm, buf: &mut Buf) -> Result<(), String> {
+    fn sign(
+        &mut self,
+        data: &[u8],
+        hash_alg: HashAlgorithm,
+        buf: &mut Buf,
+    ) -> Result<(), CryptoError> {
         let key_hash = self.hash_algorithm();
         if hash_alg != key_hash {
-            return Err(format!(
-                "aws-lc-rs ECDSA key is locked to {:?} but {:?} was requested",
-                key_hash, hash_alg
-            ));
+            return Err(CryptoError::SigningKeyHashMismatch {
+                key_hash,
+                requested: hash_alg,
+            });
         }
         let rng = aws_lc_rs::rand::SystemRandom::new();
         let signature = self
             .key_pair
             .sign(&rng, data)
-            .map_err(|_| "Signing failed".to_string())?;
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Sign))?;
         buf.clear();
         buf.extend_from_slice(signature.as_ref());
         Ok(())
@@ -80,7 +86,7 @@ impl SigningKey for EcdsaSigningKey {
 pub(super) struct AwsLcKeyProvider;
 
 impl KeyProvider for AwsLcKeyProvider {
-    fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKey>, String> {
+    fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKey>, CryptoError> {
         // Try PKCS#8 DER format first (most common)
         if let Ok(key_pair) = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, key_der) {
             return Ok(Box::new(EcdsaSigningKey {
@@ -115,9 +121,9 @@ impl KeyProvider for AwsLcKeyProvider {
                 let ec_alg_oid = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
                 let curve_params_der = curve_oid
                     .to_der()
-                    .map_err(|_| "Failed to encode curve OID".to_string())?;
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
                 let curve_params_any = der::asn1::AnyRef::try_from(curve_params_der.as_slice())
-                    .map_err(|_| "Failed to create AnyRef".to_string())?;
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
 
                 let algorithm = spki::AlgorithmIdentifierRef {
                     oid: ec_alg_oid,
@@ -132,7 +138,7 @@ impl KeyProvider for AwsLcKeyProvider {
 
                 let pkcs8_der = pkcs8
                     .to_der()
-                    .map_err(|_| "Failed to encode PKCS#8".to_string())?;
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
 
                 let p256_curve = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
                 if curve_oid == p256_curve {
@@ -169,7 +175,7 @@ impl KeyProvider for AwsLcKeyProvider {
             }
         }
 
-        Err("Failed to parse private key in any supported format".to_string())
+        Err(CryptoError::InvalidPrivateKey)
     }
 }
 
@@ -185,42 +191,42 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
         signature: &[u8],
         hash_alg: HashAlgorithm,
         sig_alg: SignatureAlgorithm,
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         if sig_alg != SignatureAlgorithm::ECDSA {
-            return Err(format!("Unsupported signature algorithm: {:?}", sig_alg));
+            return Err(CryptoError::UnsupportedSignatureAlgorithm(sig_alg));
         }
 
-        let cert = X509Certificate::from_der(cert_der)
-            .map_err(|e| format!("Failed to parse certificate: {e}"))?;
+        let cert =
+            X509Certificate::from_der(cert_der).map_err(|e| CryptoError::ProviderFailure {
+                operation: CryptoOperation::VerifySignature,
+                reason: e.to_string(),
+            })?;
         let spki = &cert.tbs_certificate.subject_public_key_info;
 
         const OID_EC_PUBLIC_KEY: ObjectIdentifier =
             ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
 
         if spki.algorithm.oid != OID_EC_PUBLIC_KEY {
-            return Err(format!(
-                "Unsupported public key algorithm: {}",
-                spki.algorithm.oid
-            ));
+            return Err(CryptoError::UnsupportedPublicKeyAlgorithm);
         }
 
         let pubkey_bytes = spki
             .subject_public_key
             .as_bytes()
-            .ok_or_else(|| "Invalid EC subject_public_key bitstring".to_string())?;
+            .ok_or(CryptoError::InvalidSubjectPublicKey)?;
 
         let curve_oid: ObjectIdentifier = spki
             .algorithm
             .parameters
             .as_ref()
-            .ok_or("Missing EC curve parameter in certificate")?
+            .ok_or(CryptoError::MissingEcCurveParameter)?
             .decode_as()
-            .map_err(|_| "Invalid EC curve parameter in certificate".to_string())?;
+            .map_err(|_| CryptoError::InvalidEcCurveParameter)?;
 
         let group = match curve_oid {
             OID_P256 => NamedGroup::Secp256r1,
             OID_P384 => NamedGroup::Secp384r1,
-            _ => return Err(format!("Unsupported EC curve: {}", curve_oid)),
+            _ => return Err(CryptoError::UnsupportedEcCurve(curve_oid.to_string())),
         };
 
         check_verify_scheme(sig_alg, hash_alg, group)?;
@@ -235,12 +241,9 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
         };
 
         let public_key = UnparsedPublicKey::new(algorithm, pubkey_bytes);
-        public_key.verify(data, signature).map_err(|_| {
-            format!(
-                "ECDSA signature verification failed for {:?} {:?}",
-                hash_alg, group
-            )
-        })
+        public_key
+            .verify(data, signature)
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::VerifySignature))
     }
 }
 

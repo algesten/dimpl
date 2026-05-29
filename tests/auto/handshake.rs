@@ -591,10 +591,8 @@ fn auto_client_rejects_unknown_version_response() {
         "Unknown version response should be an error"
     );
     match result.unwrap_err() {
-        Error::UnexpectedMessage(msg) => assert!(
-            msg.contains("Unrecognized"),
-            "error should mention unrecognized: {msg}"
-        ),
+        Error::UnexpectedMessage(dimpl::UnexpectedMessageError::UnrecognizedAutoServerResponse) => {
+        }
         other => panic!("expected UnexpectedMessage, got: {other:?}"),
     }
 }

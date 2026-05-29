@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use arrayvec::ArrayVec;
 
+use crate::CryptoError;
 use crate::buffer::{Buf, TmpBuf, ToBuf};
 use crate::crypto;
 use crate::crypto::SrtpProfile;
@@ -114,7 +115,7 @@ impl CryptoContext {
     }
 
     /// Generate key exchange public key
-    pub fn maybe_init_key_exchange(&mut self) -> Result<&[u8], String> {
+    pub fn maybe_init_key_exchange(&mut self) -> Result<&[u8], CryptoError> {
         // If we already have the public key stored, return it
         if let Some(ref pk) = self.key_exchange_public_key {
             return Ok(pk);
@@ -129,7 +130,7 @@ impl CryptoContext {
                 self.key_exchange_group = Some(group);
                 Ok(self.key_exchange_public_key.as_ref().unwrap())
             }
-            None => Err("Key exchange not initialized".to_string()),
+            None => Err(CryptoError::KeyExchangeNotInitialized),
         }
     }
 
@@ -138,11 +139,11 @@ impl CryptoContext {
         &mut self,
         peer_public_key: &[u8],
         buf: &mut Buf,
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         let ke = self
             .key_exchange
             .take()
-            .ok_or_else(|| "Key exchange not initialized".to_string())?;
+            .ok_or(CryptoError::KeyExchangeNotInitialized)?;
         ke.complete(peer_public_key, buf)?;
         self.pre_master_secret = Some(core::mem::take(buf));
         // Note: we keep key_exchange_public_key since it may be needed later
@@ -158,8 +159,8 @@ impl CryptoContext {
     ///
     /// Format: `uint16(N) || zeros(N) || uint16(N) || PSK(N)`
     /// where N is the PSK length.
-    pub fn compute_psk_pre_master_secret(&mut self) -> Result<(), String> {
-        let psk = self.psk.as_ref().ok_or("PSK not set")?;
+    pub fn compute_psk_pre_master_secret(&mut self) -> Result<(), CryptoError> {
+        let psk = self.psk.as_ref().ok_or(CryptoError::PskNotSet)?;
         let n = psk.len();
         // Total: 2 + N + 2 + N = 2N + 4
         let mut pms = Buf::new();
@@ -176,13 +177,13 @@ impl CryptoContext {
         &mut self,
         named_group: NamedGroup,
         kx_buf: &mut Buf,
-    ) -> Result<&[u8], String> {
+    ) -> Result<&[u8], CryptoError> {
         // Find the matching key exchange group from the provider
         let kx_group = self
             .provider()
             .supported_kx_groups()
             .find(|g| g.name() == named_group)
-            .ok_or_else(|| format!("Unsupported ECDHE named group: {:?}", named_group))?;
+            .ok_or(CryptoError::UnsupportedEcdheNamedGroup(named_group))?;
 
         kx_buf.clear();
         self.key_exchange = Some(kx_group.start_exchange(core::mem::take(kx_buf))?);
@@ -195,13 +196,13 @@ impl CryptoContext {
         group: NamedGroup,
         server_public: &[u8],
         kx_buf: &mut Buf,
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         // Find the matching key exchange group from the provider
         let kx_group = self
             .provider()
             .supported_kx_groups()
             .find(|g| g.name() == group)
-            .ok_or_else(|| format!("Unsupported ECDHE named group: {:?}", group))?;
+            .ok_or(CryptoError::UnsupportedEcdheNamedGroup(group))?;
 
         // Create a new ECDH key exchange
         kx_buf.clear();
@@ -223,10 +224,10 @@ impl CryptoContext {
         hash: HashAlgorithm,
         out: &mut Buf,
         scratch: &mut Buf,
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         trace!("Deriving extended master secret");
         let Some(pms) = &self.pre_master_secret else {
-            return Err("Pre-master secret not available".to_string());
+            return Err(CryptoError::PreMasterSecretNotAvailable);
         };
         crypto::prf_hkdf::prf_tls12(
             self.provider().hmac_provider,
@@ -241,7 +242,7 @@ impl CryptoContext {
         let mut master_secret = ArrayVec::new();
         master_secret
             .try_extend_from_slice(out)
-            .map_err(|_| "Master secret too long".to_string())?;
+            .map_err(|_| CryptoError::MasterSecretTooLong)?;
         self.master_secret = Some(master_secret);
         // Clear pre-master secret after use (security measure)
         self.pre_master_secret = None;
@@ -256,9 +257,9 @@ impl CryptoContext {
         server_random: &[u8],
         key_block: &mut Buf,
         scratch: &mut Buf,
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         let Some(master_secret) = &self.master_secret else {
-            return Err("Master secret not available".to_string());
+            return Err(CryptoError::MasterSecretNotAvailable);
         };
 
         // Store the randoms for later SRTP key export (RFC 5705)
@@ -280,7 +281,7 @@ impl CryptoContext {
             .cipher_suites
             .iter()
             .find(|cs| cs.suite() == cipher_suite)
-            .ok_or_else(|| format!("Unsupported cipher suite: {:?}", cipher_suite))?;
+            .ok_or(CryptoError::UnsupportedCipherSuite(cipher_suite))?;
 
         // Get key sizes from the provider
         let (mac_key_len, enc_key_len, fixed_iv_len) = supported_cipher_suite.key_lengths();
@@ -343,10 +344,10 @@ impl CryptoContext {
         plaintext: &mut Buf,
         aad: Aad,
         nonce: Nonce,
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         match &mut self.client_cipher {
             Some(cipher) => cipher.encrypt(plaintext, aad, nonce),
-            None => Err("Client cipher not initialized".to_string()),
+            None => Err(CryptoError::ClientCipherNotInitialized),
         }
     }
 
@@ -356,10 +357,10 @@ impl CryptoContext {
         ciphertext: &mut TmpBuf,
         aad: Aad,
         nonce: Nonce,
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         match &mut self.server_cipher {
             Some(cipher) => cipher.decrypt(ciphertext, aad, nonce),
-            None => Err("Server cipher not initialized".to_string()),
+            None => Err(CryptoError::ServerCipherNotInitialized),
         }
     }
 
@@ -369,10 +370,10 @@ impl CryptoContext {
         plaintext: &mut Buf,
         aad: Aad,
         nonce: Nonce,
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         match &mut self.server_cipher {
             Some(cipher) => cipher.encrypt(plaintext, aad, nonce),
-            None => Err("Server cipher not initialized".to_string()),
+            None => Err(CryptoError::ServerCipherNotInitialized),
         }
     }
 
@@ -382,10 +383,10 @@ impl CryptoContext {
         ciphertext: &mut TmpBuf,
         aad: Aad,
         nonce: Nonce,
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         match &mut self.client_cipher {
             Some(cipher) => cipher.decrypt(ciphertext, aad, nonce),
-            None => Err("Client cipher not initialized".to_string()),
+            None => Err(CryptoError::ClientCipherNotInitialized),
         }
     }
 
@@ -424,9 +425,9 @@ impl CryptoContext {
         data: &[u8],
         hash_alg: HashAlgorithm,
         out: &mut Buf,
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         let AuthMode::Certificate { private_key, .. } = &mut self.auth else {
-            return Err("No private key configured (PSK mode)".to_string());
+            return Err(CryptoError::NoPrivateKeyConfigured);
         };
         private_key.sign(data, hash_alg, out)
     }
@@ -439,10 +440,10 @@ impl CryptoContext {
         hash: HashAlgorithm,
         out: &mut Buf,
         scratch: &mut Buf,
-    ) -> Result<ArrayVec<u8, 128>, String> {
+    ) -> Result<ArrayVec<u8, 128>, CryptoError> {
         let master_secret = match &self.master_secret {
             Some(ms) => ms,
-            None => return Err("No master secret available".to_string()),
+            None => return Err(CryptoError::MasterSecretNotAvailable),
         };
 
         let label = if is_client {
@@ -465,7 +466,7 @@ impl CryptoContext {
         let mut verify_data = ArrayVec::new();
         verify_data
             .try_extend_from_slice(out)
-            .map_err(|_| "Verify data too long".to_string())?;
+            .map_err(|_| CryptoError::VerifyDataTooLong)?;
         Ok(verify_data)
     }
 
@@ -477,22 +478,22 @@ impl CryptoContext {
         hash: HashAlgorithm,
         out: &mut Buf,
         scratch: &mut Buf,
-    ) -> Result<ArrayVec<u8, 88>, String> {
+    ) -> Result<ArrayVec<u8, 88>, CryptoError> {
         const DTLS_SRTP_KEY_LABEL: &str = "EXTRACTOR-dtls_srtp";
 
         let master_secret = match &self.master_secret {
             Some(ms) => ms,
-            None => return Err("No master secret available".to_string()),
+            None => return Err(CryptoError::MasterSecretNotAvailable),
         };
 
         let client_random = match &self.client_random {
             Some(cr) => cr,
-            None => return Err("No client random available".to_string()),
+            None => return Err(CryptoError::ClientRandomNotAvailable),
         };
 
         let server_random = match &self.server_random {
             Some(sr) => sr,
-            None => return Err("No server random available".to_string()),
+            None => return Err(CryptoError::ServerRandomNotAvailable),
         };
 
         // Per RFC 5705, the exporter uses: PRF(master_secret, label, client_random + server_random)
@@ -516,7 +517,7 @@ impl CryptoContext {
         let mut keying_material = ArrayVec::new();
         keying_material
             .try_extend_from_slice(out)
-            .map_err(|_| "Keying material too long".to_string())?;
+            .map_err(|_| CryptoError::KeyingMaterialTooLong)?;
 
         Ok(keying_material)
     }
@@ -598,7 +599,7 @@ impl CryptoContext {
         signature: &DigitallySigned,
         signature_buf: &[u8],
         cert_der: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         self.provider().signature_verification.verify_signature(
             cert_der,
             data,

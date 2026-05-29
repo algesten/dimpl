@@ -227,8 +227,11 @@ mod window;
 mod util;
 
 mod error;
-pub use error::Error;
 pub(crate) use error::InternalError;
+pub use error::{
+    CertificateError, ConfigError, CryptoError, CryptoOperation, CryptoProviderValidationError,
+    Error, InvalidStateError, PskError, SecurityError, TimeoutError, UnexpectedMessageError,
+};
 
 mod config;
 pub use config::{Config, ConfigBuilder, Psk, PskResolver};
@@ -633,7 +636,7 @@ impl Dtls {
         // while inner is None would leave us unable to poll/timeout.
         if matches!(version, auto::DetectedVersion::Unknown) {
             return Err(Error::UnexpectedMessage(
-                "Unrecognized response from server".to_string(),
+                crate::UnexpectedMessageError::UnrecognizedAutoServerResponse,
             ));
         }
 

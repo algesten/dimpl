@@ -382,7 +382,7 @@ impl Engine {
         // The connect timeout is the overall timeout for establishing the connection
         if let Timeout::Armed(connect_timeout) = self.connect_timeout {
             if now >= connect_timeout {
-                return Err(Error::Timeout("connect"));
+                return Err(Error::Timeout(crate::TimeoutError::Connect));
             }
         }
 
@@ -402,7 +402,7 @@ impl Engine {
                 self.flight_timeout = Timeout::Armed(timeout);
                 self.flight_resend("flight timeout")?;
             } else {
-                return Err(Error::Timeout("handshake"));
+                return Err(Error::Timeout(crate::TimeoutError::Handshake));
             }
         }
 
@@ -729,10 +729,9 @@ impl Engine {
         F: FnOnce(&mut Buf),
     {
         let maybe_suite = if epoch >= 1 {
-            Some(
-                self.cipher_suite()
-                    .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?,
-            )
+            Some(self.cipher_suite().ok_or(Error::InvalidState(
+                crate::InvalidStateError::NoCipherSuiteSelected,
+            ))?)
         } else {
             None
         };
@@ -802,10 +801,11 @@ impl Engine {
             };
 
             let Some(iv) = iv else {
-                return Err(Error::CryptoError(format!(
-                    "{} write IV not available",
-                    if self.is_client { "Client" } else { "Server" }
-                )));
+                return Err(Error::CryptoError(
+                    crate::CryptoError::WriteIvNotAvailable {
+                        is_client: self.is_client,
+                    },
+                ));
             };
 
             let explicit_nonce_len = self.explicit_nonce_len;
@@ -818,10 +818,12 @@ impl Engine {
                     Nonce::new(iv, &explicit_nonce)
                 }
                 _ => {
-                    return Err(Error::CryptoError(format!(
-                        "Unsupported DTLS 1.2 record_iv_len={} for {:?}",
-                        explicit_nonce_len, suite
-                    )));
+                    return Err(Error::CryptoError(
+                        crate::CryptoError::UnsupportedDtls12RecordIvLen {
+                            len: explicit_nonce_len,
+                            suite,
+                        },
+                    ));
                 }
             };
 
@@ -922,8 +924,9 @@ impl Engine {
         // Per-record protection overhead on the wire (for AEAD suites this is
         // explicit_nonce + tag). Used to size fragments to fit the MTU.
         let protection_overhead = if epoch >= 1 {
-            self.cipher_suite()
-                .ok_or_else(|| Error::InvalidState("No cipher suite selected".to_string()))?;
+            self.cipher_suite().ok_or(Error::InvalidState(
+                crate::InvalidStateError::NoCipherSuiteSelected,
+            ))?;
             self.min_protected_fragment_len()
         } else {
             0
@@ -1039,11 +1042,11 @@ impl Engine {
         if self.is_client {
             self.crypto_context
                 .encrypt_client_to_server(plaintext, aad, nonce)
-                .map_err(|e| Error::CryptoError(format!("Client encryption failed: {}", e)))
+                .map_err(Error::CryptoError)
         } else {
             self.crypto_context
                 .encrypt_server_to_client(plaintext, aad, nonce)
-                .map_err(|e| Error::CryptoError(format!("Server encryption failed: {}", e)))
+                .map_err(Error::CryptoError)
         }
     }
 
@@ -1057,11 +1060,11 @@ impl Engine {
         if self.is_client {
             self.crypto_context
                 .decrypt_server_to_client(ciphertext, aad, nonce)
-                .map_err(|e| Error::CryptoError(format!("Client decryption failed: {}", e)))
+                .map_err(Error::CryptoError)
         } else {
             self.crypto_context
                 .decrypt_client_to_server(ciphertext, aad, nonce)
-                .map_err(|e| Error::CryptoError(format!("Server decryption failed: {}", e)))
+                .map_err(Error::CryptoError)
         }
     }
 
@@ -1190,7 +1193,9 @@ impl Engine {
 
     pub fn generate_verify_data(&mut self, is_client: bool) -> Result<[u8; 12], Error> {
         let Some(suite) = self.cipher_suite() else {
-            return Err(Error::InvalidState("No cipher suite selected".to_string()));
+            return Err(Error::InvalidState(
+                crate::InvalidStateError::NoCipherSuiteSelected,
+            ));
         };
         let algorithm = suite.hash_algorithm();
         let mut handshake_hash = self.buffers_free.pop();
@@ -1208,10 +1213,12 @@ impl Engine {
                 &mut out,
                 &mut scratch,
             )
-            .map_err(|e| Error::CryptoError(format!("Failed to generate verify data: {}", e)))?;
+            .map_err(Error::CryptoError)?;
 
         if verify_data_vec.len() != 12 {
-            return Err(Error::CryptoError("Invalid verify data length".to_string()));
+            return Err(Error::CryptoError(
+                crate::CryptoError::InvalidVerifyDataLength,
+            ));
         }
 
         let mut verify_data = [0u8; 12];
@@ -1273,10 +1280,10 @@ impl RecordHandler for Engine {
                 self.push_buffer(record.into_buffer());
 
                 if let Some(description) = fatal_description {
-                    return Err(Error::SecurityError(format!(
-                        "Received fatal alert: level=2, description={}",
-                        description
-                    )));
+                    return Err(Error::SecurityError(crate::SecurityError::FatalAlert {
+                        level: 2,
+                        description,
+                    }));
                 }
 
                 return Ok(None);
@@ -1301,10 +1308,10 @@ impl RecordHandler for Engine {
                 }
 
                 if level == 2 {
-                    return Err(Error::SecurityError(format!(
-                        "Received fatal alert: level={}, description={}",
-                        level, description
-                    )));
+                    return Err(Error::SecurityError(crate::SecurityError::FatalAlert {
+                        level,
+                        description,
+                    }));
                 }
             }
 

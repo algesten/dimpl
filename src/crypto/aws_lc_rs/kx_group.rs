@@ -6,6 +6,7 @@ use aws_lc_rs::agreement::{EphemeralPrivateKey, agree_ephemeral};
 use super::super::{ActiveKeyExchange, SupportedKxGroup};
 use crate::buffer::Buf;
 use crate::types::NamedGroup;
+use crate::{CryptoError, CryptoOperation};
 
 /// ECDHE key exchange implementation.
 struct EcdhKeyExchange {
@@ -24,21 +25,21 @@ impl std::fmt::Debug for EcdhKeyExchange {
 }
 
 impl EcdhKeyExchange {
-    fn new(group: NamedGroup, mut buf: Buf) -> Result<Self, String> {
+    fn new(group: NamedGroup, mut buf: Buf) -> Result<Self, CryptoError> {
         let algorithm = match group {
             NamedGroup::X25519 => &X25519,
             NamedGroup::Secp256r1 => &ECDH_P256,
             NamedGroup::Secp384r1 => &ECDH_P384,
-            _ => return Err("Unsupported group".to_string()),
+            _ => return Err(CryptoError::UnsupportedKeyExchangeGroup(group)),
         };
 
         let rng = aws_lc_rs::rand::SystemRandom::new();
         let private_key = EphemeralPrivateKey::generate(algorithm, &rng)
-            .map_err(|_| "Failed to generate ephemeral key".to_string())?;
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::GenerateEphemeralKey))?;
 
         let pk = private_key
             .compute_public_key()
-            .map_err(|_| "Failed to compute public key".to_string())?;
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::ComputePublicKey))?;
 
         buf.clear();
         buf.extend_from_slice(pk.as_ref());
@@ -65,7 +66,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
         &self.public_key
     }
 
-    fn complete(self: Box<Self>, peer_pub: &[u8], out: &mut Buf) -> Result<(), String> {
+    fn complete(self: Box<Self>, peer_pub: &[u8], out: &mut Buf) -> Result<(), CryptoError> {
         let algorithm = self.algorithm();
         let peer_key = UnparsedPublicKey::new(algorithm, peer_pub);
 
@@ -80,7 +81,10 @@ impl ActiveKeyExchange for EcdhKeyExchange {
                 Ok(())
             },
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| CryptoError::ProviderFailure {
+            operation: CryptoOperation::CompleteKeyExchange,
+            reason: e.to_string(),
+        })
     }
 
     fn group(&self) -> NamedGroup {
@@ -97,7 +101,7 @@ impl SupportedKxGroup for X25519Kx {
         NamedGroup::X25519
     }
 
-    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String> {
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, CryptoError> {
         Ok(Box::new(EcdhKeyExchange::new(NamedGroup::X25519, buf)?))
     }
 }
@@ -111,7 +115,7 @@ impl SupportedKxGroup for P256 {
         NamedGroup::Secp256r1
     }
 
-    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String> {
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, CryptoError> {
         Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp256r1, buf)?))
     }
 }
@@ -125,7 +129,7 @@ impl SupportedKxGroup for P384 {
         NamedGroup::Secp384r1
     }
 
-    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String> {
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, CryptoError> {
         Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp384r1, buf)?))
     }
 }

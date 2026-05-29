@@ -9,6 +9,7 @@ use ccm::consts::{U8, U12};
 
 use super::{Aad, Cipher, Nonce};
 use crate::buffer::{Buf, TmpBuf};
+use crate::{CryptoError, CryptoOperation};
 
 /// AES-128-CCM with 8-byte tag, 12-byte nonce.
 type Aes128Ccm8 = ccm::Ccm<aes::Aes128, U8, U12>;
@@ -25,12 +26,12 @@ impl std::fmt::Debug for AesCcm8Cipher {
 }
 
 impl AesCcm8Cipher {
-    pub fn new(key: &[u8]) -> Result<Self, String> {
+    pub fn new(key: &[u8]) -> Result<Self, CryptoError> {
         if key.len() != 16 {
-            return Err(format!("Invalid key size for AES-128-CCM-8: {}", key.len()));
+            return Err(CryptoError::InvalidAes128Ccm8KeySize { actual: key.len() });
         }
         let cipher = Aes128Ccm8::new_from_slice(key)
-            .map_err(|_| "Failed to create AES-128-CCM-8 cipher".to_string())?;
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::CreateCipher))?;
         Ok(AesCcm8Cipher {
             cipher: Box::new(cipher),
         })
@@ -38,19 +39,19 @@ impl AesCcm8Cipher {
 }
 
 impl Cipher for AesCcm8Cipher {
-    fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String> {
+    fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), CryptoError> {
         if nonce.len() != 12 {
-            return Err(format!(
-                "Invalid nonce length: expected 12, got {}",
-                nonce.len()
-            ));
+            return Err(CryptoError::InvalidNonceLength {
+                expected: 12,
+                actual: nonce.len(),
+            });
         }
 
         let ccm_nonce = ccm::aead::generic_array::GenericArray::from_slice(&nonce[..12]);
         let tag = self
             .cipher
             .encrypt_in_place_detached(ccm_nonce, &aad[..], plaintext.as_mut())
-            .map_err(|_| "AES-128-CCM-8 encryption failed".to_string())?;
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))?;
 
         // Append the 8-byte tag
         plaintext.extend_from_slice(&tag);
@@ -58,16 +59,24 @@ impl Cipher for AesCcm8Cipher {
         Ok(())
     }
 
-    fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String> {
+    fn decrypt(
+        &mut self,
+        ciphertext: &mut TmpBuf,
+        aad: Aad,
+        nonce: Nonce,
+    ) -> Result<(), CryptoError> {
         if ciphertext.len() < 8 {
-            return Err(format!("Ciphertext too short: {}", ciphertext.len()));
+            return Err(CryptoError::CiphertextTooShort {
+                minimum: 8,
+                actual: ciphertext.len(),
+            });
         }
 
         if nonce.len() != 12 {
-            return Err(format!(
-                "Invalid nonce length: expected 12, got {}",
-                nonce.len()
-            ));
+            return Err(CryptoError::InvalidNonceLength {
+                expected: 12,
+                actual: nonce.len(),
+            });
         }
 
         let ccm_nonce = ccm::aead::generic_array::GenericArray::from_slice(&nonce[..12]);
@@ -83,7 +92,7 @@ impl Cipher for AesCcm8Cipher {
 
         self.cipher
             .decrypt_in_place_detached(ccm_nonce, &aad[..], ciphertext.as_mut(), &tag)
-            .map_err(|_| "AES-128-CCM-8 decryption failed".to_string())?;
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))?;
 
         Ok(())
     }

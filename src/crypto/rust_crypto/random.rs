@@ -1,13 +1,14 @@
 //! Secure random number generation using RustCrypto.
 
 use super::super::SecureRandom;
+use crate::CryptoError;
 
 /// Secure random number generator implementation.
 #[derive(Debug)]
 pub(super) struct RustCryptoSecureRandom;
 
 impl SecureRandom for RustCryptoSecureRandom {
-    fn fill(&self, buf: &mut [u8]) -> Result<(), String> {
+    fn fill(&self, buf: &mut [u8]) -> Result<(), CryptoError> {
         use rand_core::OsRng;
         use rand_core::RngCore;
         OsRng.fill_bytes(buf);
