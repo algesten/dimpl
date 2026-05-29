@@ -370,54 +370,65 @@ impl fmt::Debug for HashAlgorithm {
 ///
 /// Represents the underlying signature primitive (RSA, ECDSA, etc.).
 /// Used internally for signing operations across both DTLS versions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum SignatureAlgorithm {
-    /// Anonymous (no certificate).
-    Anonymous,
-    /// RSA signatures.
-    RSA,
-    /// DSA signatures.
-    DSA,
-    /// ECDSA signatures.
-    ECDSA,
-    /// Unknown or unsupported signature algorithm.
-    Unknown(u8),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SignatureAlgorithm(u8);
 
 impl Default for SignatureAlgorithm {
     fn default() -> Self {
-        Self::Unknown(0)
+        Self::ANONYMOUS
     }
 }
 
 impl SignatureAlgorithm {
+    /// Anonymous (no certificate).
+    pub const ANONYMOUS: Self = Self(0);
+    /// RSA signatures.
+    pub const RSA: Self = Self(1);
+    /// DSA signatures.
+    pub const DSA: Self = Self(2);
+    /// ECDSA signatures.
+    pub const ECDSA: Self = Self(3);
+
+    pub(crate) const UNKNOWN_DERIVED: Self = Self(u8::MAX);
+
     /// Convert an 8-bit value into a `SignatureAlgorithm`.
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0 => SignatureAlgorithm::Anonymous,
-            1 => SignatureAlgorithm::RSA,
-            2 => SignatureAlgorithm::DSA,
-            3 => SignatureAlgorithm::ECDSA,
-            _ => SignatureAlgorithm::Unknown(value),
-        }
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
     /// Convert this `SignatureAlgorithm` into its 8-bit representation.
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            SignatureAlgorithm::Anonymous => 0,
-            SignatureAlgorithm::RSA => 1,
-            SignatureAlgorithm::DSA => 2,
-            SignatureAlgorithm::ECDSA => 3,
-            SignatureAlgorithm::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    /// Returns true if this is not a known DTLS signature algorithm wire value.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(
+            *self,
+            SignatureAlgorithm::ANONYMOUS
+                | SignatureAlgorithm::RSA
+                | SignatureAlgorithm::DSA
+                | SignatureAlgorithm::ECDSA
+        )
     }
 
     /// Parse a `SignatureAlgorithm` from network bytes.
     pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAlgorithm> {
         let (input, value) = be_u8(input)?;
         Ok((input, SignatureAlgorithm::from_u8(value)))
+    }
+}
+
+impl fmt::Debug for SignatureAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            SignatureAlgorithm::ANONYMOUS => f.write_str("Anonymous"),
+            SignatureAlgorithm::RSA => f.write_str("RSA"),
+            SignatureAlgorithm::DSA => f.write_str("DSA"),
+            SignatureAlgorithm::ECDSA => f.write_str("ECDSA"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
     }
 }
 
@@ -976,6 +987,42 @@ mod tests {
         assert_eq!(format!("{:?}", HashAlgorithm::NONE), "None");
         assert_eq!(format!("{:?}", HashAlgorithm::SHA256), "SHA256");
         assert_eq!(format!("{:?}", HashAlgorithm::from_u8(7)), "Unknown(7)");
+    }
+
+    #[test]
+    fn signature_algorithm_newtype_shape() {
+        assert_eq!(std::mem::size_of::<SignatureAlgorithm>(), 1);
+        assert_eq!(SignatureAlgorithm::default(), SignatureAlgorithm::ANONYMOUS);
+    }
+
+    #[test]
+    fn signature_algorithm_wire_roundtrip() {
+        let known = [
+            (0, SignatureAlgorithm::ANONYMOUS),
+            (1, SignatureAlgorithm::RSA),
+            (2, SignatureAlgorithm::DSA),
+            (3, SignatureAlgorithm::ECDSA),
+        ];
+
+        for (wire, algorithm) in known {
+            assert_eq!(SignatureAlgorithm::from_u8(wire), algorithm);
+            assert_eq!(algorithm.as_u8(), wire);
+            assert!(!algorithm.is_unknown());
+        }
+
+        let unknown = SignatureAlgorithm::from_u8(4);
+        assert_eq!(unknown.as_u8(), 4);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn signature_algorithm_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", SignatureAlgorithm::ANONYMOUS), "Anonymous");
+        assert_eq!(format!("{:?}", SignatureAlgorithm::ECDSA), "ECDSA");
+        assert_eq!(
+            format!("{:?}", SignatureAlgorithm::from_u8(4)),
+            "Unknown(4)"
+        );
     }
 
     #[test]

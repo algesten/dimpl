@@ -215,7 +215,7 @@ impl Dtls12CipherSuite {
                 Some(SignatureAlgorithm::ECDSA)
             }
             Dtls12CipherSuite::PSK_AES128_CCM_8 => None,
-            Dtls12CipherSuite::Unknown(_) => Some(SignatureAlgorithm::Unknown(0)),
+            Dtls12CipherSuite::Unknown(_) => Some(SignatureAlgorithm::UNKNOWN_DERIVED),
         }
     }
 
