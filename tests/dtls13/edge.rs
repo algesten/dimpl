@@ -398,10 +398,10 @@ fn dtls13_unknown_warning_level_alert_is_still_fatal() {
     let err = server
         .handle_packet(&packet)
         .expect_err("non-whitelisted alert must be fatal regardless of level");
-    assert!(
-        matches!(err, dimpl::Error::SecurityError(_)),
-        "expected SecurityError, got {err:?}"
-    );
+    assert!(matches!(
+        err,
+        dimpl::Error::SecurityError(dimpl::SecurityError::FatalAlert { description: 40 })
+    ));
 }
 
 fn queue_ack_with_peer_key_update(sender: &mut Dtls, receiver: &mut Dtls, now: &mut Instant) {

@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use arrayvec::ArrayVec;
 use std::fmt;
 
-use crate::Error;
 use crate::buffer::{Buf, TmpBuf};
 use crate::dtls13::message::{ContentType, Dtls13CipherSuite, Dtls13Record, Handshake, Sequence};
+use crate::{Error, InternalError};
 
 /// Holds both the UDP packet and the parsed result of that packet.
 pub struct Incoming {
@@ -43,7 +43,7 @@ impl Incoming {
         packet: &[u8],
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls13CipherSuite>,
-    ) -> Result<Option<Self>, Error> {
+    ) -> Result<Option<Self>, InternalError> {
         // Parse records directly from packet, copying each record ONCE into its own buffer
         let records = Records::parse(packet, decrypt, cs)?;
 
@@ -70,7 +70,7 @@ impl Records {
         mut packet: &[u8],
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls13CipherSuite>,
-    ) -> Result<Records, Error> {
+    ) -> Result<Records, InternalError> {
         let mut parsed_records: ArrayVec<Record, 16> = ArrayVec::new();
 
         // Find record boundaries and copy each record ONCE from the packet
@@ -84,7 +84,7 @@ impl Records {
 
                 // Unified header: variable length
                 if packet.len() < 2 {
-                    return Err(Error::ParseIncomplete);
+                    return Err(InternalError::parse_incomplete());
                 }
 
                 let flags = packet[0];
@@ -95,7 +95,7 @@ impl Records {
                 let header_len = 1 + seq_len + len_len;
 
                 if packet.len() < header_len {
-                    return Err(Error::ParseIncomplete);
+                    return Err(InternalError::parse_incomplete());
                 }
 
                 if l_flag {
@@ -112,7 +112,7 @@ impl Records {
             } else {
                 // Plaintext: fixed 13-byte header
                 if packet.len() < Dtls13Record::PLAINTEXT_HEADER_LEN {
-                    return Err(Error::ParseIncomplete);
+                    return Err(InternalError::parse_incomplete());
                 }
 
                 // unwrap: PLAINTEXT_HEADER_LEN check above ensures 2 bytes at offset
@@ -124,7 +124,7 @@ impl Records {
             };
 
             if packet.len() < record_end {
-                return Err(Error::ParseIncomplete);
+                return Err(InternalError::parse_incomplete());
             }
 
             // This is the ONLY copy: packet -> record buffer
@@ -133,7 +133,7 @@ impl Records {
                 Ok(record) => {
                     if let Some(record) = record {
                         if parsed_records.try_push(record).is_err() {
-                            return Err(Error::TooManyRecords);
+                            return Err(InternalError::too_many_records());
                         }
                     } else {
                         trace!("Discarding replayed rec");
@@ -180,7 +180,7 @@ impl Record {
         record_slice: &[u8],
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls13CipherSuite>,
-    ) -> Result<Option<Record>, Error> {
+    ) -> Result<Option<Record>, InternalError> {
         // ONLY COPY: UDP packet slice -> pooled buffer
         let mut buffer = Buf::new();
         buffer.extend_from_slice(record_slice);
@@ -360,7 +360,7 @@ impl ParsedRecord {
     pub fn parse(
         input: &[u8],
         cipher_suite: Option<Dtls13CipherSuite>,
-    ) -> Result<ParsedRecord, Error> {
+    ) -> Result<ParsedRecord, InternalError> {
         let (_, record) = Dtls13Record::parse(input, 0)?;
 
         let handshakes = if record.content_type == ContentType::Handshake {
@@ -464,14 +464,14 @@ fn parse_handshakes(
 ///
 /// The format is: `content || ContentType || zeros*`
 /// Scan backward past zero padding to find the content type byte.
-fn recover_inner_content_type(decrypted: &[u8]) -> Result<(ContentType, usize), Error> {
+fn recover_inner_content_type(decrypted: &[u8]) -> Result<(ContentType, usize), InternalError> {
     let mut i = decrypted.len();
     // Skip zero padding
     while i > 0 && decrypted[i - 1] == 0 {
         i -= 1;
     }
     if i == 0 {
-        return Err(Error::ParseError(nom::error::ErrorKind::Fail));
+        return Err(InternalError::parse(nom::error::ErrorKind::Fail));
     }
     // The byte before padding is the content type
     i -= 1;

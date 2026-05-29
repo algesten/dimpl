@@ -3,11 +3,11 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::Error;
 use crate::crypto::{CryptoProvider, SupportedDtls12CipherSuite};
 use crate::crypto::{SupportedDtls13CipherSuite, SupportedKxGroup};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, NamedGroup};
+use crate::{ConfigError, Error};
 
 /// Callback for resolving PSK identities to shared secrets.
 ///
@@ -507,17 +507,15 @@ impl ConfigBuilder {
 
         // Validate MTU: must be large enough for DTLS record + handshake headers
         if self.mtu < 64 {
-            return Err(Error::ConfigError(format!(
-                "MTU {} is too small (minimum 64)",
-                self.mtu
-            )));
+            return Err(Error::ConfigError(ConfigError::MtuTooSmall {
+                mtu: self.mtu as u16,
+                minimum: 64,
+            }));
         }
 
         // Validate aead_encryption_limit: must be at least 1
         if self.aead_encryption_limit == 0 {
-            return Err(Error::ConfigError(
-                "aead_encryption_limit must be at least 1".to_string(),
-            ));
+            return Err(Error::ConfigError(ConfigError::AeadEncryptionLimitTooSmall));
         }
 
         // Validate cipher suite filters: at least one version must have suites.
@@ -544,9 +542,7 @@ impl ConfigBuilder {
         };
         if dtls12_count + dtls13_count == 0 {
             return Err(Error::ConfigError(
-                "No cipher suites remain after filtering. \
-                 At least one DTLS 1.2 or DTLS 1.3 cipher suite must be available."
-                    .to_string(),
+                ConfigError::NoCipherSuitesAfterFiltering,
             ));
         }
 
@@ -557,10 +553,7 @@ impl ConfigBuilder {
         // by CryptoContext::is_cipher_suite_compatible.
         if has_psk && !dtls12_suites.iter().any(|cs| cs.suite().is_psk()) {
             return Err(Error::ConfigError(
-                "PSK is configured but no PSK cipher suite remains after filtering \
-                 DTLS 1.2 suites. Include at least one PSK suite in \
-                 dtls12_cipher_suites."
-                    .to_string(),
+                ConfigError::PskConfiguredWithoutPskCipherSuite,
             ));
         }
 
@@ -585,9 +578,7 @@ impl ConfigBuilder {
                 .count();
             if dtls12_kx_count == 0 {
                 return Err(Error::ConfigError(
-                    "DTLS 1.2 cipher suites are enabled but no compatible key exchange \
-                     groups remain after filtering."
-                        .to_string(),
+                    ConfigError::NoDtls12KeyExchangeGroupsAfterFiltering,
                 ));
             }
         }
@@ -598,9 +589,7 @@ impl ConfigBuilder {
                 .count();
             if kx_count == 0 {
                 return Err(Error::ConfigError(
-                    "DTLS 1.3 cipher suites are enabled but no key exchange groups \
-                     remain after filtering."
-                        .to_string(),
+                    ConfigError::NoDtls13KeyExchangeGroupsAfterFiltering,
                 ));
             }
         }
@@ -707,8 +696,9 @@ mod tests {
     #[test]
     fn rejects_zero_mtu() {
         match Config::builder().mtu(0).build() {
-            Err(Error::ConfigError(msg)) => {
-                assert!(msg.contains("MTU"), "error should mention MTU: {msg}")
+            Err(Error::ConfigError(ConfigError::MtuTooSmall { mtu, minimum })) => {
+                assert_eq!(mtu, 0);
+                assert_eq!(minimum, 64);
             }
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!("expected error for MTU=0"),
@@ -718,8 +708,9 @@ mod tests {
     #[test]
     fn rejects_small_mtu() {
         match Config::builder().mtu(32).build() {
-            Err(Error::ConfigError(msg)) => {
-                assert!(msg.contains("MTU"), "error should mention MTU: {msg}")
+            Err(Error::ConfigError(ConfigError::MtuTooSmall { mtu, minimum })) => {
+                assert_eq!(mtu, 32);
+                assert_eq!(minimum, 64);
             }
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!("expected error for MTU=32"),
@@ -737,10 +728,7 @@ mod tests {
     #[test]
     fn rejects_zero_aead_limit() {
         match Config::builder().aead_encryption_limit(0).build() {
-            Err(Error::ConfigError(msg)) => assert!(
-                msg.contains("aead_encryption_limit"),
-                "error should mention aead_encryption_limit: {msg}"
-            ),
+            Err(Error::ConfigError(ConfigError::AeadEncryptionLimitTooSmall)) => {}
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!("expected error for aead_encryption_limit=0"),
         }
@@ -811,12 +799,7 @@ mod tests {
             .dtls13_cipher_suites(&[])
             .build()
         {
-            Err(Error::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("No cipher suites"),
-                    "error should mention cipher suites: {msg}"
-                )
-            }
+            Err(Error::ConfigError(ConfigError::NoCipherSuitesAfterFiltering)) => {}
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!("expected error when both versions are empty"),
         }
@@ -825,12 +808,10 @@ mod tests {
     #[test]
     fn empty_kx_groups_filter_rejected() {
         match Config::builder().kx_groups(&[]).build() {
-            Err(Error::ConfigError(msg)) => {
-                assert!(
-                    msg.contains("key exchange"),
-                    "error should mention key exchange: {msg}"
-                )
-            }
+            Err(Error::ConfigError(
+                ConfigError::NoDtls12KeyExchangeGroupsAfterFiltering
+                | ConfigError::NoDtls13KeyExchangeGroupsAfterFiltering,
+            )) => {}
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!("expected error for empty kx groups"),
         }
@@ -928,9 +909,7 @@ mod tests {
             .dtls13_cipher_suites(&[])
             .build();
         match result {
-            Err(Error::ConfigError(msg)) => {
-                assert!(msg.contains("PSK"), "error should mention PSK: {msg}")
-            }
+            Err(Error::ConfigError(ConfigError::PskConfiguredWithoutPskCipherSuite)) => {}
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!("expected error for PSK config with only non-PSK suites"),
         }
@@ -954,9 +933,7 @@ mod tests {
             .dtls12_cipher_suites(&[Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256])
             .build();
         match result {
-            Err(Error::ConfigError(msg)) => {
-                assert!(msg.contains("PSK"), "error should mention PSK: {msg}")
-            }
+            Err(Error::ConfigError(ConfigError::PskConfiguredWithoutPskCipherSuite)) => {}
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!(
                 "expected error for PSK config with only non-PSK DTLS 1.2 suites, \
@@ -988,10 +965,7 @@ mod tests {
             .kx_groups(&[])
             .build();
         match result {
-            Err(Error::ConfigError(msg)) => assert!(
-                msg.contains("key exchange"),
-                "error should mention key exchange groups: {msg}"
-            ),
+            Err(Error::ConfigError(ConfigError::NoDtls12KeyExchangeGroupsAfterFiltering)) => {}
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!(
                 "expected error when a cert-based DTLS 1.2 suite is enabled \

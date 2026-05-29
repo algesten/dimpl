@@ -136,7 +136,7 @@ impl Handshake {
         buffer: &mut Buf,
         cipher_suite: Option<Dtls13CipherSuite>,
         transcript: Option<&mut Buf>,
-    ) -> Result<Handshake, crate::Error> {
+    ) -> Result<Handshake, crate::InternalError> {
         Self::defragment_with_options(iter, buffer, cipher_suite, transcript, false)
     }
 
@@ -145,7 +145,7 @@ impl Handshake {
         buffer: &mut Buf,
         cipher_suite: Option<Dtls13CipherSuite>,
         transcript: Option<&mut Buf>,
-    ) -> Result<Handshake, crate::Error> {
+    ) -> Result<Handshake, crate::InternalError> {
         Self::defragment_with_options(iter, buffer, cipher_suite, transcript, true)
     }
 
@@ -155,7 +155,7 @@ impl Handshake {
         cipher_suite: Option<Dtls13CipherSuite>,
         transcript: Option<&mut Buf>,
         allow_unknown_client_hello_suites: bool,
-    ) -> Result<Handshake, crate::Error> {
+    ) -> Result<Handshake, crate::InternalError> {
         buffer.clear();
 
         // Invariant is upheld by the caller.
@@ -196,7 +196,7 @@ impl Handshake {
 
         if buffer.len() != first_handshake.header.length as usize {
             debug!("Defragmentation failed. Fragment length mismatch");
-            return Err(crate::Error::ParseIncomplete);
+            return Err(crate::InternalError::parse_incomplete());
         }
 
         // If transcript is provided, write the TLS 1.3-style header + body.
@@ -221,7 +221,7 @@ impl Handshake {
 
         if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
-            return Err(crate::Error::ParseIncomplete);
+            return Err(crate::InternalError::parse_incomplete());
         }
 
         let handshake = Handshake {

@@ -15,6 +15,7 @@ use super::super::{KeyProvider, SignatureVerifier, SigningKey as SigningKeyTrait
 use super::super::{OID_P256, OID_P384};
 use crate::buffer::Buf;
 use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
+use crate::{CryptoError, CryptoOperation};
 
 /// ECDSA signing key implementation.
 enum EcdsaSigningKey {
@@ -32,7 +33,12 @@ impl std::fmt::Debug for EcdsaSigningKey {
 }
 
 impl SigningKeyTrait for EcdsaSigningKey {
-    fn sign(&mut self, data: &[u8], hash_alg: HashAlgorithm, out: &mut Buf) -> Result<(), String> {
+    fn sign(
+        &mut self,
+        data: &[u8],
+        hash_alg: HashAlgorithm,
+        out: &mut Buf,
+    ) -> Result<(), CryptoError> {
         use ecdsa::signature::hazmat::PrehashSigner;
         use sha2::Digest;
 
@@ -48,13 +54,13 @@ impl SigningKeyTrait for EcdsaSigningKey {
                         key.sign_prehash(&hash)
                     }
                     _ => {
-                        return Err(format!(
-                            "P-256 key does not support hash algorithm {:?}",
-                            hash_alg
-                        ));
+                        return Err(CryptoError::SigningKeyUnsupportedHash {
+                            group: NamedGroup::Secp256r1,
+                            hash: hash_alg,
+                        });
                     }
                 }
-                .map_err(|_| "Signing failed".to_string())?;
+                .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Sign))?;
                 out.clear();
                 out.extend_from_slice(signature.to_der().as_bytes());
                 Ok(())
@@ -70,13 +76,13 @@ impl SigningKeyTrait for EcdsaSigningKey {
                         key.sign_prehash(&hash)
                     }
                     _ => {
-                        return Err(format!(
-                            "P-384 key does not support hash algorithm {:?}",
-                            hash_alg
-                        ));
+                        return Err(CryptoError::SigningKeyUnsupportedHash {
+                            group: NamedGroup::Secp384r1,
+                            hash: hash_alg,
+                        });
                     }
                 }
-                .map_err(|_| "Signing failed".to_string())?;
+                .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Sign))?;
                 out.clear();
                 out.extend_from_slice(signature.to_der().as_bytes());
                 Ok(())
@@ -106,7 +112,7 @@ impl SigningKeyTrait for EcdsaSigningKey {
 pub(super) struct RustCryptoKeyProvider;
 
 impl KeyProvider for RustCryptoKeyProvider {
-    fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKeyTrait>, String> {
+    fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKeyTrait>, CryptoError> {
         // Try PKCS#8 DER format first (most common)
         if let Ok(key) = SigningKey::<NistP256>::from_pkcs8_der(key_der) {
             return Ok(Box::new(EcdsaSigningKey::P256(key)));
@@ -135,9 +141,9 @@ impl KeyProvider for RustCryptoKeyProvider {
                 let ec_alg_oid = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
                 let curve_params_der = curve_oid
                     .to_der()
-                    .map_err(|_| "Failed to encode curve OID".to_string())?;
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
                 let curve_params_any = der::asn1::AnyRef::try_from(curve_params_der.as_slice())
-                    .map_err(|_| "Failed to create AnyRef".to_string())?;
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
 
                 let algorithm = spki::AlgorithmIdentifierRef {
                     oid: ec_alg_oid,
@@ -152,7 +158,7 @@ impl KeyProvider for RustCryptoKeyProvider {
 
                 let pkcs8_der = pkcs8
                     .to_der()
-                    .map_err(|_| "Failed to encode PKCS#8".to_string())?;
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
 
                 let p256_curve = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
                 if curve_oid == p256_curve {
@@ -179,7 +185,7 @@ impl KeyProvider for RustCryptoKeyProvider {
             }
         }
 
-        Err("Failed to parse private key in any supported format".to_string())
+        Err(CryptoError::InvalidPrivateKey)
     }
 }
 
@@ -195,42 +201,39 @@ impl SignatureVerifier for RustCryptoSignatureVerifier {
         signature: &[u8],
         hash_alg: HashAlgorithm,
         sig_alg: SignatureAlgorithm,
-    ) -> Result<(), String> {
+    ) -> Result<(), CryptoError> {
         if sig_alg != SignatureAlgorithm::ECDSA {
-            return Err(format!("Unsupported signature algorithm: {:?}", sig_alg));
+            return Err(CryptoError::UnsupportedSignatureAlgorithm(sig_alg));
         }
 
-        let cert = X509Certificate::from_der(cert_der)
-            .map_err(|e| format!("Failed to parse certificate: {e}"))?;
+        let cert =
+            X509Certificate::from_der(cert_der).map_err(|_| CryptoError::CertificateParseFailed)?;
         let spki = &cert.tbs_certificate.subject_public_key_info;
 
         const OID_EC_PUBLIC_KEY: ObjectIdentifier =
             ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
 
         if spki.algorithm.oid != OID_EC_PUBLIC_KEY {
-            return Err(format!(
-                "Unsupported public key algorithm: {}",
-                spki.algorithm.oid
-            ));
+            return Err(CryptoError::UnsupportedPublicKeyAlgorithm);
         }
 
         let pubkey_bytes = spki
             .subject_public_key
             .as_bytes()
-            .ok_or_else(|| "Invalid EC subject_public_key bitstring".to_string())?;
+            .ok_or(CryptoError::InvalidSubjectPublicKey)?;
 
         let curve_oid: ObjectIdentifier = spki
             .algorithm
             .parameters
             .as_ref()
-            .ok_or("Missing EC curve parameter in certificate")?
+            .ok_or(CryptoError::MissingEcCurveParameter)?
             .decode_as()
-            .map_err(|_| "Invalid EC curve parameter in certificate".to_string())?;
+            .map_err(|_| CryptoError::InvalidEcCurveParameter)?;
 
         let group = match curve_oid {
             OID_P256 => NamedGroup::Secp256r1,
             OID_P384 => NamedGroup::Secp384r1,
-            _ => return Err(format!("Unsupported EC curve: {}", curve_oid)),
+            _ => return Err(CryptoError::UnsupportedEcCurve),
         };
 
         check_verify_scheme(sig_alg, hash_alg, group)?;
@@ -249,26 +252,28 @@ impl SignatureVerifier for RustCryptoSignatureVerifier {
         match group {
             NamedGroup::Secp256r1 => {
                 let verifying_key = VerifyingKey::<NistP256>::from_sec1_bytes(pubkey_bytes)
-                    .map_err(|_| "Invalid P-256 public key".to_string())?;
+                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::Secp256r1))?;
                 let sig = Signature::<NistP256>::from_der(signature)
-                    .map_err(|_| "Invalid signature format".to_string())?;
+                    .map_err(|_| CryptoError::InvalidSignatureFormat)?;
                 verifying_key.verify_prehash(&hash, &sig).map_err(|_| {
-                    format!(
-                        "ECDSA signature verification failed for {:?} {:?}",
-                        hash_alg, group
-                    )
+                    CryptoError::SignatureVerificationFailed {
+                        signature: sig_alg,
+                        hash: hash_alg,
+                        group,
+                    }
                 })
             }
             NamedGroup::Secp384r1 => {
                 let verifying_key = VerifyingKey::<NistP384>::from_sec1_bytes(pubkey_bytes)
-                    .map_err(|_| "Invalid P-384 public key".to_string())?;
+                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::Secp384r1))?;
                 let sig = Signature::<NistP384>::from_der(signature)
-                    .map_err(|_| "Invalid signature format".to_string())?;
+                    .map_err(|_| CryptoError::InvalidSignatureFormat)?;
                 verifying_key.verify_prehash(&hash, &sig).map_err(|_| {
-                    format!(
-                        "ECDSA signature verification failed for {:?} {:?}",
-                        hash_alg, group
-                    )
+                    CryptoError::SignatureVerificationFailed {
+                        signature: sig_alg,
+                        hash: hash_alg,
+                        group,
+                    }
                 })
             }
             // unreachable: OID match above only produces Secp256r1/Secp384r1
@@ -282,3 +287,43 @@ pub(super) static KEY_PROVIDER: RustCryptoKeyProvider = RustCryptoKeyProvider;
 
 /// Static instance of the signature verifier.
 pub(super) static SIGNATURE_VERIFIER: RustCryptoSignatureVerifier = RustCryptoSignatureVerifier;
+
+#[cfg(all(test, feature = "rcgen"))]
+mod tests {
+    use super::*;
+    use crate::certificate::generate_self_signed_certificate;
+
+    #[test]
+    fn invalid_signature_returns_structured_verification_error() {
+        let cert = generate_self_signed_certificate().expect("generate cert");
+        let mut key = KEY_PROVIDER
+            .load_private_key(&cert.private_key)
+            .expect("load private key");
+        let data = b"signed data";
+        let mut signature = Buf::new();
+        key.sign(data, HashAlgorithm::SHA256, &mut signature)
+            .expect("sign data");
+
+        let last = signature.len() - 1;
+        signature[last] ^= 0x01;
+
+        let err = SIGNATURE_VERIFIER
+            .verify_signature(
+                &cert.certificate,
+                data,
+                &signature,
+                HashAlgorithm::SHA256,
+                SignatureAlgorithm::ECDSA,
+            )
+            .expect_err("corrupt signature should fail");
+
+        assert_eq!(
+            err,
+            CryptoError::SignatureVerificationFailed {
+                signature: SignatureAlgorithm::ECDSA,
+                hash: HashAlgorithm::SHA256,
+                group: NamedGroup::Secp256r1,
+            }
+        );
+    }
+}

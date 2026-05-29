@@ -4,6 +4,7 @@
 //! This module provides generic implementations so that crypto backends only
 //! need to implement [`HmacProvider`] — no separate PRF or HKDF providers.
 
+use crate::CryptoError;
 use crate::buffer::Buf;
 use crate::types::HashAlgorithm;
 
@@ -29,7 +30,7 @@ pub fn prf_tls12(
     output_len: usize,
     scratch: &mut Buf,
     hash: HashAlgorithm,
-) -> Result<(), String> {
+) -> Result<(), CryptoError> {
     let mut hmac_a = [0u8; MAX_HASH_LEN];
 
     // Build label + seed
@@ -79,7 +80,7 @@ pub fn hkdf_extract(
     salt: &[u8],
     ikm: &[u8],
     out: &mut Buf,
-) -> Result<(), String> {
+) -> Result<(), CryptoError> {
     out.clear();
 
     let hash_len = hash.output_len();
@@ -105,11 +106,11 @@ pub fn hkdf_expand(
     info: &[u8],
     out: &mut Buf,
     output_len: usize,
-) -> Result<(), String> {
+) -> Result<(), CryptoError> {
     let hash_len = hash.output_len();
     let n = output_len.div_ceil(hash_len);
     if n > 255 {
-        return Err("HKDF output too long".into());
+        return Err(CryptoError::HkdfOutputTooLong);
     }
 
     let mut t_prev = [0u8; MAX_HASH_LEN];
@@ -143,7 +144,7 @@ pub fn hkdf_expand_label(
     context: &[u8],
     out: &mut Buf,
     output_len: usize,
-) -> Result<(), String> {
+) -> Result<(), CryptoError> {
     let info = build_hkdf_label(b"tls13 ", label, context, output_len)?;
     hkdf_expand(hmac, hash, secret, &info, out, output_len)
 }
@@ -159,7 +160,7 @@ pub fn hkdf_expand_label_dtls13(
     context: &[u8],
     out: &mut Buf,
     output_len: usize,
-) -> Result<(), String> {
+) -> Result<(), CryptoError> {
     let info = build_hkdf_label(b"dtls13", label, context, output_len)?;
     hkdf_expand(hmac, hash, secret, &info, out, output_len)
 }
@@ -178,17 +179,17 @@ fn build_hkdf_label(
     label: &[u8],
     context: &[u8],
     output_len: usize,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, CryptoError> {
     let full_label_len = prefix.len() + label.len();
 
     if full_label_len > 255 {
-        return Err("Label too long for HKDF-Expand-Label".into());
+        return Err(CryptoError::HkdfLabelTooLong);
     }
     if context.len() > 255 {
-        return Err("Context too long for HKDF-Expand-Label".into());
+        return Err(CryptoError::HkdfContextTooLong);
     }
     if output_len > 65535 {
-        return Err("Output length too large for HKDF-Expand-Label".into());
+        return Err(CryptoError::HkdfOutputLengthTooLarge);
     }
 
     let info_len = 2 + 1 + full_label_len + 1 + context.len();

@@ -6,9 +6,13 @@
 use arrayvec::ArrayVec;
 
 use super::{Aad, CryptoProvider, Nonce, SupportedDtls12CipherSuite, SupportedKxGroup};
-use crate::Error;
 use crate::buffer::{Buf, TmpBuf};
 use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
+use crate::{ConfigError, CryptoProviderValidationError, Error};
+
+fn provider_error(error: CryptoProviderValidationError) -> Error {
+    Error::ConfigError(ConfigError::CryptoProvider(error))
+}
 
 impl CryptoProvider {
     /// Returns an iterator over validated cipher suites supported by dimpl.
@@ -86,8 +90,8 @@ impl CryptoProvider {
     fn validate_cipher_suites(&self) -> Result<(), Error> {
         let cipher_count = self.supported_cipher_suites().count();
         if cipher_count == 0 {
-            return Err(Error::ConfigError(
-                "CryptoProvider has no cipher suites supported by dimpl.".to_string(),
+            return Err(provider_error(
+                CryptoProviderValidationError::NoCipherSuites,
             ));
         }
         Ok(())
@@ -98,9 +102,8 @@ impl CryptoProvider {
         if self.has_ecdh() {
             let kx_count = self.supported_kx_groups().count();
             if kx_count == 0 {
-                return Err(Error::ConfigError(
-                    "CryptoProvider has ECDH cipher suites but no supported key exchange groups."
-                        .to_string(),
+                return Err(provider_error(
+                    CryptoProviderValidationError::EcdhCipherSuitesWithoutKeyExchangeGroups,
                 ));
             }
         }
@@ -132,17 +135,15 @@ impl CryptoProvider {
                 .map(|(_, v)| v);
 
             let Some(expected) = maybe_expected else {
-                return Err(Error::ConfigError(format!(
-                    "No expected hash data for hash algorithm: {:?}",
-                    hash_alg
-                )));
+                return Err(provider_error(
+                    CryptoProviderValidationError::MissingHashTestVector(*hash_alg),
+                ));
             };
 
             if result.as_ref() != *expected {
-                return Err(Error::ConfigError(format!(
-                    "Hash provider {:?} produced incorrect result",
-                    hash_alg
-                )));
+                return Err(provider_error(
+                    CryptoProviderValidationError::HashProviderIncorrect(*hash_alg),
+                ));
             }
         }
 
@@ -169,16 +170,12 @@ impl CryptoProvider {
                 &mut scratch,
                 hash_alg,
             )
-            .map_err(|e| Error::ConfigError(format!("PRF failed for {:?}: {}", hash_alg, e)))?;
-
-            if result.len() != output_len {
-                return Err(Error::ConfigError(format!(
-                    "PRF {:?} returned wrong length: expected {}, got {}",
-                    hash_alg,
-                    output_len,
-                    result.len()
-                )));
-            }
+            .map_err(|e| {
+                provider_error(CryptoProviderValidationError::PrfFailed {
+                    hash: hash_alg,
+                    source: e,
+                })
+            })?;
 
             let maybe_expected = PRF_TEST_VECTORS
                 .iter()
@@ -186,16 +183,14 @@ impl CryptoProvider {
                 .map(|(_, v)| v);
 
             let Some(expected) = maybe_expected else {
-                return Err(Error::ConfigError(format!(
-                    "No expected PRF data for hash algorithm: {:?}",
-                    hash_alg
-                )));
+                return Err(provider_error(
+                    CryptoProviderValidationError::MissingPrfTestVector(hash_alg),
+                ));
             };
 
             if result.as_ref() != *expected {
-                return Err(Error::ConfigError(format!(
-                    "PRF {:?} produced incorrect result",
-                    hash_alg
+                return Err(provider_error(CryptoProviderValidationError::PrfIncorrect(
+                    hash_alg,
                 )));
             }
         }
@@ -229,10 +224,12 @@ impl CryptoProvider {
                     VALIDATION_TEST_DATA,
                 ),
                 _ => {
-                    return Err(Error::ConfigError(format!(
-                        "No validation test vectors for {:?} + {:?}",
-                        hash_alg, sig_alg
-                    )));
+                    return Err(provider_error(
+                        CryptoProviderValidationError::NoSignatureValidationVector {
+                            hash: hash_alg,
+                            signature: sig_alg,
+                        },
+                    ));
                 }
             };
 
@@ -240,10 +237,11 @@ impl CryptoProvider {
             self.signature_verification
                 .verify_signature(cert_der, test_data, signature, hash_alg, sig_alg)
                 .map_err(|e| {
-                    Error::ConfigError(format!(
-                        "Signature verification failed for {:?} + {:?}: {}",
-                        hash_alg, sig_alg, e
-                    ))
+                    provider_error(CryptoProviderValidationError::SignatureVerificationFailed {
+                        hash: hash_alg,
+                        signature: sig_alg,
+                        source: e,
+                    })
                 })?;
         }
 
@@ -253,8 +251,8 @@ impl CryptoProvider {
     /// Validate that DTLS 1.3 cipher suites and HKDF provider are configured.
     fn validate_dtls13_cipher_suites(&self) -> Result<(), Error> {
         if self.dtls13_cipher_suites.is_empty() {
-            return Err(Error::ConfigError(
-                "CryptoProvider has no DTLS 1.3 cipher suites.".to_string(),
+            return Err(provider_error(
+                CryptoProviderValidationError::NoDtls13CipherSuites,
             ));
         }
 
@@ -267,17 +265,15 @@ impl CryptoProvider {
             let mut out = Buf::new();
             super::prf_hkdf::hkdf_extract(self.hmac_provider, hash, zeros, zeros, &mut out)
                 .map_err(|e| {
-                    Error::ConfigError(format!(
-                        "HKDF failed for DTLS 1.3 suite {:?}: {}",
-                        cs.suite(),
-                        e
-                    ))
+                    provider_error(CryptoProviderValidationError::HkdfFailed {
+                        suite: cs.suite(),
+                        source: e,
+                    })
                 })?;
             if out.is_empty() {
-                return Err(Error::ConfigError(format!(
-                    "HKDF returned empty output for {:?}",
-                    cs.suite()
-                )));
+                return Err(provider_error(
+                    CryptoProviderValidationError::HkdfEmptyOutput(cs.suite()),
+                ));
             }
         }
 
@@ -292,10 +288,7 @@ impl CryptoProvider {
                 .iter()
                 .find(|tv| tv.suite == suite)
                 .ok_or_else(|| {
-                    Error::ConfigError(format!(
-                        "No AEAD test vector for DTLS 1.3 suite {:?}",
-                        suite
-                    ))
+                    provider_error(CryptoProviderValidationError::NoAeadTestVector(suite))
                 })?;
 
             let nonce = Nonce(tv.nonce);
@@ -306,34 +299,38 @@ impl CryptoProvider {
 
             // Encrypt
             let mut cipher = cs.create_cipher(tv.key).map_err(|e| {
-                Error::ConfigError(format!("Failed to create cipher for {:?}: {}", suite, e))
+                provider_error(CryptoProviderValidationError::AeadCreateFailed { suite, source: e })
             })?;
             let mut buf = Buf::new();
             buf.extend_from_slice(tv.plaintext);
             cipher.encrypt(&mut buf, aad.clone(), nonce).map_err(|e| {
-                Error::ConfigError(format!("AEAD encrypt failed for {:?}: {}", suite, e))
+                provider_error(CryptoProviderValidationError::AeadEncryptFailed {
+                    suite,
+                    source: e,
+                })
             })?;
             if buf.as_ref() != tv.ciphertext_tag {
-                return Err(Error::ConfigError(format!(
-                    "AEAD encrypt produced wrong output for {:?}",
-                    suite
-                )));
+                return Err(provider_error(
+                    CryptoProviderValidationError::AeadEncryptWrongOutput(suite),
+                ));
             }
 
             // Decrypt with a fresh cipher instance
             let mut cipher = cs.create_cipher(tv.key).map_err(|e| {
-                Error::ConfigError(format!("Failed to create cipher for {:?}: {}", suite, e))
+                provider_error(CryptoProviderValidationError::AeadCreateFailed { suite, source: e })
             })?;
             let mut ct = Vec::from(tv.ciphertext_tag);
             let mut tmp = TmpBuf::new(&mut ct);
             cipher.decrypt(&mut tmp, aad, nonce).map_err(|e| {
-                Error::ConfigError(format!("AEAD decrypt failed for {:?}: {}", suite, e))
+                provider_error(CryptoProviderValidationError::AeadDecryptFailed {
+                    suite,
+                    source: e,
+                })
             })?;
             if tmp.as_ref() != tv.plaintext {
-                return Err(Error::ConfigError(format!(
-                    "AEAD decrypt produced wrong output for {:?}",
-                    suite
-                )));
+                return Err(provider_error(
+                    CryptoProviderValidationError::AeadDecryptWrongOutput(suite),
+                ));
             }
         }
         Ok(())
@@ -347,18 +344,16 @@ impl CryptoProvider {
                 .iter()
                 .find(|tv| tv.suite == suite)
                 .ok_or_else(|| {
-                    Error::ConfigError(format!(
-                        "No encrypt_sn test vector for DTLS 1.3 suite {:?}",
-                        suite
-                    ))
+                    provider_error(
+                        CryptoProviderValidationError::NoRecordNumberEncryptionTestVector(suite),
+                    )
                 })?;
 
             let mask = cs.encrypt_sn(tv.sn_key, &tv.sample);
             if mask[..tv.check_len] != tv.expected_mask[..tv.check_len] {
-                return Err(Error::ConfigError(format!(
-                    "encrypt_sn produced wrong mask for {:?}",
-                    suite
-                )));
+                return Err(provider_error(
+                    CryptoProviderValidationError::RecordNumberEncryptionWrongMask(suite),
+                ));
             }
         }
         Ok(())
@@ -370,10 +365,16 @@ impl CryptoProvider {
             let group = kx.name();
 
             let alice = kx.start_exchange(Buf::new()).map_err(|e| {
-                Error::ConfigError(format!("Key exchange start failed for {:?}: {}", group, e))
+                provider_error(CryptoProviderValidationError::KeyExchangeStartFailed {
+                    group,
+                    source: e,
+                })
             })?;
             let bob = kx.start_exchange(Buf::new()).map_err(|e| {
-                Error::ConfigError(format!("Key exchange start failed for {:?}: {}", group, e))
+                provider_error(CryptoProviderValidationError::KeyExchangeStartFailed {
+                    group,
+                    source: e,
+                })
             })?;
 
             let alice_pub = alice.pub_key().to_vec();
@@ -381,25 +382,24 @@ impl CryptoProvider {
 
             let mut alice_secret = Buf::new();
             alice.complete(&bob_pub, &mut alice_secret).map_err(|e| {
-                Error::ConfigError(format!(
-                    "Key exchange complete failed for {:?}: {}",
-                    group, e
-                ))
+                provider_error(CryptoProviderValidationError::KeyExchangeCompleteFailed {
+                    group,
+                    source: e,
+                })
             })?;
 
             let mut bob_secret = Buf::new();
             bob.complete(&alice_pub, &mut bob_secret).map_err(|e| {
-                Error::ConfigError(format!(
-                    "Key exchange complete failed for {:?}: {}",
-                    group, e
-                ))
+                provider_error(CryptoProviderValidationError::KeyExchangeCompleteFailed {
+                    group,
+                    source: e,
+                })
             })?;
 
             if alice_secret.as_ref() != bob_secret.as_ref() {
-                return Err(Error::ConfigError(format!(
-                    "Key exchange produced different secrets for {:?}",
-                    group
-                )));
+                return Err(provider_error(
+                    CryptoProviderValidationError::KeyExchangeMismatchedSharedSecret(group),
+                ));
             }
         }
         Ok(())
@@ -417,23 +417,11 @@ impl CryptoProvider {
         let result = self
             .hmac_provider
             .hmac_sha256(key, data)
-            .map_err(|e| Error::ConfigError(format!("HMAC provider failed: {}", e)))?;
-
-        // Verify the result matches expected HMAC-SHA256 output
-        // Expected: HMAC-SHA256("key", "The quick brown fox jumps over the lazy dog")
-        // This is a standard test vector for HMAC-SHA256
-        if result.len() != 32 {
-            return Err(Error::ConfigError(format!(
-                "HMAC provider returned wrong length: expected 32 bytes, got {}",
-                result.len()
-            )));
-        }
+            .map_err(|e| provider_error(CryptoProviderValidationError::HmacFailed(e)))?;
 
         // Verify against known HMAC-SHA256 test vector
         if result.as_slice() != HMAC_SHA256_TEST_VECTOR {
-            return Err(Error::ConfigError(
-                "HMAC provider produced incorrect result for HMAC-SHA256".to_string(),
-            ));
+            return Err(provider_error(CryptoProviderValidationError::HmacIncorrect));
         }
 
         Ok(())

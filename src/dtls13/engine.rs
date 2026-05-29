@@ -28,7 +28,7 @@ use crate::dtls13::message::Sequence;
 use crate::timer::ExponentialBackoff;
 use crate::types::{HashAlgorithm, Random};
 use crate::window::ReplayWindow;
-use crate::{Config, DtlsCertificate, Error, Output, SeededRng};
+use crate::{Config, DtlsCertificate, Error, InternalError, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
@@ -329,7 +329,7 @@ impl Engine {
         &mut *self.signing_key
     }
 
-    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), InternalError> {
         let cs = self.cipher_suite;
         let incoming = Incoming::parse_packet(packet, self, cs)?;
         if let Some(incoming) = incoming {
@@ -495,7 +495,7 @@ impl Engine {
 
         if let Timeout::Armed(connect_timeout) = self.connect_timeout {
             if now >= connect_timeout {
-                return Err(Error::Timeout("connect"));
+                return Err(Error::Timeout(crate::TimeoutError::Connect));
             }
         }
 
@@ -514,7 +514,7 @@ impl Engine {
                 self.flight_timeout = Timeout::Armed(timeout);
                 self.flight_resend("flight timeout")?;
             } else {
-                return Err(Error::Timeout("handshake"));
+                return Err(Error::Timeout(crate::TimeoutError::Handshake));
             }
         }
 
@@ -781,14 +781,14 @@ impl Engine {
         &mut self,
         wanted: MessageType,
         defragment_buffer: &mut Buf,
-    ) -> Result<Option<Handshake>, Error> {
+    ) -> Result<Option<Handshake>, InternalError> {
         self.next_handshake_with_options(wanted, defragment_buffer, false)
     }
 
     pub(crate) fn next_client_hello_for_auto_sense(
         &mut self,
         defragment_buffer: &mut Buf,
-    ) -> Result<Option<Handshake>, Error> {
+    ) -> Result<Option<Handshake>, InternalError> {
         self.next_handshake_with_options(MessageType::ClientHello, defragment_buffer, true)
     }
 
@@ -797,7 +797,7 @@ impl Engine {
         wanted: MessageType,
         defragment_buffer: &mut Buf,
         allow_unknown_client_hello_suites: bool,
-    ) -> Result<Option<Handshake>, Error> {
+    ) -> Result<Option<Handshake>, InternalError> {
         if !self.has_complete_handshake(wanted) {
             return Ok(None);
         }
@@ -835,7 +835,7 @@ impl Engine {
         &mut self,
         wanted: MessageType,
         defragment_buffer: &mut Buf,
-    ) -> Result<Option<Handshake>, Error> {
+    ) -> Result<Option<Handshake>, InternalError> {
         if !self.has_complete_handshake(wanted) {
             return Ok(None);
         }
@@ -923,7 +923,7 @@ impl Engine {
 
         if self.sequence_epoch_0.sequence_number >= MAX_SEQUENCE_NUMBER {
             return Err(Error::CryptoError(
-                "Epoch 0 sequence number exhausted".to_string(),
+                crate::CryptoError::Epoch0SequenceNumberExhausted,
             ));
         }
         self.sequence_epoch_0.sequence_number += 1;
@@ -999,10 +999,9 @@ impl Engine {
         };
 
         let Some(keys) = keys else {
-            return Err(Error::CryptoError(format!(
-                "Send keys not available for epoch {}",
-                epoch
-            )));
+            return Err(Error::CryptoError(
+                crate::CryptoError::SendKeysNotAvailable { epoch },
+            ));
         };
 
         // Construct the nonce: iv XOR padded_seq
@@ -1033,7 +1032,7 @@ impl Engine {
         // Encrypt in place (appends tag)
         keys.cipher
             .encrypt(&mut fragment, aad, nonce)
-            .map_err(|e| Error::CryptoError(format!("Encryption failed: {}", e)))?;
+            .map_err(Error::CryptoError)?;
 
         // Record number encryption (RFC 9147 Section 4.2.3):
         // mask = AES-ECB(sn_key, ciphertext_sample)
@@ -1080,21 +1079,21 @@ impl Engine {
         if epoch == 2 {
             if self.hs_send_seq >= MAX_SEQUENCE_NUMBER {
                 return Err(Error::CryptoError(
-                    "Handshake epoch sequence number exhausted".to_string(),
+                    crate::CryptoError::SendSequenceNumberExhausted { epoch },
                 ));
             }
             self.hs_send_seq += 1;
         } else if self.prev_app_send_keys.is_some() && epoch == self.prev_app_send_epoch {
             if self.prev_app_send_seq >= MAX_SEQUENCE_NUMBER {
                 return Err(Error::CryptoError(
-                    "Previous epoch sequence number exhausted".to_string(),
+                    crate::CryptoError::SendSequenceNumberExhausted { epoch },
                 ));
             }
             self.prev_app_send_seq += 1;
         } else {
             if self.app_send_seq >= MAX_SEQUENCE_NUMBER {
                 return Err(Error::CryptoError(
-                    "Application epoch sequence number exhausted".to_string(),
+                    crate::CryptoError::SendSequenceNumberExhausted { epoch },
                 ));
             }
             self.app_send_seq += 1;
@@ -1593,7 +1592,7 @@ impl Engine {
         let zeros = &zeros[..hash_len];
         let mut early_secret = self.buffers_free.pop();
         prf_hkdf::hkdf_extract(self.hmac(), hash, zeros, zeros, &mut early_secret)
-            .map_err(|e| Error::CryptoError(format!("Failed to derive early secret: {}", e)))?;
+            .map_err(Error::CryptoError)?;
         Ok(early_secret)
     }
 
@@ -1623,12 +1622,12 @@ impl Engine {
             &mut derived,
             hash_len,
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive 'derived' secret: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         // handshake_secret = HKDF-Extract(derived, shared_secret)
         let mut handshake_secret = Buf::new();
         prf_hkdf::hkdf_extract(hmac, hash, &derived, shared_secret, &mut handshake_secret)
-            .map_err(|e| Error::CryptoError(format!("Failed to derive handshake secret: {}", e)))?;
+            .map_err(Error::CryptoError)?;
 
         // Get transcript hash up to and including ServerHello
         let mut transcript_hash = Buf::new();
@@ -1645,7 +1644,7 @@ impl Engine {
             &mut c_hs_traffic,
             hash_len,
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive c_hs_traffic: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         // server_handshake_traffic_secret
         let mut s_hs_traffic = Buf::new();
@@ -1658,7 +1657,7 @@ impl Engine {
             &mut s_hs_traffic,
             hash_len,
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive s_hs_traffic: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         Ok((c_hs_traffic, s_hs_traffic, handshake_secret))
     }
@@ -1707,14 +1706,14 @@ impl Engine {
             &mut derived,
             hash_len,
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive 'derived' for master: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         // master_secret = HKDF-Extract(derived, 0)
         let zeros = [0u8; 48];
         let zeros = &zeros[..hash_len];
         let mut master_secret = Buf::new();
         prf_hkdf::hkdf_extract(hmac, hash, &derived, zeros, &mut master_secret)
-            .map_err(|e| Error::CryptoError(format!("Failed to derive master secret: {}", e)))?;
+            .map_err(Error::CryptoError)?;
 
         // Get transcript hash up to and including server Finished
         let mut transcript_hash = Buf::new();
@@ -1731,9 +1730,7 @@ impl Engine {
             &mut exp_master,
             hash_len,
         )
-        .map_err(|e| {
-            Error::CryptoError(format!("Failed to derive exporter master secret: {}", e))
-        })?;
+        .map_err(Error::CryptoError)?;
 
         // client_application_traffic_secret_0
         let mut c_ap_traffic = Buf::new();
@@ -1746,7 +1743,7 @@ impl Engine {
             &mut c_ap_traffic,
             hash_len,
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive c_ap_traffic: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         // server_application_traffic_secret_0
         let mut s_ap_traffic = Buf::new();
@@ -1759,7 +1756,7 @@ impl Engine {
             &mut s_ap_traffic,
             hash_len,
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive s_ap_traffic: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         // Store exporter master secret (deferred to avoid borrow conflict with hmac)
         self.exporter_master_secret = Some(exp_master);
@@ -1813,16 +1810,16 @@ impl Engine {
             &mut next,
             hash_len,
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive next traffic secret: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         Ok(next)
     }
 
     /// Rotate send keys: move current app send keys → prev, derive new ones.
     fn update_send_keys(&mut self) -> Result<(), Error> {
-        let current_keys = self.app_send_keys.take().ok_or_else(|| {
-            Error::InvalidState("No current app send keys for KeyUpdate".to_string())
-        })?;
+        let current_keys = self.app_send_keys.take().ok_or(Error::InvalidState(
+            crate::InvalidStateError::NoCurrentAppSendKeysForKeyUpdate,
+        ))?;
 
         let next_secret = self.derive_next_traffic_secret(&current_keys.traffic_secret)?;
         let new_keys = self.derive_epoch_keys(&next_secret)?;
@@ -1851,9 +1848,9 @@ impl Engine {
     /// Returns the new epoch number.
     pub fn update_recv_keys(&mut self) -> Result<u16, Error> {
         // Find the latest recv epoch entry
-        let latest = self.app_recv_keys.last().ok_or_else(|| {
-            Error::InvalidState("No current app recv keys for KeyUpdate".to_string())
-        })?;
+        let latest = self.app_recv_keys.last().ok_or(Error::InvalidState(
+            crate::InvalidStateError::NoCurrentAppRecvKeysForKeyUpdate,
+        ))?;
 
         let next_secret = self.derive_next_traffic_secret(&latest.keys.traffic_secret)?;
         let new_epoch = latest.epoch + 1;
@@ -1946,7 +1943,7 @@ impl Engine {
             &mut key,
             suite.key_len(),
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive key: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         // iv = HKDF-Expand-Label(secret, "iv", "", iv_length)
         let mut iv_buf = Buf::new();
@@ -1959,7 +1956,7 @@ impl Engine {
             &mut iv_buf,
             suite.iv_len(),
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive iv: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         // sn_key = HKDF-Expand-Label(secret, "sn", "", key_length)
         let mut sn_key = Buf::new();
@@ -1972,11 +1969,9 @@ impl Engine {
             &mut sn_key,
             suite.key_len(),
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive sn_key: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
-        let cipher = suite
-            .create_cipher(&key)
-            .map_err(|e| Error::CryptoError(format!("Failed to create cipher: {}", e)))?;
+        let cipher = suite.create_cipher(&key).map_err(Error::CryptoError)?;
 
         let mut iv = [0u8; 12];
         iv.copy_from_slice(&iv_buf);
@@ -2017,7 +2012,7 @@ impl Engine {
             &mut finished_key,
             hash_len,
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive finished key: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         let mut transcript_hash = Buf::new();
         self.transcript_hash(&mut transcript_hash);
@@ -2031,7 +2026,7 @@ impl Engine {
             &transcript_hash,
             &mut verify_data,
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to compute verify data: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         Ok(verify_data)
     }
@@ -2102,7 +2097,7 @@ impl Engine {
     // Peer Encryption Management
     // =========================================================================
 
-    pub fn enable_peer_encryption(&mut self) -> Result<(), Error> {
+    pub fn enable_peer_encryption(&mut self) -> Result<(), InternalError> {
         debug!("Peer encryption enabled");
         self.peer_encryption_enabled = true;
 
@@ -2158,7 +2153,7 @@ impl Engine {
             .crypto_provider()
             .signature_verification
             .verify_signature(cert_der, data, signature, hash_alg, sig_alg)
-            .map_err(|e| Error::CryptoError(format!("Signature verification failed: {}", e)))
+            .map_err(Error::CryptoError)
     }
 
     // =========================================================================
@@ -2173,9 +2168,12 @@ impl Engine {
         let hash_len = hash.output_len();
         let hmac = self.hmac();
 
-        let exp_master = self.exporter_master_secret.as_ref().ok_or_else(|| {
-            Error::CryptoError("Exporter master secret not yet derived".to_string())
-        })?;
+        let exp_master = self
+            .exporter_master_secret
+            .as_ref()
+            .ok_or(Error::CryptoError(
+                crate::CryptoError::ExporterMasterSecretNotDerived,
+            ))?;
 
         let total_len = profile.keying_material_len();
 
@@ -2192,7 +2190,7 @@ impl Engine {
             &mut derived,
             hash_len,
         )
-        .map_err(|e| Error::CryptoError(format!("Failed to derive SRTP exporter secret: {}", e)))?;
+        .map_err(Error::CryptoError)?;
 
         // 2. result = HKDF-Expand-Label(derived_secret, "exporter", Hash(context), length)
         let context_hash = self.transcript_hash_of(b"");
@@ -2206,9 +2204,7 @@ impl Engine {
             &mut keying_material_buf,
             total_len,
         )
-        .map_err(|e| {
-            Error::CryptoError(format!("Failed to extract SRTP keying material: {}", e))
-        })?;
+        .map_err(Error::CryptoError)?;
 
         let mut keying_material = ArrayVec::new();
         for &b in keying_material_buf.iter().take(total_len) {
@@ -2331,10 +2327,11 @@ impl RecordHandler for Engine {
                         Ok(None)
                     }
                     Some(90) => Ok(None),
-                    Some(description) => Err(Error::SecurityError(format!(
-                        "Received fatal alert: description={}",
-                        description
-                    ))),
+                    Some(description) => {
+                        Err(Error::SecurityError(crate::SecurityError::FatalAlert {
+                            description,
+                        }))
+                    }
                     None => Ok(None),
                 }
             }
@@ -2453,10 +2450,9 @@ impl RecordHandler for Engine {
         };
 
         let Some(keys) = keys else {
-            return Err(Error::CryptoError(format!(
-                "No recv keys for epoch {}",
-                seq.epoch
-            )));
+            return Err(Error::CryptoError(
+                crate::CryptoError::RecvKeysNotAvailable { epoch: seq.epoch },
+            ));
         };
 
         // Construct nonce: iv XOR padded_seq
@@ -2467,7 +2463,7 @@ impl RecordHandler for Engine {
 
         keys.cipher
             .decrypt(ciphertext, aad, nonce)
-            .map_err(|e| Error::CryptoError(format!("Decryption failed: {}", e)))?;
+            .map_err(Error::CryptoError)?;
 
         Ok(())
     }

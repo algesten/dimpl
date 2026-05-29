@@ -4,6 +4,7 @@ use p256::{PublicKey as P256PublicKey, ecdh::EphemeralSecret};
 use p384::{PublicKey as P384PublicKey, ecdh::EphemeralSecret as P384EphemeralSecret};
 
 use super::super::{ActiveKeyExchange, SupportedKxGroup};
+use crate::CryptoError;
 use crate::buffer::Buf;
 use crate::types::NamedGroup;
 
@@ -43,7 +44,7 @@ impl std::fmt::Debug for EcdhKeyExchange {
 }
 
 impl EcdhKeyExchange {
-    fn new(group: NamedGroup, mut buf: Buf) -> Result<Self, String> {
+    fn new(group: NamedGroup, mut buf: Buf) -> Result<Self, CryptoError> {
         match group {
             NamedGroup::X25519 => {
                 use rand_core::OsRng;
@@ -80,7 +81,7 @@ impl EcdhKeyExchange {
                     public_key: buf,
                 })
             }
-            _ => Err("Unsupported group".to_string()),
+            _ => Err(CryptoError::UnsupportedKeyExchangeGroup(group)),
         }
     }
 }
@@ -94,17 +95,17 @@ impl ActiveKeyExchange for EcdhKeyExchange {
         }
     }
 
-    fn complete(self: Box<Self>, peer_pub: &[u8], out: &mut Buf) -> Result<(), String> {
+    fn complete(self: Box<Self>, peer_pub: &[u8], out: &mut Buf) -> Result<(), CryptoError> {
         match *self {
             EcdhKeyExchange::X25519 { secret, .. } => {
                 let peer_bytes: [u8; 32] = peer_pub
                     .try_into()
-                    .map_err(|_| "Invalid X25519 public key length".to_string())?;
+                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::X25519))?;
                 let peer_key = x25519_dalek::PublicKey::from(peer_bytes);
                 let shared_secret = secret.diffie_hellman(&peer_key);
                 // RFC 7748 §6.1: check the shared secret is not zero (low-order point)
                 if !shared_secret.was_contributory() {
-                    return Err("X25519 shared secret is zero (non-contributory)".to_string());
+                    return Err(CryptoError::InvalidPublicKey(NamedGroup::X25519));
                 }
                 out.clear();
                 out.extend_from_slice(shared_secret.as_bytes());
@@ -112,7 +113,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
             }
             EcdhKeyExchange::P256 { secret, .. } => {
                 let peer_key = P256PublicKey::from_sec1_bytes(peer_pub)
-                    .map_err(|_| "Invalid P-256 public key".to_string())?;
+                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::Secp256r1))?;
                 let shared_secret = secret.diffie_hellman(&peer_key);
                 out.clear();
                 out.extend_from_slice(shared_secret.raw_secret_bytes().as_slice());
@@ -120,7 +121,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
             }
             EcdhKeyExchange::P384 { secret, .. } => {
                 let peer_key = P384PublicKey::from_sec1_bytes(peer_pub)
-                    .map_err(|_| "Invalid P-384 public key".to_string())?;
+                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::Secp384r1))?;
                 let shared_secret = secret.diffie_hellman(&peer_key);
                 out.clear();
                 out.extend_from_slice(shared_secret.raw_secret_bytes().as_slice());
@@ -147,7 +148,7 @@ impl SupportedKxGroup for X25519Kx {
         NamedGroup::X25519
     }
 
-    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String> {
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, CryptoError> {
         Ok(Box::new(EcdhKeyExchange::new(NamedGroup::X25519, buf)?))
     }
 }
@@ -161,7 +162,7 @@ impl SupportedKxGroup for P256 {
         NamedGroup::Secp256r1
     }
 
-    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String> {
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, CryptoError> {
         Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp256r1, buf)?))
     }
 }
@@ -175,7 +176,7 @@ impl SupportedKxGroup for P384 {
         NamedGroup::Secp384r1
     }
 
-    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, String> {
+    fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, CryptoError> {
         Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp384r1, buf)?))
     }
 }
@@ -188,3 +189,21 @@ static KX_GROUP_P384: P384 = P384;
 /// All supported key exchange groups.
 pub(super) static ALL_KX_GROUPS: &[&dyn SupportedKxGroup] =
     &[&KX_GROUP_X25519, &KX_GROUP_P256, &KX_GROUP_P384];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn x25519_non_contributory_peer_key_returns_invalid_public_key() {
+        let exchange = X25519Kx
+            .start_exchange(Buf::new())
+            .expect("start key exchange");
+        let mut out = Buf::new();
+
+        assert_eq!(
+            exchange.complete(&[0; 32], &mut out),
+            Err(CryptoError::InvalidPublicKey(NamedGroup::X25519))
+        );
+    }
+}

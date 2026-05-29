@@ -1024,11 +1024,10 @@ fn dtls12_fatal_alert_during_handshake() {
         "Fatal alert during handshake should return an error"
     );
     let err = result.unwrap_err();
-    assert!(
-        matches!(err, dimpl::Error::SecurityError(_)),
-        "Error should be SecurityError, got: {:?}",
-        err
-    );
+    assert!(matches!(
+        err,
+        dimpl::Error::SecurityError(dimpl::SecurityError::FatalAlert { description: 40 })
+    ));
 }
 
 #[test]

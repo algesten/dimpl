@@ -10,7 +10,9 @@ use super::super::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuit
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::Dtls12CipherSuite;
+use crate::error::bounded_error_len;
 use crate::types::{Dtls13CipherSuite, HashAlgorithm};
+use crate::{CryptoError, CryptoOperation};
 
 /// AES-GCM cipher implementation using RustCrypto.
 enum AesGcm {
@@ -28,7 +30,7 @@ impl std::fmt::Debug for AesGcm {
 }
 
 impl AesGcm {
-    fn new(key: &[u8]) -> Result<Self, String> {
+    fn new(key: &[u8]) -> Result<Self, CryptoError> {
         match key.len() {
             16 => {
                 let key = Key::<Aes128Gcm>::from_slice(key);
@@ -38,23 +40,19 @@ impl AesGcm {
                 let key = Key::<Aes256Gcm>::from_slice(key);
                 Ok(AesGcm::Aes256(Box::new(Aes256Gcm::new(key))))
             }
-            _ => Err(format!("Invalid key size for AES-GCM: {}", key.len())),
+            _ => Err(CryptoError::InvalidAesGcmKeySize {
+                actual: bounded_error_len(key.len()),
+            }),
         }
     }
 }
 
 impl Cipher for AesGcm {
-    fn encrypt(&mut self, data: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String> {
-        // AES-GCM nonce is 12 bytes
-        if nonce.len() != 12 {
-            return Err(format!(
-                "Invalid nonce length: expected 12, got {}",
-                nonce.len()
-            ));
-        }
-
+    fn encrypt(&mut self, data: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), CryptoError> {
         // Create nonce from the provided nonce bytes
-        let nonce_array: [u8; 12] = nonce[..12].try_into().map_err(|_| "Invalid nonce")?;
+        let nonce_array: [u8; 12] = nonce[..12]
+            .try_into()
+            .map_err(|_| CryptoError::InvalidNonce)?;
 
         match self {
             AesGcm::Aes128(cipher) => {
@@ -63,7 +61,7 @@ impl Cipher for AesGcm {
                 let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
                 cipher
                     .encrypt_in_place(&aes_nonce, &aad, data)
-                    .map_err(|_| "AES-GCM encryption failed".to_string())?;
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))?;
             }
             AesGcm::Aes256(cipher) => {
                 // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
@@ -71,28 +69,30 @@ impl Cipher for AesGcm {
                 let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
                 cipher
                     .encrypt_in_place(&aes_nonce, &aad, data)
-                    .map_err(|_| "AES-GCM encryption failed".to_string())?;
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))?;
             }
         }
 
         Ok(())
     }
 
-    fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String> {
+    fn decrypt(
+        &mut self,
+        ciphertext: &mut TmpBuf,
+        aad: Aad,
+        nonce: Nonce,
+    ) -> Result<(), CryptoError> {
         if ciphertext.len() < 16 {
-            return Err(format!("Ciphertext too short: {}", ciphertext.len()));
-        }
-
-        // AES-GCM nonce is 12 bytes
-        if nonce.len() != 12 {
-            return Err(format!(
-                "Invalid nonce length: expected 12, got {}",
-                nonce.len()
-            ));
+            return Err(CryptoError::CiphertextTooShort {
+                minimum: 16,
+                actual: ciphertext.len() as u8,
+            });
         }
 
         // Create nonce from the provided nonce bytes
-        let nonce_array: [u8; 12] = nonce[..12].try_into().map_err(|_| "Invalid nonce")?;
+        let nonce_array: [u8; 12] = nonce[..12]
+            .try_into()
+            .map_err(|_| CryptoError::InvalidNonce)?;
 
         match self {
             AesGcm::Aes128(cipher) => {
@@ -101,7 +101,7 @@ impl Cipher for AesGcm {
                 let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
                 cipher
                     .decrypt_in_place(&aes_nonce, &aad, ciphertext)
-                    .map_err(|_| "AES-GCM decryption failed".to_string())?;
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))?;
             }
             AesGcm::Aes256(cipher) => {
                 // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
@@ -109,7 +109,7 @@ impl Cipher for AesGcm {
                 let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
                 cipher
                     .decrypt_in_place(&aes_nonce, &aad, ciphertext)
-                    .map_err(|_| "AES-GCM decryption failed".to_string())?;
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))?;
             }
         }
 
@@ -133,13 +133,12 @@ impl std::fmt::Debug for ChaCha20Poly1305Cipher {
 }
 
 impl ChaCha20Poly1305Cipher {
-    fn new(key: &[u8]) -> Result<Self, String> {
+    fn new(key: &[u8]) -> Result<Self, CryptoError> {
         use chacha20poly1305::KeyInit;
         if key.len() != 32 {
-            return Err(format!(
-                "Invalid key size for CHACHA20-POLY1305: {}",
-                key.len()
-            ));
+            return Err(CryptoError::InvalidChacha20Poly1305KeySize {
+                actual: bounded_error_len(key.len()),
+            });
         }
         let key = chacha20poly1305::Key::from_slice(key);
         Ok(ChaCha20Poly1305Cipher {
@@ -149,44 +148,42 @@ impl ChaCha20Poly1305Cipher {
 }
 
 impl Cipher for ChaCha20Poly1305Cipher {
-    fn encrypt(&mut self, data: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), String> {
-        if nonce.len() != 12 {
-            return Err(format!(
-                "Invalid nonce length: expected 12, got {}",
-                nonce.len()
-            ));
-        }
-
-        let nonce_array: [u8; 12] = nonce[..12].try_into().map_err(|_| "Invalid nonce")?;
+    fn encrypt(&mut self, data: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), CryptoError> {
+        let nonce_array: [u8; 12] = nonce[..12]
+            .try_into()
+            .map_err(|_| CryptoError::InvalidNonce)?;
 
         use generic_array::{GenericArray, typenum::U12};
         let chacha_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
         self.cipher
             .encrypt_in_place(&chacha_nonce, &aad, data)
-            .map_err(|_| "ChaCha20-Poly1305 encryption failed".to_string())?;
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))?;
 
         Ok(())
     }
 
-    fn decrypt(&mut self, ciphertext: &mut TmpBuf, aad: Aad, nonce: Nonce) -> Result<(), String> {
+    fn decrypt(
+        &mut self,
+        ciphertext: &mut TmpBuf,
+        aad: Aad,
+        nonce: Nonce,
+    ) -> Result<(), CryptoError> {
         if ciphertext.len() < 16 {
-            return Err(format!("Ciphertext too short: {}", ciphertext.len()));
+            return Err(CryptoError::CiphertextTooShort {
+                minimum: 16,
+                actual: ciphertext.len() as u8,
+            });
         }
 
-        if nonce.len() != 12 {
-            return Err(format!(
-                "Invalid nonce length: expected 12, got {}",
-                nonce.len()
-            ));
-        }
-
-        let nonce_array: [u8; 12] = nonce[..12].try_into().map_err(|_| "Invalid nonce")?;
+        let nonce_array: [u8; 12] = nonce[..12]
+            .try_into()
+            .map_err(|_| CryptoError::InvalidNonce)?;
 
         use generic_array::{GenericArray, typenum::U12};
         let chacha_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
         self.cipher
             .decrypt_in_place(&chacha_nonce, &aad, ciphertext)
-            .map_err(|_| "ChaCha20-Poly1305 decryption failed".to_string())?;
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))?;
 
         Ok(())
     }
@@ -217,7 +214,7 @@ impl SupportedDtls12CipherSuite for Aes128GcmSha256 {
         16
     }
 
-    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError> {
         Ok(Box::new(AesGcm::new(key)?))
     }
 }
@@ -247,7 +244,7 @@ impl SupportedDtls12CipherSuite for Aes256GcmSha384 {
         16
     }
 
-    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError> {
         Ok(Box::new(AesGcm::new(key)?))
     }
 }
@@ -277,7 +274,7 @@ impl SupportedDtls12CipherSuite for ChaCha20Poly1305Sha256 {
         16
     }
 
-    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError> {
         Ok(Box::new(ChaCha20Poly1305Cipher::new(key)?))
     }
 }
@@ -307,7 +304,7 @@ impl SupportedDtls12CipherSuite for PskAes128Ccm8 {
         8
     }
 
-    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError> {
         Ok(Box::new(crate::crypto::ccm_cipher::AesCcm8Cipher::new(
             key,
         )?))
@@ -357,7 +354,7 @@ impl SupportedDtls13CipherSuite for Tls13Aes128GcmSha256 {
         16 // GCM tag
     }
 
-    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError> {
         Ok(Box::new(AesGcm::new(key)?))
     }
 
@@ -395,7 +392,7 @@ impl SupportedDtls13CipherSuite for Tls13Aes256GcmSha384 {
         16 // GCM tag
     }
 
-    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError> {
         Ok(Box::new(AesGcm::new(key)?))
     }
 
@@ -433,7 +430,7 @@ impl SupportedDtls13CipherSuite for Tls13ChaCha20Poly1305Sha256 {
         16 // Poly1305 tag
     }
 
-    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, String> {
+    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError> {
         Ok(Box::new(ChaCha20Poly1305Cipher::new(key)?))
     }
 
@@ -478,8 +475,8 @@ mod test {
         // incorrect length (should be 32)
         let result = ChaCha20Poly1305Cipher::new(&[0, 1, 2, 3, 4, 5]);
         assert_eq!(
-            "Invalid key size for CHACHA20-POLY1305: 6",
-            &result.unwrap_err()
+            CryptoError::InvalidChacha20Poly1305KeySize { actual: 6 },
+            result.unwrap_err()
         );
     }
 }
