@@ -686,7 +686,10 @@ impl InternalError {
 
     pub(crate) fn into_public_error(self) -> Option<Error> {
         match self {
-            Self::Transient(_) => None,
+            Self::Transient(err) => {
+                debug!("Discarding packet: {err}");
+                None
+            }
             Self::Fatal(err) => Some(err),
         }
     }
