@@ -200,7 +200,7 @@ impl Dtls12CipherSuite {
             Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
             | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256
             | Dtls12CipherSuite::PSK_AES128_CCM_8 => HashAlgorithm::SHA256,
-            Dtls12CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
+            Dtls12CipherSuite::Unknown(_) => HashAlgorithm::UNKNOWN_DERIVED,
         }
     }
 

@@ -274,60 +274,56 @@ impl NamedGroup {
 ///
 /// Specifies the hash algorithm to be used in digital signatures,
 /// PRF/HKDF operations, and transcript hashing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum HashAlgorithm {
-    /// No hash (not typically used).
-    None,
-    /// MD5 hash (deprecated, not supported).
-    MD5,
-    /// SHA-1 hash (deprecated, not supported).
-    SHA1,
-    /// SHA-224 hash.
-    SHA224,
-    /// SHA-256 hash (supported by dimpl).
-    SHA256,
-    /// SHA-384 hash (supported by dimpl).
-    SHA384,
-    /// SHA-512 hash.
-    SHA512,
-    /// Unknown or unsupported hash algorithm.
-    Unknown(u8),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HashAlgorithm(u8);
 
 impl Default for HashAlgorithm {
     fn default() -> Self {
-        Self::Unknown(0)
+        Self::NONE
     }
 }
 
 impl HashAlgorithm {
+    /// No hash (not typically used).
+    pub const NONE: Self = Self(0);
+    /// MD5 hash (deprecated, not supported).
+    pub const MD5: Self = Self(1);
+    /// SHA-1 hash (deprecated, not supported).
+    pub const SHA1: Self = Self(2);
+    /// SHA-224 hash.
+    pub const SHA224: Self = Self(3);
+    /// SHA-256 hash (supported by dimpl).
+    pub const SHA256: Self = Self(4);
+    /// SHA-384 hash (supported by dimpl).
+    pub const SHA384: Self = Self(5);
+    /// SHA-512 hash.
+    pub const SHA512: Self = Self(6);
+
+    pub(crate) const UNKNOWN_DERIVED: Self = Self(u8::MAX);
+
     /// Convert a wire format u8 value to a `HashAlgorithm`.
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0 => HashAlgorithm::None,
-            1 => HashAlgorithm::MD5,
-            2 => HashAlgorithm::SHA1,
-            3 => HashAlgorithm::SHA224,
-            4 => HashAlgorithm::SHA256,
-            5 => HashAlgorithm::SHA384,
-            6 => HashAlgorithm::SHA512,
-            _ => HashAlgorithm::Unknown(value),
-        }
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
     /// Convert this `HashAlgorithm` to its wire format u8 value.
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            HashAlgorithm::None => 0,
-            HashAlgorithm::MD5 => 1,
-            HashAlgorithm::SHA1 => 2,
-            HashAlgorithm::SHA224 => 3,
-            HashAlgorithm::SHA256 => 4,
-            HashAlgorithm::SHA384 => 5,
-            HashAlgorithm::SHA512 => 6,
-            HashAlgorithm::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    /// Returns true if this is not a known DTLS hash algorithm wire value.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(
+            *self,
+            HashAlgorithm::NONE
+                | HashAlgorithm::MD5
+                | HashAlgorithm::SHA1
+                | HashAlgorithm::SHA224
+                | HashAlgorithm::SHA256
+                | HashAlgorithm::SHA384
+                | HashAlgorithm::SHA512
+        )
     }
 
     /// Parse a `HashAlgorithm` from wire format.
@@ -337,16 +333,31 @@ impl HashAlgorithm {
     }
 
     /// Returns the output length in bytes for this hash algorithm.
-    pub fn output_len(&self) -> usize {
-        match self {
-            HashAlgorithm::None => 0,
+    pub const fn output_len(&self) -> usize {
+        match *self {
+            HashAlgorithm::NONE => 0,
             HashAlgorithm::MD5 => 16,
             HashAlgorithm::SHA1 => 20,
             HashAlgorithm::SHA224 => 28,
             HashAlgorithm::SHA256 => 32,
             HashAlgorithm::SHA384 => 48,
             HashAlgorithm::SHA512 => 64,
-            HashAlgorithm::Unknown(_) => 0,
+            _ => 0,
+        }
+    }
+}
+
+impl fmt::Debug for HashAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            HashAlgorithm::NONE => f.write_str("None"),
+            HashAlgorithm::MD5 => f.write_str("MD5"),
+            HashAlgorithm::SHA1 => f.write_str("SHA1"),
+            HashAlgorithm::SHA224 => f.write_str("SHA224"),
+            HashAlgorithm::SHA256 => f.write_str("SHA256"),
+            HashAlgorithm::SHA384 => f.write_str("SHA384"),
+            HashAlgorithm::SHA512 => f.write_str("SHA512"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
         }
     }
 }
@@ -686,8 +697,8 @@ impl SignatureScheme {
             | SignatureScheme::RSA_PSS_PSS_SHA512
             | SignatureScheme::RSA_PKCS1_SHA512 => HashAlgorithm::SHA512,
             // Ed25519 and Ed448 have intrinsic hash algorithms
-            SignatureScheme::ED25519 | SignatureScheme::ED448 => HashAlgorithm::None,
-            SignatureScheme::Unknown(_) => HashAlgorithm::Unknown(0),
+            SignatureScheme::ED25519 | SignatureScheme::ED448 => HashAlgorithm::NONE,
+            SignatureScheme::Unknown(_) => HashAlgorithm::UNKNOWN_DERIVED,
         }
     }
 }
@@ -757,7 +768,7 @@ impl Dtls13CipherSuite {
             | Dtls13CipherSuite::AES_128_CCM_SHA256
             | Dtls13CipherSuite::AES_128_CCM_8_SHA256 => HashAlgorithm::SHA256,
             Dtls13CipherSuite::AES_256_GCM_SHA384 => HashAlgorithm::SHA384,
-            Dtls13CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
+            Dtls13CipherSuite::Unknown(_) => HashAlgorithm::UNKNOWN_DERIVED,
         }
     }
 
@@ -918,6 +929,54 @@ impl CompressionMethod {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hash_algorithm_newtype_shape() {
+        assert_eq!(std::mem::size_of::<HashAlgorithm>(), 1);
+        assert_eq!(HashAlgorithm::default(), HashAlgorithm::NONE);
+    }
+
+    #[test]
+    fn hash_algorithm_wire_roundtrip() {
+        let known = [
+            (0, HashAlgorithm::NONE),
+            (1, HashAlgorithm::MD5),
+            (2, HashAlgorithm::SHA1),
+            (3, HashAlgorithm::SHA224),
+            (4, HashAlgorithm::SHA256),
+            (5, HashAlgorithm::SHA384),
+            (6, HashAlgorithm::SHA512),
+        ];
+
+        for (wire, algorithm) in known {
+            assert_eq!(HashAlgorithm::from_u8(wire), algorithm);
+            assert_eq!(algorithm.as_u8(), wire);
+            assert!(!algorithm.is_unknown());
+        }
+
+        let unknown = HashAlgorithm::from_u8(7);
+        assert_eq!(unknown.as_u8(), 7);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn hash_algorithm_output_len() {
+        assert_eq!(HashAlgorithm::NONE.output_len(), 0);
+        assert_eq!(HashAlgorithm::MD5.output_len(), 16);
+        assert_eq!(HashAlgorithm::SHA1.output_len(), 20);
+        assert_eq!(HashAlgorithm::SHA224.output_len(), 28);
+        assert_eq!(HashAlgorithm::SHA256.output_len(), 32);
+        assert_eq!(HashAlgorithm::SHA384.output_len(), 48);
+        assert_eq!(HashAlgorithm::SHA512.output_len(), 64);
+        assert_eq!(HashAlgorithm::from_u8(7).output_len(), 0);
+    }
+
+    #[test]
+    fn hash_algorithm_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", HashAlgorithm::NONE), "None");
+        assert_eq!(format!("{:?}", HashAlgorithm::SHA256), "SHA256");
+        assert_eq!(format!("{:?}", HashAlgorithm::from_u8(7)), "Unknown(7)");
+    }
 
     #[test]
     fn random_parse() {
