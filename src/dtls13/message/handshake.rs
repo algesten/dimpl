@@ -1,3 +1,4 @@
+use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -219,7 +220,7 @@ impl Handshake {
             Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?
         };
 
-        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
+        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::FINISHED {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
             return Err(crate::InternalError::parse_incomplete());
         }
@@ -251,7 +252,7 @@ impl Handshake {
 
         let qualifies = matches!(
             self.header.msg_type,
-            MessageType::ClientHello // flight 1
+            MessageType::CLIENT_HELLO // flight 1
         );
 
         qualifies.then_some(self.header.message_seq)
@@ -266,57 +267,63 @@ impl Handshake {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MessageType {
-    ClientHello,
-    ServerHello,
-    EncryptedExtensions,
-    Certificate,
-    CertificateRequest,
-    CertificateVerify,
-    Finished,
-    KeyUpdate,
-    Unknown(u8),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MessageType(u8);
 
 impl Default for MessageType {
     fn default() -> Self {
-        Self::Unknown(0)
+        Self(u8::MAX)
     }
 }
 
 impl MessageType {
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            1 => MessageType::ClientHello,
-            2 => MessageType::ServerHello,
-            8 => MessageType::EncryptedExtensions,
-            11 => MessageType::Certificate,
-            13 => MessageType::CertificateRequest,
-            15 => MessageType::CertificateVerify,
-            20 => MessageType::Finished,
-            24 => MessageType::KeyUpdate,
-            _ => MessageType::Unknown(value),
-        }
+    pub const CLIENT_HELLO: Self = Self(1);
+    pub const SERVER_HELLO: Self = Self(2);
+    pub const ENCRYPTED_EXTENSIONS: Self = Self(8);
+    pub const CERTIFICATE: Self = Self(11);
+    pub const CERTIFICATE_REQUEST: Self = Self(13);
+    pub const CERTIFICATE_VERIFY: Self = Self(15);
+    pub const FINISHED: Self = Self(20);
+    pub const KEY_UPDATE: Self = Self(24);
+
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            MessageType::ClientHello => 1,
-            MessageType::ServerHello => 2,
-            MessageType::EncryptedExtensions => 8,
-            MessageType::Certificate => 11,
-            MessageType::CertificateRequest => 13,
-            MessageType::CertificateVerify => 15,
-            MessageType::Finished => 20,
-            MessageType::KeyUpdate => 24,
-            MessageType::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    const fn is_unknown(&self) -> bool {
+        !matches!(*self, Self(1..=2 | 8 | 11 | 13 | 15 | 20 | 24))
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], MessageType> {
         let (input, byte) = be_u8(input)?;
         Ok((input, Self::from_u8(byte)))
+    }
+}
+
+impl fmt::Debug for MessageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_unknown() {
+            return f.debug_tuple("Unknown").field(&self.0).finish();
+        }
+
+        let name = match *self {
+            MessageType::CLIENT_HELLO => "ClientHello",
+            MessageType::SERVER_HELLO => "ServerHello",
+            MessageType::ENCRYPTED_EXTENSIONS => "EncryptedExtensions",
+            MessageType::CERTIFICATE => "Certificate",
+            MessageType::CERTIFICATE_REQUEST => "CertificateRequest",
+            MessageType::CERTIFICATE_VERIFY => "CertificateVerify",
+            MessageType::FINISHED => "Finished",
+            MessageType::KEY_UPDATE => "KeyUpdate",
+            _ => unreachable!("known DTLS 1.3 handshake message type missing Debug label"),
+        };
+
+        f.write_str(name)
     }
 }
 
@@ -393,7 +400,7 @@ impl Body {
         allow_unknown_client_hello_suites: bool,
     ) -> IResult<&[u8], Body> {
         match m {
-            MessageType::ClientHello => {
+            MessageType::CLIENT_HELLO => {
                 let (input, client_hello) = if allow_unknown_client_hello_suites {
                     ClientHello::parse_allow_unknown_suites(input, base_offset)?
                 } else {
@@ -401,33 +408,33 @@ impl Body {
                 };
                 Ok((input, Body::ClientHello(client_hello)))
             }
-            MessageType::ServerHello => {
+            MessageType::SERVER_HELLO => {
                 let (input, server_hello) = ServerHello::parse(input, base_offset)?;
                 Ok((input, Body::ServerHello(server_hello)))
             }
-            MessageType::EncryptedExtensions => {
+            MessageType::ENCRYPTED_EXTENSIONS => {
                 let (input, ee) = EncryptedExtensions::parse(input, base_offset)?;
                 Ok((input, Body::EncryptedExtensions(ee)))
             }
-            MessageType::Certificate => {
+            MessageType::CERTIFICATE => {
                 let (input, certificate) = Certificate::parse(input, base_offset)?;
                 Ok((input, Body::Certificate(certificate)))
             }
-            MessageType::CertificateRequest => {
+            MessageType::CERTIFICATE_REQUEST => {
                 let range = base_offset..(base_offset + input.len());
                 Ok((&[], Body::CertificateRequest(range)))
             }
-            MessageType::CertificateVerify => {
+            MessageType::CERTIFICATE_VERIFY => {
                 let (input, cv) = CertificateVerify::parse(input, base_offset)?;
                 Ok((input, Body::CertificateVerify(cv)))
             }
-            MessageType::Finished => {
+            MessageType::FINISHED => {
                 let cipher_suite =
                     c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
                 let (input, finished) = Finished::parse(input, cipher_suite)?;
                 Ok((input, Body::Finished(finished)))
             }
-            MessageType::KeyUpdate => {
+            MessageType::KEY_UPDATE => {
                 let (input, byte) = be_u8(input)?;
                 if !input.is_empty() {
                     return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
@@ -436,7 +443,7 @@ impl Body {
                     .ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
                 Ok((input, Body::KeyUpdate(request)))
             }
-            MessageType::Unknown(value) => Ok((input, Body::Unknown(value))),
+            _ => Ok((input, Body::Unknown(m.as_u8()))),
         }
     }
 
@@ -486,7 +493,7 @@ mod tests {
     use crate::dtls13::message::{ProtocolVersion, Random, SessionId};
 
     const MESSAGE: &[u8] = &[
-        0x01, // MessageType::ClientHello
+        0x01, // MessageType::CLIENT_HELLO
         0x00, 0x00, 0x2E, // length
         0x00, 0x00, // message_seq
         0x00, 0x00, 0x00, // fragment_offset
@@ -509,9 +516,42 @@ mod tests {
     ];
 
     #[test]
+    fn message_type_newtype_shape() {
+        assert_eq!(std::mem::size_of::<MessageType>(), 1);
+        assert!(MessageType::default().is_unknown());
+    }
+
+    #[test]
+    fn message_type_wire_roundtrip() {
+        for message_type in [
+            MessageType::CLIENT_HELLO,
+            MessageType::SERVER_HELLO,
+            MessageType::ENCRYPTED_EXTENSIONS,
+            MessageType::CERTIFICATE,
+            MessageType::CERTIFICATE_REQUEST,
+            MessageType::CERTIFICATE_VERIFY,
+            MessageType::FINISHED,
+            MessageType::KEY_UPDATE,
+        ] {
+            assert_eq!(MessageType::from_u8(message_type.as_u8()), message_type);
+            assert!(!message_type.is_unknown());
+        }
+
+        let unknown = MessageType::from_u8(0xFF);
+        assert_eq!(unknown.as_u8(), 0xFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn message_type_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", MessageType::CLIENT_HELLO), "ClientHello");
+        assert_eq!(format!("{:?}", MessageType::from_u8(0xFF)), "Unknown(255)");
+    }
+
+    #[test]
     fn handshake_size() {
         let h = Handshake::new(
-            MessageType::EncryptedExtensions,
+            MessageType::ENCRYPTED_EXTENSIONS,
             2,
             0,
             0,
@@ -551,7 +591,7 @@ mod tests {
         );
 
         let handshake = Handshake::new(
-            MessageType::ClientHello,
+            MessageType::CLIENT_HELLO,
             0x2E,
             0,
             0,
@@ -574,7 +614,7 @@ mod tests {
     fn key_update_body_rejects_trailing_bytes() {
         let source = [KeyUpdateRequest::UpdateRequested.as_u8(), 0];
         let handshake = Handshake::new(
-            MessageType::KeyUpdate,
+            MessageType::KEY_UPDATE,
             source.len() as u32,
             0,
             0,

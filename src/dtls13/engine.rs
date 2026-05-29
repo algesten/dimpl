@@ -389,7 +389,7 @@ impl Engine {
         // but allow KeyUpdate (a post-handshake message).
         if self.release_app_data
             && handshake.header.message_seq >= self.peer_handshake_seq_no
-            && handshake.header.msg_type != MessageType::KeyUpdate
+            && handshake.header.msg_type != MessageType::KEY_UPDATE
         {
             return Err(Error::RenegotiationAttempt);
         }
@@ -789,7 +789,7 @@ impl Engine {
         &mut self,
         defragment_buffer: &mut Buf,
     ) -> Result<Option<Handshake>, InternalError> {
-        self.next_handshake_with_options(MessageType::ClientHello, defragment_buffer, true)
+        self.next_handshake_with_options(MessageType::CLIENT_HELLO, defragment_buffer, true)
     }
 
     fn next_handshake_with_options(
@@ -1893,7 +1893,7 @@ impl Engine {
         self.create_ciphertext_record(ContentType::HANDSHAKE, epoch, true, |fragment| {
             // DTLS handshake header (12 bytes):
             // msg_type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3)
-            fragment.push(MessageType::KeyUpdate.as_u8());
+            fragment.push(MessageType::KEY_UPDATE.as_u8());
             fragment.extend_from_slice(&1u32.to_be_bytes()[1..]); // length = 1
             fragment.extend_from_slice(&msg_seq.to_be_bytes()); // message_seq
             fragment.extend_from_slice(&0u32.to_be_bytes()[1..]); // fragment_offset = 0
@@ -2246,7 +2246,7 @@ fn jittered_aead_threshold(limit: u64, rng: &mut SeededRng) -> u64 {
 /// All other handshake messages are encrypted (epoch 2).
 fn epoch_for_message(msg_type: MessageType) -> u16 {
     match msg_type {
-        MessageType::ClientHello | MessageType::ServerHello => 0,
+        MessageType::CLIENT_HELLO | MessageType::SERVER_HELLO => 0,
         _ => 2,
     }
 }
@@ -2558,7 +2558,7 @@ mod tests {
 
     fn encrypted_key_update_record(seq: u16) -> Vec<u8> {
         let mut fragment = Vec::new();
-        fragment.push(MessageType::KeyUpdate.as_u8());
+        fragment.push(MessageType::KEY_UPDATE.as_u8());
         fragment.extend_from_slice(&1u32.to_be_bytes()[1..]);
         fragment.extend_from_slice(&0u16.to_be_bytes());
         fragment.extend_from_slice(&0u32.to_be_bytes()[1..]);

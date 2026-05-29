@@ -428,7 +428,7 @@ impl State {
 
         client
             .engine
-            .create_handshake(MessageType::ClientHello, |body, engine| {
+            .create_handshake(MessageType::CLIENT_HELLO, |body, engine| {
                 handshake_create_client_hello(
                     body,
                     engine,
@@ -450,7 +450,7 @@ impl State {
 
         let maybe = client
             .engine
-            .next_handshake(MessageType::ServerHello, &mut client.defragment_buffer)?;
+            .next_handshake(MessageType::SERVER_HELLO, &mut client.defragment_buffer)?;
 
         let Some(handshake) = maybe else {
             return Ok(self);
@@ -681,7 +681,7 @@ impl State {
 
     fn await_encrypted_extensions(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client.engine.next_handshake(
-            MessageType::EncryptedExtensions,
+            MessageType::ENCRYPTED_EXTENSIONS,
             &mut client.defragment_buffer,
         )?;
 
@@ -717,14 +717,14 @@ impl State {
         // CertificateRequest is optional. Check if Certificate is available instead.
         let has_cert = client
             .engine
-            .has_complete_handshake(MessageType::Certificate);
+            .has_complete_handshake(MessageType::CERTIFICATE);
 
         if has_cert {
             return Ok(Self::AwaitCertificate);
         }
 
         let maybe = client.engine.next_handshake(
-            MessageType::CertificateRequest,
+            MessageType::CERTIFICATE_REQUEST,
             &mut client.defragment_buffer,
         )?;
 
@@ -755,7 +755,7 @@ impl State {
     fn await_certificate(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client
             .engine
-            .next_handshake(MessageType::Certificate, &mut client.defragment_buffer)?;
+            .next_handshake(MessageType::CERTIFICATE, &mut client.defragment_buffer)?;
 
         let Some(ref handshake) = maybe else {
             return Ok(self);
@@ -818,7 +818,7 @@ impl State {
         client.engine.transcript_hash(&mut transcript_hash);
 
         let maybe = client.engine.next_handshake(
-            MessageType::CertificateVerify,
+            MessageType::CERTIFICATE_VERIFY,
             &mut client.defragment_buffer,
         )?;
 
@@ -898,7 +898,7 @@ impl State {
 
         let maybe = client
             .engine
-            .next_handshake(MessageType::Finished, &mut client.defragment_buffer)?;
+            .next_handshake(MessageType::FINISHED, &mut client.defragment_buffer)?;
 
         let Some(ref handshake) = maybe else {
             return Ok(self);
@@ -972,7 +972,7 @@ impl State {
 
             client
                 .engine
-                .create_handshake(MessageType::Certificate, |body, engine| {
+                .create_handshake(MessageType::CERTIFICATE, |body, engine| {
                     handshake_create_certificate(body, engine, &context_copy)
                 })?;
 
@@ -986,7 +986,7 @@ impl State {
 
             client
                 .engine
-                .create_handshake(MessageType::Certificate, |body, _engine| {
+                .create_handshake(MessageType::CERTIFICATE, |body, _engine| {
                     // certificate_request_context
                     body.push(context_copy.len() as u8);
                     body.extend_from_slice(&context_copy);
@@ -1004,7 +1004,7 @@ impl State {
 
         client
             .engine
-            .create_handshake(MessageType::CertificateVerify, |body, engine| {
+            .create_handshake(MessageType::CERTIFICATE_VERIFY, |body, engine| {
                 handshake_create_certificate_verify(
                     body,
                     engine,
@@ -1039,7 +1039,7 @@ impl State {
 
         client
             .engine
-            .create_handshake(MessageType::Finished, |body, engine| {
+            .create_handshake(MessageType::FINISHED, |body, engine| {
                 let verify_data = engine.compute_verify_data(&client_hs_secret)?;
                 body.extend_from_slice(&verify_data);
                 Ok(())
@@ -1109,9 +1109,12 @@ impl State {
         }
 
         // Check for incoming KeyUpdate
-        if client.engine.has_complete_handshake(MessageType::KeyUpdate) {
+        if client
+            .engine
+            .has_complete_handshake(MessageType::KEY_UPDATE)
+        {
             let maybe = client.engine.next_handshake_no_transcript(
-                MessageType::KeyUpdate,
+                MessageType::KEY_UPDATE,
                 &mut client.defragment_buffer,
             )?;
 
@@ -1142,9 +1145,12 @@ impl State {
     fn half_closed_local(self, client: &mut Client) -> Result<Self, InternalError> {
         // Write half is closed: drain incoming KeyUpdate to keep recv keys in sync,
         // but do not send our own KeyUpdate response.
-        if client.engine.has_complete_handshake(MessageType::KeyUpdate) {
+        if client
+            .engine
+            .has_complete_handshake(MessageType::KEY_UPDATE)
+        {
             let maybe = client.engine.next_handshake_no_transcript(
-                MessageType::KeyUpdate,
+                MessageType::KEY_UPDATE,
                 &mut client.defragment_buffer,
             )?;
             if let Some(handshake) = maybe {
@@ -1651,7 +1657,7 @@ mod tests {
         client
             .engine
             .parse_packet(&epoch0_handshake_packet(
-                MessageType::Certificate,
+                MessageType::CERTIFICATE,
                 2,
                 &[0, 0, 0, 0],
             ))
@@ -1677,7 +1683,7 @@ mod tests {
         client
             .engine
             .parse_packet(&epoch0_handshake_packet(
-                MessageType::ServerHello,
+                MessageType::SERVER_HELLO,
                 0,
                 &server_hello_with_key_share(NamedGroup::SECP256R1),
             ))
