@@ -220,7 +220,7 @@ impl Handshake {
             Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?
         };
 
-        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::FINISHED {
+        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
             return Err(crate::InternalError::parse_incomplete());
         }
@@ -252,7 +252,7 @@ impl Handshake {
 
         let qualifies = matches!(
             self.header.msg_type,
-            MessageType::CLIENT_HELLO // flight 1
+            MessageType::ClientHello // flight 1
         );
 
         qualifies.then_some(self.header.message_seq)
@@ -271,15 +271,16 @@ impl Handshake {
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct MessageType(u8);
 
+#[allow(non_upper_case_globals)]
 impl MessageType {
-    pub const CLIENT_HELLO: Self = Self(1);
-    pub const SERVER_HELLO: Self = Self(2);
-    pub const ENCRYPTED_EXTENSIONS: Self = Self(8);
-    pub const CERTIFICATE: Self = Self(11);
-    pub const CERTIFICATE_REQUEST: Self = Self(13);
-    pub const CERTIFICATE_VERIFY: Self = Self(15);
-    pub const FINISHED: Self = Self(20);
-    pub const KEY_UPDATE: Self = Self(24);
+    pub const ClientHello: Self = Self(1);
+    pub const ServerHello: Self = Self(2);
+    pub const EncryptedExtensions: Self = Self(8);
+    pub const Certificate: Self = Self(11);
+    pub const CertificateRequest: Self = Self(13);
+    pub const CertificateVerify: Self = Self(15);
+    pub const Finished: Self = Self(20);
+    pub const KeyUpdate: Self = Self(24);
 
     pub const fn from_u8(value: u8) -> Self {
         Self(value)
@@ -306,14 +307,14 @@ impl fmt::Debug for MessageType {
         }
 
         let name = match *self {
-            MessageType::CLIENT_HELLO => "ClientHello",
-            MessageType::SERVER_HELLO => "ServerHello",
-            MessageType::ENCRYPTED_EXTENSIONS => "EncryptedExtensions",
-            MessageType::CERTIFICATE => "Certificate",
-            MessageType::CERTIFICATE_REQUEST => "CertificateRequest",
-            MessageType::CERTIFICATE_VERIFY => "CertificateVerify",
-            MessageType::FINISHED => "Finished",
-            MessageType::KEY_UPDATE => "KeyUpdate",
+            MessageType::ClientHello => "ClientHello",
+            MessageType::ServerHello => "ServerHello",
+            MessageType::EncryptedExtensions => "EncryptedExtensions",
+            MessageType::Certificate => "Certificate",
+            MessageType::CertificateRequest => "CertificateRequest",
+            MessageType::CertificateVerify => "CertificateVerify",
+            MessageType::Finished => "Finished",
+            MessageType::KeyUpdate => "KeyUpdate",
             _ => unreachable!("known DTLS 1.3 handshake message type missing Debug label"),
         };
 
@@ -394,7 +395,7 @@ impl Body {
         allow_unknown_client_hello_suites: bool,
     ) -> IResult<&[u8], Body> {
         match m {
-            MessageType::CLIENT_HELLO => {
+            MessageType::ClientHello => {
                 let (input, client_hello) = if allow_unknown_client_hello_suites {
                     ClientHello::parse_allow_unknown_suites(input, base_offset)?
                 } else {
@@ -402,33 +403,33 @@ impl Body {
                 };
                 Ok((input, Body::ClientHello(client_hello)))
             }
-            MessageType::SERVER_HELLO => {
+            MessageType::ServerHello => {
                 let (input, server_hello) = ServerHello::parse(input, base_offset)?;
                 Ok((input, Body::ServerHello(server_hello)))
             }
-            MessageType::ENCRYPTED_EXTENSIONS => {
+            MessageType::EncryptedExtensions => {
                 let (input, ee) = EncryptedExtensions::parse(input, base_offset)?;
                 Ok((input, Body::EncryptedExtensions(ee)))
             }
-            MessageType::CERTIFICATE => {
+            MessageType::Certificate => {
                 let (input, certificate) = Certificate::parse(input, base_offset)?;
                 Ok((input, Body::Certificate(certificate)))
             }
-            MessageType::CERTIFICATE_REQUEST => {
+            MessageType::CertificateRequest => {
                 let range = base_offset..(base_offset + input.len());
                 Ok((&[], Body::CertificateRequest(range)))
             }
-            MessageType::CERTIFICATE_VERIFY => {
+            MessageType::CertificateVerify => {
                 let (input, cv) = CertificateVerify::parse(input, base_offset)?;
                 Ok((input, Body::CertificateVerify(cv)))
             }
-            MessageType::FINISHED => {
+            MessageType::Finished => {
                 let cipher_suite =
                     c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
                 let (input, finished) = Finished::parse(input, cipher_suite)?;
                 Ok((input, Body::Finished(finished)))
             }
-            MessageType::KEY_UPDATE => {
+            MessageType::KeyUpdate => {
                 let (input, byte) = be_u8(input)?;
                 if !input.is_empty() {
                     return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
@@ -487,7 +488,7 @@ mod tests {
     use crate::dtls13::message::{ProtocolVersion, Random, SessionId};
 
     const MESSAGE: &[u8] = &[
-        0x01, // MessageType::CLIENT_HELLO
+        0x01, // MessageType::ClientHello
         0x00, 0x00, 0x2E, // length
         0x00, 0x00, // message_seq
         0x00, 0x00, 0x00, // fragment_offset
@@ -519,14 +520,14 @@ mod tests {
     #[test]
     fn message_type_wire_roundtrip() {
         for message_type in [
-            MessageType::CLIENT_HELLO,
-            MessageType::SERVER_HELLO,
-            MessageType::ENCRYPTED_EXTENSIONS,
-            MessageType::CERTIFICATE,
-            MessageType::CERTIFICATE_REQUEST,
-            MessageType::CERTIFICATE_VERIFY,
-            MessageType::FINISHED,
-            MessageType::KEY_UPDATE,
+            MessageType::ClientHello,
+            MessageType::ServerHello,
+            MessageType::EncryptedExtensions,
+            MessageType::Certificate,
+            MessageType::CertificateRequest,
+            MessageType::CertificateVerify,
+            MessageType::Finished,
+            MessageType::KeyUpdate,
         ] {
             assert_eq!(MessageType::from_u8(message_type.as_u8()), message_type);
             assert!(!message_type.is_unknown());
@@ -539,14 +540,14 @@ mod tests {
 
     #[test]
     fn message_type_debug_stays_enum_like() {
-        assert_eq!(format!("{:?}", MessageType::CLIENT_HELLO), "ClientHello");
+        assert_eq!(format!("{:?}", MessageType::ClientHello), "ClientHello");
         assert_eq!(format!("{:?}", MessageType::from_u8(0xFF)), "Unknown(255)");
     }
 
     #[test]
     fn handshake_size() {
         let h = Handshake::new(
-            MessageType::ENCRYPTED_EXTENSIONS,
+            MessageType::EncryptedExtensions,
             2,
             0,
             0,
@@ -574,7 +575,7 @@ mod tests {
         cipher_suites.push(Dtls13CipherSuite::AES_128_GCM_SHA256);
         cipher_suites.push(Dtls13CipherSuite::AES_256_GCM_SHA384);
         let mut compression_methods = ArrayVec::new();
-        compression_methods.push(CompressionMethod::NULL);
+        compression_methods.push(CompressionMethod::Null);
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,
@@ -586,7 +587,7 @@ mod tests {
         );
 
         let handshake = Handshake::new(
-            MessageType::CLIENT_HELLO,
+            MessageType::ClientHello,
             0x2E,
             0,
             0,
@@ -609,7 +610,7 @@ mod tests {
     fn key_update_body_rejects_trailing_bytes() {
         let source = [KeyUpdateRequest::UpdateRequested.as_u8(), 0];
         let handshake = Handshake::new(
-            MessageType::KEY_UPDATE,
+            MessageType::KeyUpdate,
             source.len() as u32,
             0,
             0,

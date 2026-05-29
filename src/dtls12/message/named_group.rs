@@ -14,13 +14,14 @@ use std::fmt;
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CurveType(u8);
 
+#[allow(non_upper_case_globals)]
 impl CurveType {
     /// Explicit prime curve parameters.
-    pub const EXPLICIT_PRIME: Self = Self(1);
+    pub const ExplicitPrime: Self = Self(1);
     /// Explicit characteristic-2 curve parameters.
-    pub const EXPLICIT_CHAR2: Self = Self(2);
+    pub const ExplicitChar2: Self = Self(2);
     /// Named curve (the common case).
-    pub const NAMED_CURVE: Self = Self(3);
+    pub const NamedCurve: Self = Self(3);
 
     /// Convert a u8 value to a `CurveType`.
     pub const fn from_u8(value: u8) -> Self {
@@ -50,9 +51,9 @@ impl fmt::Debug for CurveType {
         }
 
         let name = match *self {
-            CurveType::EXPLICIT_PRIME => "ExplicitPrime",
-            CurveType::EXPLICIT_CHAR2 => "ExplicitChar2",
-            CurveType::NAMED_CURVE => "NamedCurve",
+            CurveType::ExplicitPrime => "ExplicitPrime",
+            CurveType::ExplicitChar2 => "ExplicitChar2",
+            CurveType::NamedCurve => "NamedCurve",
             _ => unreachable!("known DTLS 1.2 curve type missing Debug label"),
         };
 
@@ -72,9 +73,9 @@ mod tests {
     #[test]
     fn curve_type_wire_roundtrip() {
         for curve_type in [
-            CurveType::EXPLICIT_PRIME,
-            CurveType::EXPLICIT_CHAR2,
-            CurveType::NAMED_CURVE,
+            CurveType::ExplicitPrime,
+            CurveType::ExplicitChar2,
+            CurveType::NamedCurve,
         ] {
             assert_eq!(CurveType::from_u8(curve_type.as_u8()), curve_type);
             assert!(!curve_type.is_unknown());
@@ -87,7 +88,7 @@ mod tests {
 
     #[test]
     fn curve_type_debug_stays_enum_like() {
-        assert_eq!(format!("{:?}", CurveType::NAMED_CURVE), "NamedCurve");
+        assert_eq!(format!("{:?}", CurveType::NamedCurve), "NamedCurve");
         assert_eq!(format!("{:?}", CurveType::from_u8(0xFF)), "Unknown(255)");
     }
 }

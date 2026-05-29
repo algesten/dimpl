@@ -57,7 +57,7 @@ impl EcdhKeyExchange {
                     public_key: buf,
                 })
             }
-            NamedGroup::SECP256R1 => {
+            NamedGroup::Secp256r1 => {
                 use rand_core::OsRng;
                 let secret = EphemeralSecret::random(&mut OsRng);
                 let public_key_obj = P256PublicKey::from(&secret);
@@ -69,7 +69,7 @@ impl EcdhKeyExchange {
                     public_key: buf,
                 })
             }
-            NamedGroup::SECP384R1 => {
+            NamedGroup::Secp384r1 => {
                 use rand_core::OsRng;
                 let secret = P384EphemeralSecret::random(&mut OsRng);
                 let public_key_obj = P384PublicKey::from(&secret);
@@ -113,7 +113,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
             }
             EcdhKeyExchange::P256 { secret, .. } => {
                 let peer_key = P256PublicKey::from_sec1_bytes(peer_pub)
-                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::SECP256R1))?;
+                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::Secp256r1))?;
                 let shared_secret = secret.diffie_hellman(&peer_key);
                 out.clear();
                 out.extend_from_slice(shared_secret.raw_secret_bytes().as_slice());
@@ -121,7 +121,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
             }
             EcdhKeyExchange::P384 { secret, .. } => {
                 let peer_key = P384PublicKey::from_sec1_bytes(peer_pub)
-                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::SECP384R1))?;
+                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::Secp384r1))?;
                 let shared_secret = secret.diffie_hellman(&peer_key);
                 out.clear();
                 out.extend_from_slice(shared_secret.raw_secret_bytes().as_slice());
@@ -133,8 +133,8 @@ impl ActiveKeyExchange for EcdhKeyExchange {
     fn group(&self) -> NamedGroup {
         match self {
             EcdhKeyExchange::X25519 { .. } => NamedGroup::X25519,
-            EcdhKeyExchange::P256 { .. } => NamedGroup::SECP256R1,
-            EcdhKeyExchange::P384 { .. } => NamedGroup::SECP384R1,
+            EcdhKeyExchange::P256 { .. } => NamedGroup::Secp256r1,
+            EcdhKeyExchange::P384 { .. } => NamedGroup::Secp384r1,
         }
     }
 }
@@ -159,11 +159,11 @@ struct P256;
 
 impl SupportedKxGroup for P256 {
     fn name(&self) -> NamedGroup {
-        NamedGroup::SECP256R1
+        NamedGroup::Secp256r1
     }
 
     fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, CryptoError> {
-        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::SECP256R1, buf)?))
+        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp256r1, buf)?))
     }
 }
 
@@ -173,11 +173,11 @@ struct P384;
 
 impl SupportedKxGroup for P384 {
     fn name(&self) -> NamedGroup {
-        NamedGroup::SECP384R1
+        NamedGroup::Secp384r1
     }
 
     fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, CryptoError> {
-        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::SECP384R1, buf)?))
+        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp384r1, buf)?))
     }
 }
 

@@ -267,7 +267,7 @@ impl Client {
 
         let epoch = self.engine.app_send_epoch();
         self.engine.create_ciphertext_record(
-            ContentType::APPLICATION_DATA,
+            ContentType::ApplicationData,
             epoch,
             false,
             |body| {
@@ -290,7 +290,7 @@ impl Client {
         }
         let epoch = self.engine.app_send_epoch();
         self.engine
-            .create_ciphertext_record(ContentType::ALERT, epoch, false, |body| {
+            .create_ciphertext_record(ContentType::Alert, epoch, false, |body| {
                 body.push(1); // level: legacy (ignored in DTLS 1.3)
                 body.push(0); // description: close_notify
             })?;
@@ -428,7 +428,7 @@ impl State {
 
         client
             .engine
-            .create_handshake(MessageType::CLIENT_HELLO, |body, engine| {
+            .create_handshake(MessageType::ClientHello, |body, engine| {
                 handshake_create_client_hello(
                     body,
                     engine,
@@ -450,7 +450,7 @@ impl State {
 
         let maybe = client
             .engine
-            .next_handshake(MessageType::SERVER_HELLO, &mut client.defragment_buffer)?;
+            .next_handshake(MessageType::ServerHello, &mut client.defragment_buffer)?;
 
         let Some(handshake) = maybe else {
             return Ok(self);
@@ -478,13 +478,13 @@ impl State {
             if let Some(ref extensions) = server_hello.extensions {
                 for ext in extensions {
                     match ext.extension_type {
-                        ExtensionType::KEY_SHARE => {
+                        ExtensionType::KeyShare => {
                             let ext_data = ext.extension_data(&client.defragment_buffer);
                             if let Ok((_, hrr_ks)) = KeyShareHelloRetryRequest::parse(ext_data) {
                                 client.hrr_selected_group = Some(hrr_ks.selected_group);
                             }
                         }
-                        ExtensionType::COOKIE => {
+                        ExtensionType::Cookie => {
                             let ext_data = ext.extension_data(&client.defragment_buffer);
                             parse_cookie_extension(ext_data).map_err(InternalError::from)?;
                             let mut cookie = Buf::new();
@@ -512,7 +512,7 @@ impl State {
             let mut hrr_version_ok = false;
             if let Some(ref extensions) = server_hello.extensions {
                 for ext in extensions {
-                    if ext.extension_type == ExtensionType::SUPPORTED_VERSIONS {
+                    if ext.extension_type == ExtensionType::SupportedVersions {
                         let ext_data = ext.extension_data(&client.defragment_buffer);
                         if let Ok((_, sv)) = SupportedVersionsServerHello::parse(ext_data) {
                             hrr_version_ok = sv.selected_version == ProtocolVersion::DTLS1_3;
@@ -551,7 +551,7 @@ impl State {
         }
 
         // Validate legacy_compression_method (must be null)
-        if server_hello.legacy_compression_method != CompressionMethod::NULL {
+        if server_hello.legacy_compression_method != CompressionMethod::Null {
             return Err((Error::SecurityError(
                 crate::SecurityError::ServerHelloCompressionMustBeNull,
             ))
@@ -592,7 +592,7 @@ impl State {
 
         for ext in extensions {
             match ext.extension_type {
-                ExtensionType::SUPPORTED_VERSIONS => {
+                ExtensionType::SupportedVersions => {
                     let ext_data = ext.extension_data(&client.defragment_buffer);
                     if let Ok((_, sv)) = SupportedVersionsServerHello::parse(ext_data) {
                         if sv.selected_version == ProtocolVersion::DTLS1_3 {
@@ -600,7 +600,7 @@ impl State {
                         }
                     }
                 }
-                ExtensionType::KEY_SHARE => {
+                ExtensionType::KeyShare => {
                     let ext_data = ext.extension_data(&client.defragment_buffer);
                     if let Ok((_, ks)) = KeyShareServerHello::parse(ext_data, 0) {
                         // The key_exchange data is at offset 0 within ext_data, but
@@ -681,7 +681,7 @@ impl State {
 
     fn await_encrypted_extensions(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client.engine.next_handshake(
-            MessageType::ENCRYPTED_EXTENSIONS,
+            MessageType::EncryptedExtensions,
             &mut client.defragment_buffer,
         )?;
 
@@ -695,7 +695,7 @@ impl State {
 
         // Process extensions
         for ext in &ee.extensions {
-            if ext.extension_type == ExtensionType::USE_SRTP {
+            if ext.extension_type == ExtensionType::UseSrtp {
                 let ext_data = ext.extension_data(&client.defragment_buffer);
                 let (_, use_srtp) =
                     UseSrtpExtension::parse(ext_data).map_err(InternalError::from)?;
@@ -717,14 +717,14 @@ impl State {
         // CertificateRequest is optional. Check if Certificate is available instead.
         let has_cert = client
             .engine
-            .has_complete_handshake(MessageType::CERTIFICATE);
+            .has_complete_handshake(MessageType::Certificate);
 
         if has_cert {
             return Ok(Self::AwaitCertificate);
         }
 
         let maybe = client.engine.next_handshake(
-            MessageType::CERTIFICATE_REQUEST,
+            MessageType::CertificateRequest,
             &mut client.defragment_buffer,
         )?;
 
@@ -755,7 +755,7 @@ impl State {
     fn await_certificate(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client
             .engine
-            .next_handshake(MessageType::CERTIFICATE, &mut client.defragment_buffer)?;
+            .next_handshake(MessageType::Certificate, &mut client.defragment_buffer)?;
 
         let Some(ref handshake) = maybe else {
             return Ok(self);
@@ -818,7 +818,7 @@ impl State {
         client.engine.transcript_hash(&mut transcript_hash);
 
         let maybe = client.engine.next_handshake(
-            MessageType::CERTIFICATE_VERIFY,
+            MessageType::CertificateVerify,
             &mut client.defragment_buffer,
         )?;
 
@@ -898,7 +898,7 @@ impl State {
 
         let maybe = client
             .engine
-            .next_handshake(MessageType::FINISHED, &mut client.defragment_buffer)?;
+            .next_handshake(MessageType::Finished, &mut client.defragment_buffer)?;
 
         let Some(ref handshake) = maybe else {
             return Ok(self);
@@ -972,7 +972,7 @@ impl State {
 
             client
                 .engine
-                .create_handshake(MessageType::CERTIFICATE, |body, engine| {
+                .create_handshake(MessageType::Certificate, |body, engine| {
                     handshake_create_certificate(body, engine, &context_copy)
                 })?;
 
@@ -986,7 +986,7 @@ impl State {
 
             client
                 .engine
-                .create_handshake(MessageType::CERTIFICATE, |body, _engine| {
+                .create_handshake(MessageType::Certificate, |body, _engine| {
                     // certificate_request_context
                     body.push(context_copy.len() as u8);
                     body.extend_from_slice(&context_copy);
@@ -1004,7 +1004,7 @@ impl State {
 
         client
             .engine
-            .create_handshake(MessageType::CERTIFICATE_VERIFY, |body, engine| {
+            .create_handshake(MessageType::CertificateVerify, |body, engine| {
                 handshake_create_certificate_verify(
                     body,
                     engine,
@@ -1039,7 +1039,7 @@ impl State {
 
         client
             .engine
-            .create_handshake(MessageType::FINISHED, |body, engine| {
+            .create_handshake(MessageType::Finished, |body, engine| {
                 let verify_data = engine.compute_verify_data(&client_hs_secret)?;
                 body.extend_from_slice(&verify_data);
                 Ok(())
@@ -1090,7 +1090,7 @@ impl State {
             );
             for data in client.queued_data.drain(..) {
                 client.engine.create_ciphertext_record(
-                    ContentType::APPLICATION_DATA,
+                    ContentType::ApplicationData,
                     epoch,
                     false,
                     |body| {
@@ -1109,12 +1109,9 @@ impl State {
         }
 
         // Check for incoming KeyUpdate
-        if client
-            .engine
-            .has_complete_handshake(MessageType::KEY_UPDATE)
-        {
+        if client.engine.has_complete_handshake(MessageType::KeyUpdate) {
             let maybe = client.engine.next_handshake_no_transcript(
-                MessageType::KEY_UPDATE,
+                MessageType::KeyUpdate,
                 &mut client.defragment_buffer,
             )?;
 
@@ -1145,12 +1142,9 @@ impl State {
     fn half_closed_local(self, client: &mut Client) -> Result<Self, InternalError> {
         // Write half is closed: drain incoming KeyUpdate to keep recv keys in sync,
         // but do not send our own KeyUpdate response.
-        if client
-            .engine
-            .has_complete_handshake(MessageType::KEY_UPDATE)
-        {
+        if client.engine.has_complete_handshake(MessageType::KeyUpdate) {
             let maybe = client.engine.next_handshake_no_transcript(
-                MessageType::KEY_UPDATE,
+                MessageType::KeyUpdate,
                 &mut client.defragment_buffer,
             )?;
             if let Some(handshake) = maybe {
@@ -1202,7 +1196,7 @@ fn handshake_create_client_hello(
     );
 
     let mut compression_methods = ArrayVec::new();
-    compression_methods.push(CompressionMethod::NULL);
+    compression_methods.push(CompressionMethod::Null);
 
     // Build extensions
     let mut extensions: ArrayVec<Extension, 8> = ArrayVec::new();
@@ -1216,7 +1210,7 @@ fn handshake_create_client_hello(
     sv.serialize(&mut ext_buf);
     let sv_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::SUPPORTED_VERSIONS,
+        extension_type: ExtensionType::SupportedVersions,
         extension_data_range: sv_start..sv_end,
     });
 
@@ -1227,7 +1221,7 @@ fn handshake_create_client_hello(
     sg.serialize(&mut ext_buf);
     let sg_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::SUPPORTED_GROUPS,
+        extension_type: ExtensionType::SupportedGroups,
         extension_data_range: sg_start..sg_end,
     });
 
@@ -1242,7 +1236,7 @@ fn handshake_create_client_hello(
     ks.serialize(extension_data, &mut ext_buf);
     let ks_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::KEY_SHARE,
+        extension_type: ExtensionType::KeyShare,
         extension_data_range: ks_start..ks_end,
     });
 
@@ -1252,7 +1246,7 @@ fn handshake_create_client_hello(
     sa.serialize(&mut ext_buf);
     let sa_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::SIGNATURE_ALGORITHMS,
+        extension_type: ExtensionType::SignatureAlgorithms,
         extension_data_range: sa_start..sa_end,
     });
 
@@ -1262,7 +1256,7 @@ fn handshake_create_client_hello(
     use_srtp.serialize(&mut ext_buf);
     let srtp_end = ext_buf.len();
     extensions.push(Extension {
-        extension_type: ExtensionType::USE_SRTP,
+        extension_type: ExtensionType::UseSrtp,
         extension_data_range: srtp_start..srtp_end,
     });
 
@@ -1273,7 +1267,7 @@ fn handshake_create_client_hello(
         ext_buf.extend_from_slice(&extension_data[cookie_range]);
         let cookie_end = ext_buf.len();
         extensions.push(Extension {
-            extension_type: ExtensionType::COOKIE,
+            extension_type: ExtensionType::Cookie,
             extension_data_range: cookie_start..cookie_end,
         });
     }
@@ -1302,7 +1296,7 @@ fn handshake_create_client_hello(
         }
         let pad_end = ext_buf.len();
         extensions.push(Extension {
-            extension_type: ExtensionType::PADDING,
+            extension_type: ExtensionType::Padding,
             extension_data_range: pad_start..pad_end,
         });
     }
@@ -1521,7 +1515,7 @@ fn parse_certificate_request(cr_data: &[u8], base_offset: usize) -> Result<Optio
             break;
         }
 
-        if ext_type == ExtensionType::CERTIFICATE_AUTHORITIES.as_u16() {
+        if ext_type == ExtensionType::CertificateAuthorities.as_u16() {
             // Parse certificate_authorities: DistinguishedName<3..2^16-1>
             let ca_data = &cr_data[pos..pos + ext_data_len];
             if ca_data.len() >= 2 {
@@ -1609,7 +1603,7 @@ mod tests {
     fn epoch0_handshake_packet(msg_type: MessageType, message_seq: u16, body: &[u8]) -> Vec<u8> {
         let handshake_len = 12 + body.len();
         let mut packet = Vec::new();
-        packet.push(ContentType::HANDSHAKE.as_u8());
+        packet.push(ContentType::Handshake.as_u8());
         packet.extend_from_slice(&[0xfe, 0xfd]);
         packet.extend_from_slice(&0u16.to_be_bytes());
         packet.extend_from_slice(&0u64.to_be_bytes()[2..]);
@@ -1630,10 +1624,10 @@ mod tests {
         key_share.push(0);
 
         let mut extensions = Vec::new();
-        extensions.extend_from_slice(&ExtensionType::SUPPORTED_VERSIONS.as_u16().to_be_bytes());
+        extensions.extend_from_slice(&ExtensionType::SupportedVersions.as_u16().to_be_bytes());
         extensions.extend_from_slice(&2u16.to_be_bytes());
         extensions.extend_from_slice(&ProtocolVersion::DTLS1_3.as_u16().to_be_bytes());
-        extensions.extend_from_slice(&ExtensionType::KEY_SHARE.as_u16().to_be_bytes());
+        extensions.extend_from_slice(&ExtensionType::KeyShare.as_u16().to_be_bytes());
         extensions.extend_from_slice(&(key_share.len() as u16).to_be_bytes());
         extensions.extend_from_slice(&key_share);
 
@@ -1642,7 +1636,7 @@ mod tests {
         body.extend_from_slice(&[7; 32]);
         body.push(0); // legacy_session_id
         body.extend_from_slice(&Dtls13CipherSuite::AES_128_GCM_SHA256.as_u16().to_be_bytes());
-        body.push(CompressionMethod::NULL.as_u8());
+        body.push(CompressionMethod::Null.as_u8());
         body.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
         body.extend_from_slice(&extensions);
         body
@@ -1657,7 +1651,7 @@ mod tests {
         client
             .engine
             .parse_packet(&epoch0_handshake_packet(
-                MessageType::CERTIFICATE,
+                MessageType::Certificate,
                 2,
                 &[0, 0, 0, 0],
             ))
@@ -1683,9 +1677,9 @@ mod tests {
         client
             .engine
             .parse_packet(&epoch0_handshake_packet(
-                MessageType::SERVER_HELLO,
+                MessageType::ServerHello,
                 0,
-                &server_hello_with_key_share(NamedGroup::SECP256R1),
+                &server_hello_with_key_share(NamedGroup::Secp256r1),
             ))
             .expect("queue mismatched ServerHello");
 
@@ -1698,7 +1692,7 @@ mod tests {
             crate::InternalError::Fatal(Error::SecurityError(
                 SecurityError::ServerKeyShareGroupMismatch {
                     expected: NamedGroup::X25519,
-                    actual: NamedGroup::SECP256R1,
+                    actual: NamedGroup::Secp256r1,
                 }
             ))
         ));

@@ -319,22 +319,22 @@ const SUPPORTED_VERIFY_SCHEMES: &[(SignatureAlgorithm, HashAlgorithm, NamedGroup
     (
         SignatureAlgorithm::ECDSA,
         HashAlgorithm::SHA256,
-        NamedGroup::SECP256R1,
+        NamedGroup::Secp256r1,
     ),
     (
         SignatureAlgorithm::ECDSA,
         HashAlgorithm::SHA256,
-        NamedGroup::SECP384R1,
+        NamedGroup::Secp384r1,
     ),
     (
         SignatureAlgorithm::ECDSA,
         HashAlgorithm::SHA384,
-        NamedGroup::SECP256R1,
+        NamedGroup::Secp256r1,
     ),
     (
         SignatureAlgorithm::ECDSA,
         HashAlgorithm::SHA384,
-        NamedGroup::SECP384R1,
+        NamedGroup::Secp384r1,
     ),
 ];
 
@@ -380,8 +380,8 @@ pub fn cert_named_group(cert_der: &[u8]) -> Result<NamedGroup, CertificateError>
         .map_err(|_| CertificateError::InvalidEcCurveParameter)?;
 
     match curve_oid {
-        OID_P256 => Ok(NamedGroup::SECP256R1),
-        OID_P384 => Ok(NamedGroup::SECP384R1),
+        OID_P256 => Ok(NamedGroup::Secp256r1),
+        OID_P384 => Ok(NamedGroup::Secp384r1),
         _ => Err(CertificateError::UnsupportedEcCurve),
     }
 }
@@ -640,7 +640,7 @@ mod tests {
         let cert = params.self_signed(&key_pair).unwrap();
 
         let group = cert_named_group(cert.der()).unwrap();
-        assert_eq!(group, NamedGroup::SECP256R1);
+        assert_eq!(group, NamedGroup::Secp256r1);
     }
 
     #[test]
@@ -653,7 +653,7 @@ mod tests {
         let cert = params.self_signed(&key_pair).unwrap();
 
         let group = cert_named_group(cert.der()).unwrap();
-        assert_eq!(group, NamedGroup::SECP384R1);
+        assert_eq!(group, NamedGroup::Secp384r1);
     }
 
     #[test]

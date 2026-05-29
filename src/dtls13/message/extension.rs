@@ -52,45 +52,46 @@ impl Extension {
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ExtensionType(u16);
 
+#[allow(non_upper_case_globals)]
 impl ExtensionType {
-    pub const SERVER_NAME: Self = Self(0x0000);
-    pub const MAX_FRAGMENT_LENGTH: Self = Self(0x0001);
-    pub const CLIENT_CERTIFICATE_URL: Self = Self(0x0002);
-    pub const TRUSTED_CA_KEYS: Self = Self(0x0003);
-    pub const TRUNCATED_HMAC: Self = Self(0x0004);
-    pub const STATUS_REQUEST: Self = Self(0x0005);
-    pub const USER_MAPPING: Self = Self(0x0006);
-    pub const CLIENT_AUTHZ: Self = Self(0x0007);
-    pub const SERVER_AUTHZ: Self = Self(0x0008);
-    pub const CERT_TYPE: Self = Self(0x0009);
-    pub const SUPPORTED_GROUPS: Self = Self(0x000A);
-    pub const EC_POINT_FORMATS: Self = Self(0x000B);
-    pub const SRP: Self = Self(0x000C);
-    pub const SIGNATURE_ALGORITHMS: Self = Self(0x000D);
-    pub const USE_SRTP: Self = Self(0x000E);
-    pub const HEARTBEAT: Self = Self(0x000F);
-    pub const APPLICATION_LAYER_PROTOCOL_NEGOTIATION: Self = Self(0x0010);
-    pub const STATUS_REQUEST_V2: Self = Self(0x0011);
-    pub const SIGNED_CERTIFICATE_TIMESTAMP: Self = Self(0x0012);
-    pub const CLIENT_CERTIFICATE_TYPE: Self = Self(0x0013);
-    pub const SERVER_CERTIFICATE_TYPE: Self = Self(0x0014);
-    pub const PADDING: Self = Self(0x0015);
-    pub const ENCRYPT_THEN_MAC: Self = Self(0x0016);
-    pub const EXTENDED_MASTER_SECRET: Self = Self(0x0017);
-    pub const TOKEN_BINDING: Self = Self(0x0018);
-    pub const CACHED_INFO: Self = Self(0x0019);
-    pub const SESSION_TICKET: Self = Self(0x0023);
-    pub const PRE_SHARED_KEY: Self = Self(0x0029);
-    pub const EARLY_DATA: Self = Self(0x002A);
-    pub const SUPPORTED_VERSIONS: Self = Self(0x002B);
-    pub const COOKIE: Self = Self(0x002C);
-    pub const PSK_KEY_EXCHANGE_MODES: Self = Self(0x002D);
-    pub const CERTIFICATE_AUTHORITIES: Self = Self(0x002F);
-    pub const OID_FILTERS: Self = Self(0x0030);
-    pub const POST_HANDSHAKE_AUTH: Self = Self(0x0031);
-    pub const SIGNATURE_ALGORITHMS_CERT: Self = Self(0x0032);
-    pub const KEY_SHARE: Self = Self(0x0033);
-    pub const RENEGOTIATION_INFO: Self = Self(0xFF01);
+    pub const ServerName: Self = Self(0x0000);
+    pub const MaxFragmentLength: Self = Self(0x0001);
+    pub const ClientCertificateUrl: Self = Self(0x0002);
+    pub const TrustedCaKeys: Self = Self(0x0003);
+    pub const TruncatedHmac: Self = Self(0x0004);
+    pub const StatusRequest: Self = Self(0x0005);
+    pub const UserMapping: Self = Self(0x0006);
+    pub const ClientAuthz: Self = Self(0x0007);
+    pub const ServerAuthz: Self = Self(0x0008);
+    pub const CertType: Self = Self(0x0009);
+    pub const SupportedGroups: Self = Self(0x000A);
+    pub const EcPointFormats: Self = Self(0x000B);
+    pub const Srp: Self = Self(0x000C);
+    pub const SignatureAlgorithms: Self = Self(0x000D);
+    pub const UseSrtp: Self = Self(0x000E);
+    pub const Heartbeat: Self = Self(0x000F);
+    pub const ApplicationLayerProtocolNegotiation: Self = Self(0x0010);
+    pub const StatusRequestV2: Self = Self(0x0011);
+    pub const SignedCertificateTimestamp: Self = Self(0x0012);
+    pub const ClientCertificateType: Self = Self(0x0013);
+    pub const ServerCertificateType: Self = Self(0x0014);
+    pub const Padding: Self = Self(0x0015);
+    pub const EncryptThenMac: Self = Self(0x0016);
+    pub const ExtendedMasterSecret: Self = Self(0x0017);
+    pub const TokenBinding: Self = Self(0x0018);
+    pub const CachedInfo: Self = Self(0x0019);
+    pub const SessionTicket: Self = Self(0x0023);
+    pub const PreSharedKey: Self = Self(0x0029);
+    pub const EarlyData: Self = Self(0x002A);
+    pub const SupportedVersions: Self = Self(0x002B);
+    pub const Cookie: Self = Self(0x002C);
+    pub const PskKeyExchangeModes: Self = Self(0x002D);
+    pub const CertificateAuthorities: Self = Self(0x002F);
+    pub const OidFilters: Self = Self(0x0030);
+    pub const PostHandshakeAuth: Self = Self(0x0031);
+    pub const SignatureAlgorithmsCert: Self = Self(0x0032);
+    pub const KeyShare: Self = Self(0x0033);
+    pub const RenegotiationInfo: Self = Self(0xFF01);
 
     pub const fn from_u16(value: u16) -> Self {
         Self(value)
@@ -120,12 +121,12 @@ impl ExtensionType {
     /// Supported extension types that this DTLS 1.3 implementation handles.
     pub const fn supported() -> &'static [ExtensionType; 6] {
         &[
-            ExtensionType::SUPPORTED_VERSIONS,
-            ExtensionType::SUPPORTED_GROUPS,
-            ExtensionType::SIGNATURE_ALGORITHMS,
-            ExtensionType::KEY_SHARE,
-            ExtensionType::USE_SRTP,
-            ExtensionType::COOKIE,
+            ExtensionType::SupportedVersions,
+            ExtensionType::SupportedGroups,
+            ExtensionType::SignatureAlgorithms,
+            ExtensionType::KeyShare,
+            ExtensionType::UseSrtp,
+            ExtensionType::Cookie,
         ]
     }
 }
@@ -137,46 +138,46 @@ impl fmt::Debug for ExtensionType {
         }
 
         let name = match *self {
-            ExtensionType::SERVER_NAME => "ServerName",
-            ExtensionType::MAX_FRAGMENT_LENGTH => "MaxFragmentLength",
-            ExtensionType::CLIENT_CERTIFICATE_URL => "ClientCertificateUrl",
-            ExtensionType::TRUSTED_CA_KEYS => "TrustedCaKeys",
-            ExtensionType::TRUNCATED_HMAC => "TruncatedHmac",
-            ExtensionType::STATUS_REQUEST => "StatusRequest",
-            ExtensionType::USER_MAPPING => "UserMapping",
-            ExtensionType::CLIENT_AUTHZ => "ClientAuthz",
-            ExtensionType::SERVER_AUTHZ => "ServerAuthz",
-            ExtensionType::CERT_TYPE => "CertType",
-            ExtensionType::SUPPORTED_GROUPS => "SupportedGroups",
-            ExtensionType::EC_POINT_FORMATS => "EcPointFormats",
-            ExtensionType::SRP => "Srp",
-            ExtensionType::SIGNATURE_ALGORITHMS => "SignatureAlgorithms",
-            ExtensionType::USE_SRTP => "UseSrtp",
-            ExtensionType::HEARTBEAT => "Heartbeat",
-            ExtensionType::APPLICATION_LAYER_PROTOCOL_NEGOTIATION => {
+            ExtensionType::ServerName => "ServerName",
+            ExtensionType::MaxFragmentLength => "MaxFragmentLength",
+            ExtensionType::ClientCertificateUrl => "ClientCertificateUrl",
+            ExtensionType::TrustedCaKeys => "TrustedCaKeys",
+            ExtensionType::TruncatedHmac => "TruncatedHmac",
+            ExtensionType::StatusRequest => "StatusRequest",
+            ExtensionType::UserMapping => "UserMapping",
+            ExtensionType::ClientAuthz => "ClientAuthz",
+            ExtensionType::ServerAuthz => "ServerAuthz",
+            ExtensionType::CertType => "CertType",
+            ExtensionType::SupportedGroups => "SupportedGroups",
+            ExtensionType::EcPointFormats => "EcPointFormats",
+            ExtensionType::Srp => "Srp",
+            ExtensionType::SignatureAlgorithms => "SignatureAlgorithms",
+            ExtensionType::UseSrtp => "UseSrtp",
+            ExtensionType::Heartbeat => "Heartbeat",
+            ExtensionType::ApplicationLayerProtocolNegotiation => {
                 "ApplicationLayerProtocolNegotiation"
             }
-            ExtensionType::STATUS_REQUEST_V2 => "StatusRequestV2",
-            ExtensionType::SIGNED_CERTIFICATE_TIMESTAMP => "SignedCertificateTimestamp",
-            ExtensionType::CLIENT_CERTIFICATE_TYPE => "ClientCertificateType",
-            ExtensionType::SERVER_CERTIFICATE_TYPE => "ServerCertificateType",
-            ExtensionType::PADDING => "Padding",
-            ExtensionType::ENCRYPT_THEN_MAC => "EncryptThenMac",
-            ExtensionType::EXTENDED_MASTER_SECRET => "ExtendedMasterSecret",
-            ExtensionType::TOKEN_BINDING => "TokenBinding",
-            ExtensionType::CACHED_INFO => "CachedInfo",
-            ExtensionType::SESSION_TICKET => "SessionTicket",
-            ExtensionType::PRE_SHARED_KEY => "PreSharedKey",
-            ExtensionType::EARLY_DATA => "EarlyData",
-            ExtensionType::SUPPORTED_VERSIONS => "SupportedVersions",
-            ExtensionType::COOKIE => "Cookie",
-            ExtensionType::PSK_KEY_EXCHANGE_MODES => "PskKeyExchangeModes",
-            ExtensionType::CERTIFICATE_AUTHORITIES => "CertificateAuthorities",
-            ExtensionType::OID_FILTERS => "OidFilters",
-            ExtensionType::POST_HANDSHAKE_AUTH => "PostHandshakeAuth",
-            ExtensionType::SIGNATURE_ALGORITHMS_CERT => "SignatureAlgorithmsCert",
-            ExtensionType::KEY_SHARE => "KeyShare",
-            ExtensionType::RENEGOTIATION_INFO => "RenegotiationInfo",
+            ExtensionType::StatusRequestV2 => "StatusRequestV2",
+            ExtensionType::SignedCertificateTimestamp => "SignedCertificateTimestamp",
+            ExtensionType::ClientCertificateType => "ClientCertificateType",
+            ExtensionType::ServerCertificateType => "ServerCertificateType",
+            ExtensionType::Padding => "Padding",
+            ExtensionType::EncryptThenMac => "EncryptThenMac",
+            ExtensionType::ExtendedMasterSecret => "ExtendedMasterSecret",
+            ExtensionType::TokenBinding => "TokenBinding",
+            ExtensionType::CachedInfo => "CachedInfo",
+            ExtensionType::SessionTicket => "SessionTicket",
+            ExtensionType::PreSharedKey => "PreSharedKey",
+            ExtensionType::EarlyData => "EarlyData",
+            ExtensionType::SupportedVersions => "SupportedVersions",
+            ExtensionType::Cookie => "Cookie",
+            ExtensionType::PskKeyExchangeModes => "PskKeyExchangeModes",
+            ExtensionType::CertificateAuthorities => "CertificateAuthorities",
+            ExtensionType::OidFilters => "OidFilters",
+            ExtensionType::PostHandshakeAuth => "PostHandshakeAuth",
+            ExtensionType::SignatureAlgorithmsCert => "SignatureAlgorithmsCert",
+            ExtensionType::KeyShare => "KeyShare",
+            ExtensionType::RenegotiationInfo => "RenegotiationInfo",
             _ => unreachable!("known DTLS 1.3 extension type missing Debug label"),
         };
 
@@ -190,7 +191,7 @@ mod tests {
     use crate::buffer::Buf;
 
     const MESSAGE: &[u8] = &[
-        0x00, 0x0A, // ExtensionType::SUPPORTED_GROUPS
+        0x00, 0x0A, // ExtensionType::SupportedGroups
         0x00, 0x08, // Extension length
         0x00, 0x06, 0x00, 0x17, 0x00, 0x18, 0x00, 0x19, // Extension data
     ];
@@ -199,7 +200,7 @@ mod tests {
     fn extension_type_newtype_shape() {
         assert_eq!(std::mem::size_of::<ExtensionType>(), 2);
         assert_eq!(ExtensionType::default().as_u16(), 0);
-        assert_eq!(ExtensionType::default(), ExtensionType::SERVER_NAME);
+        assert_eq!(ExtensionType::default(), ExtensionType::ServerName);
     }
 
     #[test]
@@ -220,7 +221,7 @@ mod tests {
     #[test]
     fn extension_type_debug_stays_enum_like() {
         assert_eq!(
-            format!("{:?}", ExtensionType::SUPPORTED_GROUPS),
+            format!("{:?}", ExtensionType::SupportedGroups),
             "SupportedGroups"
         );
         assert_eq!(

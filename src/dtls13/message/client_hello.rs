@@ -214,7 +214,7 @@ mod tests {
         cipher_suites.push(Dtls13CipherSuite::AES_128_GCM_SHA256);
         cipher_suites.push(Dtls13CipherSuite::AES_256_GCM_SHA384);
         let mut compression_methods = ArrayVec::new();
-        compression_methods.push(CompressionMethod::NULL);
+        compression_methods.push(CompressionMethod::Null);
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,
@@ -340,7 +340,7 @@ mod tests {
             let mut message = MESSAGE.to_vec();
             message.extend_from_slice(&(count as u16 * 4).to_be_bytes());
             for _ in 0..count {
-                message.extend_from_slice(&ExtensionType::COOKIE.as_u16().to_be_bytes());
+                message.extend_from_slice(&ExtensionType::Cookie.as_u16().to_be_bytes());
                 message.extend_from_slice(&0u16.to_be_bytes());
             }
 
@@ -360,7 +360,7 @@ mod tests {
     fn zero_length_extension_vector_rejects_trailing_bytes() {
         let mut message = MESSAGE.to_vec();
         message.extend_from_slice(&0u16.to_be_bytes());
-        message.extend_from_slice(&ExtensionType::COOKIE.as_u16().to_be_bytes());
+        message.extend_from_slice(&ExtensionType::Cookie.as_u16().to_be_bytes());
         message.extend_from_slice(&0u16.to_be_bytes());
 
         assert!(
@@ -373,7 +373,7 @@ mod tests {
     fn underdeclared_extension_vector_rejects_trailing_bytes() {
         let mut message = MESSAGE.to_vec();
         message.extend_from_slice(&4u16.to_be_bytes());
-        message.extend_from_slice(&ExtensionType::COOKIE.as_u16().to_be_bytes());
+        message.extend_from_slice(&ExtensionType::Cookie.as_u16().to_be_bytes());
         message.extend_from_slice(&0u16.to_be_bytes());
         message.push(0);
 

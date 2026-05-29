@@ -279,7 +279,7 @@ impl ParsedRecord {
     ) -> Result<ParsedRecord, InternalError> {
         let (_, record) = DTLSRecord::parse(input, 0, offset)?;
 
-        let handshakes = if record.content_type == ContentType::HANDSHAKE {
+        let handshakes = if record.content_type == ContentType::Handshake {
             // This will also return None on the encrypted Finished after ChangeCipherSpec.
             // However we will then decrypt and try again.
             let fragment_offset = record.fragment_range.start;
@@ -409,7 +409,7 @@ mod tests {
     impl RecordHandler for TestHandler {
         fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
             self.classify_calls += 1;
-            if record.record().content_type == ContentType::ALERT {
+            if record.record().content_type == ContentType::Alert {
                 self.dropped_alerts += 1;
                 return Ok(None);
             }
@@ -464,9 +464,9 @@ mod tests {
     #[test]
     fn parse_packet_filters_control_records_after_packet_validation() {
         let mut packet = Vec::new();
-        packet.extend_from_slice(&build_record(ContentType::ALERT, 0, 1, &[0x01, 0x00]));
+        packet.extend_from_slice(&build_record(ContentType::Alert, 0, 1, &[0x01, 0x00]));
         packet.extend_from_slice(&build_record(
-            ContentType::APPLICATION_DATA,
+            ContentType::ApplicationData,
             1,
             2,
             &[0xAA, 0xBB],
@@ -482,7 +482,7 @@ mod tests {
         assert_eq!(incoming.records().len(), 1);
         assert_eq!(
             incoming.first().record().content_type,
-            ContentType::APPLICATION_DATA
+            ContentType::ApplicationData
         );
         assert_eq!(incoming.first().record().sequence.epoch, 1);
     }

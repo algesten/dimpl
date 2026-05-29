@@ -1130,7 +1130,7 @@ fn forged_epoch1_app_data() -> Vec<u8> {
     // garbage (undecryptable) body. The content type lives in the cleartext
     // header, so this looks like app data before anything is decrypted.
     let mut rec = Vec::new();
-    rec.push(23); // ContentType::APPLICATION_DATA
+    rec.push(23); // ContentType::ApplicationData
     rec.extend_from_slice(&[0xFE, 0xFD]); // DTLS 1.2
     rec.extend_from_slice(&1u16.to_be_bytes()); // epoch 1
     rec.extend_from_slice(&[0, 0, 0, 0, 0, 1]); // 48-bit sequence number

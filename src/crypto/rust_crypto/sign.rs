@@ -55,7 +55,7 @@ impl SigningKeyTrait for EcdsaSigningKey {
                     }
                     _ => {
                         return Err(CryptoError::SigningKeyUnsupportedHash {
-                            group: NamedGroup::SECP256R1,
+                            group: NamedGroup::Secp256r1,
                             hash: hash_alg,
                         });
                     }
@@ -77,7 +77,7 @@ impl SigningKeyTrait for EcdsaSigningKey {
                     }
                     _ => {
                         return Err(CryptoError::SigningKeyUnsupportedHash {
-                            group: NamedGroup::SECP384R1,
+                            group: NamedGroup::Secp384r1,
                             hash: hash_alg,
                         });
                     }
@@ -231,8 +231,8 @@ impl SignatureVerifier for RustCryptoSignatureVerifier {
             .map_err(|_| CryptoError::InvalidEcCurveParameter)?;
 
         let group = match curve_oid {
-            OID_P256 => NamedGroup::SECP256R1,
-            OID_P384 => NamedGroup::SECP384R1,
+            OID_P256 => NamedGroup::Secp256r1,
+            OID_P384 => NamedGroup::Secp384r1,
             _ => return Err(CryptoError::UnsupportedEcCurve),
         };
 
@@ -250,9 +250,9 @@ impl SignatureVerifier for RustCryptoSignatureVerifier {
         };
 
         match group {
-            NamedGroup::SECP256R1 => {
+            NamedGroup::Secp256r1 => {
                 let verifying_key = VerifyingKey::<NistP256>::from_sec1_bytes(pubkey_bytes)
-                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::SECP256R1))?;
+                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::Secp256r1))?;
                 let sig = Signature::<NistP256>::from_der(signature)
                     .map_err(|_| CryptoError::InvalidSignatureFormat)?;
                 verifying_key.verify_prehash(&hash, &sig).map_err(|_| {
@@ -263,9 +263,9 @@ impl SignatureVerifier for RustCryptoSignatureVerifier {
                     }
                 })
             }
-            NamedGroup::SECP384R1 => {
+            NamedGroup::Secp384r1 => {
                 let verifying_key = VerifyingKey::<NistP384>::from_sec1_bytes(pubkey_bytes)
-                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::SECP384R1))?;
+                    .map_err(|_| CryptoError::InvalidPublicKey(NamedGroup::Secp384r1))?;
                 let sig = Signature::<NistP384>::from_der(signature)
                     .map_err(|_| CryptoError::InvalidSignatureFormat)?;
                 verifying_key.verify_prehash(&hash, &sig).map_err(|_| {
@@ -322,7 +322,7 @@ mod tests {
             CryptoError::SignatureVerificationFailed {
                 signature: SignatureAlgorithm::ECDSA,
                 hash: HashAlgorithm::SHA256,
-                group: NamedGroup::SECP256R1,
+                group: NamedGroup::Secp256r1,
             }
         );
     }

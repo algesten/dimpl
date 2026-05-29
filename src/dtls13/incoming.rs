@@ -363,7 +363,7 @@ impl ParsedRecord {
     ) -> Result<ParsedRecord, InternalError> {
         let (_, record) = Dtls13Record::parse(input, 0)?;
 
-        let handshakes = if record.content_type == ContentType::HANDSHAKE {
+        let handshakes = if record.content_type == ContentType::Handshake {
             let fragment_offset = record.fragment_range.start;
             parse_handshakes(record.fragment(input), fragment_offset, cipher_suite)
         } else {
@@ -383,7 +383,7 @@ impl ParsedRecord {
         input: &[u8],
         cipher_suite: Option<Dtls13CipherSuite>,
     ) -> ParsedRecord {
-        let handshakes = if record.content_type == ContentType::HANDSHAKE {
+        let handshakes = if record.content_type == ContentType::Handshake {
             let fragment_offset = record.fragment_range.start;
             parse_handshakes(record.fragment(input), fragment_offset, cipher_suite)
         } else {
@@ -541,7 +541,7 @@ mod tests {
     impl RecordHandler for TestHandler {
         fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
             self.classify_calls += 1;
-            if record.record().content_type == ContentType::ACK {
+            if record.record().content_type == ContentType::Ack {
                 self.dropped_acks += 1;
                 return Ok(None);
             }
@@ -617,7 +617,7 @@ mod tests {
     #[test]
     fn parse_packet_filters_control_records_after_packet_validation() {
         let mut packet = Vec::new();
-        packet.extend_from_slice(&build_plaintext_record(ContentType::ACK, 1, &[0xAA, 0xBB]));
+        packet.extend_from_slice(&build_plaintext_record(ContentType::Ack, 1, &[0xAA, 0xBB]));
         packet.extend_from_slice(&build_ciphertext_record(2, 2, &[0x11, 0x22, 0x33]));
 
         let mut handler = TestHandler::default();
@@ -630,7 +630,7 @@ mod tests {
         assert_eq!(incoming.records().len(), 1);
         assert_eq!(
             incoming.first().record().content_type,
-            ContentType::APPLICATION_DATA
+            ContentType::ApplicationData
         );
         assert_eq!(incoming.first().record().sequence.epoch, 2);
     }

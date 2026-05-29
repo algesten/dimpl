@@ -189,7 +189,7 @@ impl Handshake {
 
         let (rest, body) = Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?;
 
-        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::FINISHED {
+        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
             return Err(crate::InternalError::parse_incomplete());
         }
@@ -269,10 +269,10 @@ impl Handshake {
 
         let qualifies = matches!(
             self.header.msg_type,
-            MessageType::CLIENT_HELLO |        // flight 1 and 3
-            MessageType::HELLO_VERIFY_REQUEST | // flight 2
-            MessageType::SERVER_HELLO_DONE |    // flight 4
-            MessageType::CLIENT_KEY_EXCHANGE // flight 5
+            MessageType::ClientHello |        // flight 1 and 3
+            MessageType::HelloVerifyRequest | // flight 2
+            MessageType::ServerHelloDone |    // flight 4
+            MessageType::ClientKeyExchange // flight 5
         );
 
         qualifies.then_some(self.header.message_seq)
@@ -291,19 +291,20 @@ impl Handshake {
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct MessageType(u8);
 
+#[allow(non_upper_case_globals)]
 impl MessageType {
-    pub const HELLO_REQUEST: Self = Self(0);
-    pub const CLIENT_HELLO: Self = Self(1);
-    pub const SERVER_HELLO: Self = Self(2);
-    pub const HELLO_VERIFY_REQUEST: Self = Self(3);
-    pub const NEW_SESSION_TICKET: Self = Self(4);
-    pub const CERTIFICATE: Self = Self(11);
-    pub const SERVER_KEY_EXCHANGE: Self = Self(12);
-    pub const CERTIFICATE_REQUEST: Self = Self(13);
-    pub const SERVER_HELLO_DONE: Self = Self(14);
-    pub const CERTIFICATE_VERIFY: Self = Self(15);
-    pub const CLIENT_KEY_EXCHANGE: Self = Self(16);
-    pub const FINISHED: Self = Self(20);
+    pub const HelloRequest: Self = Self(0);
+    pub const ClientHello: Self = Self(1);
+    pub const ServerHello: Self = Self(2);
+    pub const HelloVerifyRequest: Self = Self(3);
+    pub const NewSessionTicket: Self = Self(4);
+    pub const Certificate: Self = Self(11);
+    pub const ServerKeyExchange: Self = Self(12);
+    pub const CertificateRequest: Self = Self(13);
+    pub const ServerHelloDone: Self = Self(14);
+    pub const CertificateVerify: Self = Self(15);
+    pub const ClientKeyExchange: Self = Self(16);
+    pub const Finished: Self = Self(20);
 
     pub const fn from_u8(value: u8) -> Self {
         Self(value)
@@ -323,10 +324,7 @@ impl MessageType {
     }
 
     pub fn epoch(&self) -> u16 {
-        if matches!(
-            *self,
-            MessageType::NEW_SESSION_TICKET | MessageType::FINISHED
-        ) {
+        if matches!(*self, MessageType::NewSessionTicket | MessageType::Finished) {
             1
         } else {
             0
@@ -341,18 +339,18 @@ impl fmt::Debug for MessageType {
         }
 
         let name = match *self {
-            MessageType::HELLO_REQUEST => "HelloRequest",
-            MessageType::CLIENT_HELLO => "ClientHello",
-            MessageType::HELLO_VERIFY_REQUEST => "HelloVerifyRequest",
-            MessageType::SERVER_HELLO => "ServerHello",
-            MessageType::CERTIFICATE => "Certificate",
-            MessageType::SERVER_KEY_EXCHANGE => "ServerKeyExchange",
-            MessageType::CERTIFICATE_REQUEST => "CertificateRequest",
-            MessageType::SERVER_HELLO_DONE => "ServerHelloDone",
-            MessageType::CERTIFICATE_VERIFY => "CertificateVerify",
-            MessageType::CLIENT_KEY_EXCHANGE => "ClientKeyExchange",
-            MessageType::NEW_SESSION_TICKET => "NewSessionTicket",
-            MessageType::FINISHED => "Finished",
+            MessageType::HelloRequest => "HelloRequest",
+            MessageType::ClientHello => "ClientHello",
+            MessageType::HelloVerifyRequest => "HelloVerifyRequest",
+            MessageType::ServerHello => "ServerHello",
+            MessageType::Certificate => "Certificate",
+            MessageType::ServerKeyExchange => "ServerKeyExchange",
+            MessageType::CertificateRequest => "CertificateRequest",
+            MessageType::ServerHelloDone => "ServerHelloDone",
+            MessageType::CertificateVerify => "CertificateVerify",
+            MessageType::ClientKeyExchange => "ClientKeyExchange",
+            MessageType::NewSessionTicket => "NewSessionTicket",
+            MessageType::Finished => "Finished",
             _ => unreachable!("known DTLS 1.2 handshake message type missing Debug label"),
         };
 
@@ -393,24 +391,24 @@ impl Body {
         c: Option<Dtls12CipherSuite>,
     ) -> IResult<&[u8], Body> {
         match m {
-            MessageType::HELLO_REQUEST => Ok((input, Body::HelloRequest)),
-            MessageType::CLIENT_HELLO => {
+            MessageType::HelloRequest => Ok((input, Body::HelloRequest)),
+            MessageType::ClientHello => {
                 let (input, client_hello) = ClientHello::parse(input, base_offset)?;
                 Ok((input, Body::ClientHello(client_hello)))
             }
-            MessageType::HELLO_VERIFY_REQUEST => {
+            MessageType::HelloVerifyRequest => {
                 let (input, hello_verify_request) = HelloVerifyRequest::parse(input)?;
                 Ok((input, Body::HelloVerifyRequest(hello_verify_request)))
             }
-            MessageType::SERVER_HELLO => {
+            MessageType::ServerHello => {
                 let (input, server_hello) = ServerHello::parse(input, base_offset)?;
                 Ok((input, Body::ServerHello(server_hello)))
             }
-            MessageType::CERTIFICATE => {
+            MessageType::Certificate => {
                 let (input, certificate) = Certificate::parse(input, base_offset)?;
                 Ok((input, Body::Certificate(certificate)))
             }
-            MessageType::SERVER_KEY_EXCHANGE => {
+            MessageType::ServerKeyExchange => {
                 let cipher_suite =
                     c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
                 let algo = cipher_suite.as_key_exchange_algorithm();
@@ -418,16 +416,16 @@ impl Body {
                     ServerKeyExchange::parse(input, base_offset, algo)?;
                 Ok((input, Body::ServerKeyExchange(server_key_exchange)))
             }
-            MessageType::CERTIFICATE_REQUEST => {
+            MessageType::CertificateRequest => {
                 let (input, certificate_request) = CertificateRequest::parse(input, base_offset)?;
                 Ok((input, Body::CertificateRequest(certificate_request)))
             }
-            MessageType::SERVER_HELLO_DONE => Ok((input, Body::ServerHelloDone)),
-            MessageType::CERTIFICATE_VERIFY => {
+            MessageType::ServerHelloDone => Ok((input, Body::ServerHelloDone)),
+            MessageType::CertificateVerify => {
                 let (input, certificate_verify) = CertificateVerify::parse(input, base_offset)?;
                 Ok((input, Body::CertificateVerify(certificate_verify)))
             }
-            MessageType::CLIENT_KEY_EXCHANGE => {
+            MessageType::ClientKeyExchange => {
                 let cipher_suite =
                     c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
                 let algo = cipher_suite.as_key_exchange_algorithm();
@@ -435,12 +433,12 @@ impl Body {
                     ClientKeyExchange::parse(input, base_offset, algo)?;
                 Ok((input, Body::ClientKeyExchange(client_key_exchange)))
             }
-            MessageType::NEW_SESSION_TICKET => {
+            MessageType::NewSessionTicket => {
                 // Treat ticket as opaque per RFC 5077: lifetime_hint(4) + ticket (opaque vector)
                 let range = base_offset..(base_offset + input.len());
                 Ok((&[], Body::NewSessionTicket(range)))
             }
-            MessageType::FINISHED => {
+            MessageType::Finished => {
                 let cipher_suite =
                     c.ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
                 let (input, finished) = Finished::parse(input, cipher_suite)?;
@@ -513,7 +511,7 @@ mod tests {
     use crate::dtls12::message::SessionId;
 
     const MESSAGE: &[u8] = &[
-        0x01, // MessageType::CLIENT_HELLO
+        0x01, // MessageType::ClientHello
         0x00, 0x00, 0x2E, // length
         0x00, 0x00, // message_seq
         0x00, 0x00, 0x00, // fragment_offset
@@ -532,31 +530,31 @@ mod tests {
         0xC0, 0x2B, // Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
         0xC0, 0x2C, // Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
         0x01, // CompressionMethods length
-        0x00, // CompressionMethod::NULL
+        0x00, // CompressionMethod::Null
     ];
 
     #[test]
     fn message_type_newtype_shape() {
         assert_eq!(std::mem::size_of::<MessageType>(), 1);
         assert_eq!(MessageType::default().as_u8(), 0);
-        assert_eq!(MessageType::default(), MessageType::HELLO_REQUEST);
+        assert_eq!(MessageType::default(), MessageType::HelloRequest);
     }
 
     #[test]
     fn message_type_wire_roundtrip() {
         for message_type in [
-            MessageType::HELLO_REQUEST,
-            MessageType::CLIENT_HELLO,
-            MessageType::SERVER_HELLO,
-            MessageType::HELLO_VERIFY_REQUEST,
-            MessageType::NEW_SESSION_TICKET,
-            MessageType::CERTIFICATE,
-            MessageType::SERVER_KEY_EXCHANGE,
-            MessageType::CERTIFICATE_REQUEST,
-            MessageType::SERVER_HELLO_DONE,
-            MessageType::CERTIFICATE_VERIFY,
-            MessageType::CLIENT_KEY_EXCHANGE,
-            MessageType::FINISHED,
+            MessageType::HelloRequest,
+            MessageType::ClientHello,
+            MessageType::ServerHello,
+            MessageType::HelloVerifyRequest,
+            MessageType::NewSessionTicket,
+            MessageType::Certificate,
+            MessageType::ServerKeyExchange,
+            MessageType::CertificateRequest,
+            MessageType::ServerHelloDone,
+            MessageType::CertificateVerify,
+            MessageType::ClientKeyExchange,
+            MessageType::Finished,
         ] {
             assert_eq!(MessageType::from_u8(message_type.as_u8()), message_type);
             assert!(!message_type.is_unknown());
@@ -569,7 +567,7 @@ mod tests {
 
     #[test]
     fn message_type_debug_stays_enum_like() {
-        assert_eq!(format!("{:?}", MessageType::CLIENT_HELLO), "ClientHello");
+        assert_eq!(format!("{:?}", MessageType::ClientHello), "ClientHello");
         assert_eq!(format!("{:?}", MessageType::from_u8(0xFF)), "Unknown(255)");
     }
 
@@ -577,7 +575,7 @@ mod tests {
     fn handshake_size() {
         let h = Handshake::new(
             // ServerHelloDone has a 0 sized body.
-            MessageType::SERVER_HELLO_DONE,
+            MessageType::ServerHelloDone,
             0,
             0,
             0,
@@ -602,7 +600,7 @@ mod tests {
         cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
         cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
         let mut compression_methods = ArrayVec::new();
-        compression_methods.push(CompressionMethod::NULL);
+        compression_methods.push(CompressionMethod::Null);
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,
@@ -614,7 +612,7 @@ mod tests {
         );
 
         let handshake = Handshake::new(
-            MessageType::CLIENT_HELLO,
+            MessageType::ClientHello,
             0x2E,
             0,
             0,
@@ -645,7 +643,7 @@ mod tests {
         cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
         cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
         let mut compression_methods = ArrayVec::new();
-        compression_methods.push(CompressionMethod::NULL);
+        compression_methods.push(CompressionMethod::Null);
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,
@@ -657,7 +655,7 @@ mod tests {
         );
 
         let handshake = Handshake::new(
-            MessageType::CLIENT_HELLO,
+            MessageType::ClientHello,
             46,
             0,
             0,

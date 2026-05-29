@@ -85,57 +85,58 @@ impl Random {
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct NamedGroup(u16);
 
+#[allow(non_upper_case_globals)]
 impl NamedGroup {
     /// sect163k1 (deprecated).
-    pub const SECT163K1: Self = Self(1);
+    pub const Sect163k1: Self = Self(1);
     /// sect163r1 (deprecated).
-    pub const SECT163R1: Self = Self(2);
+    pub const Sect163r1: Self = Self(2);
     /// sect163r2 (deprecated).
-    pub const SECT163R2: Self = Self(3);
+    pub const Sect163r2: Self = Self(3);
     /// sect193r1 (deprecated).
-    pub const SECT193R1: Self = Self(4);
+    pub const Sect193r1: Self = Self(4);
     /// sect193r2 (deprecated).
-    pub const SECT193R2: Self = Self(5);
+    pub const Sect193r2: Self = Self(5);
     /// sect233k1 (deprecated).
-    pub const SECT233K1: Self = Self(6);
+    pub const Sect233k1: Self = Self(6);
     /// sect233r1 (deprecated).
-    pub const SECT233R1: Self = Self(7);
+    pub const Sect233r1: Self = Self(7);
     /// sect239k1 (deprecated).
-    pub const SECT239K1: Self = Self(8);
+    pub const Sect239k1: Self = Self(8);
     /// sect283k1 (deprecated).
-    pub const SECT283K1: Self = Self(9);
+    pub const Sect283k1: Self = Self(9);
     /// sect283r1 (deprecated).
-    pub const SECT283R1: Self = Self(10);
+    pub const Sect283r1: Self = Self(10);
     /// sect409k1 (deprecated).
-    pub const SECT409K1: Self = Self(11);
+    pub const Sect409k1: Self = Self(11);
     /// sect409r1 (deprecated).
-    pub const SECT409R1: Self = Self(12);
+    pub const Sect409r1: Self = Self(12);
     /// sect571k1 (deprecated).
-    pub const SECT571K1: Self = Self(13);
+    pub const Sect571k1: Self = Self(13);
     /// sect571r1 (deprecated).
-    pub const SECT571R1: Self = Self(14);
+    pub const Sect571r1: Self = Self(14);
     /// secp160k1 (deprecated).
-    pub const SECP160K1: Self = Self(15);
+    pub const Secp160k1: Self = Self(15);
     /// secp160r1 (deprecated).
-    pub const SECP160R1: Self = Self(16);
+    pub const Secp160r1: Self = Self(16);
     /// secp160r2 (deprecated).
-    pub const SECP160R2: Self = Self(17);
+    pub const Secp160r2: Self = Self(17);
     /// secp192k1 (deprecated).
-    pub const SECP192K1: Self = Self(18);
+    pub const Secp192k1: Self = Self(18);
     /// secp192r1 (deprecated).
-    pub const SECP192R1: Self = Self(19);
+    pub const Secp192r1: Self = Self(19);
     /// secp224k1.
-    pub const SECP224K1: Self = Self(20);
+    pub const Secp224k1: Self = Self(20);
     /// secp224r1.
-    pub const SECP224R1: Self = Self(21);
+    pub const Secp224r1: Self = Self(21);
     /// secp256k1.
-    pub const SECP256K1: Self = Self(22);
+    pub const Secp256k1: Self = Self(22);
     /// secp256r1 / P-256 (supported by dimpl).
-    pub const SECP256R1: Self = Self(23);
+    pub const Secp256r1: Self = Self(23);
     /// secp384r1 / P-384 (supported by dimpl).
-    pub const SECP384R1: Self = Self(24);
+    pub const Secp384r1: Self = Self(24);
     /// secp521r1 / P-521.
-    pub const SECP521R1: Self = Self(25);
+    pub const Secp521r1: Self = Self(25);
     /// X25519 (Curve25519 for ECDHE).
     pub const X25519: Self = Self(29);
     /// X448 (Curve448 for ECDHE).
@@ -170,31 +171,31 @@ impl NamedGroup {
     /// All recognized named groups (every non-`Unknown` variant).
     pub const fn all() -> &'static [NamedGroup; 27] {
         &[
-            NamedGroup::SECT163K1,
-            NamedGroup::SECT163R1,
-            NamedGroup::SECT163R2,
-            NamedGroup::SECT193R1,
-            NamedGroup::SECT193R2,
-            NamedGroup::SECT233K1,
-            NamedGroup::SECT233R1,
-            NamedGroup::SECT239K1,
-            NamedGroup::SECT283K1,
-            NamedGroup::SECT283R1,
-            NamedGroup::SECT409K1,
-            NamedGroup::SECT409R1,
-            NamedGroup::SECT571K1,
-            NamedGroup::SECT571R1,
-            NamedGroup::SECP160K1,
-            NamedGroup::SECP160R1,
-            NamedGroup::SECP160R2,
-            NamedGroup::SECP192K1,
-            NamedGroup::SECP192R1,
-            NamedGroup::SECP224K1,
-            NamedGroup::SECP224R1,
-            NamedGroup::SECP256K1,
-            NamedGroup::SECP256R1,
-            NamedGroup::SECP384R1,
-            NamedGroup::SECP521R1,
+            NamedGroup::Sect163k1,
+            NamedGroup::Sect163r1,
+            NamedGroup::Sect163r2,
+            NamedGroup::Sect193r1,
+            NamedGroup::Sect193r2,
+            NamedGroup::Sect233k1,
+            NamedGroup::Sect233r1,
+            NamedGroup::Sect239k1,
+            NamedGroup::Sect283k1,
+            NamedGroup::Sect283r1,
+            NamedGroup::Sect409k1,
+            NamedGroup::Sect409r1,
+            NamedGroup::Sect571k1,
+            NamedGroup::Sect571r1,
+            NamedGroup::Secp160k1,
+            NamedGroup::Secp160r1,
+            NamedGroup::Secp160r2,
+            NamedGroup::Secp192k1,
+            NamedGroup::Secp192r1,
+            NamedGroup::Secp224k1,
+            NamedGroup::Secp224r1,
+            NamedGroup::Secp256k1,
+            NamedGroup::Secp256r1,
+            NamedGroup::Secp384r1,
+            NamedGroup::Secp521r1,
             NamedGroup::X25519,
             NamedGroup::X448,
         ]
@@ -204,9 +205,9 @@ impl NamedGroup {
     pub const fn supported() -> &'static [NamedGroup; 4] {
         &[
             NamedGroup::X25519,
-            NamedGroup::SECP256R1,
-            NamedGroup::SECP384R1,
-            NamedGroup::SECP521R1,
+            NamedGroup::Secp256r1,
+            NamedGroup::Secp384r1,
+            NamedGroup::Secp521r1,
         ]
     }
 }
@@ -214,31 +215,31 @@ impl NamedGroup {
 impl fmt::Debug for NamedGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            NamedGroup::SECT163K1 => f.write_str("Sect163k1"),
-            NamedGroup::SECT163R1 => f.write_str("Sect163r1"),
-            NamedGroup::SECT163R2 => f.write_str("Sect163r2"),
-            NamedGroup::SECT193R1 => f.write_str("Sect193r1"),
-            NamedGroup::SECT193R2 => f.write_str("Sect193r2"),
-            NamedGroup::SECT233K1 => f.write_str("Sect233k1"),
-            NamedGroup::SECT233R1 => f.write_str("Sect233r1"),
-            NamedGroup::SECT239K1 => f.write_str("Sect239k1"),
-            NamedGroup::SECT283K1 => f.write_str("Sect283k1"),
-            NamedGroup::SECT283R1 => f.write_str("Sect283r1"),
-            NamedGroup::SECT409K1 => f.write_str("Sect409k1"),
-            NamedGroup::SECT409R1 => f.write_str("Sect409r1"),
-            NamedGroup::SECT571K1 => f.write_str("Sect571k1"),
-            NamedGroup::SECT571R1 => f.write_str("Sect571r1"),
-            NamedGroup::SECP160K1 => f.write_str("Secp160k1"),
-            NamedGroup::SECP160R1 => f.write_str("Secp160r1"),
-            NamedGroup::SECP160R2 => f.write_str("Secp160r2"),
-            NamedGroup::SECP192K1 => f.write_str("Secp192k1"),
-            NamedGroup::SECP192R1 => f.write_str("Secp192r1"),
-            NamedGroup::SECP224K1 => f.write_str("Secp224k1"),
-            NamedGroup::SECP224R1 => f.write_str("Secp224r1"),
-            NamedGroup::SECP256K1 => f.write_str("Secp256k1"),
-            NamedGroup::SECP256R1 => f.write_str("Secp256r1"),
-            NamedGroup::SECP384R1 => f.write_str("Secp384r1"),
-            NamedGroup::SECP521R1 => f.write_str("Secp521r1"),
+            NamedGroup::Sect163k1 => f.write_str("Sect163k1"),
+            NamedGroup::Sect163r1 => f.write_str("Sect163r1"),
+            NamedGroup::Sect163r2 => f.write_str("Sect163r2"),
+            NamedGroup::Sect193r1 => f.write_str("Sect193r1"),
+            NamedGroup::Sect193r2 => f.write_str("Sect193r2"),
+            NamedGroup::Sect233k1 => f.write_str("Sect233k1"),
+            NamedGroup::Sect233r1 => f.write_str("Sect233r1"),
+            NamedGroup::Sect239k1 => f.write_str("Sect239k1"),
+            NamedGroup::Sect283k1 => f.write_str("Sect283k1"),
+            NamedGroup::Sect283r1 => f.write_str("Sect283r1"),
+            NamedGroup::Sect409k1 => f.write_str("Sect409k1"),
+            NamedGroup::Sect409r1 => f.write_str("Sect409r1"),
+            NamedGroup::Sect571k1 => f.write_str("Sect571k1"),
+            NamedGroup::Sect571r1 => f.write_str("Sect571r1"),
+            NamedGroup::Secp160k1 => f.write_str("Secp160k1"),
+            NamedGroup::Secp160r1 => f.write_str("Secp160r1"),
+            NamedGroup::Secp160r2 => f.write_str("Secp160r2"),
+            NamedGroup::Secp192k1 => f.write_str("Secp192k1"),
+            NamedGroup::Secp192r1 => f.write_str("Secp192r1"),
+            NamedGroup::Secp224k1 => f.write_str("Secp224k1"),
+            NamedGroup::Secp224r1 => f.write_str("Secp224r1"),
+            NamedGroup::Secp256k1 => f.write_str("Secp256k1"),
+            NamedGroup::Secp256r1 => f.write_str("Secp256r1"),
+            NamedGroup::Secp384r1 => f.write_str("Secp384r1"),
+            NamedGroup::Secp521r1 => f.write_str("Secp521r1"),
             NamedGroup::X25519 => f.write_str("X25519"),
             NamedGroup::X448 => f.write_str("X448"),
             _ => f.debug_tuple("Unknown").field(&self.0).finish(),
@@ -260,13 +261,14 @@ pub struct HashAlgorithm(u8);
 
 impl Default for HashAlgorithm {
     fn default() -> Self {
-        Self::NONE
+        Self::None
     }
 }
 
+#[allow(non_upper_case_globals)]
 impl HashAlgorithm {
     /// No hash (not typically used).
-    pub const NONE: Self = Self(0);
+    pub const None: Self = Self(0);
     /// MD5 hash (deprecated, not supported).
     pub const MD5: Self = Self(1);
     /// SHA-1 hash (deprecated, not supported).
@@ -306,7 +308,7 @@ impl HashAlgorithm {
     /// Returns the output length in bytes for this hash algorithm.
     pub const fn output_len(&self) -> usize {
         match *self {
-            HashAlgorithm::NONE => 0,
+            HashAlgorithm::None => 0,
             HashAlgorithm::MD5 => 16,
             HashAlgorithm::SHA1 => 20,
             HashAlgorithm::SHA224 => 28,
@@ -321,7 +323,7 @@ impl HashAlgorithm {
 impl fmt::Debug for HashAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            HashAlgorithm::NONE => f.write_str("None"),
+            HashAlgorithm::None => f.write_str("None"),
             HashAlgorithm::MD5 => f.write_str("MD5"),
             HashAlgorithm::SHA1 => f.write_str("SHA1"),
             HashAlgorithm::SHA224 => f.write_str("SHA224"),
@@ -347,13 +349,14 @@ pub struct SignatureAlgorithm(u8);
 
 impl Default for SignatureAlgorithm {
     fn default() -> Self {
-        Self::ANONYMOUS
+        Self::Anonymous
     }
 }
 
+#[allow(non_upper_case_globals)]
 impl SignatureAlgorithm {
     /// Anonymous (no certificate).
-    pub const ANONYMOUS: Self = Self(0);
+    pub const Anonymous: Self = Self(0);
     /// RSA signatures.
     pub const RSA: Self = Self(1);
     /// DSA signatures.
@@ -388,7 +391,7 @@ impl SignatureAlgorithm {
 impl fmt::Debug for SignatureAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            SignatureAlgorithm::ANONYMOUS => f.write_str("Anonymous"),
+            SignatureAlgorithm::Anonymous => f.write_str("Anonymous"),
             SignatureAlgorithm::RSA => f.write_str("RSA"),
             SignatureAlgorithm::DSA => f.write_str("DSA"),
             SignatureAlgorithm::ECDSA => f.write_str("ECDSA"),
@@ -409,17 +412,18 @@ impl fmt::Debug for SignatureAlgorithm {
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ContentType(u8);
 
+#[allow(non_upper_case_globals)]
 impl ContentType {
     /// Change Cipher Spec (used in DTLS 1.2, compatibility-only in 1.3).
-    pub const CHANGE_CIPHER_SPEC: Self = Self(20);
+    pub const ChangeCipherSpec: Self = Self(20);
     /// Alert message.
-    pub const ALERT: Self = Self(21);
+    pub const Alert: Self = Self(21);
     /// Handshake message.
-    pub const HANDSHAKE: Self = Self(22);
+    pub const Handshake: Self = Self(22);
     /// Application data.
-    pub const APPLICATION_DATA: Self = Self(23);
+    pub const ApplicationData: Self = Self(23);
     /// ACK (DTLS 1.3 only, RFC 9147 Section 7).
-    pub const ACK: Self = Self(26);
+    pub const Ack: Self = Self(26);
 
     /// Convert a u8 value to a `ContentType`.
     pub const fn from_u8(value: u8) -> Self {
@@ -446,11 +450,11 @@ impl ContentType {
 impl fmt::Debug for ContentType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            ContentType::CHANGE_CIPHER_SPEC => f.write_str("ChangeCipherSpec"),
-            ContentType::ALERT => f.write_str("Alert"),
-            ContentType::HANDSHAKE => f.write_str("Handshake"),
-            ContentType::APPLICATION_DATA => f.write_str("ApplicationData"),
-            ContentType::ACK => f.write_str("Ack"),
+            ContentType::ChangeCipherSpec => f.write_str("ChangeCipherSpec"),
+            ContentType::Alert => f.write_str("Alert"),
+            ContentType::Handshake => f.write_str("Handshake"),
+            ContentType::ApplicationData => f.write_str("ApplicationData"),
+            ContentType::Ack => f.write_str("Ack"),
             _ => f.debug_tuple("Unknown").field(&self.0).finish(),
         }
     }
@@ -621,8 +625,8 @@ impl SignatureScheme {
     /// Returns `None` for non-ECDSA schemes.
     pub fn named_group(&self) -> Option<NamedGroup> {
         match *self {
-            SignatureScheme::ECDSA_SECP256R1_SHA256 => Some(NamedGroup::SECP256R1),
-            SignatureScheme::ECDSA_SECP384R1_SHA384 => Some(NamedGroup::SECP384R1),
+            SignatureScheme::ECDSA_SECP256R1_SHA256 => Some(NamedGroup::Secp256r1),
+            SignatureScheme::ECDSA_SECP384R1_SHA384 => Some(NamedGroup::Secp384r1),
             _ => None,
         }
     }
@@ -643,7 +647,7 @@ impl SignatureScheme {
             | SignatureScheme::RSA_PSS_PSS_SHA512
             | SignatureScheme::RSA_PKCS1_SHA512 => HashAlgorithm::SHA512,
             // Ed25519 and Ed448 have intrinsic hash algorithms
-            SignatureScheme::ED25519 | SignatureScheme::ED448 => HashAlgorithm::NONE,
+            SignatureScheme::ED25519 | SignatureScheme::ED448 => HashAlgorithm::None,
             _ => HashAlgorithm::UNKNOWN_DERIVED,
         }
     }
@@ -843,15 +847,16 @@ pub struct CompressionMethod(u8);
 
 impl Default for CompressionMethod {
     fn default() -> Self {
-        Self::NULL
+        Self::Null
     }
 }
 
+#[allow(non_upper_case_globals)]
 impl CompressionMethod {
     /// No compression.
-    pub const NULL: Self = Self(0x00);
+    pub const Null: Self = Self(0x00);
     /// DEFLATE compression.
-    pub const DEFLATE: Self = Self(0x01);
+    pub const Deflate: Self = Self(0x01);
 
     /// Convert a u8 value to a `CompressionMethod`.
     pub const fn from_u8(value: u8) -> Self {
@@ -865,7 +870,7 @@ impl CompressionMethod {
 
     /// All recognized compression methods (every non-`Unknown` variant).
     pub const fn all() -> &'static [CompressionMethod; 2] {
-        &[CompressionMethod::NULL, CompressionMethod::DEFLATE]
+        &[CompressionMethod::Null, CompressionMethod::Deflate]
     }
 
     /// Supported compression methods.
@@ -874,7 +879,7 @@ impl CompressionMethod {
     /// §4.1.2) mandates exactly one compression method (null). DEFLATE
     /// is recognized by parsing but not accepted.
     pub const fn supported() -> &'static [CompressionMethod; 1] {
-        &[CompressionMethod::NULL]
+        &[CompressionMethod::Null]
     }
 
     /// Convert this `CompressionMethod` to its u8 value.
@@ -884,7 +889,7 @@ impl CompressionMethod {
 
     /// Returns true if this is not a known TLS compression method wire value.
     pub const fn is_unknown(&self) -> bool {
-        self.0 > Self::DEFLATE.0
+        self.0 > Self::Deflate.0
     }
 
     /// Parse a `CompressionMethod` from wire format.
@@ -897,8 +902,8 @@ impl CompressionMethod {
 impl fmt::Debug for CompressionMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            CompressionMethod::NULL => f.write_str("Null"),
-            CompressionMethod::DEFLATE => f.write_str("Deflate"),
+            CompressionMethod::Null => f.write_str("Null"),
+            CompressionMethod::Deflate => f.write_str("Deflate"),
             _ => f.debug_tuple("Unknown").field(&self.0).finish(),
         }
     }
@@ -929,7 +934,7 @@ mod tests {
 
     #[test]
     fn named_group_debug_stays_enum_like() {
-        assert_eq!(format!("{:?}", NamedGroup::SECP256R1), "Secp256r1");
+        assert_eq!(format!("{:?}", NamedGroup::Secp256r1), "Secp256r1");
         assert_eq!(format!("{:?}", NamedGroup::X25519), "X25519");
         assert_eq!(
             format!("{:?}", NamedGroup::from_u16(0xFFFF)),
@@ -941,13 +946,13 @@ mod tests {
     fn hash_algorithm_newtype_shape() {
         assert_eq!(std::mem::size_of::<HashAlgorithm>(), 1);
         assert_eq!(HashAlgorithm::default().as_u8(), 0);
-        assert_eq!(HashAlgorithm::default(), HashAlgorithm::NONE);
+        assert_eq!(HashAlgorithm::default(), HashAlgorithm::None);
     }
 
     #[test]
     fn hash_algorithm_wire_roundtrip() {
         let known = [
-            (0, HashAlgorithm::NONE),
+            (0, HashAlgorithm::None),
             (1, HashAlgorithm::MD5),
             (2, HashAlgorithm::SHA1),
             (3, HashAlgorithm::SHA224),
@@ -969,7 +974,7 @@ mod tests {
 
     #[test]
     fn hash_algorithm_output_len() {
-        assert_eq!(HashAlgorithm::NONE.output_len(), 0);
+        assert_eq!(HashAlgorithm::None.output_len(), 0);
         assert_eq!(HashAlgorithm::MD5.output_len(), 16);
         assert_eq!(HashAlgorithm::SHA1.output_len(), 20);
         assert_eq!(HashAlgorithm::SHA224.output_len(), 28);
@@ -981,7 +986,7 @@ mod tests {
 
     #[test]
     fn hash_algorithm_debug_stays_enum_like() {
-        assert_eq!(format!("{:?}", HashAlgorithm::NONE), "None");
+        assert_eq!(format!("{:?}", HashAlgorithm::None), "None");
         assert_eq!(format!("{:?}", HashAlgorithm::SHA256), "SHA256");
         assert_eq!(format!("{:?}", HashAlgorithm::from_u8(7)), "Unknown(7)");
     }
@@ -990,13 +995,13 @@ mod tests {
     fn signature_algorithm_newtype_shape() {
         assert_eq!(std::mem::size_of::<SignatureAlgorithm>(), 1);
         assert_eq!(SignatureAlgorithm::default().as_u8(), 0);
-        assert_eq!(SignatureAlgorithm::default(), SignatureAlgorithm::ANONYMOUS);
+        assert_eq!(SignatureAlgorithm::default(), SignatureAlgorithm::Anonymous);
     }
 
     #[test]
     fn signature_algorithm_wire_roundtrip() {
         let known = [
-            (0, SignatureAlgorithm::ANONYMOUS),
+            (0, SignatureAlgorithm::Anonymous),
             (1, SignatureAlgorithm::RSA),
             (2, SignatureAlgorithm::DSA),
             (3, SignatureAlgorithm::ECDSA),
@@ -1015,7 +1020,7 @@ mod tests {
 
     #[test]
     fn signature_algorithm_debug_stays_enum_like() {
-        assert_eq!(format!("{:?}", SignatureAlgorithm::ANONYMOUS), "Anonymous");
+        assert_eq!(format!("{:?}", SignatureAlgorithm::Anonymous), "Anonymous");
         assert_eq!(format!("{:?}", SignatureAlgorithm::ECDSA), "ECDSA");
         assert_eq!(
             format!("{:?}", SignatureAlgorithm::from_u8(4)),
@@ -1027,14 +1032,14 @@ mod tests {
     fn compression_method_newtype_shape() {
         assert_eq!(std::mem::size_of::<CompressionMethod>(), 1);
         assert_eq!(CompressionMethod::default().as_u8(), 0);
-        assert_eq!(CompressionMethod::default(), CompressionMethod::NULL);
+        assert_eq!(CompressionMethod::default(), CompressionMethod::Null);
     }
 
     #[test]
     fn compression_method_wire_roundtrip() {
         let known = [
-            (0x00, CompressionMethod::NULL),
-            (0x01, CompressionMethod::DEFLATE),
+            (0x00, CompressionMethod::Null),
+            (0x01, CompressionMethod::Deflate),
         ];
 
         for (wire, method) in known {
@@ -1050,8 +1055,8 @@ mod tests {
 
     #[test]
     fn compression_method_debug_stays_enum_like() {
-        assert_eq!(format!("{:?}", CompressionMethod::NULL), "Null");
-        assert_eq!(format!("{:?}", CompressionMethod::DEFLATE), "Deflate");
+        assert_eq!(format!("{:?}", CompressionMethod::Null), "Null");
+        assert_eq!(format!("{:?}", CompressionMethod::Deflate), "Deflate");
         assert_eq!(
             format!("{:?}", CompressionMethod::from_u8(0x02)),
             "Unknown(2)"
@@ -1068,11 +1073,11 @@ mod tests {
     #[test]
     fn content_type_wire_roundtrip() {
         let known = [
-            (20, ContentType::CHANGE_CIPHER_SPEC),
-            (21, ContentType::ALERT),
-            (22, ContentType::HANDSHAKE),
-            (23, ContentType::APPLICATION_DATA),
-            (26, ContentType::ACK),
+            (20, ContentType::ChangeCipherSpec),
+            (21, ContentType::Alert),
+            (22, ContentType::Handshake),
+            (23, ContentType::ApplicationData),
+            (26, ContentType::Ack),
         ];
 
         for (wire, content_type) in known {
@@ -1089,10 +1094,10 @@ mod tests {
     #[test]
     fn content_type_debug_stays_enum_like() {
         assert_eq!(
-            format!("{:?}", ContentType::CHANGE_CIPHER_SPEC),
+            format!("{:?}", ContentType::ChangeCipherSpec),
             "ChangeCipherSpec"
         );
-        assert_eq!(format!("{:?}", ContentType::HANDSHAKE), "Handshake");
+        assert_eq!(format!("{:?}", ContentType::Handshake), "Handshake");
         assert_eq!(format!("{:?}", ContentType::from_u8(24)), "Unknown(24)");
     }
 
@@ -1228,7 +1233,7 @@ mod tests {
         let supported = CompressionMethod::supported();
         assert_eq!(
             supported,
-            &[CompressionMethod::NULL],
+            &[CompressionMethod::Null],
             "Only Null compression should be supported"
         );
     }
@@ -1237,11 +1242,11 @@ mod tests {
     fn signature_scheme_named_group_ecdsa() {
         assert_eq!(
             SignatureScheme::ECDSA_SECP256R1_SHA256.named_group(),
-            Some(NamedGroup::SECP256R1)
+            Some(NamedGroup::Secp256r1)
         );
         assert_eq!(
             SignatureScheme::ECDSA_SECP384R1_SHA384.named_group(),
-            Some(NamedGroup::SECP384R1)
+            Some(NamedGroup::Secp384r1)
         );
     }
 

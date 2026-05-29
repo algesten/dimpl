@@ -324,7 +324,7 @@ impl Engine {
 
         if self.peer_encryption_enabled
             && seq_current.epoch == 0
-            && first.record().content_type == ContentType::HANDSHAKE
+            && first.record().content_type == ContentType::Handshake
         {
             return Ok(());
         }
@@ -332,7 +332,7 @@ impl Engine {
         if self.peer_encryption_enabled {
             for record in incoming.records().iter() {
                 if record.record().sequence.epoch == 0
-                    && record.record().content_type == ContentType::HANDSHAKE
+                    && record.record().content_type == ContentType::Handshake
                 {
                     if record.handshakes().is_empty() {
                         record.set_handled();
@@ -443,7 +443,7 @@ impl Engine {
             .queue_rx
             .iter()
             .flat_map(|i| i.records().iter())
-            .filter(|r| r.record().content_type == ContentType::APPLICATION_DATA)
+            .filter(|r| r.record().content_type == ContentType::ApplicationData)
             .skip_while(|r| r.is_handled());
 
         let Some(next) = unhandled.next() else {
@@ -697,7 +697,7 @@ impl Engine {
     pub fn drop_pending_ccs(&mut self) {
         for incoming in self.queue_rx.iter() {
             for record in incoming.records().iter() {
-                if record.record().content_type == ContentType::CHANGE_CIPHER_SPEC {
+                if record.record().content_type == ContentType::ChangeCipherSpec {
                     record.set_handled();
                 }
             }
@@ -983,7 +983,7 @@ impl Engine {
             };
 
             // Emit the record; packing into current datagram happens inside create_record
-            self.create_record(ContentType::HANDSHAKE, epoch, true, |fragment| {
+            self.create_record(ContentType::Handshake, epoch, true, |fragment| {
                 // Serialize with body_buffer as source
                 frag_handshake.serialize(&body_buffer, fragment);
             })?;
@@ -1237,7 +1237,7 @@ impl RecordHandler for Engine {
     fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
         let epoch = record.record().sequence.epoch;
 
-        if record.record().content_type == ContentType::CHANGE_CIPHER_SPEC
+        if record.record().content_type == ContentType::ChangeCipherSpec
             && epoch == 0
             && self.peer_encryption_enabled
         {
@@ -1250,7 +1250,7 @@ impl RecordHandler for Engine {
             return Ok(None);
         }
 
-        if record.record().content_type == ContentType::HANDSHAKE
+        if record.record().content_type == ContentType::Handshake
             && epoch == 0
             && self.peer_encryption_enabled
             && record
@@ -1266,7 +1266,7 @@ impl RecordHandler for Engine {
             return Ok(None);
         }
 
-        if record.record().content_type == ContentType::ALERT {
+        if record.record().content_type == ContentType::Alert {
             if epoch == 0 {
                 if self.peer_encryption_enabled {
                     // Post-handshake: epoch 0 alerts are unauthenticated, discard.
@@ -1318,7 +1318,7 @@ impl RecordHandler for Engine {
         }
 
         if self.close_notify_received
-            && record.record().content_type == ContentType::APPLICATION_DATA
+            && record.record().content_type == ContentType::ApplicationData
         {
             self.push_buffer(record.into_buffer());
             return Ok(None);
@@ -1347,7 +1347,7 @@ impl RecordHandler for Engine {
         // that's known, a stale plaintext handshake (unauthenticated, replayable)
         // must no longer drive a courtesy flight retransmission. The client
         // confirms separately at its own completion (flight_stop_resend_timers).
-        if content_type == ContentType::APPLICATION_DATA {
+        if content_type == ContentType::ApplicationData {
             self.peer_handshake_confirmed = true;
         }
     }

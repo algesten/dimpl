@@ -70,7 +70,7 @@ impl DTLSRecord {
         // the epoch-0 content types this implementation supports.
         if epoch == 0 {
             match content_type {
-                ContentType::CHANGE_CIPHER_SPEC | ContentType::ALERT | ContentType::HANDSHAKE => {}
+                ContentType::ChangeCipherSpec | ContentType::Alert | ContentType::Handshake => {}
                 _ => {
                     return Err(Err::Failure(nom::error::Error::new(
                         input,
@@ -156,7 +156,7 @@ mod tests {
     use crate::buffer::Buf;
 
     const RECORD: &[u8] = &[
-        0x16, // ContentType::HANDSHAKE
+        0x16, // ContentType::Handshake
         0xFE, 0xFD, // ProtocolVersion::DTLS1_2
         0x00, 0x01, // epoch
         0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // sequence_number

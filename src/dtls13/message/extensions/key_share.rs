@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn key_share_hrr_roundtrip() {
         let message: &[u8] = &[
-            0x00, 0x17, // NamedGroup::SECP256R1
+            0x00, 0x17, // NamedGroup::Secp256r1
         ];
 
         let (rest, parsed) = KeyShareHelloRetryRequest::parse(message).unwrap();

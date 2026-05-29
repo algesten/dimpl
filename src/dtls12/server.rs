@@ -232,7 +232,7 @@ impl Server {
         // Use the engine's create_record to send application data
         // The encryption is now handled in the engine
         self.engine
-            .create_record(ContentType::APPLICATION_DATA, 1, false, |body| {
+            .create_record(ContentType::ApplicationData, 1, false, |body| {
                 body.extend_from_slice(data);
             })?;
 
@@ -250,7 +250,7 @@ impl Server {
             return Ok(());
         }
         self.engine
-            .create_record(ContentType::ALERT, 1, false, |body| {
+            .create_record(ContentType::Alert, 1, false, |body| {
                 body.push(1); // level: warning
                 body.push(0); // description: close_notify
             })?;
@@ -318,7 +318,7 @@ impl State {
     fn await_client_hello(self, server: &mut Server) -> Result<Self, InternalError> {
         let maybe = server
             .engine
-            .next_handshake(MessageType::CLIENT_HELLO, &mut server.defragment_buffer)?;
+            .next_handshake(MessageType::ClientHello, &mut server.defragment_buffer)?;
 
         let Some(handshake) = maybe else {
             // Stay in same state
@@ -340,7 +340,7 @@ impl State {
         }
 
         // Enforce Null compression only (client must offer it)
-        let has_null = ch.compression_methods.contains(&CompressionMethod::NULL);
+        let has_null = ch.compression_methods.contains(&CompressionMethod::Null);
         if !has_null {
             return Err(
                 Error::SecurityError(crate::SecurityError::UnsupportedClientCompression).into(),
@@ -370,16 +370,15 @@ impl State {
             let cookie = compute_cookie(hmac_provider, &server.cookie_secret, client_random)?;
             // Start/restart flight timer for server Flight 2 (HelloVerifyRequest)
             server.engine.flight_begin(2);
-            server.engine.create_handshake(
-                MessageType::HELLO_VERIFY_REQUEST,
-                |body, _engine| {
+            server
+                .engine
+                .create_handshake(MessageType::HelloVerifyRequest, |body, _engine| {
                     // RFC 6347 4.2.1: The server_version field in the HelloVerifyRequest
                     // message MUST be set to DTLS 1.0
                     let hvr = HelloVerifyRequest::new(ProtocolVersion::DTLS1_0, cookie);
                     hvr.serialize(body);
                     Ok(())
-                },
-            )?;
+                })?;
 
             // The HelloVerifyRequest exchange is stateless per RFC 6347.
             // Reset all handshake state so the next ClientHello (with cookie) is processed fresh.
@@ -422,27 +421,27 @@ impl State {
         let mut client_signature_algorithms: Option<SignatureAndHashAlgorithmVec> = None;
         for ext in ch.extensions {
             match ext.extension_type {
-                ExtensionType::USE_SRTP => {
+                ExtensionType::UseSrtp => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let (_, use_srtp) =
                         UseSrtpExtension::parse(ext_data).map_err(InternalError::from)?;
                     client_srtp_profiles = Some(use_srtp.profiles);
                 }
-                ExtensionType::EXTENDED_MASTER_SECRET => {
+                ExtensionType::ExtendedMasterSecret => {
                     client_offers_ems = true;
                 }
-                ExtensionType::SUPPORTED_GROUPS => {
+                ExtensionType::SupportedGroups => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let (_, groups) =
                         SupportedGroupsExtension::parse(ext_data).map_err(InternalError::from)?;
                     client_supported_groups = Some(groups.groups);
                 }
-                ExtensionType::EC_POINT_FORMATS => {
+                ExtensionType::EcPointFormats => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     let _ =
                         ECPointFormatsExtension::parse(ext_data).map_err(InternalError::from)?;
                 }
-                ExtensionType::SIGNATURE_ALGORITHMS => {
+                ExtensionType::SignatureAlgorithms => {
                     let ext_data = ext.extension_data(&server.defragment_buffer);
                     if let Ok((_, sigs)) = SignatureAlgorithmsExtension::parse(ext_data) {
                         client_signature_algorithms = Some(sigs.supported_signature_algorithms);
@@ -506,7 +505,7 @@ impl State {
         // Send ServerHello
         server
             .engine
-            .create_handshake(MessageType::SERVER_HELLO, move |body, engine| {
+            .create_handshake(MessageType::ServerHello, move |body, engine| {
                 handshake_create_server_hello(
                     body,
                     engine,
@@ -534,7 +533,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::CERTIFICATE, handshake_create_certificate)?;
+            .create_handshake(MessageType::Certificate, handshake_create_certificate)?;
 
         Ok(Self::SendServerKeyExchange)
     }
@@ -606,7 +605,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::SERVER_KEY_EXCHANGE, |body, engine| {
+            .create_handshake(MessageType::ServerKeyExchange, |body, engine| {
                 handshake_create_server_key_exchange(
                     body,
                     engine,
@@ -636,13 +635,12 @@ impl State {
             return Ok(Self::SendServerHelloDone);
         };
 
-        server.engine.create_handshake(
-            MessageType::SERVER_KEY_EXCHANGE,
-            move |body, _engine| {
+        server
+            .engine
+            .create_handshake(MessageType::ServerKeyExchange, move |body, _engine| {
                 PskParams::serialize_from_bytes(&hint, body);
                 Ok(())
-            },
-        )?;
+            })?;
 
         // PSK never sends CertificateRequest
         Ok(Self::SendServerHelloDone)
@@ -660,7 +658,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::CERTIFICATE_REQUEST, move |body, _| {
+            .create_handshake(MessageType::CertificateRequest, move |body, _| {
                 handshake_serialize_certificate_request(body, &sig_algs)
             })?;
 
@@ -672,7 +670,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::SERVER_HELLO_DONE, |_, _| Ok(()))?;
+            .create_handshake(MessageType::ServerHelloDone, |_, _| Ok(()))?;
 
         let cs = server.engine.cipher_suite().ok_or(Error::InvalidState(
             crate::InvalidStateError::NoCipherSuiteSelected,
@@ -693,7 +691,7 @@ impl State {
     fn await_certificate(self, server: &mut Server) -> Result<Self, InternalError> {
         let maybe = server
             .engine
-            .next_handshake(MessageType::CERTIFICATE, &mut server.defragment_buffer)?;
+            .next_handshake(MessageType::Certificate, &mut server.defragment_buffer)?;
 
         let Some(ref handshake) = maybe else {
             // Stay in same state
@@ -739,7 +737,7 @@ impl State {
 
     fn await_client_key_exchange(self, server: &mut Server) -> Result<Self, InternalError> {
         let maybe = server.engine.next_handshake(
-            MessageType::CLIENT_KEY_EXCHANGE,
+            MessageType::ClientKeyExchange,
             &mut server.defragment_buffer,
         )?;
 
@@ -895,7 +893,7 @@ impl State {
         let data = server.engine.transcript().to_buf();
 
         let maybe = server.engine.next_handshake(
-            MessageType::CERTIFICATE_VERIFY,
+            MessageType::CertificateVerify,
             &mut server.defragment_buffer,
         )?;
 
@@ -950,7 +948,7 @@ impl State {
     }
 
     fn await_change_cipher_spec(self, server: &mut Server) -> Result<Self, InternalError> {
-        let maybe = server.engine.next_record(ContentType::CHANGE_CIPHER_SPEC);
+        let maybe = server.engine.next_record(ContentType::ChangeCipherSpec);
 
         let Some(_) = maybe else {
             // Stay in same state
@@ -976,7 +974,7 @@ impl State {
 
         let maybe = server
             .engine
-            .next_handshake(MessageType::FINISHED, &mut server.defragment_buffer)?;
+            .next_handshake(MessageType::Finished, &mut server.defragment_buffer)?;
 
         if maybe.is_none() {
             // stay in same state
@@ -1050,7 +1048,7 @@ impl State {
         // Send ChangeCipherSpec
         server
             .engine
-            .create_record(ContentType::CHANGE_CIPHER_SPEC, 0, true, |body| {
+            .create_record(ContentType::ChangeCipherSpec, 0, true, |body| {
                 body.push(1);
             })?;
 
@@ -1062,7 +1060,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::FINISHED, |body, engine| {
+            .create_handshake(MessageType::Finished, |body, engine| {
                 let verify_data = engine.generate_verify_data(false /* server */)?;
                 trace!("Finished.verify_data length: {}", verify_data.len());
                 // Directly write the verify data without creating Finished struct
@@ -1120,7 +1118,7 @@ impl State {
             server.engine.discard_pending_writes();
             server
                 .engine
-                .create_record(ContentType::ALERT, 1, false, |body| {
+                .create_record(ContentType::Alert, 1, false, |body| {
                     body.push(1); // level: warning
                     body.push(0); // description: close_notify
                 })?;
@@ -1136,7 +1134,7 @@ impl State {
             for data in server.queued_data.drain(..) {
                 server
                     .engine
-                    .create_record(ContentType::APPLICATION_DATA, 1, false, |body| {
+                    .create_record(ContentType::ApplicationData, 1, false, |body| {
                         body.extend_from_slice(&data);
                     })?;
             }
@@ -1212,7 +1210,7 @@ fn handshake_create_server_hello(
         random,
         session_id,
         cs,
-        CompressionMethod::NULL,
+        CompressionMethod::Null,
         None,
     )
     .with_extensions(extension_data, srtp_pid);
@@ -1243,7 +1241,7 @@ fn handshake_create_server_key_exchange(
 
     match key_exchange_algorithm {
         KeyExchangeAlgorithm::EECDH => {
-            let (curve_type, named_group) = (CurveType::NAMED_CURVE, named_group);
+            let (curve_type, named_group) = (CurveType::NamedCurve, named_group);
             let mut kx_buf = engine.pop_buffer();
             let pubkey = engine
                 .crypto_context_mut()
@@ -1420,11 +1418,11 @@ mod tests {
     #[test]
     fn select_named_group_prefers_x25519_when_available() {
         let client = named_group_vec(&[
-            NamedGroup::SECP256R1,
+            NamedGroup::Secp256r1,
             NamedGroup::X25519,
-            NamedGroup::SECP384R1,
+            NamedGroup::Secp384r1,
         ]);
-        let provider = [NamedGroup::X25519, NamedGroup::SECP256R1];
+        let provider = [NamedGroup::X25519, NamedGroup::Secp256r1];
 
         let selected = select_named_group(Some(&client), &provider);
 
@@ -1433,27 +1431,27 @@ mod tests {
 
     #[test]
     fn select_named_group_respects_provider_capabilities() {
-        let client = named_group_vec(&[NamedGroup::X25519, NamedGroup::SECP256R1]);
-        let provider = [NamedGroup::SECP256R1];
+        let client = named_group_vec(&[NamedGroup::X25519, NamedGroup::Secp256r1]);
+        let provider = [NamedGroup::Secp256r1];
 
         let selected = select_named_group(Some(&client), &provider);
 
-        assert_eq!(selected, Some(NamedGroup::SECP256R1));
+        assert_eq!(selected, Some(NamedGroup::Secp256r1));
     }
 
     #[test]
     fn select_named_group_falls_back_to_provider_when_client_missing() {
-        let provider = [NamedGroup::SECP384R1];
+        let provider = [NamedGroup::Secp384r1];
 
         let selected = select_named_group(None, &provider);
 
-        assert_eq!(selected, Some(NamedGroup::SECP384R1));
+        assert_eq!(selected, Some(NamedGroup::Secp384r1));
     }
 
     #[test]
     fn select_named_group_rejects_when_client_has_no_overlap() {
         let client = named_group_vec(&[NamedGroup::X25519]);
-        let provider = [NamedGroup::SECP256R1];
+        let provider = [NamedGroup::Secp256r1];
 
         let selected = select_named_group(Some(&client), &provider);
 

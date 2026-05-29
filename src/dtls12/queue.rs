@@ -50,10 +50,10 @@ impl fmt::Debug for QueueRx {
         for item in &self.0 {
             let record = item.first().record();
             match record.content_type {
-                ContentType::HANDSHAKE => handshake += 1,
-                ContentType::APPLICATION_DATA => app_data += 1,
-                ContentType::ALERT => alert += 1,
-                ContentType::CHANGE_CIPHER_SPEC => ccs += 1,
+                ContentType::Handshake => handshake += 1,
+                ContentType::ApplicationData => app_data += 1,
+                ContentType::Alert => alert += 1,
+                ContentType::ChangeCipherSpec => ccs += 1,
                 _ => other += 1,
             }
 

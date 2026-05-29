@@ -156,14 +156,14 @@ mod test {
         0x01, // SessionId length
         0xAA, // SessionId
         0x13, 0x01, // Dtls13CipherSuite::AES_128_GCM_SHA256
-        0x00, // CompressionMethod::NULL
+        0x00, // CompressionMethod::Null
         0x00, 0x0C, // Extensions length (12 bytes)
-        0x00, 0x0A, // ExtensionType::SUPPORTED_GROUPS
+        0x00, 0x0A, // ExtensionType::SupportedGroups
         0x00, 0x08, // Extension data length (8 bytes)
         0x00, 0x06, // Extension data
-        0x00, 0x17, // NamedGroup::SECP256R1
-        0x00, 0x18, // NamedGroup::SECP384R1
-        0x00, 0x19, // NamedGroup::SECP521R1
+        0x00, 0x17, // NamedGroup::Secp256r1
+        0x00, 0x18, // NamedGroup::Secp384r1
+        0x00, 0x19, // NamedGroup::Secp521r1
     ];
 
     #[test]
@@ -194,7 +194,7 @@ mod test {
             hrr_random,
             SessionId::empty(),
             Dtls13CipherSuite::AES_128_GCM_SHA256,
-            CompressionMethod::NULL,
+            CompressionMethod::Null,
             None,
         );
 
@@ -213,7 +213,7 @@ mod test {
         let count = 2;
         message.extend_from_slice(&(count as u16 * 4).to_be_bytes());
         for _ in 0..count {
-            message.extend_from_slice(&ExtensionType::COOKIE.as_u16().to_be_bytes());
+            message.extend_from_slice(&ExtensionType::Cookie.as_u16().to_be_bytes());
             message.extend_from_slice(&0u16.to_be_bytes());
         }
 

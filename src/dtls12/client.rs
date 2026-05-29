@@ -234,7 +234,7 @@ impl Client {
         // Use the engine's create_record to send application data
         // The encryption is now handled in the engine
         self.engine
-            .create_record(ContentType::APPLICATION_DATA, 1, false, |body| {
+            .create_record(ContentType::ApplicationData, 1, false, |body| {
                 body.extend_from_slice(data);
             })?;
 
@@ -252,7 +252,7 @@ impl Client {
             return Ok(());
         }
         self.engine
-            .create_record(ContentType::ALERT, 1, false, |body| {
+            .create_record(ContentType::Alert, 1, false, |body| {
                 body.push(1); // level: warning
                 body.push(0); // description: close_notify
             })?;
@@ -354,7 +354,7 @@ impl State {
 
         client
             .engine
-            .create_handshake(MessageType::CLIENT_HELLO, |body, engine| {
+            .create_handshake(MessageType::ClientHello, |body, engine| {
                 handshake_create_client_hello(
                     body,
                     engine,
@@ -377,7 +377,7 @@ impl State {
     fn await_hello_verify_request(self, client: &mut Client) -> Result<Self, InternalError> {
         let has_hello = client
             .engine
-            .has_complete_handshake(MessageType::SERVER_HELLO);
+            .has_complete_handshake(MessageType::ServerHello);
 
         // Got ServerHello, skip HelloVerifyRequest
         if has_hello {
@@ -385,7 +385,7 @@ impl State {
         }
 
         let maybe = client.engine.next_handshake(
-            MessageType::HELLO_VERIFY_REQUEST,
+            MessageType::HelloVerifyRequest,
             &mut client.defragment_buffer,
         )?;
 
@@ -429,7 +429,7 @@ impl State {
     fn await_server_hello(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client
             .engine
-            .next_handshake(MessageType::SERVER_HELLO, &mut client.defragment_buffer)?;
+            .next_handshake(MessageType::ServerHello, &mut client.defragment_buffer)?;
 
         let Some(handshake) = maybe else {
             // Stay in same state
@@ -456,7 +456,7 @@ impl State {
         }
 
         // Enforce Null compression only
-        if server_hello.compression_method != CompressionMethod::NULL {
+        if server_hello.compression_method != CompressionMethod::Null {
             return Err(
                 Error::SecurityError(crate::SecurityError::UnsupportedServerCompression(
                     server_hello.compression_method,
@@ -507,7 +507,7 @@ impl State {
         };
 
         for extension in extensions {
-            if extension.extension_type == ExtensionType::USE_SRTP {
+            if extension.extension_type == ExtensionType::UseSrtp {
                 // Parse the use_srtp extension to get the selected profile
                 let extension_data = extension.extension_data(&client.defragment_buffer);
                 let (_, use_srtp) =
@@ -523,7 +523,7 @@ impl State {
             }
 
             // We are to use extended master secret
-            if extension.extension_type == ExtensionType::EXTENDED_MASTER_SECRET {
+            if extension.extension_type == ExtensionType::ExtendedMasterSecret {
                 extended_master_secret = true;
                 trace!("Server negotiated Extended Master Secret");
             }
@@ -554,7 +554,7 @@ impl State {
     fn await_certificate(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client
             .engine
-            .next_handshake(MessageType::CERTIFICATE, &mut client.defragment_buffer)?;
+            .next_handshake(MessageType::Certificate, &mut client.defragment_buffer)?;
 
         let Some(ref handshake) = maybe else {
             // Stay in same state
@@ -610,7 +610,7 @@ impl State {
 
     fn await_server_key_exchange_ecdhe(self, client: &mut Client) -> Result<Self, InternalError> {
         let maybe = client.engine.next_handshake(
-            MessageType::SERVER_KEY_EXCHANGE,
+            MessageType::ServerKeyExchange,
             &mut client.defragment_buffer,
         )?;
 
@@ -747,13 +747,13 @@ impl State {
         // If the server skipped ServerKeyExchange (no hint), go straight to ServerHelloDone
         let has_done = client
             .engine
-            .has_complete_handshake(MessageType::SERVER_HELLO_DONE);
+            .has_complete_handshake(MessageType::ServerHelloDone);
         if has_done {
             return Ok(Self::AwaitServerHelloDone);
         }
 
         let maybe = client.engine.next_handshake(
-            MessageType::SERVER_KEY_EXCHANGE,
+            MessageType::ServerKeyExchange,
             &mut client.defragment_buffer,
         )?;
 
@@ -790,14 +790,14 @@ impl State {
     fn await_certificate_request(self, client: &mut Client) -> Result<Self, InternalError> {
         let has_done = client
             .engine
-            .has_complete_handshake(MessageType::SERVER_HELLO_DONE);
+            .has_complete_handshake(MessageType::ServerHelloDone);
 
         if has_done {
             return Ok(Self::AwaitServerHelloDone);
         }
 
         let maybe = client.engine.next_handshake(
-            MessageType::CERTIFICATE_REQUEST,
+            MessageType::CertificateRequest,
             &mut client.defragment_buffer,
         )?;
 
@@ -838,10 +838,9 @@ impl State {
     }
 
     fn await_server_hello_done(self, client: &mut Client) -> Result<Self, InternalError> {
-        let maybe = client.engine.next_handshake(
-            MessageType::SERVER_HELLO_DONE,
-            &mut client.defragment_buffer,
-        )?;
+        let maybe = client
+            .engine
+            .next_handshake(MessageType::ServerHelloDone, &mut client.defragment_buffer)?;
 
         let Some(handshake) = maybe else {
             // stay in same state
@@ -892,7 +891,7 @@ impl State {
         // Now use the engine with the stored data
         client
             .engine
-            .create_handshake(MessageType::CERTIFICATE, handshake_create_certificate)?;
+            .create_handshake(MessageType::Certificate, handshake_create_certificate)?;
 
         Ok(Self::SendClientKeyExchange)
     }
@@ -907,7 +906,7 @@ impl State {
 
         // Send client key exchange message
         client.engine.create_handshake(
-            MessageType::CLIENT_KEY_EXCHANGE,
+            MessageType::ClientKeyExchange,
             handshake_create_client_key_exchange,
         )?;
 
@@ -937,7 +936,7 @@ impl State {
 
         // Send the certificate verify message
         client.engine.create_handshake(
-            MessageType::CERTIFICATE_VERIFY,
+            MessageType::CertificateVerify,
             handshake_create_certificate_verify,
         )?;
 
@@ -951,7 +950,7 @@ impl State {
         trace!("Sending ChangeCipherSpec");
         client
             .engine
-            .create_record(ContentType::CHANGE_CIPHER_SPEC, 0, true, |body| {
+            .create_record(ContentType::ChangeCipherSpec, 0, true, |body| {
                 // Change cipher spec is just a single byte with value 1
                 body.push(1);
             })?;
@@ -1032,7 +1031,7 @@ impl State {
 
         client
             .engine
-            .create_handshake(MessageType::FINISHED, |body, engine| {
+            .create_handshake(MessageType::Finished, |body, engine| {
                 // Calculate verify data for Finished message using PRF
                 let verify_data = engine.generate_verify_data(true)?;
 
@@ -1047,7 +1046,7 @@ impl State {
     }
 
     fn await_change_cipher_spec(self, client: &mut Client) -> Result<Self, InternalError> {
-        let maybe = client.engine.next_record(ContentType::CHANGE_CIPHER_SPEC);
+        let maybe = client.engine.next_record(ContentType::ChangeCipherSpec);
 
         let Some(_) = maybe else {
             // Stay in same state
@@ -1066,16 +1065,15 @@ impl State {
     }
 
     fn await_new_session_ticket(self, client: &mut Client) -> Result<Self, InternalError> {
-        let has_finished = client.engine.has_complete_handshake(MessageType::FINISHED);
+        let has_finished = client.engine.has_complete_handshake(MessageType::Finished);
 
         if has_finished {
             return Ok(Self::AwaitFinished);
         }
 
-        let maybe = client.engine.next_handshake(
-            MessageType::NEW_SESSION_TICKET,
-            &mut client.defragment_buffer,
-        )?;
+        let maybe = client
+            .engine
+            .next_handshake(MessageType::NewSessionTicket, &mut client.defragment_buffer)?;
 
         let Some(handshake) = maybe else {
             // Stay in same state
@@ -1101,7 +1099,7 @@ impl State {
 
         let maybe = client
             .engine
-            .next_handshake(MessageType::FINISHED, &mut client.defragment_buffer)?;
+            .next_handshake(MessageType::Finished, &mut client.defragment_buffer)?;
 
         if maybe.is_none() {
             // stay in same state
@@ -1192,7 +1190,7 @@ impl State {
             client.engine.discard_pending_writes();
             client
                 .engine
-                .create_record(ContentType::ALERT, 1, false, |body| {
+                .create_record(ContentType::Alert, 1, false, |body| {
                     body.push(1); // level: warning
                     body.push(0); // description: close_notify
                 })?;
@@ -1207,7 +1205,7 @@ impl State {
             for data in client.queued_data.drain(..) {
                 client
                     .engine
-                    .create_record(ContentType::APPLICATION_DATA, 1, false, |body| {
+                    .create_record(ContentType::ApplicationData, 1, false, |body| {
                         body.extend_from_slice(&data);
                     })?;
             }
@@ -1244,7 +1242,7 @@ fn handshake_create_client_hello(
     );
 
     let mut compression_methods = ArrayVec::new();
-    compression_methods.push(CompressionMethod::NULL);
+    compression_methods.push(CompressionMethod::Null);
 
     // Create ClientHello with all required extensions
     let client_hello = ClientHello::new(
@@ -1411,7 +1409,7 @@ mod tests {
     fn epoch0_handshake_packet(msg_type: MessageType, message_seq: u16, body: &[u8]) -> Vec<u8> {
         let handshake_len = 12 + body.len();
         let mut packet = Vec::new();
-        packet.push(ContentType::HANDSHAKE.as_u8());
+        packet.push(ContentType::Handshake.as_u8());
         packet.extend_from_slice(&[0xfe, 0xfd]);
         packet.extend_from_slice(&0u16.to_be_bytes());
         packet.extend_from_slice(&0u64.to_be_bytes()[2..]);
@@ -1431,7 +1429,7 @@ mod tests {
         client
             .engine
             .parse_packet(&epoch0_handshake_packet(
-                MessageType::CERTIFICATE,
+                MessageType::Certificate,
                 0,
                 &[0, 0, 0],
             ))

@@ -389,7 +389,7 @@ impl Engine {
         // but allow KeyUpdate (a post-handshake message).
         if self.release_app_data
             && handshake.header.message_seq >= self.peer_handshake_seq_no
-            && handshake.header.msg_type != MessageType::KEY_UPDATE
+            && handshake.header.msg_type != MessageType::KeyUpdate
         {
             return Err(Error::RenegotiationAttempt);
         }
@@ -558,7 +558,7 @@ impl Engine {
             .queue_rx
             .iter()
             .flat_map(|i| i.records().iter())
-            .filter(|r| r.record().content_type == ContentType::APPLICATION_DATA)
+            .filter(|r| r.record().content_type == ContentType::ApplicationData)
             .skip_while(|r| r.is_handled());
 
         let Some(next) = unhandled.next() else {
@@ -789,7 +789,7 @@ impl Engine {
         &mut self,
         defragment_buffer: &mut Buf,
     ) -> Result<Option<Handshake>, InternalError> {
-        self.next_handshake_with_options(MessageType::CLIENT_HELLO, defragment_buffer, true)
+        self.next_handshake_with_options(MessageType::ClientHello, defragment_buffer, true)
     }
 
     fn next_handshake_with_options(
@@ -1066,7 +1066,7 @@ impl Engine {
 
         // Build the record for serialization
         let record = Dtls13Record {
-            content_type: ContentType::APPLICATION_DATA,
+            content_type: ContentType::ApplicationData,
             sequence: Sequence {
                 epoch,
                 sequence_number: seq,
@@ -1216,11 +1216,11 @@ impl Engine {
             };
 
             if epoch == 0 {
-                self.create_plaintext_record(ContentType::HANDSHAKE, true, |fragment| {
+                self.create_plaintext_record(ContentType::Handshake, true, |fragment| {
                     frag_handshake.serialize(&body_buffer, fragment);
                 })?;
             } else {
-                self.create_ciphertext_record(ContentType::HANDSHAKE, epoch, true, |fragment| {
+                self.create_ciphertext_record(ContentType::Handshake, epoch, true, |fragment| {
                     frag_handshake.serialize(&body_buffer, fragment);
                 })?;
             }
@@ -1288,7 +1288,7 @@ impl Engine {
             2
         };
 
-        self.create_ciphertext_record(ContentType::ACK, epoch, false, |fragment| {
+        self.create_ciphertext_record(ContentType::Ack, epoch, false, |fragment| {
             // record_numbers_length: 2 bytes, value = entries.len() * 16
             let len = (entries.len() * 16) as u16;
             fragment.extend_from_slice(&len.to_be_bytes());
@@ -1515,7 +1515,7 @@ impl Engine {
         for incoming in self.queue_rx.iter() {
             for r in incoming.records().iter() {
                 if r.record().sequence.epoch == 2
-                    && r.record().content_type == ContentType::HANDSHAKE
+                    && r.record().content_type == ContentType::Handshake
                 {
                     let seq = r.record().sequence;
                     let _ = record_numbers.try_push((seq.epoch as u64, seq.sequence_number));
@@ -1538,7 +1538,7 @@ impl Engine {
             return Ok(());
         }
 
-        self.create_ciphertext_record(ContentType::ACK, 2, false, |fragment| {
+        self.create_ciphertext_record(ContentType::Ack, 2, false, |fragment| {
             let len = (record_numbers.len() * 16) as u16;
             fragment.extend_from_slice(&len.to_be_bytes());
             for &(epoch, seq) in record_numbers {
@@ -1890,10 +1890,10 @@ impl Engine {
         let epoch = self.app_send_epoch;
 
         // Build the handshake message manually (12-byte DTLS header + 1-byte body)
-        self.create_ciphertext_record(ContentType::HANDSHAKE, epoch, true, |fragment| {
+        self.create_ciphertext_record(ContentType::Handshake, epoch, true, |fragment| {
             // DTLS handshake header (12 bytes):
             // msg_type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3)
-            fragment.push(MessageType::KEY_UPDATE.as_u8());
+            fragment.push(MessageType::KeyUpdate.as_u8());
             fragment.extend_from_slice(&1u32.to_be_bytes()[1..]); // length = 1
             fragment.extend_from_slice(&msg_seq.to_be_bytes()); // message_seq
             fragment.extend_from_slice(&0u32.to_be_bytes()[1..]); // fragment_offset = 0
@@ -2246,7 +2246,7 @@ fn jittered_aead_threshold(limit: u64, rng: &mut SeededRng) -> u64 {
 /// All other handshake messages are encrypted (epoch 2).
 fn epoch_for_message(msg_type: MessageType) -> u16 {
     match msg_type {
-        MessageType::CLIENT_HELLO | MessageType::SERVER_HELLO => 0,
+        MessageType::ClientHello | MessageType::ServerHello => 0,
         _ => 2,
     }
 }
@@ -2294,7 +2294,7 @@ impl RecordHandler for Engine {
             && self.peer_encryption_enabled
             && matches!(
                 record.record().content_type,
-                ContentType::ACK | ContentType::ALERT
+                ContentType::Ack | ContentType::Alert
             )
         {
             // Plaintext ACKs and alerts after peer encryption is enabled are
@@ -2304,13 +2304,13 @@ impl RecordHandler for Engine {
         }
 
         match record.record().content_type {
-            ContentType::ACK => {
+            ContentType::Ack => {
                 let fragment = record.record().fragment(record.buffer());
                 self.process_ack(fragment);
                 self.push_buffer(record.into_buffer());
                 Ok(None)
             }
-            ContentType::ALERT => {
+            ContentType::Alert => {
                 // RFC 8446 §6: TLS 1.3 ignores the AlertLevel byte; severity is
                 // implicit in the description (only close_notify and user_canceled
                 // are non-fatal).
@@ -2335,7 +2335,7 @@ impl RecordHandler for Engine {
                     None => Ok(None),
                 }
             }
-            ContentType::CHANGE_CIPHER_SPEC => {
+            ContentType::ChangeCipherSpec => {
                 trace!("Discarding CCS record");
                 self.push_buffer(record.into_buffer());
                 Ok(None)
@@ -2558,13 +2558,13 @@ mod tests {
 
     fn encrypted_key_update_record(seq: u16) -> Vec<u8> {
         let mut fragment = Vec::new();
-        fragment.push(MessageType::KEY_UPDATE.as_u8());
+        fragment.push(MessageType::KeyUpdate.as_u8());
         fragment.extend_from_slice(&1u32.to_be_bytes()[1..]);
         fragment.extend_from_slice(&0u16.to_be_bytes());
         fragment.extend_from_slice(&0u32.to_be_bytes()[1..]);
         fragment.extend_from_slice(&1u32.to_be_bytes()[1..]);
         fragment.push(KeyUpdateRequest::UpdateRequested.as_u8());
-        fragment.push(ContentType::HANDSHAKE.as_u8());
+        fragment.push(ContentType::Handshake.as_u8());
 
         let mut packet = Vec::new();
         packet.push(
@@ -2602,7 +2602,7 @@ mod tests {
         // Set epoch-0 sequence to MAX — the next increment should be rejected
         engine.sequence_epoch_0.sequence_number = MAX_SEQUENCE_NUMBER;
 
-        let result = engine.create_plaintext_record(ContentType::HANDSHAKE, false, |buf| {
+        let result = engine.create_plaintext_record(ContentType::Handshake, false, |buf| {
             buf.extend_from_slice(b"test")
         });
         assert!(
@@ -2736,7 +2736,7 @@ mod tests {
     fn malformed_ack_record_number_vector_is_ignored() {
         let mut engine = test_engine();
         engine.flight_saved_records.push(Entry {
-            content_type: ContentType::HANDSHAKE,
+            content_type: ContentType::Handshake,
             epoch: 2,
             send_seq: 7,
             fragment: Buf::new(),

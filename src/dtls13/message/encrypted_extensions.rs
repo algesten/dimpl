@@ -71,7 +71,7 @@ mod tests {
 
     const MESSAGE: &[u8] = &[
         0x00, 0x0C, // Extensions length (12)
-        0x00, 0x0A, // ExtensionType::SUPPORTED_GROUPS
+        0x00, 0x0A, // ExtensionType::SupportedGroups
         0x00, 0x08, // Extension data length
         0x00, 0x06, 0x00, 0x17, 0x00, 0x18, 0x00, 0x19, // Extension data
     ];
@@ -92,7 +92,7 @@ mod tests {
         let count = 2;
         message.extend_from_slice(&(count as u16 * 4).to_be_bytes());
         for _ in 0..count {
-            message.extend_from_slice(&ExtensionType::COOKIE.as_u16().to_be_bytes());
+            message.extend_from_slice(&ExtensionType::Cookie.as_u16().to_be_bytes());
             message.extend_from_slice(&0u16.to_be_bytes());
         }
 
