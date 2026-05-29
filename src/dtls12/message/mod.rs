@@ -245,39 +245,28 @@ pub enum KeyExchangeAlgorithm {
 pub type CertificateTypeVec =
     ArrayVec<ClientCertificateType, { ClientCertificateType::supported().len() }>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum ClientCertificateType {
-    RSA_SIGN,
-    DSS_SIGN,
-    RSA_FIXED_DH,
-    DSS_FIXED_DH,
-    RSA_EPHEMERAL_DH,
-    DSS_EPHEMERAL_DH,
-    FORTEZZA_DMS,
-    ECDSA_SIGN,
-    Unknown(u8),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ClientCertificateType(u8);
 
 impl Default for ClientCertificateType {
     fn default() -> Self {
-        Self::Unknown(0)
+        Self(u8::MAX)
     }
 }
 
 impl ClientCertificateType {
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            1 => ClientCertificateType::RSA_SIGN,
-            2 => ClientCertificateType::DSS_SIGN,
-            3 => ClientCertificateType::RSA_FIXED_DH,
-            4 => ClientCertificateType::DSS_FIXED_DH,
-            5 => ClientCertificateType::RSA_EPHEMERAL_DH,
-            6 => ClientCertificateType::DSS_EPHEMERAL_DH,
-            20 => ClientCertificateType::FORTEZZA_DMS,
-            64 => ClientCertificateType::ECDSA_SIGN,
-            _ => ClientCertificateType::Unknown(value),
-        }
+    pub const RSA_SIGN: Self = Self(1);
+    pub const DSS_SIGN: Self = Self(2);
+    pub const RSA_FIXED_DH: Self = Self(3);
+    pub const DSS_FIXED_DH: Self = Self(4);
+    pub const RSA_EPHEMERAL_DH: Self = Self(5);
+    pub const DSS_EPHEMERAL_DH: Self = Self(6);
+    pub const FORTEZZA_DMS: Self = Self(20);
+    pub const ECDSA_SIGN: Self = Self(64);
+
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
     /// Returns true if this certificate type is supported by this implementation.
@@ -291,23 +280,39 @@ impl ClientCertificateType {
         &[ClientCertificateType::ECDSA_SIGN]
     }
 
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            ClientCertificateType::RSA_SIGN => 1,
-            ClientCertificateType::DSS_SIGN => 2,
-            ClientCertificateType::RSA_FIXED_DH => 3,
-            ClientCertificateType::DSS_FIXED_DH => 4,
-            ClientCertificateType::RSA_EPHEMERAL_DH => 5,
-            ClientCertificateType::DSS_EPHEMERAL_DH => 6,
-            ClientCertificateType::FORTEZZA_DMS => 20,
-            ClientCertificateType::ECDSA_SIGN => 64,
-            ClientCertificateType::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    const fn is_unknown(&self) -> bool {
+        !matches!(*self, Self(1..=6 | 20 | 64))
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], ClientCertificateType> {
         let (input, value) = be_u8(input)?;
         Ok((input, ClientCertificateType::from_u8(value)))
+    }
+}
+
+impl fmt::Debug for ClientCertificateType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_unknown() {
+            return f.debug_tuple("Unknown").field(&self.0).finish();
+        }
+
+        let name = match *self {
+            ClientCertificateType::RSA_SIGN => "RSA_SIGN",
+            ClientCertificateType::DSS_SIGN => "DSS_SIGN",
+            ClientCertificateType::RSA_FIXED_DH => "RSA_FIXED_DH",
+            ClientCertificateType::DSS_FIXED_DH => "DSS_FIXED_DH",
+            ClientCertificateType::RSA_EPHEMERAL_DH => "RSA_EPHEMERAL_DH",
+            ClientCertificateType::DSS_EPHEMERAL_DH => "DSS_EPHEMERAL_DH",
+            ClientCertificateType::FORTEZZA_DMS => "FORTEZZA_DMS",
+            ClientCertificateType::ECDSA_SIGN => "ECDSA_SIGN",
+            _ => unreachable!("known DTLS 1.2 client certificate type missing Debug label"),
+        };
+
+        f.write_str(name)
     }
 }
 
@@ -397,6 +402,48 @@ mod tests {
         assert_eq!(
             format!("{:?}", Dtls12CipherSuite::from_u16(0xFFFF)),
             "Unknown(65535)"
+        );
+    }
+
+    #[test]
+    fn client_certificate_type_newtype_shape() {
+        assert_eq!(std::mem::size_of::<ClientCertificateType>(), 1);
+        assert!(ClientCertificateType::default().is_unknown());
+    }
+
+    #[test]
+    fn client_certificate_type_wire_roundtrip() {
+        for certificate_type in [
+            ClientCertificateType::RSA_SIGN,
+            ClientCertificateType::DSS_SIGN,
+            ClientCertificateType::RSA_FIXED_DH,
+            ClientCertificateType::DSS_FIXED_DH,
+            ClientCertificateType::RSA_EPHEMERAL_DH,
+            ClientCertificateType::DSS_EPHEMERAL_DH,
+            ClientCertificateType::FORTEZZA_DMS,
+            ClientCertificateType::ECDSA_SIGN,
+        ] {
+            assert_eq!(
+                ClientCertificateType::from_u8(certificate_type.as_u8()),
+                certificate_type
+            );
+            assert!(!certificate_type.is_unknown());
+        }
+
+        let unknown = ClientCertificateType::from_u8(0xFF);
+        assert_eq!(unknown.as_u8(), 0xFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn client_certificate_type_debug_stays_enum_like() {
+        assert_eq!(
+            format!("{:?}", ClientCertificateType::ECDSA_SIGN),
+            "ECDSA_SIGN"
+        );
+        assert_eq!(
+            format!("{:?}", ClientCertificateType::from_u8(0xFF)),
+            "Unknown(255)"
         );
     }
 
