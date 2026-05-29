@@ -318,7 +318,7 @@ impl State {
     fn await_client_hello(self, server: &mut Server) -> Result<Self, InternalError> {
         let maybe = server
             .engine
-            .next_handshake(MessageType::ClientHello, &mut server.defragment_buffer)?;
+            .next_handshake(MessageType::CLIENT_HELLO, &mut server.defragment_buffer)?;
 
         let Some(handshake) = maybe else {
             // Stay in same state
@@ -370,15 +370,16 @@ impl State {
             let cookie = compute_cookie(hmac_provider, &server.cookie_secret, client_random)?;
             // Start/restart flight timer for server Flight 2 (HelloVerifyRequest)
             server.engine.flight_begin(2);
-            server
-                .engine
-                .create_handshake(MessageType::HelloVerifyRequest, |body, _engine| {
+            server.engine.create_handshake(
+                MessageType::HELLO_VERIFY_REQUEST,
+                |body, _engine| {
                     // RFC 6347 4.2.1: The server_version field in the HelloVerifyRequest
                     // message MUST be set to DTLS 1.0
                     let hvr = HelloVerifyRequest::new(ProtocolVersion::DTLS1_0, cookie);
                     hvr.serialize(body);
                     Ok(())
-                })?;
+                },
+            )?;
 
             // The HelloVerifyRequest exchange is stateless per RFC 6347.
             // Reset all handshake state so the next ClientHello (with cookie) is processed fresh.
@@ -505,7 +506,7 @@ impl State {
         // Send ServerHello
         server
             .engine
-            .create_handshake(MessageType::ServerHello, move |body, engine| {
+            .create_handshake(MessageType::SERVER_HELLO, move |body, engine| {
                 handshake_create_server_hello(
                     body,
                     engine,
@@ -533,7 +534,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::Certificate, handshake_create_certificate)?;
+            .create_handshake(MessageType::CERTIFICATE, handshake_create_certificate)?;
 
         Ok(Self::SendServerKeyExchange)
     }
@@ -605,7 +606,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::ServerKeyExchange, |body, engine| {
+            .create_handshake(MessageType::SERVER_KEY_EXCHANGE, |body, engine| {
                 handshake_create_server_key_exchange(
                     body,
                     engine,
@@ -635,12 +636,13 @@ impl State {
             return Ok(Self::SendServerHelloDone);
         };
 
-        server
-            .engine
-            .create_handshake(MessageType::ServerKeyExchange, move |body, _engine| {
+        server.engine.create_handshake(
+            MessageType::SERVER_KEY_EXCHANGE,
+            move |body, _engine| {
                 PskParams::serialize_from_bytes(&hint, body);
                 Ok(())
-            })?;
+            },
+        )?;
 
         // PSK never sends CertificateRequest
         Ok(Self::SendServerHelloDone)
@@ -658,7 +660,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::CertificateRequest, move |body, _| {
+            .create_handshake(MessageType::CERTIFICATE_REQUEST, move |body, _| {
                 handshake_serialize_certificate_request(body, &sig_algs)
             })?;
 
@@ -670,7 +672,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::ServerHelloDone, |_, _| Ok(()))?;
+            .create_handshake(MessageType::SERVER_HELLO_DONE, |_, _| Ok(()))?;
 
         let cs = server.engine.cipher_suite().ok_or(Error::InvalidState(
             crate::InvalidStateError::NoCipherSuiteSelected,
@@ -691,7 +693,7 @@ impl State {
     fn await_certificate(self, server: &mut Server) -> Result<Self, InternalError> {
         let maybe = server
             .engine
-            .next_handshake(MessageType::Certificate, &mut server.defragment_buffer)?;
+            .next_handshake(MessageType::CERTIFICATE, &mut server.defragment_buffer)?;
 
         let Some(ref handshake) = maybe else {
             // Stay in same state
@@ -737,7 +739,7 @@ impl State {
 
     fn await_client_key_exchange(self, server: &mut Server) -> Result<Self, InternalError> {
         let maybe = server.engine.next_handshake(
-            MessageType::ClientKeyExchange,
+            MessageType::CLIENT_KEY_EXCHANGE,
             &mut server.defragment_buffer,
         )?;
 
@@ -893,7 +895,7 @@ impl State {
         let data = server.engine.transcript().to_buf();
 
         let maybe = server.engine.next_handshake(
-            MessageType::CertificateVerify,
+            MessageType::CERTIFICATE_VERIFY,
             &mut server.defragment_buffer,
         )?;
 
@@ -974,7 +976,7 @@ impl State {
 
         let maybe = server
             .engine
-            .next_handshake(MessageType::Finished, &mut server.defragment_buffer)?;
+            .next_handshake(MessageType::FINISHED, &mut server.defragment_buffer)?;
 
         if maybe.is_none() {
             // stay in same state
@@ -1060,7 +1062,7 @@ impl State {
 
         server
             .engine
-            .create_handshake(MessageType::Finished, |body, engine| {
+            .create_handshake(MessageType::FINISHED, |body, engine| {
                 let verify_data = engine.generate_verify_data(false /* server */)?;
                 trace!("Finished.verify_data length: {}", verify_data.len());
                 // Directly write the verify data without creating Finished struct
