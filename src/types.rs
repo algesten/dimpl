@@ -850,50 +850,56 @@ impl fmt::Debug for Dtls13CipherSuite {
 /// DTLS protocol version identifiers.
 ///
 /// Used in record headers and handshake messages for both DTLS 1.2 and 1.3.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProtocolVersion {
-    /// DTLS 1.0.
-    DTLS1_0,
-    /// DTLS 1.2.
-    DTLS1_2,
-    /// DTLS 1.3.
-    DTLS1_3,
-    /// Unknown protocol version.
-    Unknown(u16),
-}
-
-impl Default for ProtocolVersion {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct ProtocolVersion(u16);
 
 impl ProtocolVersion {
+    /// DTLS 1.0.
+    pub const DTLS1_0: Self = Self(0xFEFF);
+    /// DTLS 1.2.
+    pub const DTLS1_2: Self = Self(0xFEFD);
+    /// DTLS 1.3.
+    pub const DTLS1_3: Self = Self(0xFEFC);
+
+    /// Convert a wire format u16 value to a `ProtocolVersion`.
+    pub const fn from_u16(value: u16) -> Self {
+        Self(value)
+    }
+
     /// Convert this `ProtocolVersion` to its wire format u16 value.
-    pub fn as_u16(&self) -> u16 {
-        match self {
-            ProtocolVersion::DTLS1_0 => 0xFEFF,
-            ProtocolVersion::DTLS1_2 => 0xFEFD,
-            ProtocolVersion::DTLS1_3 => 0xFEFC,
-            ProtocolVersion::Unknown(value) => *value,
-        }
+    pub const fn as_u16(&self) -> u16 {
+        self.0
+    }
+
+    /// Returns true if this is not a known DTLS protocol version wire value.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(
+            *self,
+            ProtocolVersion::DTLS1_0 | ProtocolVersion::DTLS1_2 | ProtocolVersion::DTLS1_3
+        )
     }
 
     /// Parse a `ProtocolVersion` from wire format.
     pub fn parse(input: &[u8]) -> IResult<&[u8], ProtocolVersion> {
         let (input, version) = be_u16(input)?;
-        let protocol_version = match version {
-            0xFEFF => ProtocolVersion::DTLS1_0,
-            0xFEFD => ProtocolVersion::DTLS1_2,
-            0xFEFC => ProtocolVersion::DTLS1_3,
-            _ => ProtocolVersion::Unknown(version),
-        };
-        Ok((input, protocol_version))
+        Ok((input, ProtocolVersion::from_u16(version)))
     }
 
     /// Serialize this `ProtocolVersion` to wire format.
     pub fn serialize(&self, output: &mut Buf) {
         output.extend_from_slice(&self.as_u16().to_be_bytes());
+    }
+}
+
+impl fmt::Debug for ProtocolVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            ProtocolVersion::DTLS1_0 => f.write_str("DTLS1_0"),
+            ProtocolVersion::DTLS1_2 => f.write_str("DTLS1_2"),
+            ProtocolVersion::DTLS1_3 => f.write_str("DTLS1_3"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
     }
 }
 
@@ -1215,6 +1221,40 @@ mod tests {
         );
         assert_eq!(
             format!("{:?}", Dtls13CipherSuite::from_u16(0xFFFF)),
+            "Unknown(65535)"
+        );
+    }
+
+    #[test]
+    fn protocol_version_newtype_shape() {
+        assert_eq!(std::mem::size_of::<ProtocolVersion>(), 2);
+        assert!(ProtocolVersion::default().is_unknown());
+    }
+
+    #[test]
+    fn protocol_version_wire_roundtrip() {
+        let known = [
+            (0xFEFF, ProtocolVersion::DTLS1_0),
+            (0xFEFD, ProtocolVersion::DTLS1_2),
+            (0xFEFC, ProtocolVersion::DTLS1_3),
+        ];
+
+        for (wire, version) in known {
+            assert_eq!(ProtocolVersion::from_u16(wire), version);
+            assert_eq!(version.as_u16(), wire);
+            assert!(!version.is_unknown());
+        }
+
+        let unknown = ProtocolVersion::from_u16(0xFFFF);
+        assert_eq!(unknown.as_u16(), 0xFFFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn protocol_version_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", ProtocolVersion::DTLS1_2), "DTLS1_2");
+        assert_eq!(
+            format!("{:?}", ProtocolVersion::from_u16(0xFFFF)),
             "Unknown(65535)"
         );
     }
