@@ -1573,6 +1573,26 @@ mod tests {
     use super::*;
     use crate::Config;
     use crate::certificate::generate_self_signed_certificate;
+    use crate::{CryptoError, SecurityError};
+
+    #[derive(Debug)]
+    struct TestKeyExchange {
+        group: NamedGroup,
+    }
+
+    impl ActiveKeyExchange for TestKeyExchange {
+        fn pub_key(&self) -> &[u8] {
+            &[]
+        }
+
+        fn complete(self: Box<Self>, _peer_pub: &[u8], _out: &mut Buf) -> Result<(), CryptoError> {
+            unreachable!("mismatched server key share should fail before completing ECDHE")
+        }
+
+        fn group(&self) -> NamedGroup {
+            self.group
+        }
+    }
 
     fn client() -> Client {
         let cert = generate_self_signed_certificate().expect("generate cert");
@@ -1597,6 +1617,31 @@ mod tests {
         packet
     }
 
+    fn server_hello_with_key_share(group: NamedGroup) -> Vec<u8> {
+        let mut key_share = Vec::new();
+        key_share.extend_from_slice(&group.as_u16().to_be_bytes());
+        key_share.extend_from_slice(&1u16.to_be_bytes());
+        key_share.push(0);
+
+        let mut extensions = Vec::new();
+        extensions.extend_from_slice(&ExtensionType::SupportedVersions.as_u16().to_be_bytes());
+        extensions.extend_from_slice(&2u16.to_be_bytes());
+        extensions.extend_from_slice(&ProtocolVersion::DTLS1_3.as_u16().to_be_bytes());
+        extensions.extend_from_slice(&ExtensionType::KeyShare.as_u16().to_be_bytes());
+        extensions.extend_from_slice(&(key_share.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(&key_share);
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&ProtocolVersion::DTLS1_2.as_u16().to_be_bytes());
+        body.extend_from_slice(&[7; 32]);
+        body.push(0); // legacy_session_id
+        body.extend_from_slice(&Dtls13CipherSuite::AES_128_GCM_SHA256.as_u16().to_be_bytes());
+        body.push(CompressionMethod::Null.as_u8());
+        body.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
+        body.extend_from_slice(&extensions);
+        body
+    }
+
     #[test]
     fn empty_server_certificate_is_certificate_error() {
         let mut client = client();
@@ -1619,6 +1664,37 @@ mod tests {
         assert!(matches!(
             err,
             crate::InternalError::Fatal(Error::CertificateError(_))
+        ));
+    }
+
+    #[test]
+    fn server_key_share_group_mismatch_reports_expected_and_actual_groups() {
+        let mut client = client();
+        client.active_key_exchange = Some(Box::new(TestKeyExchange {
+            group: NamedGroup::X25519,
+        }));
+
+        client
+            .engine
+            .parse_packet(&epoch0_handshake_packet(
+                MessageType::ServerHello,
+                0,
+                &server_hello_with_key_share(NamedGroup::Secp256r1),
+            ))
+            .expect("queue mismatched ServerHello");
+
+        let err = State::AwaitServerHello
+            .await_server_hello(&mut client)
+            .expect_err("mismatched server key share group should fail");
+
+        assert!(matches!(
+            err,
+            crate::InternalError::Fatal(Error::SecurityError(
+                SecurityError::ServerKeyShareGroupMismatch {
+                    expected: NamedGroup::X25519,
+                    actual: NamedGroup::Secp256r1,
+                }
+            ))
         ));
     }
 }

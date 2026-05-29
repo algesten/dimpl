@@ -10,6 +10,7 @@ use crate::dtls12::context::{AuthMode, CryptoContext};
 use crate::dtls12::incoming::{Incoming, Record, RecordHandler};
 use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
 use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
+use crate::error::bounded_error_len;
 use crate::timer::ExponentialBackoff;
 use crate::window::ReplayWindow;
 use crate::{Config, Error, InternalError, Output, SeededRng};
@@ -820,7 +821,7 @@ impl Engine {
                 _ => {
                     return Err(Error::CryptoError(
                         crate::CryptoError::UnsupportedDtls12RecordIvLen {
-                            len: explicit_nonce_len,
+                            len: bounded_error_len(explicit_nonce_len),
                             suite,
                         },
                     ));

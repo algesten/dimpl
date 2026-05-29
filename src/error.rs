@@ -294,7 +294,9 @@ pub enum CryptoError {
     /// The DTLS 1.2 record IV length is unsupported for the selected suite.
     UnsupportedDtls12RecordIvLen {
         /// The unsupported record IV length.
-        len: usize,
+        ///
+        /// Values greater than `u16::MAX` are reported as `u16::MAX`.
+        len: u16,
         /// The selected DTLS 1.2 cipher suite.
         suite: Dtls12CipherSuite,
     },
