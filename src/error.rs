@@ -61,360 +61,631 @@ pub enum Error {
     Dtls12Fallback,
 }
 
+/// Fine-grained reason for an [`Error::UnexpectedMessage`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum UnexpectedMessageError {
+    /// Auto-detection received a server response that was neither DTLS 1.2 nor DTLS 1.3.
     UnrecognizedAutoServerResponse,
+    /// A DTLS 1.2 `ServerKeyExchange` omitted its required signature.
     ServerKeyExchangeWithoutSignature,
+    /// A PSK `ServerKeyExchange` was received while processing an ECDHE suite.
     PskServerKeyExchangeInEcdhePath,
+    /// An ECDHE `ServerKeyExchange` was received while processing a PSK suite.
     EcdheServerKeyExchangeInPskPath,
+    /// A PSK `ClientKeyExchange` was received while processing an ECDHE suite.
     PskClientKeyExchangeInEcdhePath,
+    /// An ECDHE `ClientKeyExchange` was received while processing a PSK suite.
     EcdheClientKeyExchangeInPskPath,
+    /// A DTLS 1.3 `CertificateRequest` context was shorter than declared.
     CertificateRequestContextTruncated,
+    /// A DTLS 1.3 `CertificateRequest` extension block was shorter than declared.
     CertificateRequestExtensionsTruncated,
+    /// A free-form unexpected-message reason not represented by a dedicated variant.
     Other(String),
 }
 
+/// Fine-grained reason for an [`Error::InvalidState`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum InvalidStateError {
+    /// No cipher suite has been selected for the connection.
     NoCipherSuiteSelected,
+    /// A cipher suite was required but not available.
     NoCipherSuite,
+    /// The client random was required but not available.
     NoClientRandom,
+    /// The server random was required but not available.
     NoServerRandom,
+    /// The handshake key schedule was used before a shared secret existed.
     NoSharedSecretForHandshakeKeyDerivation,
+    /// The server handshake traffic secret was required but not available.
     NoServerHandshakeTrafficSecret,
+    /// The server handshake traffic secret was required to verify or create `Finished`.
     NoServerHandshakeTrafficSecretForFinished,
+    /// The client handshake traffic secret was required but not available.
     NoClientHandshakeTrafficSecret,
+    /// The client handshake traffic secret was required to verify or create `Finished`.
     NoClientHandshakeTrafficSecretForFinished,
+    /// Application traffic keys were requested before the handshake secret existed.
     NoHandshakeSecretForApplicationKeyDerivation,
+    /// A key exchange was required but no exchange was active.
     NoActiveKeyExchange,
+    /// A DTLS 1.3 key update was requested before current send keys existed.
     NoCurrentAppSendKeysForKeyUpdate,
+    /// A DTLS 1.3 peer key update was processed before current receive keys existed.
     NoCurrentAppRecvKeysForKeyUpdate,
+    /// Exported keying material was requested before the exporter secret was derived.
     ExporterMasterSecretNotDerived,
+    /// A static invalid-state reason not represented by a dedicated variant.
     Other(&'static str),
 }
 
+/// Fine-grained reason for an [`Error::CryptoError`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum CryptoError {
+    /// No supported key exchange group is available.
     NoSupportedKeyExchangeGroups,
+    /// DTLS 1.2 needs a key exchange group but none is configured.
     NoDtls12KeyExchangeGroupsConfigured,
+    /// The epoch 0 sequence number space has been exhausted.
     Epoch0SequenceNumberExhausted,
+    /// The send sequence number space for an epoch has been exhausted.
     SendSequenceNumberExhausted {
+        /// The epoch whose send sequence number was exhausted.
         epoch: u16,
     },
+    /// Send keys are not available for an epoch.
     SendKeysNotAvailable {
+        /// The epoch whose send keys are unavailable.
         epoch: u16,
     },
+    /// Receive keys are not available for an epoch.
     RecvKeysNotAvailable {
+        /// The epoch whose receive keys are unavailable.
         epoch: u16,
     },
+    /// No provider key exchange group matches the negotiated group.
     KeyExchangeGroupNotFound(NamedGroup),
+    /// A key exchange operation was requested before initialization.
     KeyExchangeNotInitialized,
+    /// The requested key exchange group is unsupported.
     UnsupportedKeyExchangeGroup(NamedGroup),
+    /// The requested ECDHE group is unsupported.
     UnsupportedEcdheNamedGroup(NamedGroup),
+    /// The requested DTLS 1.2 cipher suite is unsupported.
     UnsupportedCipherSuite(Dtls12CipherSuite),
+    /// The requested HMAC hash algorithm is unsupported.
     UnsupportedHmacHash(HashAlgorithm),
+    /// The requested signature algorithm is unsupported.
     UnsupportedSignatureAlgorithm(SignatureAlgorithm),
+    /// No locally supported signature algorithm was offered by the peer.
     SignatureAlgorithmNotOfferedByClient,
+    /// The signature algorithm did not match the expected algorithm.
     SignatureAlgorithmMismatch {
+        /// The signature algorithm expected for this operation.
         expected: SignatureAlgorithm,
+        /// The signature algorithm actually present.
         actual: SignatureAlgorithm,
     },
+    /// The signature and hash algorithm pair is unsupported.
     UnsupportedSignaturePair {
+        /// The requested signature algorithm.
         signature: SignatureAlgorithm,
+        /// The requested hash algorithm.
         hash: HashAlgorithm,
     },
+    /// The signature, hash, and key group combination is unsupported for verification.
     UnsupportedSignatureVerification {
+        /// The requested signature algorithm.
         signature: SignatureAlgorithm,
+        /// The requested hash algorithm.
         hash: HashAlgorithm,
+        /// The public key group used for verification.
         group: NamedGroup,
     },
+    /// The public key algorithm is unsupported.
     UnsupportedPublicKeyAlgorithm,
+    /// The certificate or key references an unsupported EC curve.
     UnsupportedEcCurve(String),
+    /// A certificate omitted its required EC curve parameter.
     MissingEcCurveParameter,
+    /// A certificate had an invalid EC curve parameter.
     InvalidEcCurveParameter,
+    /// A certificate had an invalid subject public key.
     InvalidSubjectPublicKey,
+    /// A signature was not encoded in the expected format.
     InvalidSignatureFormat,
+    /// A public key could not be parsed for the given group.
     InvalidPublicKey(NamedGroup),
+    /// A private key could not be parsed in any supported format.
     InvalidPrivateKey,
+    /// A signing key was used with a hash other than the one it is bound to.
     SigningKeyHashMismatch {
+        /// The hash algorithm bound to the signing key.
         key_hash: HashAlgorithm,
+        /// The hash algorithm requested by the caller.
         requested: HashAlgorithm,
     },
+    /// A signing key group does not support the requested hash algorithm.
     SigningKeyUnsupportedHash {
+        /// The key group used for signing.
         group: NamedGroup,
+        /// The requested hash algorithm.
         hash: HashAlgorithm,
     },
+    /// An AES-GCM key had the wrong length.
     InvalidAesGcmKeySize {
+        /// The actual key length in bytes.
         actual: usize,
     },
+    /// A ChaCha20-Poly1305 key had the wrong length.
     InvalidChacha20Poly1305KeySize {
+        /// The actual key length in bytes.
         actual: usize,
     },
+    /// An AES-128-CCM-8 key had the wrong length.
     InvalidAes128Ccm8KeySize {
+        /// The actual key length in bytes.
         actual: usize,
     },
+    /// A nonce was invalid for the selected cipher.
     InvalidNonce,
+    /// A nonce had the wrong length.
     InvalidNonceLength {
+        /// The expected nonce length in bytes.
         expected: usize,
+        /// The actual nonce length in bytes.
         actual: usize,
     },
+    /// A ciphertext was shorter than the selected AEAD permits.
     CiphertextTooShort {
+        /// The minimum accepted ciphertext length in bytes.
         minimum: usize,
+        /// The actual ciphertext length in bytes.
         actual: usize,
     },
+    /// The requested HKDF output length is too large.
     HkdfOutputTooLong,
+    /// The HKDF label is too long to encode.
     HkdfLabelTooLong,
+    /// The HKDF context is too long to encode.
     HkdfContextTooLong,
+    /// The HKDF-Expand-Label output length is too large to encode.
     HkdfOutputLengthTooLarge,
+    /// The `Finished` verify-data length was invalid.
     InvalidVerifyDataLength,
+    /// The `Finished` verify-data is too long to encode.
     VerifyDataTooLong,
+    /// The TLS 1.2 master secret is too long to encode.
     MasterSecretTooLong,
+    /// The requested exported keying material is too long.
     KeyingMaterialTooLong,
+    /// The TLS 1.2 pre-master secret is not available.
     PreMasterSecretNotAvailable,
+    /// The TLS 1.2 master secret is not available.
     MasterSecretNotAvailable,
+    /// The client random is not available.
     ClientRandomNotAvailable,
+    /// The server random is not available.
     ServerRandomNotAvailable,
+    /// The client cipher has not been initialized.
     ClientCipherNotInitialized,
+    /// The server cipher has not been initialized.
     ServerCipherNotInitialized,
+    /// A write IV is not available for the requested side.
     WriteIvNotAvailable {
+        /// Whether the missing write IV is for the client side.
         is_client: bool,
     },
+    /// The DTLS 1.2 record IV length is unsupported for the selected suite.
     UnsupportedDtls12RecordIvLen {
+        /// The unsupported record IV length.
         len: usize,
+        /// The selected DTLS 1.2 cipher suite.
         suite: Dtls12CipherSuite,
     },
+    /// No private key is configured.
     NoPrivateKeyConfigured,
+    /// A PSK operation was requested before a PSK was set.
     PskNotSet,
+    /// The exporter master secret is not available.
     ExporterMasterSecretNotDerived,
+    /// A provider operation failed without a more specific reason.
     OperationFailed(CryptoOperation),
+    /// A provider operation failed with a backend-specific reason.
     ProviderFailure {
+        /// The provider operation that failed.
         operation: CryptoOperation,
+        /// The backend-specific reason.
         reason: String,
     },
+    /// A free-form crypto reason not represented by a dedicated variant.
     Other(String),
 }
 
+/// A cryptographic operation that can fail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum CryptoOperation {
+    /// Create an AEAD cipher instance.
     CreateCipher,
+    /// Encrypt plaintext.
     Encrypt,
+    /// Decrypt ciphertext.
     Decrypt,
+    /// Sign a transcript or payload.
     Sign,
+    /// Verify a signature.
     VerifySignature,
+    /// Load a private key.
     LoadPrivateKey,
+    /// Start a key exchange.
     StartKeyExchange,
+    /// Complete a key exchange.
     CompleteKeyExchange,
+    /// Generate an ephemeral key.
     GenerateEphemeralKey,
+    /// Compute a public key.
     ComputePublicKey,
+    /// Fill a buffer with random bytes.
     FillRandom,
+    /// Compute an HMAC.
     ComputeHmac,
+    /// Run the TLS 1.2 PRF.
     Prf,
+    /// Run HKDF-Extract.
     HkdfExtract,
+    /// Run HKDF-Expand.
     HkdfExpand,
+    /// Run TLS HKDF-Expand-Label.
     HkdfExpandLabel,
+    /// Derive a DTLS 1.3 early secret.
     DeriveEarlySecret,
+    /// Derive a DTLS 1.3 derived secret.
     DeriveDerivedSecret,
+    /// Derive a DTLS 1.3 handshake secret.
     DeriveHandshakeSecret,
+    /// Derive a DTLS 1.3 traffic secret.
     DeriveTrafficSecret,
+    /// Derive a DTLS 1.3 master secret.
     DeriveMasterSecret,
+    /// Derive a DTLS 1.3 exporter master secret.
     DeriveExporterMasterSecret,
+    /// Derive a DTLS 1.3 next-generation traffic secret.
     DeriveNextTrafficSecret,
+    /// Derive an AEAD key.
     DeriveKey,
+    /// Derive an AEAD IV.
     DeriveIv,
+    /// Derive a record sequence-number encryption key.
     DeriveSequenceNumberKey,
+    /// Derive a Finished-message key.
     DeriveFinishedKey,
+    /// Compute Finished verify data.
     ComputeVerifyData,
+    /// Verify Finished verify data.
     VerifyData,
+    /// Compute a PSK pre-master secret.
     ComputePskPreMasterSecret,
+    /// Compute a DTLS cookie.
     ComputeCookie,
+    /// Extract SRTP keying material.
     ExtractSrtpKeyingMaterial,
+    /// Encode a key.
     EncodeKey,
+    /// Decode a key.
     DecodeKey,
 }
 
+/// Fine-grained reason for an [`Error::CertificateError`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum CertificateError {
+    /// The peer did not send a server certificate.
     NoServerCertificateReceived,
+    /// Client certificate verification was requested with no client certificate.
     NoClientCertificateForVerification,
+    /// Server certificate verification was requested with no server certificate.
     NoServerCertificateForVerification,
+    /// A DTLS 1.3 server certificate carried a non-empty context.
     ServerCertificateContextMustBeEmpty,
+    /// A DTLS 1.3 client certificate carried a non-empty context.
     ClientCertificateContextMustBeEmpty,
+    /// The certificate operation needs an unsupported hash algorithm.
     UnsupportedHashAlgorithm(HashAlgorithm),
+    /// Certificate parsing failed.
     ParseFailed,
+    /// A certificate omitted its EC curve parameter.
     MissingEcCurveParameter,
+    /// A certificate had an invalid EC curve parameter.
     InvalidEcCurveParameter,
+    /// A certificate references an unsupported EC curve.
     UnsupportedEcCurve(String),
+    /// A certificate had an invalid subject public key.
     InvalidSubjectPublicKey,
+    /// Private-key handling failed during certificate processing.
     PrivateKey(CryptoError),
+    /// Certificate verification failed.
     Verification(CryptoError),
+    /// A free-form certificate reason not represented by a dedicated variant.
     Other(String),
 }
 
+/// Fine-grained reason for an [`Error::SecurityError`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum SecurityError {
+    /// `HelloVerifyRequest` used an unsupported protocol version.
     UnsupportedHelloVerifyRequestVersion(ProtocolVersion),
+    /// A server selected an unsupported protocol version.
     UnsupportedServerVersion(ProtocolVersion),
+    /// A client offered an unsupported protocol version.
     UnsupportedClientVersion(ProtocolVersion),
+    /// A server selected an unsupported DTLS 1.2 compression method.
     UnsupportedServerCompression(CompressionMethod),
+    /// A client did not offer null compression.
     UnsupportedClientCompression,
+    /// The selected key exchange algorithm is unsupported.
     UnsupportedKeyExchangeAlgorithm,
+    /// The server selected a cipher suite that was not offered or recognized.
     ServerSelectedUnknownCipherSuite,
+    /// The server selected a DTLS 1.2 cipher suite incompatible with local mode.
     ServerSelectedIncompatibleCipherSuite(Dtls12CipherSuite),
+    /// The server selected a DTLS 1.2 cipher suite disallowed by configuration.
     ServerSelectedDisallowedCipherSuite(Dtls12CipherSuite),
+    /// The server selected a DTLS 1.3 cipher suite disallowed by configuration.
     ServerSelectedDisallowedDtls13CipherSuite(Dtls13CipherSuite),
+    /// DTLS 1.2 extended master secret was required but not negotiated.
     ExtendedMasterSecretNotNegotiated,
+    /// No mutually acceptable cipher suite was found.
     NoMutuallyAcceptableCipherSuite,
+    /// A DTLS 1.3 ClientHello did not use the required DTLS 1.2 legacy version.
     ClientHelloLegacyVersionNotDtls12,
+    /// A DTLS 1.3 ServerHello did not use the required DTLS 1.2 legacy version.
     ServerHelloLegacyVersionNotDtls12,
+    /// A DTLS 1.3 ClientHello did not contain a recognized DTLS 1.3 version.
     ClientHelloMissingDtls13SupportedVersions,
+    /// A ClientHello did not offer null compression.
     ClientHelloMustOfferNullCompression,
+    /// The ClientHello cookie did not match the expected cookie.
     InvalidCookieInClientHello,
+    /// The server attempted to send a second HelloRetryRequest.
     CannotSendSecondHelloRetryRequest,
+    /// No common DTLS 1.3 cipher suite was found.
     NoCommonCipherSuite,
+    /// No common DTLS 1.3 key exchange group was found.
     NoCommonKeyExchangeGroup,
+    /// A HelloRetryRequest selected a disallowed cipher suite.
     HrrSelectedDisallowedCipherSuite,
+    /// A HelloRetryRequest did not select DTLS 1.3.
     HrrDidNotSelectDtls13,
+    /// A ServerHello selected a non-null compression method.
     ServerHelloCompressionMustBeNull,
+    /// A server did not negotiate DTLS 1.3.
     ServerDidNotNegotiateDtls13,
+    /// A DTLS 1.3 server did not send a key share.
     ServerMissingKeyShare,
+    /// The server key share group did not match the negotiated group.
     ServerKeyShareGroupMismatch {
+        /// The negotiated key exchange group.
         selected: NamedGroup,
+        /// The key exchange group in the server key share.
         actual: NamedGroup,
     },
+    /// A signature was too large to encode.
     SignatureTooLarge,
+    /// A signature scheme was used even though the peer did not offer it.
     SignatureSchemeNotOffered(SignatureScheme),
+    /// A signature algorithm did not match the expected algorithm.
     SignatureAlgorithmMismatch {
+        /// The expected signature algorithm.
         expected: SignatureAlgorithm,
+        /// The actual signature algorithm.
         actual: SignatureAlgorithm,
     },
+    /// The signature scheme is unsupported.
     UnsupportedSignatureScheme(SignatureScheme),
+    /// The signature scheme and certificate curve are incompatible.
     SignatureSchemeCertificateCurveMismatch {
+        /// The signature scheme used for the operation.
         scheme: SignatureScheme,
+        /// The certificate curve required by the signature scheme.
         expected: NamedGroup,
+        /// The actual certificate curve.
         actual: NamedGroup,
     },
+    /// Server Finished verification failed.
     ServerFinishedVerificationFailed,
+    /// Client Finished verification failed.
     ClientFinishedVerificationFailed,
+    /// A fatal DTLS alert was received.
     FatalAlert {
+        /// The DTLS alert level.
         level: u8,
+        /// The DTLS alert description.
         description: u8,
     },
+    /// A free-form security reason not represented by a dedicated variant.
     Other(String),
 }
 
+/// Fine-grained reason for an [`Error::PskError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum PskError {
+    /// No PSK resolver is configured.
     NoPskResolverConfigured,
+    /// No PSK identity is configured.
     NoPskIdentityConfigured,
+    /// The configured PSK resolver did not return a key.
     ResolverReturnedNoKey,
+    /// A static PSK reason not represented by a dedicated variant.
     Other(&'static str),
 }
 
+/// Fine-grained reason for an [`Error::Timeout`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum TimeoutError {
+    /// Timeout while waiting for an auto client hybrid ClientHello to resolve.
     HybridClientHello,
+    /// Timeout while connecting.
     Connect,
+    /// Timeout while handshaking.
     Handshake,
+    /// A static timeout reason not represented by a dedicated variant.
     Other(&'static str),
 }
 
+/// Fine-grained reason for an [`Error::ConfigError`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum ConfigError {
+    /// No crypto provider is available.
     NoCryptoProvider,
-    MtuTooSmall { mtu: usize, minimum: usize },
+    /// The configured MTU is smaller than dimpl permits.
+    MtuTooSmall {
+        /// The configured MTU.
+        mtu: usize,
+        /// The minimum accepted MTU.
+        minimum: usize,
+    },
+    /// The configured AEAD encryption limit is too small.
     AeadEncryptionLimitTooSmall,
+    /// Cipher-suite filtering removed every available suite.
     NoCipherSuitesAfterFiltering,
+    /// A PSK resolver is configured but no PSK cipher suite remains enabled.
     PskConfiguredWithoutPskCipherSuite,
+    /// DTLS 1.2 suites are enabled but no compatible key exchange group remains enabled.
     NoDtls12KeyExchangeGroupsAfterFiltering,
+    /// DTLS 1.3 suites are enabled but no key exchange group remains enabled.
     NoDtls13KeyExchangeGroupsAfterFiltering,
+    /// Crypto provider validation failed.
     CryptoProvider(CryptoProviderValidationError),
+    /// A free-form configuration reason not represented by a dedicated variant.
     Other(String),
 }
 
+/// Fine-grained reason for crypto provider validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(missing_docs)]
 pub enum CryptoProviderValidationError {
+    /// The provider has no cipher suites supported by dimpl.
     NoCipherSuites,
+    /// The provider has ECDH cipher suites but no key exchange groups.
     EcdhCipherSuitesWithoutKeyExchangeGroups,
+    /// The provider has no DTLS 1.3 cipher suites.
     NoDtls13CipherSuites,
+    /// No hash test vector exists for the hash algorithm.
     MissingHashTestVector(HashAlgorithm),
+    /// The provider hash implementation returned an unexpected value.
     HashProviderIncorrect(HashAlgorithm),
+    /// The provider PRF operation failed.
     PrfFailed {
+        /// The hash algorithm used by the PRF.
         hash: HashAlgorithm,
+        /// The underlying crypto failure.
         source: CryptoError,
     },
+    /// The provider PRF returned the wrong output length.
     PrfWrongLength {
+        /// The hash algorithm used by the PRF.
         hash: HashAlgorithm,
+        /// The expected output length in bytes.
         expected: usize,
+        /// The actual output length in bytes.
         actual: usize,
     },
+    /// No PRF test vector exists for the hash algorithm.
     MissingPrfTestVector(HashAlgorithm),
+    /// The provider PRF returned incorrect output.
     PrfIncorrect(HashAlgorithm),
+    /// No signature-validation vector exists for the algorithm pair.
     NoSignatureValidationVector {
+        /// The hash algorithm used by the vector.
         hash: HashAlgorithm,
+        /// The signature algorithm used by the vector.
         signature: SignatureAlgorithm,
     },
+    /// Provider signature verification failed.
     SignatureVerificationFailed {
+        /// The hash algorithm used for verification.
         hash: HashAlgorithm,
+        /// The signature algorithm used for verification.
         signature: SignatureAlgorithm,
+        /// The underlying crypto failure.
         source: CryptoError,
     },
+    /// Provider HKDF validation failed.
     HkdfFailed {
+        /// The DTLS 1.3 cipher suite under validation.
         suite: Dtls13CipherSuite,
+        /// The underlying crypto failure.
         source: CryptoError,
     },
+    /// Provider HKDF returned empty output.
     HkdfEmptyOutput(Dtls13CipherSuite),
+    /// No AEAD test vector exists for the suite.
     NoAeadTestVector(Dtls13CipherSuite),
+    /// Creating the AEAD cipher failed.
     AeadCreateFailed {
+        /// The DTLS 1.3 cipher suite under validation.
         suite: Dtls13CipherSuite,
+        /// The underlying crypto failure.
         source: CryptoError,
     },
+    /// AEAD encryption failed.
     AeadEncryptFailed {
+        /// The DTLS 1.3 cipher suite under validation.
         suite: Dtls13CipherSuite,
+        /// The underlying crypto failure.
         source: CryptoError,
     },
+    /// AEAD encryption returned the wrong output.
     AeadEncryptWrongOutput(Dtls13CipherSuite),
+    /// AEAD decryption failed.
     AeadDecryptFailed {
+        /// The DTLS 1.3 cipher suite under validation.
         suite: Dtls13CipherSuite,
+        /// The underlying crypto failure.
         source: CryptoError,
     },
+    /// AEAD decryption returned the wrong output.
     AeadDecryptWrongOutput(Dtls13CipherSuite),
+    /// No record-number-encryption vector exists for the suite.
     NoRecordNumberEncryptionTestVector(Dtls13CipherSuite),
+    /// Record-number encryption returned the wrong mask.
     RecordNumberEncryptionWrongMask(Dtls13CipherSuite),
+    /// Starting key exchange failed.
     KeyExchangeStartFailed {
+        /// The key exchange group under validation.
         group: NamedGroup,
+        /// The underlying crypto failure.
         source: CryptoError,
     },
+    /// Completing key exchange failed.
     KeyExchangeCompleteFailed {
+        /// The key exchange group under validation.
         group: NamedGroup,
+        /// The underlying crypto failure.
         source: CryptoError,
     },
+    /// Two sides of a validation key exchange produced different shared secrets.
     KeyExchangeMismatchedSharedSecret(NamedGroup),
+    /// HMAC validation failed.
     HmacFailed(CryptoError),
+    /// HMAC validation returned the wrong output length.
     HmacWrongLength {
+        /// The expected HMAC length in bytes.
         expected: usize,
+        /// The actual HMAC length in bytes.
         actual: usize,
     },
+    /// HMAC validation returned incorrect output.
     HmacIncorrect,
+    /// A free-form provider-validation reason not represented by a dedicated variant.
     Other(String),
 }
 
