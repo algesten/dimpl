@@ -1679,7 +1679,7 @@ mod tests {
             .parse_packet(&epoch0_handshake_packet(
                 MessageType::ServerHello,
                 0,
-                &server_hello_with_key_share(NamedGroup::Secp256r1),
+                &server_hello_with_key_share(NamedGroup::SECP256R1),
             ))
             .expect("queue mismatched ServerHello");
 
@@ -1692,7 +1692,7 @@ mod tests {
             crate::InternalError::Fatal(Error::SecurityError(
                 SecurityError::ServerKeyShareGroupMismatch {
                     expected: NamedGroup::X25519,
-                    actual: NamedGroup::Secp256r1,
+                    actual: NamedGroup::SECP256R1,
                 }
             ))
         ));

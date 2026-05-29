@@ -672,7 +672,7 @@ fn dtls12_handshake_secp384r1_key_exchange() {
         .kx_groups
         .iter()
         .copied()
-        .filter(|g| g.name() == dimpl::NamedGroup::Secp384r1)
+        .filter(|g| g.name() == dimpl::NamedGroup::SECP384R1)
         .collect();
     // leak: intentional leak to produce a &'static slice for the provider field
     let p384_only: &'static [&'static dyn dimpl::crypto::SupportedKxGroup] =

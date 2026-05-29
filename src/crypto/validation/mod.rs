@@ -40,7 +40,7 @@ impl CryptoProvider {
         self.kx_groups.iter().copied().filter(|kx| {
             matches!(
                 kx.name(),
-                NamedGroup::X25519 | NamedGroup::Secp256r1 | NamedGroup::Secp384r1
+                NamedGroup::X25519 | NamedGroup::SECP256R1 | NamedGroup::SECP384R1
             )
         })
     }

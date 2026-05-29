@@ -515,7 +515,7 @@ fn dtls13_handshake_secp256r1_key_exchange() {
         .kx_groups
         .iter()
         .copied()
-        .filter(|g| g.name() == NamedGroup::Secp256r1)
+        .filter(|g| g.name() == NamedGroup::SECP256R1)
         .collect();
     assert!(!p256_only.is_empty(), "Provider must have P-256");
 
@@ -806,12 +806,12 @@ fn dtls13_hrr_with_p256_then_x25519() {
         .kx_groups
         .iter()
         .copied()
-        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::X25519)
+        .filter(|g| g.name() == NamedGroup::SECP256R1 || g.name() == NamedGroup::X25519)
         .collect();
     // Ensure P-256 is first
     let mut client_groups_sorted: Vec<_> = client_groups;
     client_groups_sorted.sort_by_key(|g| {
-        if g.name() == NamedGroup::Secp256r1 {
+        if g.name() == NamedGroup::SECP256R1 {
             0
         } else {
             1
@@ -829,7 +829,7 @@ fn dtls13_hrr_with_p256_then_x25519() {
         .kx_groups
         .iter()
         .copied()
-        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::X25519)
+        .filter(|g| g.name() == NamedGroup::SECP256R1 || g.name() == NamedGroup::X25519)
         .collect();
     let mut server_groups_sorted: Vec<_> = server_groups;
     server_groups_sorted.sort_by_key(|g| if g.name() == NamedGroup::X25519 { 0 } else { 1 });
@@ -935,11 +935,11 @@ fn dtls13_hrr_handshake_completes_after_packet_loss() {
         .kx_groups
         .iter()
         .copied()
-        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::Secp384r1)
+        .filter(|g| g.name() == NamedGroup::SECP256R1 || g.name() == NamedGroup::SECP384R1)
         .collect();
     let mut client_groups_sorted: Vec<_> = client_groups;
     client_groups_sorted.sort_by_key(|g| {
-        if g.name() == NamedGroup::Secp256r1 {
+        if g.name() == NamedGroup::SECP256R1 {
             0
         } else {
             1
@@ -957,11 +957,11 @@ fn dtls13_hrr_handshake_completes_after_packet_loss() {
         .kx_groups
         .iter()
         .copied()
-        .filter(|g| g.name() == NamedGroup::Secp256r1 || g.name() == NamedGroup::Secp384r1)
+        .filter(|g| g.name() == NamedGroup::SECP256R1 || g.name() == NamedGroup::SECP384R1)
         .collect();
     let mut server_groups_sorted: Vec<_> = server_groups;
     server_groups_sorted.sort_by_key(|g| {
-        if g.name() == NamedGroup::Secp384r1 {
+        if g.name() == NamedGroup::SECP384R1 {
             0
         } else {
             1

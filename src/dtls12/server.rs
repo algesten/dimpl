@@ -1418,11 +1418,11 @@ mod tests {
     #[test]
     fn select_named_group_prefers_x25519_when_available() {
         let client = named_group_vec(&[
-            NamedGroup::Secp256r1,
+            NamedGroup::SECP256R1,
             NamedGroup::X25519,
-            NamedGroup::Secp384r1,
+            NamedGroup::SECP384R1,
         ]);
-        let provider = [NamedGroup::X25519, NamedGroup::Secp256r1];
+        let provider = [NamedGroup::X25519, NamedGroup::SECP256R1];
 
         let selected = select_named_group(Some(&client), &provider);
 
@@ -1431,27 +1431,27 @@ mod tests {
 
     #[test]
     fn select_named_group_respects_provider_capabilities() {
-        let client = named_group_vec(&[NamedGroup::X25519, NamedGroup::Secp256r1]);
-        let provider = [NamedGroup::Secp256r1];
+        let client = named_group_vec(&[NamedGroup::X25519, NamedGroup::SECP256R1]);
+        let provider = [NamedGroup::SECP256R1];
 
         let selected = select_named_group(Some(&client), &provider);
 
-        assert_eq!(selected, Some(NamedGroup::Secp256r1));
+        assert_eq!(selected, Some(NamedGroup::SECP256R1));
     }
 
     #[test]
     fn select_named_group_falls_back_to_provider_when_client_missing() {
-        let provider = [NamedGroup::Secp384r1];
+        let provider = [NamedGroup::SECP384R1];
 
         let selected = select_named_group(None, &provider);
 
-        assert_eq!(selected, Some(NamedGroup::Secp384r1));
+        assert_eq!(selected, Some(NamedGroup::SECP384R1));
     }
 
     #[test]
     fn select_named_group_rejects_when_client_has_no_overlap() {
         let client = named_group_vec(&[NamedGroup::X25519]);
-        let provider = [NamedGroup::Secp256r1];
+        let provider = [NamedGroup::SECP256R1];
 
         let selected = select_named_group(Some(&client), &provider);
 

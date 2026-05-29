@@ -765,11 +765,11 @@ mod tests {
     #[test]
     fn filter_kx_groups() {
         let config = Config::builder()
-            .kx_groups(&[NamedGroup::Secp256r1])
+            .kx_groups(&[NamedGroup::SECP256R1])
             .build()
             .expect("should accept single kx group");
         let groups: Vec<_> = config.kx_groups().map(|g| g.name()).collect();
-        assert_eq!(groups, &[NamedGroup::Secp256r1]);
+        assert_eq!(groups, &[NamedGroup::SECP256R1]);
     }
 
     #[test]
@@ -1003,7 +1003,7 @@ mod tests {
                 .with_crypto_provider(aws_lc_rs::default_provider())
                 .dtls12_cipher_suites(&[Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384])
                 .dtls13_cipher_suites(&[Dtls13CipherSuite::AES_128_GCM_SHA256])
-                .kx_groups(&[NamedGroup::X25519, NamedGroup::Secp256r1])
+                .kx_groups(&[NamedGroup::X25519, NamedGroup::SECP256R1])
                 .build()
                 .expect("should accept filtered config with explicit provider");
             let suites12: Vec<_> = config.dtls12_cipher_suites().map(|cs| cs.suite()).collect();
@@ -1014,7 +1014,7 @@ mod tests {
             let suites13: Vec<_> = config.dtls13_cipher_suites().map(|cs| cs.suite()).collect();
             assert_eq!(suites13, &[Dtls13CipherSuite::AES_128_GCM_SHA256]);
             let groups: Vec<_> = config.kx_groups().map(|g| g.name()).collect();
-            assert_eq!(groups, &[NamedGroup::X25519, NamedGroup::Secp256r1]);
+            assert_eq!(groups, &[NamedGroup::X25519, NamedGroup::SECP256R1]);
         }
     }
 }

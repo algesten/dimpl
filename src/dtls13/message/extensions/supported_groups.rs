@@ -62,7 +62,7 @@ mod tests {
     fn test_supported_groups_extension() {
         let mut groups = ArrayVec::new();
         groups.push(NamedGroup::X25519);
-        groups.push(NamedGroup::Secp256r1);
+        groups.push(NamedGroup::SECP256R1);
 
         let ext = SupportedGroupsExtension { groups };
 
@@ -94,8 +94,8 @@ mod tests {
             parsed.groups.as_slice(),
             &[
                 NamedGroup::X25519,
-                NamedGroup::Secp256r1,
-                NamedGroup::Secp384r1
+                NamedGroup::SECP256R1,
+                NamedGroup::SECP384R1
             ]
         );
     }

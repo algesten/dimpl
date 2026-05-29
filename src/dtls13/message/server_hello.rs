@@ -161,9 +161,9 @@ mod test {
         0x00, 0x0A, // ExtensionType::SupportedGroups
         0x00, 0x08, // Extension data length (8 bytes)
         0x00, 0x06, // Extension data
-        0x00, 0x17, // NamedGroup::Secp256r1
-        0x00, 0x18, // NamedGroup::Secp384r1
-        0x00, 0x19, // NamedGroup::Secp521r1
+        0x00, 0x17, // NamedGroup::SECP256R1
+        0x00, 0x18, // NamedGroup::SECP384R1
+        0x00, 0x19, // NamedGroup::SECP521R1
     ];
 
     #[test]

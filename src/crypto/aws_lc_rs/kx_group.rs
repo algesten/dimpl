@@ -28,8 +28,8 @@ impl EcdhKeyExchange {
     fn new(group: NamedGroup, mut buf: Buf) -> Result<Self, CryptoError> {
         let algorithm = match group {
             NamedGroup::X25519 => &X25519,
-            NamedGroup::Secp256r1 => &ECDH_P256,
-            NamedGroup::Secp384r1 => &ECDH_P384,
+            NamedGroup::SECP256R1 => &ECDH_P256,
+            NamedGroup::SECP384R1 => &ECDH_P384,
             _ => return Err(CryptoError::UnsupportedKeyExchangeGroup(group)),
         };
 
@@ -54,8 +54,8 @@ impl EcdhKeyExchange {
     fn algorithm(&self) -> &'static aws_lc_rs::agreement::Algorithm {
         match self.group {
             NamedGroup::X25519 => &X25519,
-            NamedGroup::Secp256r1 => &ECDH_P256,
-            NamedGroup::Secp384r1 => &ECDH_P384,
+            NamedGroup::SECP256R1 => &ECDH_P256,
+            NamedGroup::SECP384R1 => &ECDH_P384,
             _ => unreachable!("Unsupported group"),
         }
     }
@@ -109,11 +109,11 @@ struct P256;
 
 impl SupportedKxGroup for P256 {
     fn name(&self) -> NamedGroup {
-        NamedGroup::Secp256r1
+        NamedGroup::SECP256R1
     }
 
     fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, CryptoError> {
-        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp256r1, buf)?))
+        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::SECP256R1, buf)?))
     }
 }
 
@@ -123,11 +123,11 @@ struct P384;
 
 impl SupportedKxGroup for P384 {
     fn name(&self) -> NamedGroup {
-        NamedGroup::Secp384r1
+        NamedGroup::SECP384R1
     }
 
     fn start_exchange(&self, buf: Buf) -> Result<Box<dyn ActiveKeyExchange>, CryptoError> {
-        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::Secp384r1, buf)?))
+        Ok(Box::new(EcdhKeyExchange::new(NamedGroup::SECP384R1, buf)?))
     }
 }
 

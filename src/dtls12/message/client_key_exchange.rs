@@ -43,7 +43,7 @@ impl ClientEcdhKeys {
                 // In ClientKeyExchange, we don't include curve_type and named_group
                 // since they're already established during ServerKeyExchange
                 curve_type: CurveType::NamedCurve,  // Default
-                named_group: NamedGroup::Secp256r1, // Default
+                named_group: NamedGroup::SECP256R1, // Default
                 public_key_range: start..end,
             },
         ))

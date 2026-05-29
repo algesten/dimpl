@@ -221,18 +221,18 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
             .map_err(|_| CryptoError::InvalidEcCurveParameter)?;
 
         let group = match curve_oid {
-            OID_P256 => NamedGroup::Secp256r1,
-            OID_P384 => NamedGroup::Secp384r1,
+            OID_P256 => NamedGroup::SECP256R1,
+            OID_P384 => NamedGroup::SECP384R1,
             _ => return Err(CryptoError::UnsupportedEcCurve),
         };
 
         check_verify_scheme(sig_alg, hash_alg, group)?;
 
         let algorithm: &EcdsaVerificationAlgorithm = match (group, hash_alg) {
-            (NamedGroup::Secp256r1, HashAlgorithm::SHA256) => &ECDSA_P256_SHA256_ASN1,
-            (NamedGroup::Secp256r1, HashAlgorithm::SHA384) => &ECDSA_P256_SHA384_ASN1,
-            (NamedGroup::Secp384r1, HashAlgorithm::SHA256) => &ECDSA_P384_SHA256_ASN1,
-            (NamedGroup::Secp384r1, HashAlgorithm::SHA384) => &ECDSA_P384_SHA384_ASN1,
+            (NamedGroup::SECP256R1, HashAlgorithm::SHA256) => &ECDSA_P256_SHA256_ASN1,
+            (NamedGroup::SECP256R1, HashAlgorithm::SHA384) => &ECDSA_P256_SHA384_ASN1,
+            (NamedGroup::SECP384R1, HashAlgorithm::SHA256) => &ECDSA_P384_SHA256_ASN1,
+            (NamedGroup::SECP384R1, HashAlgorithm::SHA384) => &ECDSA_P384_SHA384_ASN1,
             // unreachable: check_verify_scheme already validated
             _ => unreachable!(),
         };
@@ -288,7 +288,7 @@ mod tests {
             CryptoError::SignatureVerificationFailed {
                 signature: SignatureAlgorithm::ECDSA,
                 hash: HashAlgorithm::SHA256,
-                group: NamedGroup::Secp256r1,
+                group: NamedGroup::SECP256R1,
             }
         );
     }
