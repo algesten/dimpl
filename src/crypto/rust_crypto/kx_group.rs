@@ -4,9 +4,9 @@ use p256::{PublicKey as P256PublicKey, ecdh::EphemeralSecret};
 use p384::{PublicKey as P384PublicKey, ecdh::EphemeralSecret as P384EphemeralSecret};
 
 use super::super::{ActiveKeyExchange, SupportedKxGroup};
+use crate::CryptoError;
 use crate::buffer::Buf;
 use crate::types::NamedGroup;
-use crate::{CryptoError, CryptoOperation};
 
 /// ECDHE key exchange implementation.
 enum EcdhKeyExchange {
@@ -105,9 +105,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
                 let shared_secret = secret.diffie_hellman(&peer_key);
                 // RFC 7748 §6.1: check the shared secret is not zero (low-order point)
                 if !shared_secret.was_contributory() {
-                    return Err(CryptoError::OperationFailed(
-                        CryptoOperation::CompleteKeyExchange,
-                    ));
+                    return Err(CryptoError::InvalidPublicKey(NamedGroup::X25519));
                 }
                 out.clear();
                 out.extend_from_slice(shared_secret.as_bytes());
@@ -191,3 +189,21 @@ static KX_GROUP_P384: P384 = P384;
 /// All supported key exchange groups.
 pub(super) static ALL_KX_GROUPS: &[&dyn SupportedKxGroup] =
     &[&KX_GROUP_X25519, &KX_GROUP_P256, &KX_GROUP_P384];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn x25519_non_contributory_peer_key_returns_invalid_public_key() {
+        let exchange = X25519Kx
+            .start_exchange(Buf::new())
+            .expect("start key exchange");
+        let mut out = Buf::new();
+
+        assert_eq!(
+            exchange.complete(&[0; 32], &mut out),
+            Err(CryptoError::InvalidPublicKey(NamedGroup::X25519))
+        );
+    }
+}

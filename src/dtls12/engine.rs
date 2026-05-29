@@ -1281,7 +1281,6 @@ impl RecordHandler for Engine {
 
                 if let Some(description) = fatal_description {
                     return Err(Error::SecurityError(crate::SecurityError::FatalAlert {
-                        level: 2,
                         description,
                     }));
                 }
@@ -1309,7 +1308,6 @@ impl RecordHandler for Engine {
 
                 if level == 2 {
                     return Err(Error::SecurityError(crate::SecurityError::FatalAlert {
-                        level,
                         description,
                     }));
                 }

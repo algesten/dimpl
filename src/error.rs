@@ -11,6 +11,10 @@ use crate::types::ProtocolVersion;
 use crate::types::SignatureAlgorithm;
 use crate::types::SignatureScheme;
 
+pub(crate) fn bounded_error_len(len: usize) -> u16 {
+    len.min(u16::MAX as usize) as u16
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 /// Errors returned by DTLS processing functions.
@@ -183,6 +187,15 @@ pub enum CryptoError {
         /// The public key group used for verification.
         group: NamedGroup,
     },
+    /// Signature verification failed for a supported signature/hash/group combination.
+    SignatureVerificationFailed {
+        /// The requested signature algorithm.
+        signature: SignatureAlgorithm,
+        /// The requested hash algorithm.
+        hash: HashAlgorithm,
+        /// The public key group used for verification.
+        group: NamedGroup,
+    },
     /// The public key algorithm is unsupported.
     UnsupportedPublicKeyAlgorithm,
     /// A certificate or key references an unsupported EC curve.
@@ -218,33 +231,32 @@ pub enum CryptoError {
     /// An AES-GCM key had the wrong length.
     InvalidAesGcmKeySize {
         /// The actual key length in bytes.
-        actual: usize,
+        ///
+        /// Values greater than `u16::MAX` are reported as `u16::MAX`.
+        actual: u16,
     },
     /// A ChaCha20-Poly1305 key had the wrong length.
     InvalidChacha20Poly1305KeySize {
         /// The actual key length in bytes.
-        actual: usize,
+        ///
+        /// Values greater than `u16::MAX` are reported as `u16::MAX`.
+        actual: u16,
     },
     /// An AES-128-CCM-8 key had the wrong length.
     InvalidAes128Ccm8KeySize {
         /// The actual key length in bytes.
-        actual: usize,
+        ///
+        /// Values greater than `u16::MAX` are reported as `u16::MAX`.
+        actual: u16,
     },
     /// A nonce was invalid for the selected cipher.
     InvalidNonce,
-    /// A nonce had the wrong length.
-    InvalidNonceLength {
-        /// The expected nonce length in bytes.
-        expected: usize,
-        /// The actual nonce length in bytes.
-        actual: usize,
-    },
     /// A ciphertext was shorter than the selected AEAD permits.
     CiphertextTooShort {
         /// The minimum accepted ciphertext length in bytes.
-        minimum: usize,
+        minimum: u8,
         /// The actual ciphertext length in bytes.
-        actual: usize,
+        actual: u8,
     },
     /// The requested HKDF output length is too large.
     HkdfOutputTooLong,
@@ -396,10 +408,6 @@ pub enum CertificateError {
     UnsupportedEcCurve,
     /// A certificate had an invalid subject public key.
     InvalidSubjectPublicKey,
-    /// Private-key handling failed during certificate processing.
-    PrivateKey(CryptoError),
-    /// Certificate verification failed.
-    Verification(CryptoError),
 }
 
 /// Fine-grained reason for an [`Error::SecurityError`].
@@ -456,10 +464,10 @@ pub enum SecurityError {
     ServerDidNotNegotiateDtls13,
     /// A DTLS 1.3 server did not send a key share.
     ServerMissingKeyShare,
-    /// The server key share group did not match the negotiated group.
+    /// The server key share group did not match the expected group.
     ServerKeyShareGroupMismatch {
-        /// The negotiated key exchange group.
-        selected: NamedGroup,
+        /// The expected key exchange group.
+        expected: NamedGroup,
         /// The key exchange group in the server key share.
         actual: NamedGroup,
     },
@@ -491,8 +499,6 @@ pub enum SecurityError {
     ClientFinishedVerificationFailed,
     /// A fatal DTLS alert was received.
     FatalAlert {
-        /// The DTLS alert level.
-        level: u8,
         /// The DTLS alert description.
         description: u8,
     },
@@ -526,14 +532,12 @@ pub enum TimeoutError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConfigError {
-    /// No crypto provider is available.
-    NoCryptoProvider,
     /// The configured MTU is smaller than dimpl permits.
     MtuTooSmall {
         /// The configured MTU.
-        mtu: usize,
+        mtu: u16,
         /// The minimum accepted MTU.
-        minimum: usize,
+        minimum: u16,
     },
     /// The configured AEAD encryption limit is too small.
     AeadEncryptionLimitTooSmall,
@@ -569,15 +573,6 @@ pub enum CryptoProviderValidationError {
         hash: HashAlgorithm,
         /// The underlying crypto failure.
         source: CryptoError,
-    },
-    /// The provider PRF returned the wrong output length.
-    PrfWrongLength {
-        /// The hash algorithm used by the PRF.
-        hash: HashAlgorithm,
-        /// The expected output length in bytes.
-        expected: usize,
-        /// The actual output length in bytes.
-        actual: usize,
     },
     /// No PRF test vector exists for the hash algorithm.
     MissingPrfTestVector(HashAlgorithm),
@@ -657,13 +652,6 @@ pub enum CryptoProviderValidationError {
     KeyExchangeMismatchedSharedSecret(NamedGroup),
     /// HMAC validation failed.
     HmacFailed(CryptoError),
-    /// HMAC validation returned the wrong output length.
-    HmacWrongLength {
-        /// The expected HMAC length in bytes.
-        expected: usize,
-        /// The actual HMAC length in bytes.
-        actual: usize,
-    },
     /// HMAC validation returned incorrect output.
     HmacIncorrect,
 }
@@ -926,6 +914,14 @@ impl fmt::Display for CryptoError {
                 f,
                 "unsupported signature verification: {signature:?} + {hash:?} + {group:?}"
             ),
+            Self::SignatureVerificationFailed {
+                signature,
+                hash,
+                group,
+            } => write!(
+                f,
+                "signature verification failed: {signature:?} + {hash:?} + {group:?}"
+            ),
             Self::UnsupportedPublicKeyAlgorithm => write!(f, "unsupported public key algorithm"),
             Self::UnsupportedEcCurve => write!(f, "unsupported EC curve"),
             Self::CertificateParseFailed => write!(f, "failed to parse certificate"),
@@ -963,9 +959,6 @@ impl fmt::Display for CryptoError {
                 write!(f, "invalid key size for AES-128-CCM-8: {actual}")
             }
             Self::InvalidNonce => write!(f, "invalid nonce"),
-            Self::InvalidNonceLength { expected, actual } => {
-                write!(f, "invalid nonce length: expected {expected}, got {actual}")
-            }
             Self::CiphertextTooShort { minimum, actual } => {
                 write!(f, "ciphertext too short: got {actual}, minimum {minimum}")
             }
@@ -1074,8 +1067,6 @@ impl fmt::Display for CertificateError {
             Self::InvalidSubjectPublicKey => {
                 write!(f, "invalid EC subject_public_key bitstring")
             }
-            Self::PrivateKey(err) => write!(f, "private key error: {err}"),
-            Self::Verification(err) => write!(f, "verification failed: {err}"),
         }
     }
 }
@@ -1154,10 +1145,10 @@ impl fmt::Display for SecurityError {
                 write!(f, "server did not negotiate DTLS 1.3")
             }
             Self::ServerMissingKeyShare => write!(f, "server missing key_share"),
-            Self::ServerKeyShareGroupMismatch { selected, actual } => {
+            Self::ServerKeyShareGroupMismatch { expected, actual } => {
                 write!(
                     f,
-                    "server key_share group mismatch: selected {selected:?}, actual {actual:?}"
+                    "server key_share group mismatch: expected {expected:?}, actual {actual:?}"
                 )
             }
             Self::SignatureTooLarge => write!(f, "signature too large"),
@@ -1187,11 +1178,8 @@ impl fmt::Display for SecurityError {
             Self::ClientFinishedVerificationFailed => {
                 write!(f, "client Finished verification failed")
             }
-            Self::FatalAlert { level, description } => {
-                write!(
-                    f,
-                    "received fatal alert: level={level}, description={description}"
-                )
+            Self::FatalAlert { description } => {
+                write!(f, "received fatal alert: description={description}")
             }
         }
     }
@@ -1220,13 +1208,6 @@ impl fmt::Display for TimeoutError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoCryptoProvider => write!(
-                f,
-                concat!(
-                    "no crypto provider available; set one explicitly, install a default, ",
-                    "or enable a crypto feature"
-                )
-            ),
             Self::MtuTooSmall { mtu, minimum } => {
                 write!(f, "MTU {mtu} is too small (minimum {minimum})")
             }
@@ -1280,14 +1261,6 @@ impl fmt::Display for CryptoProviderValidationError {
                 write!(f, "hash provider {hash:?} produced incorrect result")
             }
             Self::PrfFailed { hash, source } => write!(f, "PRF failed for {hash:?}: {source}"),
-            Self::PrfWrongLength {
-                hash,
-                expected,
-                actual,
-            } => write!(
-                f,
-                "PRF {hash:?} returned wrong length: expected {expected}, got {actual}"
-            ),
             Self::MissingPrfTestVector(hash) => {
                 write!(f, "no expected PRF data for hash algorithm: {hash:?}")
             }
@@ -1343,12 +1316,6 @@ impl fmt::Display for CryptoProviderValidationError {
                 write!(f, "key exchange produced different secrets for {group:?}")
             }
             Self::HmacFailed(source) => write!(f, "HMAC provider failed: {source}"),
-            Self::HmacWrongLength { expected, actual } => {
-                write!(
-                    f,
-                    "HMAC provider returned wrong length: expected {expected} bytes, got {actual}"
-                )
-            }
             Self::HmacIncorrect => {
                 write!(f, "HMAC provider produced incorrect result for HMAC-SHA256")
             }

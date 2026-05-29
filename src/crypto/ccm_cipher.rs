@@ -9,6 +9,7 @@ use ccm::consts::{U8, U12};
 
 use super::{Aad, Cipher, Nonce};
 use crate::buffer::{Buf, TmpBuf};
+use crate::error::bounded_error_len;
 use crate::{CryptoError, CryptoOperation};
 
 /// AES-128-CCM with 8-byte tag, 12-byte nonce.
@@ -28,7 +29,9 @@ impl std::fmt::Debug for AesCcm8Cipher {
 impl AesCcm8Cipher {
     pub fn new(key: &[u8]) -> Result<Self, CryptoError> {
         if key.len() != 16 {
-            return Err(CryptoError::InvalidAes128Ccm8KeySize { actual: key.len() });
+            return Err(CryptoError::InvalidAes128Ccm8KeySize {
+                actual: bounded_error_len(key.len()),
+            });
         }
         let cipher = Aes128Ccm8::new_from_slice(key)
             .map_err(|_| CryptoError::OperationFailed(CryptoOperation::CreateCipher))?;
@@ -40,13 +43,6 @@ impl AesCcm8Cipher {
 
 impl Cipher for AesCcm8Cipher {
     fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), CryptoError> {
-        if nonce.len() != 12 {
-            return Err(CryptoError::InvalidNonceLength {
-                expected: 12,
-                actual: nonce.len(),
-            });
-        }
-
         let ccm_nonce = ccm::aead::generic_array::GenericArray::from_slice(&nonce[..12]);
         let tag = self
             .cipher
@@ -68,14 +64,7 @@ impl Cipher for AesCcm8Cipher {
         if ciphertext.len() < 8 {
             return Err(CryptoError::CiphertextTooShort {
                 minimum: 8,
-                actual: ciphertext.len(),
-            });
-        }
-
-        if nonce.len() != 12 {
-            return Err(CryptoError::InvalidNonceLength {
-                expected: 12,
-                actual: nonce.len(),
+                actual: ciphertext.len() as u8,
             });
         }
 

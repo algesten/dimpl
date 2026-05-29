@@ -2329,7 +2329,6 @@ impl RecordHandler for Engine {
                     Some(90) => Ok(None),
                     Some(description) => {
                         Err(Error::SecurityError(crate::SecurityError::FatalAlert {
-                            level: 2,
                             description,
                         }))
                     }

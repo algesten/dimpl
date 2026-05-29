@@ -10,6 +10,7 @@ use super::super::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuit
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::Dtls12CipherSuite;
+use crate::error::bounded_error_len;
 use crate::types::{Dtls13CipherSuite, HashAlgorithm};
 use crate::{CryptoError, CryptoOperation};
 
@@ -39,21 +40,15 @@ impl AesGcm {
                 let key = Key::<Aes256Gcm>::from_slice(key);
                 Ok(AesGcm::Aes256(Box::new(Aes256Gcm::new(key))))
             }
-            _ => Err(CryptoError::InvalidAesGcmKeySize { actual: key.len() }),
+            _ => Err(CryptoError::InvalidAesGcmKeySize {
+                actual: bounded_error_len(key.len()),
+            }),
         }
     }
 }
 
 impl Cipher for AesGcm {
     fn encrypt(&mut self, data: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), CryptoError> {
-        // AES-GCM nonce is 12 bytes
-        if nonce.len() != 12 {
-            return Err(CryptoError::InvalidNonceLength {
-                expected: 12,
-                actual: nonce.len(),
-            });
-        }
-
         // Create nonce from the provided nonce bytes
         let nonce_array: [u8; 12] = nonce[..12]
             .try_into()
@@ -90,15 +85,7 @@ impl Cipher for AesGcm {
         if ciphertext.len() < 16 {
             return Err(CryptoError::CiphertextTooShort {
                 minimum: 16,
-                actual: ciphertext.len(),
-            });
-        }
-
-        // AES-GCM nonce is 12 bytes
-        if nonce.len() != 12 {
-            return Err(CryptoError::InvalidNonceLength {
-                expected: 12,
-                actual: nonce.len(),
+                actual: ciphertext.len() as u8,
             });
         }
 
@@ -149,7 +136,9 @@ impl ChaCha20Poly1305Cipher {
     fn new(key: &[u8]) -> Result<Self, CryptoError> {
         use chacha20poly1305::KeyInit;
         if key.len() != 32 {
-            return Err(CryptoError::InvalidChacha20Poly1305KeySize { actual: key.len() });
+            return Err(CryptoError::InvalidChacha20Poly1305KeySize {
+                actual: bounded_error_len(key.len()),
+            });
         }
         let key = chacha20poly1305::Key::from_slice(key);
         Ok(ChaCha20Poly1305Cipher {
@@ -160,13 +149,6 @@ impl ChaCha20Poly1305Cipher {
 
 impl Cipher for ChaCha20Poly1305Cipher {
     fn encrypt(&mut self, data: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), CryptoError> {
-        if nonce.len() != 12 {
-            return Err(CryptoError::InvalidNonceLength {
-                expected: 12,
-                actual: nonce.len(),
-            });
-        }
-
         let nonce_array: [u8; 12] = nonce[..12]
             .try_into()
             .map_err(|_| CryptoError::InvalidNonce)?;
@@ -189,14 +171,7 @@ impl Cipher for ChaCha20Poly1305Cipher {
         if ciphertext.len() < 16 {
             return Err(CryptoError::CiphertextTooShort {
                 minimum: 16,
-                actual: ciphertext.len(),
-            });
-        }
-
-        if nonce.len() != 12 {
-            return Err(CryptoError::InvalidNonceLength {
-                expected: 12,
-                actual: nonce.len(),
+                actual: ciphertext.len() as u8,
             });
         }
 

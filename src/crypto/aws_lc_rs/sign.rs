@@ -240,7 +240,11 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
         let public_key = UnparsedPublicKey::new(algorithm, pubkey_bytes);
         public_key
             .verify(data, signature)
-            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::VerifySignature))
+            .map_err(|_| CryptoError::SignatureVerificationFailed {
+                signature: sig_alg,
+                hash: hash_alg,
+                group,
+            })
     }
 }
 
@@ -249,3 +253,43 @@ pub(super) static KEY_PROVIDER: AwsLcKeyProvider = AwsLcKeyProvider;
 
 /// Static instance of the signature verifier.
 pub(super) static SIGNATURE_VERIFIER: AwsLcSignatureVerifier = AwsLcSignatureVerifier;
+
+#[cfg(all(test, feature = "rcgen"))]
+mod tests {
+    use super::*;
+    use crate::certificate::generate_self_signed_certificate;
+
+    #[test]
+    fn invalid_signature_returns_structured_verification_error() {
+        let cert = generate_self_signed_certificate().expect("generate cert");
+        let mut key = KEY_PROVIDER
+            .load_private_key(&cert.private_key)
+            .expect("load private key");
+        let data = b"signed data";
+        let mut signature = Buf::new();
+        key.sign(data, HashAlgorithm::SHA256, &mut signature)
+            .expect("sign data");
+
+        let last = signature.len() - 1;
+        signature[last] ^= 0x01;
+
+        let err = SIGNATURE_VERIFIER
+            .verify_signature(
+                &cert.certificate,
+                data,
+                &signature,
+                HashAlgorithm::SHA256,
+                SignatureAlgorithm::ECDSA,
+            )
+            .expect_err("corrupt signature should fail");
+
+        assert_eq!(
+            err,
+            CryptoError::SignatureVerificationFailed {
+                signature: SignatureAlgorithm::ECDSA,
+                hash: HashAlgorithm::SHA256,
+                group: NamedGroup::Secp256r1,
+            }
+        );
+    }
+}

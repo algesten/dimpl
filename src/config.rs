@@ -508,7 +508,7 @@ impl ConfigBuilder {
         // Validate MTU: must be large enough for DTLS record + handshake headers
         if self.mtu < 64 {
             return Err(Error::ConfigError(ConfigError::MtuTooSmall {
-                mtu: self.mtu,
+                mtu: self.mtu as u16,
                 minimum: 64,
             }));
         }

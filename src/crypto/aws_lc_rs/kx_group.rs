@@ -81,7 +81,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
                 Ok(())
             },
         )
-        .map_err(|_| CryptoError::OperationFailed(CryptoOperation::CompleteKeyExchange))
+        .map_err(|_| CryptoError::InvalidPublicKey(self.group))
     }
 
     fn group(&self) -> NamedGroup {
@@ -139,3 +139,21 @@ static KX_GROUP_P384: P384 = P384;
 /// All supported key exchange groups.
 pub(super) static ALL_KX_GROUPS: &[&dyn SupportedKxGroup] =
     &[&KX_GROUP_X25519, &KX_GROUP_P256, &KX_GROUP_P384];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn x25519_non_contributory_peer_key_returns_invalid_public_key() {
+        let exchange = X25519Kx
+            .start_exchange(Buf::new())
+            .expect("start key exchange");
+        let mut out = Buf::new();
+
+        assert_eq!(
+            exchange.complete(&[0; 32], &mut out),
+            Err(CryptoError::InvalidPublicKey(NamedGroup::X25519))
+        );
+    }
+}

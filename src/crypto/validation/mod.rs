@@ -177,16 +177,6 @@ impl CryptoProvider {
                 })
             })?;
 
-            if result.len() != output_len {
-                return Err(provider_error(
-                    CryptoProviderValidationError::PrfWrongLength {
-                        hash: hash_alg,
-                        expected: output_len,
-                        actual: result.len(),
-                    },
-                ));
-            }
-
             let maybe_expected = PRF_TEST_VECTORS
                 .iter()
                 .find(|(h, _)| *h == hash_alg)
@@ -428,18 +418,6 @@ impl CryptoProvider {
             .hmac_provider
             .hmac_sha256(key, data)
             .map_err(|e| provider_error(CryptoProviderValidationError::HmacFailed(e)))?;
-
-        // Verify the result matches expected HMAC-SHA256 output
-        // Expected: HMAC-SHA256("key", "The quick brown fox jumps over the lazy dog")
-        // This is a standard test vector for HMAC-SHA256
-        if result.len() != 32 {
-            return Err(provider_error(
-                CryptoProviderValidationError::HmacWrongLength {
-                    expected: 32,
-                    actual: result.len(),
-                },
-            ));
-        }
 
         // Verify against known HMAC-SHA256 test vector
         if result.as_slice() != HMAC_SHA256_TEST_VECTOR {

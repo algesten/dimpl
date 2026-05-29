@@ -9,6 +9,7 @@ use super::super::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuit
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::Dtls12CipherSuite;
+use crate::error::bounded_error_len;
 use crate::types::{Dtls13CipherSuite, HashAlgorithm};
 use crate::{CryptoError, CryptoOperation};
 
@@ -28,7 +29,11 @@ impl AesGcm {
         let algorithm = match key.len() {
             16 => &AES_128_GCM,
             32 => &AES_256_GCM,
-            _ => return Err(CryptoError::InvalidAesGcmKeySize { actual: key.len() }),
+            _ => {
+                return Err(CryptoError::InvalidAesGcmKeySize {
+                    actual: bounded_error_len(key.len()),
+                });
+            }
         };
 
         let unbound_key = UnboundKey::new(algorithm, key)
@@ -63,7 +68,7 @@ impl Cipher for AesGcm {
         if ciphertext.len() < 16 {
             return Err(CryptoError::CiphertextTooShort {
                 minimum: 16,
-                actual: ciphertext.len(),
+                actual: ciphertext.len() as u8,
             });
         }
 
@@ -101,7 +106,9 @@ impl ChaCha20Poly1305Cipher {
         // The UnboundKey::new call also validates length, but doesnt give us
         // a reasonable error message. This makes it equivalent to RustCrypto
         if key.len() != 32 {
-            return Err(CryptoError::InvalidChacha20Poly1305KeySize { actual: key.len() });
+            return Err(CryptoError::InvalidChacha20Poly1305KeySize {
+                actual: bounded_error_len(key.len()),
+            });
         }
         let unbound_key = UnboundKey::new(&CHACHA20_POLY1305, key)
             .map_err(|_| CryptoError::OperationFailed(CryptoOperation::CreateCipher))?;
@@ -135,7 +142,7 @@ impl Cipher for ChaCha20Poly1305Cipher {
         if ciphertext.len() < 16 {
             return Err(CryptoError::CiphertextTooShort {
                 minimum: 16,
-                actual: ciphertext.len(),
+                actual: ciphertext.len() as u8,
             });
         }
 

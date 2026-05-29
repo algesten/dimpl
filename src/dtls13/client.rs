@@ -638,8 +638,8 @@ impl State {
         if key_exchange.group() != server_group {
             return Err(
                 Error::SecurityError(crate::SecurityError::ServerKeyShareGroupMismatch {
-                    selected: server_group,
-                    actual: key_exchange.group(),
+                    expected: key_exchange.group(),
+                    actual: server_group,
                 })
                 .into(),
             );
