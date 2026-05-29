@@ -309,7 +309,7 @@ impl Server {
 
         let epoch = self.engine.app_send_epoch();
         self.engine.create_ciphertext_record(
-            ContentType::ApplicationData,
+            ContentType::APPLICATION_DATA,
             epoch,
             false,
             |body| {
@@ -332,7 +332,7 @@ impl Server {
         }
         let epoch = self.engine.app_send_epoch();
         self.engine
-            .create_ciphertext_record(ContentType::Alert, epoch, false, |body| {
+            .create_ciphertext_record(ContentType::ALERT, epoch, false, |body| {
                 body.push(1); // level: legacy (ignored in DTLS 1.3)
                 body.push(0); // description: close_notify
             })?;
@@ -1172,7 +1172,7 @@ impl State {
             );
             for data in server.queued_data.drain(..) {
                 server.engine.create_ciphertext_record(
-                    ContentType::ApplicationData,
+                    ContentType::APPLICATION_DATA,
                     epoch,
                     false,
                     |body| {

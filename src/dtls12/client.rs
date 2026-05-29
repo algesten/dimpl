@@ -234,7 +234,7 @@ impl Client {
         // Use the engine's create_record to send application data
         // The encryption is now handled in the engine
         self.engine
-            .create_record(ContentType::ApplicationData, 1, false, |body| {
+            .create_record(ContentType::APPLICATION_DATA, 1, false, |body| {
                 body.extend_from_slice(data);
             })?;
 
@@ -252,7 +252,7 @@ impl Client {
             return Ok(());
         }
         self.engine
-            .create_record(ContentType::Alert, 1, false, |body| {
+            .create_record(ContentType::ALERT, 1, false, |body| {
                 body.push(1); // level: warning
                 body.push(0); // description: close_notify
             })?;
@@ -456,7 +456,7 @@ impl State {
         }
 
         // Enforce Null compression only
-        if server_hello.compression_method != CompressionMethod::Null {
+        if server_hello.compression_method != CompressionMethod::NULL {
             return Err(
                 Error::SecurityError(crate::SecurityError::UnsupportedServerCompression(
                     server_hello.compression_method,
@@ -950,7 +950,7 @@ impl State {
         trace!("Sending ChangeCipherSpec");
         client
             .engine
-            .create_record(ContentType::ChangeCipherSpec, 0, true, |body| {
+            .create_record(ContentType::CHANGE_CIPHER_SPEC, 0, true, |body| {
                 // Change cipher spec is just a single byte with value 1
                 body.push(1);
             })?;
@@ -1046,7 +1046,7 @@ impl State {
     }
 
     fn await_change_cipher_spec(self, client: &mut Client) -> Result<Self, InternalError> {
-        let maybe = client.engine.next_record(ContentType::ChangeCipherSpec);
+        let maybe = client.engine.next_record(ContentType::CHANGE_CIPHER_SPEC);
 
         let Some(_) = maybe else {
             // Stay in same state
@@ -1190,7 +1190,7 @@ impl State {
             client.engine.discard_pending_writes();
             client
                 .engine
-                .create_record(ContentType::Alert, 1, false, |body| {
+                .create_record(ContentType::ALERT, 1, false, |body| {
                     body.push(1); // level: warning
                     body.push(0); // description: close_notify
                 })?;
@@ -1205,7 +1205,7 @@ impl State {
             for data in client.queued_data.drain(..) {
                 client
                     .engine
-                    .create_record(ContentType::ApplicationData, 1, false, |body| {
+                    .create_record(ContentType::APPLICATION_DATA, 1, false, |body| {
                         body.extend_from_slice(&data);
                     })?;
             }
@@ -1242,7 +1242,7 @@ fn handshake_create_client_hello(
     );
 
     let mut compression_methods = ArrayVec::new();
-    compression_methods.push(CompressionMethod::Null);
+    compression_methods.push(CompressionMethod::NULL);
 
     // Create ClientHello with all required extensions
     let client_hello = ClientHello::new(
@@ -1409,7 +1409,7 @@ mod tests {
     fn epoch0_handshake_packet(msg_type: MessageType, message_seq: u16, body: &[u8]) -> Vec<u8> {
         let handshake_len = 12 + body.len();
         let mut packet = Vec::new();
-        packet.push(ContentType::Handshake.as_u8());
+        packet.push(ContentType::HANDSHAKE.as_u8());
         packet.extend_from_slice(&[0xfe, 0xfd]);
         packet.extend_from_slice(&0u16.to_be_bytes());
         packet.extend_from_slice(&0u64.to_be_bytes()[2..]);

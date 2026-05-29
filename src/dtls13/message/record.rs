@@ -75,7 +75,7 @@ impl Dtls13Record {
         // RFC 9147 §4.1: Only alert(21), handshake(22), and ack(26) are valid
         // plaintext content types in DTLS 1.3. Reject all others.
         match content_type {
-            ContentType::Alert | ContentType::Handshake | ContentType::Ack => {}
+            ContentType::ALERT | ContentType::HANDSHAKE | ContentType::ACK => {}
             _ => {
                 return Err(Err::Failure(nom::error::Error::new(
                     input,
@@ -190,7 +190,7 @@ impl Dtls13Record {
         Ok((
             rest,
             Dtls13Record {
-                content_type: ContentType::ApplicationData,
+                content_type: ContentType::APPLICATION_DATA,
                 sequence,
                 length,
                 fragment_range: start..end,

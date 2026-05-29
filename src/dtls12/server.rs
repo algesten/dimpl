@@ -232,7 +232,7 @@ impl Server {
         // Use the engine's create_record to send application data
         // The encryption is now handled in the engine
         self.engine
-            .create_record(ContentType::ApplicationData, 1, false, |body| {
+            .create_record(ContentType::APPLICATION_DATA, 1, false, |body| {
                 body.extend_from_slice(data);
             })?;
 
@@ -250,7 +250,7 @@ impl Server {
             return Ok(());
         }
         self.engine
-            .create_record(ContentType::Alert, 1, false, |body| {
+            .create_record(ContentType::ALERT, 1, false, |body| {
                 body.push(1); // level: warning
                 body.push(0); // description: close_notify
             })?;
@@ -340,7 +340,7 @@ impl State {
         }
 
         // Enforce Null compression only (client must offer it)
-        let has_null = ch.compression_methods.contains(&CompressionMethod::Null);
+        let has_null = ch.compression_methods.contains(&CompressionMethod::NULL);
         if !has_null {
             return Err(
                 Error::SecurityError(crate::SecurityError::UnsupportedClientCompression).into(),
@@ -948,7 +948,7 @@ impl State {
     }
 
     fn await_change_cipher_spec(self, server: &mut Server) -> Result<Self, InternalError> {
-        let maybe = server.engine.next_record(ContentType::ChangeCipherSpec);
+        let maybe = server.engine.next_record(ContentType::CHANGE_CIPHER_SPEC);
 
         let Some(_) = maybe else {
             // Stay in same state
@@ -1048,7 +1048,7 @@ impl State {
         // Send ChangeCipherSpec
         server
             .engine
-            .create_record(ContentType::ChangeCipherSpec, 0, true, |body| {
+            .create_record(ContentType::CHANGE_CIPHER_SPEC, 0, true, |body| {
                 body.push(1);
             })?;
 
@@ -1118,7 +1118,7 @@ impl State {
             server.engine.discard_pending_writes();
             server
                 .engine
-                .create_record(ContentType::Alert, 1, false, |body| {
+                .create_record(ContentType::ALERT, 1, false, |body| {
                     body.push(1); // level: warning
                     body.push(0); // description: close_notify
                 })?;
@@ -1134,7 +1134,7 @@ impl State {
             for data in server.queued_data.drain(..) {
                 server
                     .engine
-                    .create_record(ContentType::ApplicationData, 1, false, |body| {
+                    .create_record(ContentType::APPLICATION_DATA, 1, false, |body| {
                         body.extend_from_slice(&data);
                     })?;
             }
@@ -1210,7 +1210,7 @@ fn handshake_create_server_hello(
         random,
         session_id,
         cs,
-        CompressionMethod::Null,
+        CompressionMethod::NULL,
         None,
     )
     .with_extensions(extension_data, srtp_pid);

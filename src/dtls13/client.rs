@@ -267,7 +267,7 @@ impl Client {
 
         let epoch = self.engine.app_send_epoch();
         self.engine.create_ciphertext_record(
-            ContentType::ApplicationData,
+            ContentType::APPLICATION_DATA,
             epoch,
             false,
             |body| {
@@ -290,7 +290,7 @@ impl Client {
         }
         let epoch = self.engine.app_send_epoch();
         self.engine
-            .create_ciphertext_record(ContentType::Alert, epoch, false, |body| {
+            .create_ciphertext_record(ContentType::ALERT, epoch, false, |body| {
                 body.push(1); // level: legacy (ignored in DTLS 1.3)
                 body.push(0); // description: close_notify
             })?;
@@ -1090,7 +1090,7 @@ impl State {
             );
             for data in client.queued_data.drain(..) {
                 client.engine.create_ciphertext_record(
-                    ContentType::ApplicationData,
+                    ContentType::APPLICATION_DATA,
                     epoch,
                     false,
                     |body| {
@@ -1603,7 +1603,7 @@ mod tests {
     fn epoch0_handshake_packet(msg_type: MessageType, message_seq: u16, body: &[u8]) -> Vec<u8> {
         let handshake_len = 12 + body.len();
         let mut packet = Vec::new();
-        packet.push(ContentType::Handshake.as_u8());
+        packet.push(ContentType::HANDSHAKE.as_u8());
         packet.extend_from_slice(&[0xfe, 0xfd]);
         packet.extend_from_slice(&0u16.to_be_bytes());
         packet.extend_from_slice(&0u64.to_be_bytes()[2..]);

@@ -440,57 +440,61 @@ impl fmt::Debug for SignatureAlgorithm {
 ///
 /// Identifies the type of data in a DTLS record. These values are the same
 /// for both DTLS 1.2 and DTLS 1.3.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContentType {
-    /// Change Cipher Spec (used in DTLS 1.2, compatibility-only in 1.3).
-    ChangeCipherSpec,
-    /// Alert message.
-    Alert,
-    /// Handshake message.
-    Handshake,
-    /// Application data.
-    ApplicationData,
-    /// ACK (DTLS 1.3 only, RFC 9147 Section 7).
-    Ack,
-    /// Unknown content type.
-    Unknown(u8),
-}
-
-impl Default for ContentType {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct ContentType(u8);
 
 impl ContentType {
+    /// Change Cipher Spec (used in DTLS 1.2, compatibility-only in 1.3).
+    pub const CHANGE_CIPHER_SPEC: Self = Self(20);
+    /// Alert message.
+    pub const ALERT: Self = Self(21);
+    /// Handshake message.
+    pub const HANDSHAKE: Self = Self(22);
+    /// Application data.
+    pub const APPLICATION_DATA: Self = Self(23);
+    /// ACK (DTLS 1.3 only, RFC 9147 Section 7).
+    pub const ACK: Self = Self(26);
+
     /// Convert a u8 value to a `ContentType`.
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            20 => ContentType::ChangeCipherSpec,
-            21 => ContentType::Alert,
-            22 => ContentType::Handshake,
-            23 => ContentType::ApplicationData,
-            26 => ContentType::Ack,
-            _ => ContentType::Unknown(value),
-        }
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
     /// Convert this `ContentType` to its u8 value.
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            ContentType::ChangeCipherSpec => 20,
-            ContentType::Alert => 21,
-            ContentType::Handshake => 22,
-            ContentType::ApplicationData => 23,
-            ContentType::Ack => 26,
-            ContentType::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    /// Returns true if this is not a known DTLS record content type.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(
+            *self,
+            ContentType::CHANGE_CIPHER_SPEC
+                | ContentType::ALERT
+                | ContentType::HANDSHAKE
+                | ContentType::APPLICATION_DATA
+                | ContentType::ACK
+        )
     }
 
     /// Parse a `ContentType` from wire format.
     pub fn parse(input: &[u8]) -> IResult<&[u8], ContentType> {
         let (input, byte) = be_u8(input)?;
         Ok((input, Self::from_u8(byte)))
+    }
+}
+
+impl fmt::Debug for ContentType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            ContentType::CHANGE_CIPHER_SPEC => f.write_str("ChangeCipherSpec"),
+            ContentType::ALERT => f.write_str("Alert"),
+            ContentType::HANDSHAKE => f.write_str("Handshake"),
+            ContentType::APPLICATION_DATA => f.write_str("ApplicationData"),
+            ContentType::ACK => f.write_str("Ack"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
     }
 }
 
@@ -1063,6 +1067,43 @@ mod tests {
             format!("{:?}", CompressionMethod::from_u8(0x02)),
             "Unknown(2)"
         );
+    }
+
+    #[test]
+    fn content_type_newtype_shape() {
+        assert_eq!(std::mem::size_of::<ContentType>(), 1);
+        assert!(ContentType::default().is_unknown());
+    }
+
+    #[test]
+    fn content_type_wire_roundtrip() {
+        let known = [
+            (20, ContentType::CHANGE_CIPHER_SPEC),
+            (21, ContentType::ALERT),
+            (22, ContentType::HANDSHAKE),
+            (23, ContentType::APPLICATION_DATA),
+            (26, ContentType::ACK),
+        ];
+
+        for (wire, content_type) in known {
+            assert_eq!(ContentType::from_u8(wire), content_type);
+            assert_eq!(content_type.as_u8(), wire);
+            assert!(!content_type.is_unknown());
+        }
+
+        let unknown = ContentType::from_u8(24);
+        assert_eq!(unknown.as_u8(), 24);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn content_type_debug_stays_enum_like() {
+        assert_eq!(
+            format!("{:?}", ContentType::CHANGE_CIPHER_SPEC),
+            "ChangeCipherSpec"
+        );
+        assert_eq!(format!("{:?}", ContentType::HANDSHAKE), "Handshake");
+        assert_eq!(format!("{:?}", ContentType::from_u8(24)), "Unknown(24)");
     }
 
     #[test]

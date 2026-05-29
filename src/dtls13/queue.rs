@@ -49,12 +49,10 @@ impl fmt::Debug for QueueRx {
         for item in &self.0 {
             let record = item.first().record();
             match record.content_type {
-                ContentType::Handshake => handshake += 1,
-                ContentType::ApplicationData => app_data += 1,
-                ContentType::Alert => alert += 1,
-                ContentType::Unknown(_) | ContentType::ChangeCipherSpec | ContentType::Ack => {
-                    other += 1
-                }
+                ContentType::HANDSHAKE => handshake += 1,
+                ContentType::APPLICATION_DATA => app_data += 1,
+                ContentType::ALERT => alert += 1,
+                _ => other += 1,
             }
 
             let seq = (record.sequence.epoch, record.sequence.sequence_number);
