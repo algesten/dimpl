@@ -558,14 +558,14 @@ impl CryptoContext {
     pub fn get_key_exchange_group_info(&self) -> Option<(CurveType, NamedGroup)> {
         // Use stored group if available (after key exchange is consumed)
         if let Some(group) = self.key_exchange_group {
-            return Some((CurveType::NamedCurve, group));
+            return Some((CurveType::NAMED_CURVE, group));
         }
 
         // Otherwise get it from the active key exchange
         let Some(ke) = &self.key_exchange else {
             return None;
         };
-        Some((CurveType::NamedCurve, ke.group()))
+        Some((CurveType::NAMED_CURVE, ke.group()))
     }
 
     /// Check if the client's private key is compatible with a given cipher suite.

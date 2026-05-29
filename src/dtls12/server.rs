@@ -1243,7 +1243,7 @@ fn handshake_create_server_key_exchange(
 
     match key_exchange_algorithm {
         KeyExchangeAlgorithm::EECDH => {
-            let (curve_type, named_group) = (CurveType::NamedCurve, named_group);
+            let (curve_type, named_group) = (CurveType::NAMED_CURVE, named_group);
             let mut kx_buf = engine.pop_buffer();
             let pubkey = engine
                 .crypto_context_mut()
