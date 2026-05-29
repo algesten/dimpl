@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.6.2
+
   * Split local DTLS invalid-state errors from peer-input errors #126
   * Reject malformed DTLS 1.3 ClientHello extension vectors #133
   * Reject malformed DTLS 1.3 KeyUpdate bodies #131
