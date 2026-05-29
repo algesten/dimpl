@@ -743,47 +743,42 @@ impl fmt::Debug for SignatureScheme {
 ///
 /// Unlike DTLS 1.2, TLS 1.3 cipher suites only specify the AEAD algorithm
 /// and hash function. Key exchange is negotiated separately via key_share.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-#[non_exhaustive]
-pub enum Dtls13CipherSuite {
-    /// TLS_AES_128_GCM_SHA256.
-    AES_128_GCM_SHA256,
-    /// TLS_AES_256_GCM_SHA384.
-    AES_256_GCM_SHA384,
-    /// TLS_CHACHA20_POLY1305_SHA256.
-    CHACHA20_POLY1305_SHA256,
-    /// TLS_AES_128_CCM_SHA256.
-    AES_128_CCM_SHA256,
-    /// TLS_AES_128_CCM_8_SHA256 (shorter tag, for constrained devices).
-    AES_128_CCM_8_SHA256,
-    /// Unknown or unsupported cipher suite.
-    Unknown(u16),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Dtls13CipherSuite(u16);
 
 impl Dtls13CipherSuite {
+    /// TLS_AES_128_GCM_SHA256.
+    pub const AES_128_GCM_SHA256: Self = Self(0x1301);
+    /// TLS_AES_256_GCM_SHA384.
+    pub const AES_256_GCM_SHA384: Self = Self(0x1302);
+    /// TLS_CHACHA20_POLY1305_SHA256.
+    pub const CHACHA20_POLY1305_SHA256: Self = Self(0x1303);
+    /// TLS_AES_128_CCM_SHA256.
+    pub const AES_128_CCM_SHA256: Self = Self(0x1304);
+    /// TLS_AES_128_CCM_8_SHA256 (shorter tag, for constrained devices).
+    pub const AES_128_CCM_8_SHA256: Self = Self(0x1305);
+
     /// Convert a wire format u16 value to a `Dtls13CipherSuite`.
-    pub fn from_u16(value: u16) -> Self {
-        match value {
-            0x1301 => Dtls13CipherSuite::AES_128_GCM_SHA256,
-            0x1302 => Dtls13CipherSuite::AES_256_GCM_SHA384,
-            0x1303 => Dtls13CipherSuite::CHACHA20_POLY1305_SHA256,
-            0x1304 => Dtls13CipherSuite::AES_128_CCM_SHA256,
-            0x1305 => Dtls13CipherSuite::AES_128_CCM_8_SHA256,
-            _ => Dtls13CipherSuite::Unknown(value),
-        }
+    pub const fn from_u16(value: u16) -> Self {
+        Self(value)
     }
 
     /// Convert this `Dtls13CipherSuite` to its wire format u16 value.
-    pub fn as_u16(&self) -> u16 {
-        match self {
-            Dtls13CipherSuite::AES_128_GCM_SHA256 => 0x1301,
-            Dtls13CipherSuite::AES_256_GCM_SHA384 => 0x1302,
-            Dtls13CipherSuite::CHACHA20_POLY1305_SHA256 => 0x1303,
-            Dtls13CipherSuite::AES_128_CCM_SHA256 => 0x1304,
-            Dtls13CipherSuite::AES_128_CCM_8_SHA256 => 0x1305,
-            Dtls13CipherSuite::Unknown(value) => *value,
-        }
+    pub const fn as_u16(&self) -> u16 {
+        self.0
+    }
+
+    /// Returns true if this is not a known DTLS 1.3 cipher suite wire value.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(
+            *self,
+            Dtls13CipherSuite::AES_128_GCM_SHA256
+                | Dtls13CipherSuite::AES_256_GCM_SHA384
+                | Dtls13CipherSuite::CHACHA20_POLY1305_SHA256
+                | Dtls13CipherSuite::AES_128_CCM_SHA256
+                | Dtls13CipherSuite::AES_128_CCM_8_SHA256
+        )
     }
 
     /// Parse a `Dtls13CipherSuite` from wire format.
@@ -794,13 +789,13 @@ impl Dtls13CipherSuite {
 
     /// Returns the hash algorithm used by this cipher suite.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
-        match self {
+        match *self {
             Dtls13CipherSuite::AES_128_GCM_SHA256
             | Dtls13CipherSuite::CHACHA20_POLY1305_SHA256
             | Dtls13CipherSuite::AES_128_CCM_SHA256
             | Dtls13CipherSuite::AES_128_CCM_8_SHA256 => HashAlgorithm::SHA256,
             Dtls13CipherSuite::AES_256_GCM_SHA384 => HashAlgorithm::SHA384,
-            Dtls13CipherSuite::Unknown(_) => HashAlgorithm::UNKNOWN_DERIVED,
+            _ => HashAlgorithm::UNKNOWN_DERIVED,
         }
     }
 
@@ -810,7 +805,7 @@ impl Dtls13CipherSuite {
     }
 
     /// All recognized DTLS 1.3 cipher suites (every non-`Unknown` variant).
-    pub fn all() -> &'static [Dtls13CipherSuite] {
+    pub const fn all() -> &'static [Dtls13CipherSuite] {
         &[
             Dtls13CipherSuite::AES_128_GCM_SHA256,
             Dtls13CipherSuite::AES_256_GCM_SHA384,
@@ -821,7 +816,7 @@ impl Dtls13CipherSuite {
     }
 
     /// Supported DTLS 1.3 cipher suites in preference order.
-    pub fn supported() -> &'static [Dtls13CipherSuite] {
+    pub const fn supported() -> &'static [Dtls13CipherSuite] {
         &[
             Dtls13CipherSuite::AES_128_GCM_SHA256,
             Dtls13CipherSuite::AES_256_GCM_SHA384,
@@ -832,6 +827,19 @@ impl Dtls13CipherSuite {
     /// Length in bytes of verify_data for Finished messages.
     pub fn verify_data_length(&self) -> usize {
         self.hash_algorithm().output_len()
+    }
+}
+
+impl fmt::Debug for Dtls13CipherSuite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Dtls13CipherSuite::AES_128_GCM_SHA256 => f.write_str("AES_128_GCM_SHA256"),
+            Dtls13CipherSuite::AES_256_GCM_SHA384 => f.write_str("AES_256_GCM_SHA384"),
+            Dtls13CipherSuite::CHACHA20_POLY1305_SHA256 => f.write_str("CHACHA20_POLY1305_SHA256"),
+            Dtls13CipherSuite::AES_128_CCM_SHA256 => f.write_str("AES_128_CCM_SHA256"),
+            Dtls13CipherSuite::AES_128_CCM_8_SHA256 => f.write_str("AES_128_CCM_8_SHA256"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
     }
 }
 
@@ -1177,6 +1185,36 @@ mod tests {
         );
         assert_eq!(
             format!("{:?}", SignatureScheme::from_u16(0xFFFF)),
+            "Unknown(65535)"
+        );
+    }
+
+    #[test]
+    fn dtls13_cipher_suite_newtype_shape() {
+        assert_eq!(std::mem::size_of::<Dtls13CipherSuite>(), 2);
+        assert!(Dtls13CipherSuite::default().is_unknown());
+    }
+
+    #[test]
+    fn dtls13_cipher_suite_wire_roundtrip() {
+        for suite in Dtls13CipherSuite::all() {
+            assert_eq!(Dtls13CipherSuite::from_u16(suite.as_u16()), *suite);
+            assert!(!suite.is_unknown());
+        }
+
+        let unknown = Dtls13CipherSuite::from_u16(0xFFFF);
+        assert_eq!(unknown.as_u16(), 0xFFFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn dtls13_cipher_suite_debug_stays_enum_like() {
+        assert_eq!(
+            format!("{:?}", Dtls13CipherSuite::AES_128_GCM_SHA256),
+            "AES_128_GCM_SHA256"
+        );
+        assert_eq!(
+            format!("{:?}", Dtls13CipherSuite::from_u16(0xFFFF)),
             "Unknown(65535)"
         );
     }
