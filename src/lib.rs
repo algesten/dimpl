@@ -71,7 +71,24 @@
 //! - `PeerCert(&[u8])`: peer leaf certificate (DER) — validate in your app
 //! - `KeyingMaterial(KeyingMaterial, SrtpProfile)`: DTLS‑SRTP export
 //! - `ApplicationData(&[u8])`: plaintext received from peer
-//! - `CloseNotify`: peer sent a graceful shutdown alert
+//! - `CloseNotify`: peer sent a `close_notify` alert (graceful shutdown)
+//!
+//! # Error handling
+//!
+//! Every `Error` returned by the public API
+//! ([`handle_packet`][handle_packet], [`handle_timeout`][handle_timeout],
+//! `send_application_data`, and `close`) is **fatal**: the connection is no
+//! longer usable and must be thrown away. The engine has no recoverable
+//! error states, so the correct response is always to drop the `Dtls`
+//! instance — and start a fresh handshake if you still need a connection.
+//!
+//! Transient, non‑fatal conditions inherent to running over an unreliable
+//! transport — malformed datagrams, replayed or out‑of‑window records, and
+//! other parser noise — are handled internally and never surface as an
+//! `Error`. Such packets are discarded (logged at `debug!`) while the
+//! connection keeps running. You therefore never need to distinguish
+//! "retry" from "give up": a returned `Error` always means give up on this
+//! connection.
 //!
 //! # Example (Sans‑IO loop)
 //!
@@ -111,6 +128,7 @@
 //!                 }
 //!                 Output::CloseNotify => {
 //!                     // Peer initiated graceful shutdown
+//!                     break;
 //!                 }
 //!                 _ => {}
 //!             }
@@ -138,7 +156,7 @@
 //! # }
 //! ```
 //!
-//! ## Example (PSK client)
+//! # Example (PSK client)
 //!
 //! ```rust,no_run
 //! use std::sync::Arc;
