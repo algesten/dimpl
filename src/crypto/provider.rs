@@ -382,7 +382,7 @@ pub fn cert_named_group(cert_der: &[u8]) -> Result<NamedGroup, CertificateError>
     match curve_oid {
         OID_P256 => Ok(NamedGroup::Secp256r1),
         OID_P384 => Ok(NamedGroup::Secp384r1),
-        _ => Err(CertificateError::UnsupportedEcCurve(curve_oid.to_string())),
+        _ => Err(CertificateError::UnsupportedEcCurve),
     }
 }
 

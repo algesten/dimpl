@@ -81,8 +81,6 @@ pub enum UnexpectedMessageError {
     CertificateRequestContextTruncated,
     /// A DTLS 1.3 `CertificateRequest` extension block was shorter than declared.
     CertificateRequestExtensionsTruncated,
-    /// A free-form unexpected-message reason not represented by a dedicated variant.
-    Other(String),
 }
 
 /// Fine-grained reason for an [`Error::InvalidState`].
@@ -117,8 +115,8 @@ pub enum InvalidStateError {
     NoCurrentAppRecvKeysForKeyUpdate,
     /// Exported keying material was requested before the exporter secret was derived.
     ExporterMasterSecretNotDerived,
-    /// A static invalid-state reason not represented by a dedicated variant.
-    Other(&'static str),
+    /// Extended master secret was negotiated, but the session hash was not captured.
+    ExtendedMasterSecretSessionHashMissing,
 }
 
 /// Fine-grained reason for an [`Error::CryptoError`].
@@ -187,8 +185,10 @@ pub enum CryptoError {
     },
     /// The public key algorithm is unsupported.
     UnsupportedPublicKeyAlgorithm,
-    /// The certificate or key references an unsupported EC curve.
-    UnsupportedEcCurve(String),
+    /// A certificate or key references an unsupported EC curve.
+    UnsupportedEcCurve,
+    /// Certificate parsing failed during a crypto operation.
+    CertificateParseFailed,
     /// A certificate omitted its required EC curve parameter.
     MissingEcCurveParameter,
     /// A certificate had an invalid EC curve parameter.
@@ -294,15 +294,6 @@ pub enum CryptoError {
     ExporterMasterSecretNotDerived,
     /// A provider operation failed without a more specific reason.
     OperationFailed(CryptoOperation),
-    /// A provider operation failed with a backend-specific reason.
-    ProviderFailure {
-        /// The provider operation that failed.
-        operation: CryptoOperation,
-        /// The backend-specific reason.
-        reason: String,
-    },
-    /// A free-form crypto reason not represented by a dedicated variant.
-    Other(String),
 }
 
 /// A cryptographic operation that can fail.
@@ -402,15 +393,13 @@ pub enum CertificateError {
     /// A certificate had an invalid EC curve parameter.
     InvalidEcCurveParameter,
     /// A certificate references an unsupported EC curve.
-    UnsupportedEcCurve(String),
+    UnsupportedEcCurve,
     /// A certificate had an invalid subject public key.
     InvalidSubjectPublicKey,
     /// Private-key handling failed during certificate processing.
     PrivateKey(CryptoError),
     /// Certificate verification failed.
     Verification(CryptoError),
-    /// A free-form certificate reason not represented by a dedicated variant.
-    Other(String),
 }
 
 /// Fine-grained reason for an [`Error::SecurityError`].
@@ -507,8 +496,6 @@ pub enum SecurityError {
         /// The DTLS alert description.
         description: u8,
     },
-    /// A free-form security reason not represented by a dedicated variant.
-    Other(String),
 }
 
 /// Fine-grained reason for an [`Error::PskError`].
@@ -521,8 +508,6 @@ pub enum PskError {
     NoPskIdentityConfigured,
     /// The configured PSK resolver did not return a key.
     ResolverReturnedNoKey,
-    /// A static PSK reason not represented by a dedicated variant.
-    Other(&'static str),
 }
 
 /// Fine-grained reason for an [`Error::Timeout`].
@@ -535,8 +520,6 @@ pub enum TimeoutError {
     Connect,
     /// Timeout while handshaking.
     Handshake,
-    /// A static timeout reason not represented by a dedicated variant.
-    Other(&'static str),
 }
 
 /// Fine-grained reason for an [`Error::ConfigError`].
@@ -564,8 +547,6 @@ pub enum ConfigError {
     NoDtls13KeyExchangeGroupsAfterFiltering,
     /// Crypto provider validation failed.
     CryptoProvider(CryptoProviderValidationError),
-    /// A free-form configuration reason not represented by a dedicated variant.
-    Other(String),
 }
 
 /// Fine-grained reason for crypto provider validation failure.
@@ -685,8 +666,6 @@ pub enum CryptoProviderValidationError {
     },
     /// HMAC validation returned incorrect output.
     HmacIncorrect,
-    /// A free-form provider-validation reason not represented by a dedicated variant.
-    Other(String),
 }
 
 #[derive(Debug)]
@@ -769,66 +748,6 @@ impl From<ConfigError> for Error {
     }
 }
 
-impl From<String> for UnexpectedMessageError {
-    fn from(value: String) -> Self {
-        Self::Other(value)
-    }
-}
-
-impl From<&'static str> for UnexpectedMessageError {
-    fn from(value: &'static str) -> Self {
-        Self::Other(value.to_string())
-    }
-}
-
-impl From<String> for CryptoError {
-    fn from(value: String) -> Self {
-        Self::Other(value)
-    }
-}
-
-impl From<&'static str> for CryptoError {
-    fn from(value: &'static str) -> Self {
-        Self::Other(value.to_string())
-    }
-}
-
-impl From<String> for CertificateError {
-    fn from(value: String) -> Self {
-        Self::Other(value)
-    }
-}
-
-impl From<&'static str> for CertificateError {
-    fn from(value: &'static str) -> Self {
-        Self::Other(value.to_string())
-    }
-}
-
-impl From<String> for SecurityError {
-    fn from(value: String) -> Self {
-        Self::Other(value)
-    }
-}
-
-impl From<&'static str> for SecurityError {
-    fn from(value: &'static str) -> Self {
-        Self::Other(value.to_string())
-    }
-}
-
-impl From<String> for ConfigError {
-    fn from(value: String) -> Self {
-        Self::Other(value)
-    }
-}
-
-impl From<&'static str> for ConfigError {
-    fn from(value: &'static str) -> Self {
-        Self::Other(value.to_string())
-    }
-}
-
 impl std::error::Error for Error {}
 
 impl fmt::Display for InternalError {
@@ -900,7 +819,6 @@ impl fmt::Display for UnexpectedMessageError {
             Self::CertificateRequestExtensionsTruncated => {
                 write!(f, "CertificateRequest extensions truncated")
             }
-            Self::Other(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -940,7 +858,12 @@ impl fmt::Display for InvalidStateError {
             Self::ExporterMasterSecretNotDerived => {
                 write!(f, "exporter master secret not yet derived")
             }
-            Self::Other(msg) => write!(f, "{msg}"),
+            Self::ExtendedMasterSecretSessionHashMissing => {
+                write!(
+                    f,
+                    "extended master secret negotiated but session hash not captured"
+                )
+            }
         }
     }
 }
@@ -1004,7 +927,8 @@ impl fmt::Display for CryptoError {
                 "unsupported signature verification: {signature:?} + {hash:?} + {group:?}"
             ),
             Self::UnsupportedPublicKeyAlgorithm => write!(f, "unsupported public key algorithm"),
-            Self::UnsupportedEcCurve(curve) => write!(f, "unsupported EC curve: {curve}"),
+            Self::UnsupportedEcCurve => write!(f, "unsupported EC curve"),
+            Self::CertificateParseFailed => write!(f, "failed to parse certificate"),
             Self::MissingEcCurveParameter => {
                 write!(f, "missing EC curve parameter in certificate")
             }
@@ -1074,10 +998,6 @@ impl fmt::Display for CryptoError {
                 write!(f, "exporter master secret not yet derived")
             }
             Self::OperationFailed(op) => write!(f, "{op} failed"),
-            Self::ProviderFailure { operation, reason } => {
-                write!(f, "{operation} failed: {reason}")
-            }
-            Self::Other(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -1150,13 +1070,12 @@ impl fmt::Display for CertificateError {
             Self::InvalidEcCurveParameter => {
                 write!(f, "invalid EC curve parameter in certificate")
             }
-            Self::UnsupportedEcCurve(curve) => write!(f, "unsupported EC curve: {curve}"),
+            Self::UnsupportedEcCurve => write!(f, "unsupported EC curve"),
             Self::InvalidSubjectPublicKey => {
                 write!(f, "invalid EC subject_public_key bitstring")
             }
             Self::PrivateKey(err) => write!(f, "private key error: {err}"),
             Self::Verification(err) => write!(f, "verification failed: {err}"),
-            Self::Other(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -1274,7 +1193,6 @@ impl fmt::Display for SecurityError {
                     "received fatal alert: level={level}, description={description}"
                 )
             }
-            Self::Other(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -1285,7 +1203,6 @@ impl fmt::Display for PskError {
             Self::NoPskResolverConfigured => write!(f, "no PSK resolver configured"),
             Self::NoPskIdentityConfigured => write!(f, "no PSK identity configured"),
             Self::ResolverReturnedNoKey => write!(f, "PSK resolver returned no key"),
-            Self::Other(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -1296,7 +1213,6 @@ impl fmt::Display for TimeoutError {
             Self::HybridClientHello => write!(f, "hybrid ClientHello"),
             Self::Connect => write!(f, "connect"),
             Self::Handshake => write!(f, "handshake"),
-            Self::Other(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -1340,7 +1256,6 @@ impl fmt::Display for ConfigError {
                 "DTLS 1.3 cipher suites are enabled but no key exchange groups remain after filtering"
             ),
             Self::CryptoProvider(err) => write!(f, "crypto provider validation failed: {err}"),
-            Self::Other(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -1437,7 +1352,6 @@ impl fmt::Display for CryptoProviderValidationError {
             Self::HmacIncorrect => {
                 write!(f, "HMAC provider produced incorrect result for HMAC-SHA256")
             }
-            Self::Other(msg) => write!(f, "{msg}"),
         }
     }
 }

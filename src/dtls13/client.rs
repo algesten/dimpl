@@ -1482,7 +1482,7 @@ fn parse_certificate_request(cr_data: &[u8], base_offset: usize) -> Result<Optio
     if context_len > 0 {
         if cr_data.len() < 1 + context_len {
             return Err(Error::UnexpectedMessage(
-                "CertificateRequest context truncated".into(),
+                crate::UnexpectedMessageError::CertificateRequestContextTruncated,
             ));
         }
         let mut ctx = Buf::new();
@@ -1501,7 +1501,7 @@ fn parse_certificate_request(cr_data: &[u8], base_offset: usize) -> Result<Optio
     let ext_end = pos + ext_len;
     if cr_data.len() < ext_end {
         return Err(Error::UnexpectedMessage(
-            "CertificateRequest extensions truncated".into(),
+            crate::UnexpectedMessageError::CertificateRequestExtensionsTruncated,
         ));
     }
 

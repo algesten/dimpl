@@ -81,10 +81,7 @@ impl ActiveKeyExchange for EcdhKeyExchange {
                 Ok(())
             },
         )
-        .map_err(|e| CryptoError::ProviderFailure {
-            operation: CryptoOperation::CompleteKeyExchange,
-            reason: e.to_string(),
-        })
+        .map_err(|_| CryptoError::OperationFailed(CryptoOperation::CompleteKeyExchange))
     }
 
     fn group(&self) -> NamedGroup {

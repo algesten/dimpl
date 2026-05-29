@@ -197,10 +197,7 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
         }
 
         let cert =
-            X509Certificate::from_der(cert_der).map_err(|e| CryptoError::ProviderFailure {
-                operation: CryptoOperation::VerifySignature,
-                reason: e.to_string(),
-            })?;
+            X509Certificate::from_der(cert_der).map_err(|_| CryptoError::CertificateParseFailed)?;
         let spki = &cert.tbs_certificate.subject_public_key_info;
 
         const OID_EC_PUBLIC_KEY: ObjectIdentifier =
@@ -226,7 +223,7 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
         let group = match curve_oid {
             OID_P256 => NamedGroup::Secp256r1,
             OID_P384 => NamedGroup::Secp384r1,
-            _ => return Err(CryptoError::UnsupportedEcCurve(curve_oid.to_string())),
+            _ => return Err(CryptoError::UnsupportedEcCurve),
         };
 
         check_verify_scheme(sig_alg, hash_alg, group)?;

@@ -992,9 +992,9 @@ impl State {
         let session_hash = client
             .captured_session_hash
             .as_ref()
-            .ok_or(Error::InvalidState(crate::InvalidStateError::Other(
-                "Extended Master Secret negotiated but session hash not captured",
-            )))?;
+            .ok_or(Error::InvalidState(
+                crate::InvalidStateError::ExtendedMasterSecretSessionHashMissing,
+            ))?;
         trace!(
             "Using captured session hash for Extended Master Secret (length: {})",
             session_hash.len()

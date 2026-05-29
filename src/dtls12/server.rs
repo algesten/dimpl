@@ -846,9 +846,9 @@ impl State {
         let session_hash = server
             .captured_session_hash
             .as_ref()
-            .ok_or(Error::InvalidState(crate::InvalidStateError::Other(
-                "Extended Master Secret negotiated but session hash not captured",
-            )))?;
+            .ok_or(Error::InvalidState(
+                crate::InvalidStateError::ExtendedMasterSecretSessionHashMissing,
+            ))?;
 
         let mut out = server.engine.pop_buffer();
         let mut scratch = server.engine.pop_buffer();
