@@ -288,14 +288,8 @@ impl Handshake {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct MessageType(u8);
-
-impl Default for MessageType {
-    fn default() -> Self {
-        Self(u8::MAX)
-    }
-}
 
 impl MessageType {
     pub const HELLO_REQUEST: Self = Self(0);
@@ -544,7 +538,8 @@ mod tests {
     #[test]
     fn message_type_newtype_shape() {
         assert_eq!(std::mem::size_of::<MessageType>(), 1);
-        assert!(MessageType::default().is_unknown());
+        assert_eq!(MessageType::default().as_u8(), 0);
+        assert_eq!(MessageType::default(), MessageType::HELLO_REQUEST);
     }
 
     #[test]

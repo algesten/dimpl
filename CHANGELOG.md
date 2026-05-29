@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Represent DTLS wire-code identifiers as compact newtypes (breaking) #TBD
   * Make public errors structured and fatal-only (breaking) #134
 
 # 0.6.2

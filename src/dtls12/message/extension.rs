@@ -52,14 +52,8 @@ impl Extension {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ExtensionType(u16);
-
-impl Default for ExtensionType {
-    fn default() -> Self {
-        Self(u16::MAX)
-    }
-}
 
 impl ExtensionType {
     pub const SERVER_NAME: Self = Self(0x0000);
@@ -209,7 +203,8 @@ mod tests {
     #[test]
     fn extension_type_newtype_shape() {
         assert_eq!(std::mem::size_of::<ExtensionType>(), 2);
-        assert!(ExtensionType::default().is_unknown());
+        assert_eq!(ExtensionType::default().as_u16(), 0);
+        assert_eq!(ExtensionType::default(), ExtensionType::SERVER_NAME);
     }
 
     #[test]

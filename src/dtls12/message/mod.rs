@@ -240,14 +240,8 @@ pub type CertificateTypeVec =
     ArrayVec<ClientCertificateType, { ClientCertificateType::supported().len() }>;
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ClientCertificateType(u8);
-
-impl Default for ClientCertificateType {
-    fn default() -> Self {
-        Self(u8::MAX)
-    }
-}
 
 impl ClientCertificateType {
     pub const RSA_SIGN: Self = Self(1);
@@ -372,6 +366,7 @@ mod tests {
     #[test]
     fn dtls12_cipher_suite_newtype_shape() {
         assert_eq!(std::mem::size_of::<Dtls12CipherSuite>(), 2);
+        assert_eq!(Dtls12CipherSuite::default().as_u16(), 0);
         assert!(Dtls12CipherSuite::default().is_unknown());
     }
 
@@ -402,6 +397,7 @@ mod tests {
     #[test]
     fn client_certificate_type_newtype_shape() {
         assert_eq!(std::mem::size_of::<ClientCertificateType>(), 1);
+        assert_eq!(ClientCertificateType::default().as_u8(), 0);
         assert!(ClientCertificateType::default().is_unknown());
     }
 

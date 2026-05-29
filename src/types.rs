@@ -911,6 +911,7 @@ mod tests {
     #[test]
     fn named_group_newtype_shape() {
         assert_eq!(std::mem::size_of::<NamedGroup>(), 2);
+        assert_eq!(NamedGroup::default().as_u16(), 0);
         assert!(NamedGroup::default().is_unknown());
     }
 
@@ -939,6 +940,7 @@ mod tests {
     #[test]
     fn hash_algorithm_newtype_shape() {
         assert_eq!(std::mem::size_of::<HashAlgorithm>(), 1);
+        assert_eq!(HashAlgorithm::default().as_u8(), 0);
         assert_eq!(HashAlgorithm::default(), HashAlgorithm::NONE);
     }
 
@@ -987,6 +989,7 @@ mod tests {
     #[test]
     fn signature_algorithm_newtype_shape() {
         assert_eq!(std::mem::size_of::<SignatureAlgorithm>(), 1);
+        assert_eq!(SignatureAlgorithm::default().as_u8(), 0);
         assert_eq!(SignatureAlgorithm::default(), SignatureAlgorithm::ANONYMOUS);
     }
 
@@ -1023,6 +1026,7 @@ mod tests {
     #[test]
     fn compression_method_newtype_shape() {
         assert_eq!(std::mem::size_of::<CompressionMethod>(), 1);
+        assert_eq!(CompressionMethod::default().as_u8(), 0);
         assert_eq!(CompressionMethod::default(), CompressionMethod::NULL);
     }
 
@@ -1057,6 +1061,7 @@ mod tests {
     #[test]
     fn content_type_newtype_shape() {
         assert_eq!(std::mem::size_of::<ContentType>(), 1);
+        assert_eq!(ContentType::default().as_u8(), 0);
         assert!(ContentType::default().is_unknown());
     }
 
@@ -1094,6 +1099,7 @@ mod tests {
     #[test]
     fn signature_scheme_newtype_shape() {
         assert_eq!(std::mem::size_of::<SignatureScheme>(), 2);
+        assert_eq!(SignatureScheme::default().as_u16(), 0);
         assert!(SignatureScheme::default().is_unknown());
     }
 
@@ -1124,6 +1130,7 @@ mod tests {
     #[test]
     fn dtls13_cipher_suite_newtype_shape() {
         assert_eq!(std::mem::size_of::<Dtls13CipherSuite>(), 2);
+        assert_eq!(Dtls13CipherSuite::default().as_u16(), 0);
         assert!(Dtls13CipherSuite::default().is_unknown());
     }
 
@@ -1154,6 +1161,7 @@ mod tests {
     #[test]
     fn protocol_version_newtype_shape() {
         assert_eq!(std::mem::size_of::<ProtocolVersion>(), 2);
+        assert_eq!(ProtocolVersion::default().as_u16(), 0);
         assert!(ProtocolVersion::default().is_unknown());
     }
 
