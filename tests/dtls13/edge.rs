@@ -52,7 +52,7 @@ fn dtls13_ack_record_for_records(seq: u64, records: &[(u64, u64)]) -> Vec<u8> {
 
 #[test]
 #[cfg(feature = "rcgen")]
-fn dtls13_malformed_datagram_does_not_process_alerts_before_parse_completes() {
+fn dtls13_malformed_datagram_is_discarded_without_processing_alerts() {
     let _ = env_logger::try_init();
 
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -65,19 +65,17 @@ fn dtls13_malformed_datagram_does_not_process_alerts_before_parse_completes() {
     let mut packet = dtls13_alert_record(1, 2, 40);
     packet.push(0xFF); // trailing truncated record header
 
-    let err = server
+    server
         .handle_packet(&packet)
-        .expect_err("malformed datagram should fail atomically");
+        .expect("malformed datagram should be discarded");
 
-    assert!(
-        matches!(err, dimpl::Error::ParseIncomplete),
-        "expected ParseIncomplete, got {err:?}"
-    );
+    let mut buf = [0; 1500];
+    assert!(!matches!(server.poll_output(&mut buf), Output::CloseNotify));
 }
 
 #[test]
 #[cfg(feature = "rcgen")]
-fn dtls13_too_many_control_records_still_fail_before_filtering() {
+fn dtls13_too_many_control_records_are_discarded() {
     let _ = env_logger::try_init();
 
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -92,14 +90,9 @@ fn dtls13_too_many_control_records_still_fail_before_filtering() {
         packet.extend_from_slice(&dtls13_ack_record(seq));
     }
 
-    let err = server
+    server
         .handle_packet(&packet)
-        .expect_err("control-only datagram should still trip TooManyRecords");
-
-    assert!(
-        matches!(err, dimpl::Error::TooManyRecords),
-        "expected TooManyRecords, got {err:?}"
-    );
+        .expect("too many records should be discarded");
 }
 
 #[test]

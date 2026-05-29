@@ -248,8 +248,15 @@ impl Server {
             self.retained_hello.push_back(packet.to_buf());
         }
 
-        self.engine.parse_packet(packet)?;
-        self.make_progress()?;
+        match self
+            .engine
+            .parse_packet(packet)
+            .and_then(|_| self.make_progress())
+        {
+            Ok(()) => {}
+            Err(e) if e.is_transient() => return Ok(()),
+            Err(e) => return Err(e),
+        }
 
         // Once past AwaitClientHello, DTLS 1.3 is committed — free the buffer.
         if self.auto_mode && self.state != State::AwaitClientHello {

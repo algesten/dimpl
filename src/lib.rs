@@ -1281,7 +1281,7 @@ mod test {
     }
 
     #[test]
-    fn auto_server_rejects_ch_shaped_malformed_packet_without_fallback() {
+    fn auto_server_discards_ch_shaped_malformed_packet_without_fallback() {
         let body = ch_shaped_malformed_body();
         let len = body.len() as u32;
         let hs = make_handshake(0x01, len, 0, len, &body);
@@ -1292,14 +1292,8 @@ mod test {
         );
 
         let mut dtls = new_instance_auto();
-        let err = dtls
-            .handle_packet(&pkt)
-            .expect_err("malformed ClientHello-shaped packet must not force fallback");
-
-        assert!(
-            matches!(err, Error::ParseIncomplete | Error::ParseError(_)),
-            "expected parser error, got {err:?}"
-        );
+        dtls.handle_packet(&pkt)
+            .expect("malformed ClientHello-shaped packet should be discarded");
         assert!(matches!(
             dtls.inner,
             Some(Inner::Server13(ref server)) if server.is_auto_mode()
@@ -1370,7 +1364,7 @@ mod test {
     }
 
     #[test]
-    fn dtls12_server_rejects_oversized_ec_point_formats_extension() {
+    fn dtls12_server_discards_oversized_ec_point_formats_extension() {
         let mut extensions = Vec::new();
         extensions.extend_from_slice(&[0x00, 0x0B]); // ec_point_formats
         extensions.extend_from_slice(&[0x00, 0x05]); // extension body length
@@ -1390,15 +1384,12 @@ mod test {
         let pkt = make_record(0x16, &hs);
 
         let mut dtls = new_instance_12_no_cookie();
-        let err = dtls.handle_packet(&pkt).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::ParseError(nom::error::ErrorKind::LengthValue)
-        ));
+        dtls.handle_packet(&pkt)
+            .expect("malformed extension should be discarded");
     }
 
     #[test]
-    fn dtls12_server_rejects_trailing_ec_point_formats_extension() {
+    fn dtls12_server_discards_trailing_ec_point_formats_extension() {
         let mut extensions = Vec::new();
         extensions.extend_from_slice(&[0x00, 0x0B]); // ec_point_formats
         extensions.extend_from_slice(&[0x00, 0x03]); // extension body length
@@ -1416,11 +1407,8 @@ mod test {
         let pkt = make_record(0x16, &hs);
 
         let mut dtls = new_instance_12_no_cookie();
-        let err = dtls.handle_packet(&pkt).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::ParseError(nom::error::ErrorKind::LengthValue)
-        ));
+        dtls.handle_packet(&pkt)
+            .expect("malformed extension should be discarded");
     }
 
     #[test]
