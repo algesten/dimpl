@@ -127,8 +127,8 @@ fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
                     // Deliver plaintext to application
                 }
                 Output::CloseNotify => {
-                    // Peer initiated graceful shutdown
-                    break;
+                    // Peer initiated graceful shutdown — leave the event loop
+                    return Ok(());
                 }
                 _ => {}
             }
