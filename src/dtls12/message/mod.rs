@@ -84,13 +84,7 @@ impl Dtls12CipherSuite {
 
     /// Returns true if this is not a known DTLS 1.2 cipher suite wire value.
     pub const fn is_unknown(&self) -> bool {
-        !matches!(
-            *self,
-            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
-                | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-                | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256
-                | Dtls12CipherSuite::PSK_AES128_CCM_8
-        )
+        !matches!(*self, Self(0xC02B..=0xC02C | 0xC0A8 | 0xCCA9))
     }
 
     /// Parse a `Dtls12CipherSuite` from network byte order.

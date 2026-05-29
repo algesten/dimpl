@@ -153,36 +153,7 @@ impl NamedGroup {
 
     /// Returns true if this is not a known TLS named group wire value.
     pub const fn is_unknown(&self) -> bool {
-        !matches!(
-            *self,
-            NamedGroup::SECT163K1
-                | NamedGroup::SECT163R1
-                | NamedGroup::SECT163R2
-                | NamedGroup::SECT193R1
-                | NamedGroup::SECT193R2
-                | NamedGroup::SECT233K1
-                | NamedGroup::SECT233R1
-                | NamedGroup::SECT239K1
-                | NamedGroup::SECT283K1
-                | NamedGroup::SECT283R1
-                | NamedGroup::SECT409K1
-                | NamedGroup::SECT409R1
-                | NamedGroup::SECT571K1
-                | NamedGroup::SECT571R1
-                | NamedGroup::SECP160K1
-                | NamedGroup::SECP160R1
-                | NamedGroup::SECP160R2
-                | NamedGroup::SECP192K1
-                | NamedGroup::SECP192R1
-                | NamedGroup::SECP224K1
-                | NamedGroup::SECP224R1
-                | NamedGroup::SECP256K1
-                | NamedGroup::SECP256R1
-                | NamedGroup::SECP384R1
-                | NamedGroup::SECP521R1
-                | NamedGroup::X25519
-                | NamedGroup::X448
-        )
+        !matches!(*self, Self(1..=25 | 29..=30))
     }
 
     /// Parse a `NamedGroup` from wire format.
@@ -323,16 +294,7 @@ impl HashAlgorithm {
 
     /// Returns true if this is not a known DTLS hash algorithm wire value.
     pub const fn is_unknown(&self) -> bool {
-        !matches!(
-            *self,
-            HashAlgorithm::NONE
-                | HashAlgorithm::MD5
-                | HashAlgorithm::SHA1
-                | HashAlgorithm::SHA224
-                | HashAlgorithm::SHA256
-                | HashAlgorithm::SHA384
-                | HashAlgorithm::SHA512
-        )
+        self.0 > Self::SHA512.0
     }
 
     /// Parse a `HashAlgorithm` from wire format.
@@ -413,13 +375,7 @@ impl SignatureAlgorithm {
 
     /// Returns true if this is not a known DTLS signature algorithm wire value.
     pub const fn is_unknown(&self) -> bool {
-        !matches!(
-            *self,
-            SignatureAlgorithm::ANONYMOUS
-                | SignatureAlgorithm::RSA
-                | SignatureAlgorithm::DSA
-                | SignatureAlgorithm::ECDSA
-        )
+        self.0 > Self::ECDSA.0
     }
 
     /// Parse a `SignatureAlgorithm` from network bytes.
@@ -477,14 +433,7 @@ impl ContentType {
 
     /// Returns true if this is not a known DTLS record content type.
     pub const fn is_unknown(&self) -> bool {
-        !matches!(
-            *self,
-            ContentType::CHANGE_CIPHER_SPEC
-                | ContentType::ALERT
-                | ContentType::HANDSHAKE
-                | ContentType::APPLICATION_DATA
-                | ContentType::ACK
-        )
+        !matches!(*self, Self(20..=23 | 26))
     }
 
     /// Parse a `ContentType` from wire format.
@@ -618,20 +567,7 @@ impl SignatureScheme {
     pub const fn is_unknown(&self) -> bool {
         !matches!(
             *self,
-            SignatureScheme::ECDSA_SECP256R1_SHA256
-                | SignatureScheme::ECDSA_SECP384R1_SHA384
-                | SignatureScheme::ECDSA_SECP521R1_SHA512
-                | SignatureScheme::ED25519
-                | SignatureScheme::ED448
-                | SignatureScheme::RSA_PSS_RSAE_SHA256
-                | SignatureScheme::RSA_PSS_RSAE_SHA384
-                | SignatureScheme::RSA_PSS_RSAE_SHA512
-                | SignatureScheme::RSA_PSS_PSS_SHA256
-                | SignatureScheme::RSA_PSS_PSS_SHA384
-                | SignatureScheme::RSA_PSS_PSS_SHA512
-                | SignatureScheme::RSA_PKCS1_SHA256
-                | SignatureScheme::RSA_PKCS1_SHA384
-                | SignatureScheme::RSA_PKCS1_SHA512
+            Self(0x0401 | 0x0403 | 0x0501 | 0x0503 | 0x0601 | 0x0603 | 0x0804..=0x080b)
         )
     }
 
@@ -771,14 +707,7 @@ impl Dtls13CipherSuite {
 
     /// Returns true if this is not a known DTLS 1.3 cipher suite wire value.
     pub const fn is_unknown(&self) -> bool {
-        !matches!(
-            *self,
-            Dtls13CipherSuite::AES_128_GCM_SHA256
-                | Dtls13CipherSuite::AES_256_GCM_SHA384
-                | Dtls13CipherSuite::CHACHA20_POLY1305_SHA256
-                | Dtls13CipherSuite::AES_128_CCM_SHA256
-                | Dtls13CipherSuite::AES_128_CCM_8_SHA256
-        )
+        !matches!(*self, Self(0x1301..=0x1305))
     }
 
     /// Parse a `Dtls13CipherSuite` from wire format.
@@ -874,10 +803,7 @@ impl ProtocolVersion {
 
     /// Returns true if this is not a known DTLS protocol version wire value.
     pub const fn is_unknown(&self) -> bool {
-        !matches!(
-            *self,
-            ProtocolVersion::DTLS1_0 | ProtocolVersion::DTLS1_2 | ProtocolVersion::DTLS1_3
-        )
+        !matches!(*self, Self(0xFEFF | 0xFEFD | 0xFEFC))
     }
 
     /// Parse a `ProtocolVersion` from wire format.
@@ -958,7 +884,7 @@ impl CompressionMethod {
 
     /// Returns true if this is not a known TLS compression method wire value.
     pub const fn is_unknown(&self) -> bool {
-        !matches!(*self, CompressionMethod::NULL | CompressionMethod::DEFLATE)
+        self.0 > Self::DEFLATE.0
     }
 
     /// Parse a `CompressionMethod` from wire format.
