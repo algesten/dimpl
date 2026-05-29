@@ -551,7 +551,7 @@ impl State {
         }
 
         // Validate legacy_compression_method (must be null)
-        if server_hello.legacy_compression_method != CompressionMethod::Null {
+        if server_hello.legacy_compression_method != CompressionMethod::NULL {
             return Err((Error::SecurityError(
                 crate::SecurityError::ServerHelloCompressionMustBeNull,
             ))
@@ -1196,7 +1196,7 @@ fn handshake_create_client_hello(
     );
 
     let mut compression_methods = ArrayVec::new();
-    compression_methods.push(CompressionMethod::Null);
+    compression_methods.push(CompressionMethod::NULL);
 
     // Build extensions
     let mut extensions: ArrayVec<Extension, 8> = ArrayVec::new();
@@ -1636,7 +1636,7 @@ mod tests {
         body.extend_from_slice(&[7; 32]);
         body.push(0); // legacy_session_id
         body.extend_from_slice(&Dtls13CipherSuite::AES_128_GCM_SHA256.as_u16().to_be_bytes());
-        body.push(CompressionMethod::Null.as_u8());
+        body.push(CompressionMethod::NULL.as_u8());
         body.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
         body.extend_from_slice(&extensions);
         body

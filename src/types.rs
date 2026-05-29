@@ -876,30 +876,25 @@ impl ProtocolVersion {
 ///
 /// Used in ClientHello/ServerHello for both DTLS 1.2 and 1.3.
 /// TLS 1.3 only uses Null compression but includes it for compatibility.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompressionMethod {
-    /// No compression.
-    Null,
-    /// DEFLATE compression.
-    Deflate,
-    /// Unknown compression method.
-    Unknown(u8),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CompressionMethod(u8);
 
 impl Default for CompressionMethod {
     fn default() -> Self {
-        Self::Unknown(0)
+        Self::NULL
     }
 }
 
 impl CompressionMethod {
+    /// No compression.
+    pub const NULL: Self = Self(0x00);
+    /// DEFLATE compression.
+    pub const DEFLATE: Self = Self(0x01);
+
     /// Convert a u8 value to a `CompressionMethod`.
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0x00 => CompressionMethod::Null,
-            0x01 => CompressionMethod::Deflate,
-            _ => CompressionMethod::Unknown(value),
-        }
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
     /// Returns true if this compression method is supported by this implementation.
@@ -909,7 +904,7 @@ impl CompressionMethod {
 
     /// All recognized compression methods (every non-`Unknown` variant).
     pub const fn all() -> &'static [CompressionMethod; 2] {
-        &[CompressionMethod::Null, CompressionMethod::Deflate]
+        &[CompressionMethod::NULL, CompressionMethod::DEFLATE]
     }
 
     /// Supported compression methods.
@@ -918,22 +913,33 @@ impl CompressionMethod {
     /// §4.1.2) mandates exactly one compression method (null). DEFLATE
     /// is recognized by parsing but not accepted.
     pub const fn supported() -> &'static [CompressionMethod; 1] {
-        &[CompressionMethod::Null]
+        &[CompressionMethod::NULL]
     }
 
     /// Convert this `CompressionMethod` to its u8 value.
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            CompressionMethod::Null => 0x00,
-            CompressionMethod::Deflate => 0x01,
-            CompressionMethod::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    /// Returns true if this is not a known TLS compression method wire value.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(*self, CompressionMethod::NULL | CompressionMethod::DEFLATE)
     }
 
     /// Parse a `CompressionMethod` from wire format.
     pub fn parse(input: &[u8]) -> IResult<&[u8], CompressionMethod> {
         let (input, value) = be_u8(input)?;
         Ok((input, CompressionMethod::from_u8(value)))
+    }
+}
+
+impl fmt::Debug for CompressionMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            CompressionMethod::NULL => f.write_str("Null"),
+            CompressionMethod::DEFLATE => f.write_str("Deflate"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
     }
 }
 
@@ -1026,6 +1032,40 @@ mod tests {
     }
 
     #[test]
+    fn compression_method_newtype_shape() {
+        assert_eq!(std::mem::size_of::<CompressionMethod>(), 1);
+        assert_eq!(CompressionMethod::default(), CompressionMethod::NULL);
+    }
+
+    #[test]
+    fn compression_method_wire_roundtrip() {
+        let known = [
+            (0x00, CompressionMethod::NULL),
+            (0x01, CompressionMethod::DEFLATE),
+        ];
+
+        for (wire, method) in known {
+            assert_eq!(CompressionMethod::from_u8(wire), method);
+            assert_eq!(method.as_u8(), wire);
+            assert!(!method.is_unknown());
+        }
+
+        let unknown = CompressionMethod::from_u8(0x02);
+        assert_eq!(unknown.as_u8(), 0x02);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn compression_method_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", CompressionMethod::NULL), "Null");
+        assert_eq!(format!("{:?}", CompressionMethod::DEFLATE), "Deflate");
+        assert_eq!(
+            format!("{:?}", CompressionMethod::from_u8(0x02)),
+            "Unknown(2)"
+        );
+    }
+
+    #[test]
     fn random_parse() {
         let data = [
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
@@ -1060,7 +1100,7 @@ mod tests {
         let supported = CompressionMethod::supported();
         assert_eq!(
             supported,
-            &[CompressionMethod::Null],
+            &[CompressionMethod::NULL],
             "Only Null compression should be supported"
         );
     }

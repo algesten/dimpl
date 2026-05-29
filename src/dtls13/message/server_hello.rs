@@ -156,7 +156,7 @@ mod test {
         0x01, // SessionId length
         0xAA, // SessionId
         0x13, 0x01, // Dtls13CipherSuite::AES_128_GCM_SHA256
-        0x00, // CompressionMethod::Null
+        0x00, // CompressionMethod::NULL
         0x00, 0x0C, // Extensions length (12 bytes)
         0x00, 0x0A, // ExtensionType::SupportedGroups
         0x00, 0x08, // Extension data length (8 bytes)
@@ -194,7 +194,7 @@ mod test {
             hrr_random,
             SessionId::empty(),
             Dtls13CipherSuite::AES_128_GCM_SHA256,
-            CompressionMethod::Null,
+            CompressionMethod::NULL,
             None,
         );
 

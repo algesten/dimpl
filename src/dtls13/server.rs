@@ -428,7 +428,7 @@ impl State {
         // Validate null compression is offered
         let has_null_compression = client_hello
             .legacy_compression_methods
-            .contains(&CompressionMethod::Null);
+            .contains(&CompressionMethod::NULL);
         if !has_null_compression {
             return Err(Error::SecurityError(
                 crate::SecurityError::ClientHelloMustOfferNullCompression,
@@ -1322,7 +1322,7 @@ fn send_hello_retry_request(
         hrr_random,
         client_session_id,
         cipher_suite,
-        CompressionMethod::Null,
+        CompressionMethod::NULL,
         Some(extensions),
     );
 
@@ -1384,7 +1384,7 @@ fn handshake_create_server_hello(
         random,
         client_session_id,
         cipher_suite,
-        CompressionMethod::Null,
+        CompressionMethod::NULL,
         Some(extensions),
     );
 

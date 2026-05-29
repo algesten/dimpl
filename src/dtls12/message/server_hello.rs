@@ -200,7 +200,7 @@ mod test {
         0x01, // SessionId length
         0xAA, // SessionId
         0xC0, 0x2B, // Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-        0x00, // CompressionMethod::Null
+        0x00, // CompressionMethod::NULL
         0x00, 0x0C, // Extensions length (12 bytes total: 2 type + 2 length + 8 data)
         0x00, 0x0A, // ExtensionType::SupportedGroups
         0x00, 0x08, // Extension data length (8 bytes)

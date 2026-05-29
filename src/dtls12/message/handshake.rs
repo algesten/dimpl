@@ -532,7 +532,7 @@ mod tests {
         0xC0, 0x2B, // Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
         0xC0, 0x2C, // Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
         0x01, // CompressionMethods length
-        0x00, // CompressionMethod::Null
+        0x00, // CompressionMethod::NULL
     ];
 
     #[test]
@@ -564,7 +564,7 @@ mod tests {
         cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
         cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
         let mut compression_methods = ArrayVec::new();
-        compression_methods.push(CompressionMethod::Null);
+        compression_methods.push(CompressionMethod::NULL);
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,
@@ -607,7 +607,7 @@ mod tests {
         cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256);
         cipher_suites.push(Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384);
         let mut compression_methods = ArrayVec::new();
-        compression_methods.push(CompressionMethod::Null);
+        compression_methods.push(CompressionMethod::NULL);
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,

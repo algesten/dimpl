@@ -539,7 +539,7 @@ mod tests {
         cipher_suites.push(Dtls13CipherSuite::AES_128_GCM_SHA256);
         cipher_suites.push(Dtls13CipherSuite::AES_256_GCM_SHA384);
         let mut compression_methods = ArrayVec::new();
-        compression_methods.push(CompressionMethod::Null);
+        compression_methods.push(CompressionMethod::NULL);
 
         let client_hello = ClientHello::new(
             ProtocolVersion::DTLS1_2,
