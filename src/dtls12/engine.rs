@@ -1155,7 +1155,16 @@ impl Engine {
 
             for record in unhandled {
                 let buf = record.into_buffer();
-                self.parse_packet(&buf)?;
+                match self.parse_packet(&buf) {
+                    Ok(()) => {}
+                    Err(InternalError::Transient(err)) => {
+                        trace!("Discarding buffered protected record after reparse failed: {err}");
+                    }
+                    Err(err) => {
+                        self.buffers_free.push(buf);
+                        return Err(err);
+                    }
+                }
                 self.buffers_free.push(buf);
             }
         }

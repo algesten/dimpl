@@ -62,6 +62,56 @@ fn dtls12_min_protected_fragment_len(suite: Dtls12CipherSuite) -> usize {
     }
 }
 
+fn append_truncated_handshake_tail(mut packet: Vec<u8>) -> Vec<u8> {
+    let len = u16::from_be_bytes([packet[11], packet[12]]);
+    let len = len.checked_add(1).expect("record length fits");
+    packet[11..13].copy_from_slice(&len.to_be_bytes());
+    packet.push(0xff);
+    packet
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_same_record_malformed_handshake_tail_is_discarded_atomically() {
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let config = dtls12_config();
+    let now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+
+    client.handle_timeout(now).expect("client timeout");
+    let client_hello = collect_packets(&mut client);
+    assert!(!client_hello.is_empty(), "client should emit ClientHello");
+
+    let malformed = append_truncated_handshake_tail(client_hello[0].clone());
+    server
+        .handle_packet(&malformed)
+        .expect("malformed same-record tail should be discarded");
+    server.handle_timeout(now).expect("server timeout");
+    assert!(
+        collect_packets(&mut server).is_empty(),
+        "server must not process the valid ClientHello prefix"
+    );
+
+    for packet in &client_hello {
+        server
+            .handle_packet(packet)
+            .expect("clean retransmitted ClientHello should recover");
+    }
+    server.handle_timeout(now).expect("server timeout");
+    assert!(
+        !collect_packets(&mut server).is_empty(),
+        "server should respond to clean retransmission"
+    );
+}
+
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_malformed_datagram_is_discarded_without_processing_alerts() {

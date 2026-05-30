@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Discard DTLS handshake records with malformed same-record tails #139
   * Represent DTLS wire-code identifiers as compact newtypes (breaking) #137
   * Make public errors structured and fatal-only (breaking) #134
 
