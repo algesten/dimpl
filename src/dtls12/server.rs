@@ -189,11 +189,25 @@ impl Server {
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        match self
-            .engine
-            .parse_packet(packet)
-            .and_then(|_| self.make_progress())
-        {
+        let result = if self.state == State::AwaitClientHello {
+            let expected_seq = self.engine.expected_peer_handshake_seq_no();
+            self.engine
+                .parse_packet_filtering_records(packet, |record| {
+                    record.record().sequence.epoch == 0
+                        && (record.record().content_type == ContentType::Alert
+                            || (record.record().content_type == ContentType::Handshake
+                                && record.first_handshake().is_some_and(|h| {
+                                    h.header.msg_type == MessageType::ClientHello
+                                        && (h.header.message_seq == expected_seq
+                                            || h.header.message_seq.saturating_add(1)
+                                                == expected_seq)
+                                })))
+                })
+        } else {
+            self.engine.parse_packet(packet)
+        };
+
+        match result.and_then(|_| self.make_progress()) {
             Ok(()) => Ok(()),
             Err(e) => e.into_public_error().map_or(Ok(()), Err),
         }

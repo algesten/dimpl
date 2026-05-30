@@ -50,6 +50,86 @@ fn dtls13_ack_record_for_records(seq: u64, records: &[(u64, u64)]) -> Vec<u8> {
     out
 }
 
+fn dtls13_future_epoch_ciphertext(seq: u16) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(0x2E); // fixed bits, S=1, L=1, epoch_bits=2
+    out.extend_from_slice(&seq.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes()); // empty ciphertext
+    out
+}
+
+#[cfg(feature = "rcgen")]
+fn dtls13_client_server_with_max_queue(max_queue_rx: usize) -> (Dtls, Dtls, Instant) {
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let config = Arc::new(
+        Config::builder()
+            .max_queue_rx(max_queue_rx)
+            .build()
+            .expect("build config"),
+    );
+
+    let now = Instant::now();
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    (client, server, now)
+}
+
+#[cfg(feature = "rcgen")]
+fn dtls13_client_hello(client: &mut Dtls, now: Instant) -> Vec<Vec<u8>> {
+    client.handle_timeout(now).expect("client timeout");
+    let packets = collect_packets(client);
+    assert!(!packets.is_empty(), "client should emit ClientHello");
+    packets
+}
+
+#[cfg(feature = "rcgen")]
+fn dtls13_server_responds_to_client_hello(client: &mut Dtls, server: &mut Dtls, now: Instant) {
+    let packets = dtls13_client_hello(client, now);
+    for packet in &packets {
+        server
+            .handle_packet(packet)
+            .expect("ClientHello should not be blocked");
+    }
+
+    server.handle_timeout(now).expect("server timeout");
+    let server_out = collect_packets(server);
+    assert!(
+        !server_out.is_empty(),
+        "server should respond after ClientHello"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_prehandshake_future_epoch_records_do_not_block_client_hello() {
+    let _ = env_logger::try_init();
+    let (mut client, mut server, now) = dtls13_client_server_with_max_queue(1);
+
+    server
+        .handle_packet(&dtls13_future_epoch_ciphertext(0))
+        .expect("pre-handshake future-epoch ciphertext should be tolerated");
+
+    dtls13_server_responds_to_client_hello(&mut client, &mut server, now);
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_prehandshake_plaintext_non_client_hello_records_do_not_block_client_hello() {
+    let _ = env_logger::try_init();
+    let (mut client, mut server, now) = dtls13_client_server_with_max_queue(1);
+
+    server
+        .handle_packet(&dtls13_ack_record(0))
+        .expect("pre-handshake ACK should not occupy receive queue");
+
+    dtls13_server_responds_to_client_hello(&mut client, &mut server, now);
+}
+
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_malformed_datagram_is_discarded_without_processing_alerts() {

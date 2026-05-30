@@ -29,6 +29,14 @@ impl Incoming {
     pub fn into_records(self) -> impl Iterator<Item = Record> {
         self.records.records.into_iter()
     }
+
+    pub(crate) fn to_datagram_buf(&self) -> Buf {
+        let mut packet = Buf::new();
+        for record in &self.records.records {
+            packet.extend_from_slice(record.buffer());
+        }
+        packet
+    }
 }
 
 impl Incoming {
@@ -57,6 +65,23 @@ impl Incoming {
 
         Ok(Some(Incoming { records }))
     }
+
+    pub(crate) fn parse_packet_filtering_records(
+        packet: &[u8],
+        decrypt: &mut dyn RecordHandler,
+        cs: Option<Dtls13CipherSuite>,
+        keep_record: impl FnMut(&Record) -> bool,
+    ) -> Result<Option<Self>, InternalError> {
+        let records = Records::parse_filtering_records(packet, decrypt, cs, keep_record)?;
+
+        if records.records.is_empty() {
+            return Ok(None);
+        }
+
+        let records = Box::new(records);
+
+        Ok(Some(Incoming { records }))
+    }
 }
 
 /// A number of records parsed from a single UDP packet.
@@ -67,11 +92,21 @@ pub struct Records {
 
 impl Records {
     pub fn parse(
-        mut packet: &[u8],
+        packet: &[u8],
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls13CipherSuite>,
     ) -> Result<Records, InternalError> {
+        Self::parse_filtering_records(packet, decrypt, cs, |_| true)
+    }
+
+    fn parse_filtering_records(
+        mut packet: &[u8],
+        decrypt: &mut dyn RecordHandler,
+        cs: Option<Dtls13CipherSuite>,
+        mut keep_record: impl FnMut(&Record) -> bool,
+    ) -> Result<Records, InternalError> {
         let mut parsed_records: ArrayVec<Record, 16> = ArrayVec::new();
+        let mut parsed_record_count = 0usize;
 
         // Find record boundaries and copy each record ONCE from the packet
         while !packet.is_empty() {
@@ -132,8 +167,17 @@ impl Records {
             match Record::parse(record_slice, decrypt, cs) {
                 Ok(record) => {
                     if let Some(record) = record {
-                        if parsed_records.try_push(record).is_err() {
+                        if parsed_record_count >= parsed_records.capacity() {
                             return Err(InternalError::too_many_records());
+                        }
+                        parsed_record_count += 1;
+
+                        if !keep_record(&record) {
+                            trace!("Discarding filtered rec");
+                        } else {
+                            parsed_records
+                                .try_push(record)
+                                .expect("parsed record count is capacity-checked");
                         }
                     } else {
                         trace!("Discarding replayed rec");

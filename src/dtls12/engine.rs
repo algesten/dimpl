@@ -229,22 +229,34 @@ impl Engine {
         Ok(())
     }
 
-    /// Insert a parsed datagram into the receive queue.
-    fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
-        // Capacity guard before iterating records.
-        if self.queue_rx.len() >= self.config.max_queue_rx() {
-            warn!(
-                "Receive queue full (max {}): {:?}",
-                self.config.max_queue_rx(),
-                self.queue_rx
-            );
-            return Err(Error::ReceiveQueueFull);
+    pub(crate) fn parse_packet_filtering_records(
+        &mut self,
+        packet: &[u8],
+        keep_record: impl FnMut(&Record) -> bool,
+    ) -> Result<(), InternalError> {
+        let cs = self.cipher_suite;
+        let incoming = Incoming::parse_packet_filtering_records(packet, self, cs, keep_record)?;
+        if let Some(incoming) = incoming {
+            self.insert_incoming(incoming)?;
         }
 
+        Ok(())
+    }
+
+    /// Insert a parsed datagram into the receive queue.
+    fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
         // Dispatch to specialized handlers
         if incoming.first().first_handshake().is_some() {
             self.insert_incoming_handshake(incoming)
         } else {
+            if self.queue_rx.len() >= self.config.max_queue_rx() {
+                warn!(
+                    "Receive queue full (max {}): {:?}",
+                    self.config.max_queue_rx(),
+                    self.queue_rx
+                );
+                return Err(Error::ReceiveQueueFull);
+            }
             self.insert_incoming_non_handshake(incoming)
         }
     }
@@ -307,6 +319,14 @@ impl Engine {
 
         match search_result {
             Err(index) => {
+                if self.queue_rx.len() >= self.config.max_queue_rx() {
+                    warn!(
+                        "Receive queue full (max {}): {:?}",
+                        self.config.max_queue_rx(),
+                        self.queue_rx
+                    );
+                    return Err(Error::ReceiveQueueFull);
+                }
                 // Insert in order of handshake key
                 self.queue_rx.insert(index, incoming);
             }
@@ -588,6 +608,10 @@ impl Engine {
 
     pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
         self.has_complete_handshake_with_seq(wanted, self.peer_handshake_seq_no)
+    }
+
+    pub(crate) fn expected_peer_handshake_seq_no(&self) -> u16 {
+        self.peer_handshake_seq_no
     }
 
     fn has_complete_handshake_with_seq(&mut self, wanted: MessageType, expected_seq: u16) -> bool {
