@@ -565,7 +565,7 @@ impl State {
 
         // Validate cipher suite
         let cs = server_hello.cipher_suite;
-        if matches!(cs, Dtls13CipherSuite::Unknown(_)) {
+        if cs.is_unknown() {
             return Err((Error::SecurityError(
                 crate::SecurityError::ServerSelectedUnknownCipherSuite,
             ))

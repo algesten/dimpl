@@ -22,6 +22,8 @@ mod server_hello;
 mod server_key_exchange;
 mod wrapped;
 
+use std::fmt;
+
 use arrayvec::ArrayVec;
 pub use certificate::Certificate;
 pub use certificate_request::CertificateRequest;
@@ -55,60 +57,34 @@ use nom::number::complete::{be_u8, be_u16};
 
 pub type CipherSuiteVec = ArrayVec<Dtls12CipherSuite, { Dtls12CipherSuite::supported().len() }>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
 /// Supported TLS 1.2 cipher suites for DTLS.
-pub enum Dtls12CipherSuite {
-    // ECDHE with AES-GCM
-    /// ECDHE with ECDSA authentication, AES-256-GCM, SHA-384
-    ECDHE_ECDSA_AES256_GCM_SHA384, // 0xC02C
-    /// ECDHE with ECDSA authentication, AES-128-GCM, SHA-256
-    ECDHE_ECDSA_AES128_GCM_SHA256, // 0xC02B
-    /// ECDHE with ECDSA authentication, ChaCha20-Poly1305, SHA-256
-    ECDHE_ECDSA_CHACHA20_POLY1305_SHA256, // 0xCCA9
-
-    // PSK cipher suites (no certificate authentication)
-    /// PSK with AES-128-CCM-8 (8-byte tag), SHA-256
-    PSK_AES128_CCM_8, // 0xC0A8
-
-    /// Unknown or unsupported cipher suite by its IANA value
-    Unknown(u16),
-}
-
-impl Default for Dtls12CipherSuite {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Dtls12CipherSuite(u16);
 
 impl Dtls12CipherSuite {
+    /// ECDHE with ECDSA authentication, AES-256-GCM, SHA-384.
+    pub const ECDHE_ECDSA_AES256_GCM_SHA384: Self = Self(0xC02C);
+    /// ECDHE with ECDSA authentication, AES-128-GCM, SHA-256.
+    pub const ECDHE_ECDSA_AES128_GCM_SHA256: Self = Self(0xC02B);
+    /// ECDHE with ECDSA authentication, ChaCha20-Poly1305, SHA-256.
+    pub const ECDHE_ECDSA_CHACHA20_POLY1305_SHA256: Self = Self(0xCCA9);
+    /// PSK with AES-128-CCM-8 (8-byte tag), SHA-256.
+    pub const PSK_AES128_CCM_8: Self = Self(0xC0A8);
+
     /// Convert the 16-bit IANA value to a `Dtls12CipherSuite`.
-    pub fn from_u16(value: u16) -> Self {
-        match value {
-            // ECDHE with AES-GCM
-            0xC02C => Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
-            0xC02B => Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
-            0xCCA9 => Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256,
-
-            // PSK
-            0xC0A8 => Dtls12CipherSuite::PSK_AES128_CCM_8,
-
-            _ => Dtls12CipherSuite::Unknown(value),
-        }
+    pub const fn from_u16(value: u16) -> Self {
+        Self(value)
     }
 
     /// Return the 16-bit IANA value for this cipher suite.
-    pub fn as_u16(&self) -> u16 {
-        match self {
-            // ECDHE with AES-GCM
-            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => 0xC02C,
-            Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 0xC02B,
-            Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256 => 0xCCA9,
+    pub const fn as_u16(&self) -> u16 {
+        self.0
+    }
 
-            Dtls12CipherSuite::PSK_AES128_CCM_8 => 0xC0A8,
-
-            Dtls12CipherSuite::Unknown(value) => *value,
-        }
+    /// Returns true if this is not a known DTLS 1.2 cipher suite wire value.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(*self, Self(0xC02B..=0xC02C | 0xC0A8 | 0xCCA9))
     }
 
     /// Parse a `Dtls12CipherSuite` from network byte order.
@@ -119,20 +95,20 @@ impl Dtls12CipherSuite {
 
     /// Length in bytes of verify_data for Finished MACs.
     pub fn verify_data_length(&self) -> usize {
-        match self {
+        match *self {
             // AES-GCM suites
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
             | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
             | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256
             | Dtls12CipherSuite::PSK_AES128_CCM_8 => 12,
 
-            Dtls12CipherSuite::Unknown(_) => 12, // Default length for unknown cipher suites
+            _ => 12, // Default length for unknown cipher suites
         }
     }
 
     /// The key exchange algorithm family for this cipher suite.
     pub fn as_key_exchange_algorithm(&self) -> KeyExchangeAlgorithm {
-        match self {
+        match *self {
             // All ECDHE ciphers
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
             | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
@@ -142,14 +118,14 @@ impl Dtls12CipherSuite {
 
             Dtls12CipherSuite::PSK_AES128_CCM_8 => KeyExchangeAlgorithm::PSK,
 
-            Dtls12CipherSuite::Unknown(_) => KeyExchangeAlgorithm::Unknown,
+            _ => KeyExchangeAlgorithm::Unknown,
         }
     }
 
     /// Whether this cipher suite uses ECC-based key exchange.
     pub fn has_ecc(&self) -> bool {
         matches!(
-            self,
+            *self,
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
                 | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
                 | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256
@@ -158,7 +134,7 @@ impl Dtls12CipherSuite {
 
     /// Whether this cipher suite uses PSK (Pre-Shared Key) key exchange.
     pub fn is_psk(&self) -> bool {
-        matches!(self, Dtls12CipherSuite::PSK_AES128_CCM_8)
+        matches!(*self, Dtls12CipherSuite::PSK_AES128_CCM_8)
     }
 
     /// All supported cipher suites in server preference order.
@@ -195,12 +171,12 @@ impl Dtls12CipherSuite {
 
     /// The hash algorithm used by this cipher suite.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
-        match self {
+        match *self {
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
             Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
             | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256
             | Dtls12CipherSuite::PSK_AES128_CCM_8 => HashAlgorithm::SHA256,
-            Dtls12CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
+            _ => HashAlgorithm::UNKNOWN_DERIVED,
         }
     }
 
@@ -208,14 +184,14 @@ impl Dtls12CipherSuite {
     ///
     /// Returns `None` for PSK cipher suites (no signature authentication).
     pub fn signature_algorithm(&self) -> Option<SignatureAlgorithm> {
-        match self {
+        match *self {
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
             | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
             | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256 => {
                 Some(SignatureAlgorithm::ECDSA)
             }
             Dtls12CipherSuite::PSK_AES128_CCM_8 => None,
-            Dtls12CipherSuite::Unknown(_) => Some(SignatureAlgorithm::Unknown(0)),
+            _ => Some(SignatureAlgorithm::UNKNOWN_DERIVED),
         }
     }
 
@@ -227,6 +203,24 @@ impl Dtls12CipherSuite {
     /// Supported DTLS 1.2 cipher suites in server preference order.
     pub const fn supported() -> &'static [Dtls12CipherSuite; 4] {
         Self::all()
+    }
+}
+
+impl fmt::Debug for Dtls12CipherSuite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => {
+                f.write_str("ECDHE_ECDSA_AES256_GCM_SHA384")
+            }
+            Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => {
+                f.write_str("ECDHE_ECDSA_AES128_GCM_SHA256")
+            }
+            Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256 => {
+                f.write_str("ECDHE_ECDSA_CHACHA20_POLY1305_SHA256")
+            }
+            Dtls12CipherSuite::PSK_AES128_CCM_8 => f.write_str("PSK_AES128_CCM_8"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
     }
 }
 
@@ -245,39 +239,22 @@ pub enum KeyExchangeAlgorithm {
 pub type CertificateTypeVec =
     ArrayVec<ClientCertificateType, { ClientCertificateType::supported().len() }>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum ClientCertificateType {
-    RSA_SIGN,
-    DSS_SIGN,
-    RSA_FIXED_DH,
-    DSS_FIXED_DH,
-    RSA_EPHEMERAL_DH,
-    DSS_EPHEMERAL_DH,
-    FORTEZZA_DMS,
-    ECDSA_SIGN,
-    Unknown(u8),
-}
-
-impl Default for ClientCertificateType {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct ClientCertificateType(u8);
 
 impl ClientCertificateType {
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            1 => ClientCertificateType::RSA_SIGN,
-            2 => ClientCertificateType::DSS_SIGN,
-            3 => ClientCertificateType::RSA_FIXED_DH,
-            4 => ClientCertificateType::DSS_FIXED_DH,
-            5 => ClientCertificateType::RSA_EPHEMERAL_DH,
-            6 => ClientCertificateType::DSS_EPHEMERAL_DH,
-            20 => ClientCertificateType::FORTEZZA_DMS,
-            64 => ClientCertificateType::ECDSA_SIGN,
-            _ => ClientCertificateType::Unknown(value),
-        }
+    pub const RSA_SIGN: Self = Self(1);
+    pub const DSS_SIGN: Self = Self(2);
+    pub const RSA_FIXED_DH: Self = Self(3);
+    pub const DSS_FIXED_DH: Self = Self(4);
+    pub const RSA_EPHEMERAL_DH: Self = Self(5);
+    pub const DSS_EPHEMERAL_DH: Self = Self(6);
+    pub const FORTEZZA_DMS: Self = Self(20);
+    pub const ECDSA_SIGN: Self = Self(64);
+
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
     /// Returns true if this certificate type is supported by this implementation.
@@ -291,23 +268,39 @@ impl ClientCertificateType {
         &[ClientCertificateType::ECDSA_SIGN]
     }
 
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            ClientCertificateType::RSA_SIGN => 1,
-            ClientCertificateType::DSS_SIGN => 2,
-            ClientCertificateType::RSA_FIXED_DH => 3,
-            ClientCertificateType::DSS_FIXED_DH => 4,
-            ClientCertificateType::RSA_EPHEMERAL_DH => 5,
-            ClientCertificateType::DSS_EPHEMERAL_DH => 6,
-            ClientCertificateType::FORTEZZA_DMS => 20,
-            ClientCertificateType::ECDSA_SIGN => 64,
-            ClientCertificateType::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    const fn is_unknown(&self) -> bool {
+        !matches!(*self, Self(1..=6 | 20 | 64))
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], ClientCertificateType> {
         let (input, value) = be_u8(input)?;
         Ok((input, ClientCertificateType::from_u8(value)))
+    }
+}
+
+impl fmt::Debug for ClientCertificateType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_unknown() {
+            return f.debug_tuple("Unknown").field(&self.0).finish();
+        }
+
+        let name = match *self {
+            ClientCertificateType::RSA_SIGN => "RSA_SIGN",
+            ClientCertificateType::DSS_SIGN => "DSS_SIGN",
+            ClientCertificateType::RSA_FIXED_DH => "RSA_FIXED_DH",
+            ClientCertificateType::DSS_FIXED_DH => "DSS_FIXED_DH",
+            ClientCertificateType::RSA_EPHEMERAL_DH => "RSA_EPHEMERAL_DH",
+            ClientCertificateType::DSS_EPHEMERAL_DH => "DSS_EPHEMERAL_DH",
+            ClientCertificateType::FORTEZZA_DMS => "FORTEZZA_DMS",
+            ClientCertificateType::ECDSA_SIGN => "ECDSA_SIGN",
+            _ => unreachable!("known DTLS 1.2 client certificate type missing Debug label"),
+        };
+
+        f.write_str(name)
     }
 }
 
@@ -363,5 +356,95 @@ impl SignatureAndHashAlgorithm {
     /// Returns true if this signature+hash combination is supported.
     pub fn is_supported(&self) -> bool {
         Self::supported().contains(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dtls12_cipher_suite_newtype_shape() {
+        assert_eq!(std::mem::size_of::<Dtls12CipherSuite>(), 2);
+        assert_eq!(Dtls12CipherSuite::default().as_u16(), 0);
+        assert!(Dtls12CipherSuite::default().is_unknown());
+    }
+
+    #[test]
+    fn dtls12_cipher_suite_wire_roundtrip() {
+        for suite in Dtls12CipherSuite::all() {
+            assert_eq!(Dtls12CipherSuite::from_u16(suite.as_u16()), *suite);
+            assert!(!suite.is_unknown());
+        }
+
+        let unknown = Dtls12CipherSuite::from_u16(0xFFFF);
+        assert_eq!(unknown.as_u16(), 0xFFFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn dtls12_cipher_suite_debug_stays_enum_like() {
+        assert_eq!(
+            format!("{:?}", Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256),
+            "ECDHE_ECDSA_AES128_GCM_SHA256"
+        );
+        assert_eq!(
+            format!("{:?}", Dtls12CipherSuite::from_u16(0xFFFF)),
+            "Unknown(65535)"
+        );
+    }
+
+    #[test]
+    fn client_certificate_type_newtype_shape() {
+        assert_eq!(std::mem::size_of::<ClientCertificateType>(), 1);
+        assert_eq!(ClientCertificateType::default().as_u8(), 0);
+        assert!(ClientCertificateType::default().is_unknown());
+    }
+
+    #[test]
+    fn client_certificate_type_wire_roundtrip() {
+        for certificate_type in [
+            ClientCertificateType::RSA_SIGN,
+            ClientCertificateType::DSS_SIGN,
+            ClientCertificateType::RSA_FIXED_DH,
+            ClientCertificateType::DSS_FIXED_DH,
+            ClientCertificateType::RSA_EPHEMERAL_DH,
+            ClientCertificateType::DSS_EPHEMERAL_DH,
+            ClientCertificateType::FORTEZZA_DMS,
+            ClientCertificateType::ECDSA_SIGN,
+        ] {
+            assert_eq!(
+                ClientCertificateType::from_u8(certificate_type.as_u8()),
+                certificate_type
+            );
+            assert!(!certificate_type.is_unknown());
+        }
+
+        let unknown = ClientCertificateType::from_u8(0xFF);
+        assert_eq!(unknown.as_u8(), 0xFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn client_certificate_type_debug_stays_enum_like() {
+        assert_eq!(
+            format!("{:?}", ClientCertificateType::ECDSA_SIGN),
+            "ECDSA_SIGN"
+        );
+        assert_eq!(
+            format!("{:?}", ClientCertificateType::from_u8(0xFF)),
+            "Unknown(255)"
+        );
+    }
+
+    #[test]
+    fn unknown_dtls12_cipher_suite_uses_internal_derived_markers() {
+        let unknown = Dtls12CipherSuite::from_u16(0xFFFF);
+        assert!(unknown.hash_algorithm().is_unknown());
+        assert!(
+            unknown
+                .signature_algorithm()
+                .is_some_and(|s| s.is_unknown())
+        );
     }
 }

@@ -1,3 +1,4 @@
+use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -286,64 +287,35 @@ impl Handshake {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MessageType {
-    HelloRequest, // empty
-    ClientHello,
-    HelloVerifyRequest,
-    ServerHello,
-    Certificate,
-    ServerKeyExchange,
-    CertificateRequest,
-    ServerHelloDone, // empty
-    CertificateVerify,
-    ClientKeyExchange,
-    NewSessionTicket,
-    Finished,
-    Unknown(u8),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct MessageType(u8);
 
-impl Default for MessageType {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
-
+#[allow(non_upper_case_globals)]
 impl MessageType {
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0 => MessageType::HelloRequest, // empty
-            1 => MessageType::ClientHello,
-            3 => MessageType::HelloVerifyRequest,
-            2 => MessageType::ServerHello,
-            11 => MessageType::Certificate,
-            12 => MessageType::ServerKeyExchange,
-            13 => MessageType::CertificateRequest,
-            14 => MessageType::ServerHelloDone, // empty
-            15 => MessageType::CertificateVerify,
-            16 => MessageType::ClientKeyExchange,
-            4 => MessageType::NewSessionTicket,
-            20 => MessageType::Finished,
-            _ => MessageType::Unknown(value),
-        }
+    pub const HelloRequest: Self = Self(0);
+    pub const ClientHello: Self = Self(1);
+    pub const ServerHello: Self = Self(2);
+    pub const HelloVerifyRequest: Self = Self(3);
+    pub const NewSessionTicket: Self = Self(4);
+    pub const Certificate: Self = Self(11);
+    pub const ServerKeyExchange: Self = Self(12);
+    pub const CertificateRequest: Self = Self(13);
+    pub const ServerHelloDone: Self = Self(14);
+    pub const CertificateVerify: Self = Self(15);
+    pub const ClientKeyExchange: Self = Self(16);
+    pub const Finished: Self = Self(20);
+
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            MessageType::HelloRequest => 0,
-            MessageType::ClientHello => 1,
-            MessageType::HelloVerifyRequest => 3,
-            MessageType::ServerHello => 2,
-            MessageType::Certificate => 11,
-            MessageType::ServerKeyExchange => 12,
-            MessageType::CertificateRequest => 13,
-            MessageType::ServerHelloDone => 14,
-            MessageType::CertificateVerify => 15,
-            MessageType::ClientKeyExchange => 16,
-            MessageType::NewSessionTicket => 4,
-            MessageType::Finished => 20,
-            MessageType::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    const fn is_unknown(&self) -> bool {
+        !matches!(*self, Self(0..=4 | 11..=16 | 20))
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], MessageType> {
@@ -352,11 +324,37 @@ impl MessageType {
     }
 
     pub fn epoch(&self) -> u16 {
-        if matches!(self, MessageType::NewSessionTicket | MessageType::Finished) {
+        if matches!(*self, MessageType::NewSessionTicket | MessageType::Finished) {
             1
         } else {
             0
         }
+    }
+}
+
+impl fmt::Debug for MessageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_unknown() {
+            return f.debug_tuple("Unknown").field(&self.0).finish();
+        }
+
+        let name = match *self {
+            MessageType::HelloRequest => "HelloRequest",
+            MessageType::ClientHello => "ClientHello",
+            MessageType::HelloVerifyRequest => "HelloVerifyRequest",
+            MessageType::ServerHello => "ServerHello",
+            MessageType::Certificate => "Certificate",
+            MessageType::ServerKeyExchange => "ServerKeyExchange",
+            MessageType::CertificateRequest => "CertificateRequest",
+            MessageType::ServerHelloDone => "ServerHelloDone",
+            MessageType::CertificateVerify => "CertificateVerify",
+            MessageType::ClientKeyExchange => "ClientKeyExchange",
+            MessageType::NewSessionTicket => "NewSessionTicket",
+            MessageType::Finished => "Finished",
+            _ => unreachable!("known DTLS 1.2 handshake message type missing Debug label"),
+        };
+
+        f.write_str(name)
     }
 }
 
@@ -446,7 +444,7 @@ impl Body {
                 let (input, finished) = Finished::parse(input, cipher_suite)?;
                 Ok((input, Body::Finished(finished)))
             }
-            MessageType::Unknown(value) => Ok((input, Body::Unknown(value))),
+            _ => Ok((input, Body::Unknown(m.as_u8()))),
         }
     }
 
@@ -534,6 +532,44 @@ mod tests {
         0x01, // CompressionMethods length
         0x00, // CompressionMethod::Null
     ];
+
+    #[test]
+    fn message_type_newtype_shape() {
+        assert_eq!(std::mem::size_of::<MessageType>(), 1);
+        assert_eq!(MessageType::default().as_u8(), 0);
+        assert_eq!(MessageType::default(), MessageType::HelloRequest);
+    }
+
+    #[test]
+    fn message_type_wire_roundtrip() {
+        for message_type in [
+            MessageType::HelloRequest,
+            MessageType::ClientHello,
+            MessageType::ServerHello,
+            MessageType::HelloVerifyRequest,
+            MessageType::NewSessionTicket,
+            MessageType::Certificate,
+            MessageType::ServerKeyExchange,
+            MessageType::CertificateRequest,
+            MessageType::ServerHelloDone,
+            MessageType::CertificateVerify,
+            MessageType::ClientKeyExchange,
+            MessageType::Finished,
+        ] {
+            assert_eq!(MessageType::from_u8(message_type.as_u8()), message_type);
+            assert!(!message_type.is_unknown());
+        }
+
+        let unknown = MessageType::from_u8(0xFF);
+        assert_eq!(unknown.as_u8(), 0xFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn message_type_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", MessageType::ClientHello), "ClientHello");
+        assert_eq!(format!("{:?}", MessageType::from_u8(0xFF)), "Unknown(255)");
+    }
 
     #[test]
     fn handshake_size() {

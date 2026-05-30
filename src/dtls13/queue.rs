@@ -52,9 +52,7 @@ impl fmt::Debug for QueueRx {
                 ContentType::Handshake => handshake += 1,
                 ContentType::ApplicationData => app_data += 1,
                 ContentType::Alert => alert += 1,
-                ContentType::Unknown(_) | ContentType::ChangeCipherSpec | ContentType::Ack => {
-                    other += 1
-                }
+                _ => other += 1,
             }
 
             let seq = (record.sequence.epoch, record.sequence.sequence_number);

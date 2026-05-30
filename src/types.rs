@@ -81,134 +81,80 @@ impl Random {
 ///
 /// Used for Elliptic Curve Diffie-Hellman Ephemeral (ECDHE) key exchange.
 /// The same named groups are used in both DTLS 1.2 and DTLS 1.3.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum NamedGroup {
-    /// sect163k1 (deprecated).
-    Sect163k1,
-    /// sect163r1 (deprecated).
-    Sect163r1,
-    /// sect163r2 (deprecated).
-    Sect163r2,
-    /// sect193r1 (deprecated).
-    Sect193r1,
-    /// sect193r2 (deprecated).
-    Sect193r2,
-    /// sect233k1 (deprecated).
-    Sect233k1,
-    /// sect233r1 (deprecated).
-    Sect233r1,
-    /// sect239k1 (deprecated).
-    Sect239k1,
-    /// sect283k1 (deprecated).
-    Sect283k1,
-    /// sect283r1 (deprecated).
-    Sect283r1,
-    /// sect409k1 (deprecated).
-    Sect409k1,
-    /// sect409r1 (deprecated).
-    Sect409r1,
-    /// sect571k1 (deprecated).
-    Sect571k1,
-    /// sect571r1 (deprecated).
-    Sect571r1,
-    /// secp160k1 (deprecated).
-    Secp160k1,
-    /// secp160r1 (deprecated).
-    Secp160r1,
-    /// secp160r2 (deprecated).
-    Secp160r2,
-    /// secp192k1 (deprecated).
-    Secp192k1,
-    /// secp192r1 (deprecated).
-    Secp192r1,
-    /// secp224k1.
-    Secp224k1,
-    /// secp224r1.
-    Secp224r1,
-    /// secp256k1.
-    Secp256k1,
-    /// secp256r1 / P-256 (supported by dimpl).
-    Secp256r1,
-    /// secp384r1 / P-384 (supported by dimpl).
-    Secp384r1,
-    /// secp521r1 / P-521.
-    Secp521r1,
-    /// X25519 (Curve25519 for ECDHE).
-    X25519,
-    /// X448 (Curve448 for ECDHE).
-    X448,
-    /// Unknown or unsupported group.
-    Unknown(u16),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct NamedGroup(u16);
 
+#[allow(non_upper_case_globals)]
 impl NamedGroup {
+    /// sect163k1 (deprecated).
+    pub const Sect163k1: Self = Self(1);
+    /// sect163r1 (deprecated).
+    pub const Sect163r1: Self = Self(2);
+    /// sect163r2 (deprecated).
+    pub const Sect163r2: Self = Self(3);
+    /// sect193r1 (deprecated).
+    pub const Sect193r1: Self = Self(4);
+    /// sect193r2 (deprecated).
+    pub const Sect193r2: Self = Self(5);
+    /// sect233k1 (deprecated).
+    pub const Sect233k1: Self = Self(6);
+    /// sect233r1 (deprecated).
+    pub const Sect233r1: Self = Self(7);
+    /// sect239k1 (deprecated).
+    pub const Sect239k1: Self = Self(8);
+    /// sect283k1 (deprecated).
+    pub const Sect283k1: Self = Self(9);
+    /// sect283r1 (deprecated).
+    pub const Sect283r1: Self = Self(10);
+    /// sect409k1 (deprecated).
+    pub const Sect409k1: Self = Self(11);
+    /// sect409r1 (deprecated).
+    pub const Sect409r1: Self = Self(12);
+    /// sect571k1 (deprecated).
+    pub const Sect571k1: Self = Self(13);
+    /// sect571r1 (deprecated).
+    pub const Sect571r1: Self = Self(14);
+    /// secp160k1 (deprecated).
+    pub const Secp160k1: Self = Self(15);
+    /// secp160r1 (deprecated).
+    pub const Secp160r1: Self = Self(16);
+    /// secp160r2 (deprecated).
+    pub const Secp160r2: Self = Self(17);
+    /// secp192k1 (deprecated).
+    pub const Secp192k1: Self = Self(18);
+    /// secp192r1 (deprecated).
+    pub const Secp192r1: Self = Self(19);
+    /// secp224k1.
+    pub const Secp224k1: Self = Self(20);
+    /// secp224r1.
+    pub const Secp224r1: Self = Self(21);
+    /// secp256k1.
+    pub const Secp256k1: Self = Self(22);
+    /// secp256r1 / P-256 (supported by dimpl).
+    pub const Secp256r1: Self = Self(23);
+    /// secp384r1 / P-384 (supported by dimpl).
+    pub const Secp384r1: Self = Self(24);
+    /// secp521r1 / P-521.
+    pub const Secp521r1: Self = Self(25);
+    /// X25519 (Curve25519 for ECDHE).
+    pub const X25519: Self = Self(29);
+    /// X448 (Curve448 for ECDHE).
+    pub const X448: Self = Self(30);
+
     /// Convert a wire format u16 value to a `NamedGroup`.
-    pub fn from_u16(value: u16) -> Self {
-        match value {
-            1 => NamedGroup::Sect163k1,
-            2 => NamedGroup::Sect163r1,
-            3 => NamedGroup::Sect163r2,
-            4 => NamedGroup::Sect193r1,
-            5 => NamedGroup::Sect193r2,
-            6 => NamedGroup::Sect233k1,
-            7 => NamedGroup::Sect233r1,
-            8 => NamedGroup::Sect239k1,
-            9 => NamedGroup::Sect283k1,
-            10 => NamedGroup::Sect283r1,
-            11 => NamedGroup::Sect409k1,
-            12 => NamedGroup::Sect409r1,
-            13 => NamedGroup::Sect571k1,
-            14 => NamedGroup::Sect571r1,
-            15 => NamedGroup::Secp160k1,
-            16 => NamedGroup::Secp160r1,
-            17 => NamedGroup::Secp160r2,
-            18 => NamedGroup::Secp192k1,
-            19 => NamedGroup::Secp192r1,
-            20 => NamedGroup::Secp224k1,
-            21 => NamedGroup::Secp224r1,
-            22 => NamedGroup::Secp256k1,
-            23 => NamedGroup::Secp256r1,
-            24 => NamedGroup::Secp384r1,
-            25 => NamedGroup::Secp521r1,
-            29 => NamedGroup::X25519,
-            30 => NamedGroup::X448,
-            _ => NamedGroup::Unknown(value),
-        }
+    pub const fn from_u16(value: u16) -> Self {
+        Self(value)
     }
 
     /// Convert this `NamedGroup` to its wire format u16 value.
-    pub fn as_u16(&self) -> u16 {
-        match self {
-            NamedGroup::Sect163k1 => 1,
-            NamedGroup::Sect163r1 => 2,
-            NamedGroup::Sect163r2 => 3,
-            NamedGroup::Sect193r1 => 4,
-            NamedGroup::Sect193r2 => 5,
-            NamedGroup::Sect233k1 => 6,
-            NamedGroup::Sect233r1 => 7,
-            NamedGroup::Sect239k1 => 8,
-            NamedGroup::Sect283k1 => 9,
-            NamedGroup::Sect283r1 => 10,
-            NamedGroup::Sect409k1 => 11,
-            NamedGroup::Sect409r1 => 12,
-            NamedGroup::Sect571k1 => 13,
-            NamedGroup::Sect571r1 => 14,
-            NamedGroup::Secp160k1 => 15,
-            NamedGroup::Secp160r1 => 16,
-            NamedGroup::Secp160r2 => 17,
-            NamedGroup::Secp192k1 => 18,
-            NamedGroup::Secp192r1 => 19,
-            NamedGroup::Secp224k1 => 20,
-            NamedGroup::Secp224r1 => 21,
-            NamedGroup::Secp256k1 => 22,
-            NamedGroup::Secp256r1 => 23,
-            NamedGroup::Secp384r1 => 24,
-            NamedGroup::Secp521r1 => 25,
-            NamedGroup::X25519 => 29,
-            NamedGroup::X448 => 30,
-            NamedGroup::Unknown(value) => *value,
-        }
+    pub const fn as_u16(&self) -> u16 {
+        self.0
+    }
+
+    /// Returns true if this is not a known TLS named group wire value.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(*self, Self(1..=25 | 29..=30))
     }
 
     /// Parse a `NamedGroup` from wire format.
@@ -266,6 +212,41 @@ impl NamedGroup {
     }
 }
 
+impl fmt::Debug for NamedGroup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            NamedGroup::Sect163k1 => f.write_str("Sect163k1"),
+            NamedGroup::Sect163r1 => f.write_str("Sect163r1"),
+            NamedGroup::Sect163r2 => f.write_str("Sect163r2"),
+            NamedGroup::Sect193r1 => f.write_str("Sect193r1"),
+            NamedGroup::Sect193r2 => f.write_str("Sect193r2"),
+            NamedGroup::Sect233k1 => f.write_str("Sect233k1"),
+            NamedGroup::Sect233r1 => f.write_str("Sect233r1"),
+            NamedGroup::Sect239k1 => f.write_str("Sect239k1"),
+            NamedGroup::Sect283k1 => f.write_str("Sect283k1"),
+            NamedGroup::Sect283r1 => f.write_str("Sect283r1"),
+            NamedGroup::Sect409k1 => f.write_str("Sect409k1"),
+            NamedGroup::Sect409r1 => f.write_str("Sect409r1"),
+            NamedGroup::Sect571k1 => f.write_str("Sect571k1"),
+            NamedGroup::Sect571r1 => f.write_str("Sect571r1"),
+            NamedGroup::Secp160k1 => f.write_str("Secp160k1"),
+            NamedGroup::Secp160r1 => f.write_str("Secp160r1"),
+            NamedGroup::Secp160r2 => f.write_str("Secp160r2"),
+            NamedGroup::Secp192k1 => f.write_str("Secp192k1"),
+            NamedGroup::Secp192r1 => f.write_str("Secp192r1"),
+            NamedGroup::Secp224k1 => f.write_str("Secp224k1"),
+            NamedGroup::Secp224r1 => f.write_str("Secp224r1"),
+            NamedGroup::Secp256k1 => f.write_str("Secp256k1"),
+            NamedGroup::Secp256r1 => f.write_str("Secp256r1"),
+            NamedGroup::Secp384r1 => f.write_str("Secp384r1"),
+            NamedGroup::Secp521r1 => f.write_str("Secp521r1"),
+            NamedGroup::X25519 => f.write_str("X25519"),
+            NamedGroup::X448 => f.write_str("X448"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
+    }
+}
+
 // ============================================================================
 // Hash Algorithms
 // ============================================================================
@@ -274,60 +255,48 @@ impl NamedGroup {
 ///
 /// Specifies the hash algorithm to be used in digital signatures,
 /// PRF/HKDF operations, and transcript hashing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum HashAlgorithm {
-    /// No hash (not typically used).
-    None,
-    /// MD5 hash (deprecated, not supported).
-    MD5,
-    /// SHA-1 hash (deprecated, not supported).
-    SHA1,
-    /// SHA-224 hash.
-    SHA224,
-    /// SHA-256 hash (supported by dimpl).
-    SHA256,
-    /// SHA-384 hash (supported by dimpl).
-    SHA384,
-    /// SHA-512 hash.
-    SHA512,
-    /// Unknown or unsupported hash algorithm.
-    Unknown(u8),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HashAlgorithm(u8);
 
 impl Default for HashAlgorithm {
     fn default() -> Self {
-        Self::Unknown(0)
+        Self::None
     }
 }
 
+#[allow(non_upper_case_globals)]
 impl HashAlgorithm {
+    /// No hash (not typically used).
+    pub const None: Self = Self(0);
+    /// MD5 hash (deprecated, not supported).
+    pub const MD5: Self = Self(1);
+    /// SHA-1 hash (deprecated, not supported).
+    pub const SHA1: Self = Self(2);
+    /// SHA-224 hash.
+    pub const SHA224: Self = Self(3);
+    /// SHA-256 hash (supported by dimpl).
+    pub const SHA256: Self = Self(4);
+    /// SHA-384 hash (supported by dimpl).
+    pub const SHA384: Self = Self(5);
+    /// SHA-512 hash.
+    pub const SHA512: Self = Self(6);
+
+    pub(crate) const UNKNOWN_DERIVED: Self = Self(u8::MAX);
+
     /// Convert a wire format u8 value to a `HashAlgorithm`.
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0 => HashAlgorithm::None,
-            1 => HashAlgorithm::MD5,
-            2 => HashAlgorithm::SHA1,
-            3 => HashAlgorithm::SHA224,
-            4 => HashAlgorithm::SHA256,
-            5 => HashAlgorithm::SHA384,
-            6 => HashAlgorithm::SHA512,
-            _ => HashAlgorithm::Unknown(value),
-        }
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
     /// Convert this `HashAlgorithm` to its wire format u8 value.
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            HashAlgorithm::None => 0,
-            HashAlgorithm::MD5 => 1,
-            HashAlgorithm::SHA1 => 2,
-            HashAlgorithm::SHA224 => 3,
-            HashAlgorithm::SHA256 => 4,
-            HashAlgorithm::SHA384 => 5,
-            HashAlgorithm::SHA512 => 6,
-            HashAlgorithm::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    /// Returns true if this is not a known DTLS hash algorithm wire value.
+    pub const fn is_unknown(&self) -> bool {
+        self.0 > Self::SHA512.0
     }
 
     /// Parse a `HashAlgorithm` from wire format.
@@ -337,8 +306,8 @@ impl HashAlgorithm {
     }
 
     /// Returns the output length in bytes for this hash algorithm.
-    pub fn output_len(&self) -> usize {
-        match self {
+    pub const fn output_len(&self) -> usize {
+        match *self {
             HashAlgorithm::None => 0,
             HashAlgorithm::MD5 => 16,
             HashAlgorithm::SHA1 => 20,
@@ -346,7 +315,22 @@ impl HashAlgorithm {
             HashAlgorithm::SHA256 => 32,
             HashAlgorithm::SHA384 => 48,
             HashAlgorithm::SHA512 => 64,
-            HashAlgorithm::Unknown(_) => 0,
+            _ => 0,
+        }
+    }
+}
+
+impl fmt::Debug for HashAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            HashAlgorithm::None => f.write_str("None"),
+            HashAlgorithm::MD5 => f.write_str("MD5"),
+            HashAlgorithm::SHA1 => f.write_str("SHA1"),
+            HashAlgorithm::SHA224 => f.write_str("SHA224"),
+            HashAlgorithm::SHA256 => f.write_str("SHA256"),
+            HashAlgorithm::SHA384 => f.write_str("SHA384"),
+            HashAlgorithm::SHA512 => f.write_str("SHA512"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
         }
     }
 }
@@ -359,54 +343,60 @@ impl HashAlgorithm {
 ///
 /// Represents the underlying signature primitive (RSA, ECDSA, etc.).
 /// Used internally for signing operations across both DTLS versions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum SignatureAlgorithm {
-    /// Anonymous (no certificate).
-    Anonymous,
-    /// RSA signatures.
-    RSA,
-    /// DSA signatures.
-    DSA,
-    /// ECDSA signatures.
-    ECDSA,
-    /// Unknown or unsupported signature algorithm.
-    Unknown(u8),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SignatureAlgorithm(u8);
 
 impl Default for SignatureAlgorithm {
     fn default() -> Self {
-        Self::Unknown(0)
+        Self::Anonymous
     }
 }
 
+#[allow(non_upper_case_globals)]
 impl SignatureAlgorithm {
+    /// Anonymous (no certificate).
+    pub const Anonymous: Self = Self(0);
+    /// RSA signatures.
+    pub const RSA: Self = Self(1);
+    /// DSA signatures.
+    pub const DSA: Self = Self(2);
+    /// ECDSA signatures.
+    pub const ECDSA: Self = Self(3);
+
+    pub(crate) const UNKNOWN_DERIVED: Self = Self(u8::MAX);
+
     /// Convert an 8-bit value into a `SignatureAlgorithm`.
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0 => SignatureAlgorithm::Anonymous,
-            1 => SignatureAlgorithm::RSA,
-            2 => SignatureAlgorithm::DSA,
-            3 => SignatureAlgorithm::ECDSA,
-            _ => SignatureAlgorithm::Unknown(value),
-        }
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
     /// Convert this `SignatureAlgorithm` into its 8-bit representation.
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            SignatureAlgorithm::Anonymous => 0,
-            SignatureAlgorithm::RSA => 1,
-            SignatureAlgorithm::DSA => 2,
-            SignatureAlgorithm::ECDSA => 3,
-            SignatureAlgorithm::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    /// Returns true if this is not a known DTLS signature algorithm wire value.
+    pub const fn is_unknown(&self) -> bool {
+        self.0 > Self::ECDSA.0
     }
 
     /// Parse a `SignatureAlgorithm` from network bytes.
     pub fn parse(input: &[u8]) -> IResult<&[u8], SignatureAlgorithm> {
         let (input, value) = be_u8(input)?;
         Ok((input, SignatureAlgorithm::from_u8(value)))
+    }
+}
+
+impl fmt::Debug for SignatureAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            SignatureAlgorithm::Anonymous => f.write_str("Anonymous"),
+            SignatureAlgorithm::RSA => f.write_str("RSA"),
+            SignatureAlgorithm::DSA => f.write_str("DSA"),
+            SignatureAlgorithm::ECDSA => f.write_str("ECDSA"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
     }
 }
 
@@ -418,57 +408,55 @@ impl SignatureAlgorithm {
 ///
 /// Identifies the type of data in a DTLS record. These values are the same
 /// for both DTLS 1.2 and DTLS 1.3.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContentType {
-    /// Change Cipher Spec (used in DTLS 1.2, compatibility-only in 1.3).
-    ChangeCipherSpec,
-    /// Alert message.
-    Alert,
-    /// Handshake message.
-    Handshake,
-    /// Application data.
-    ApplicationData,
-    /// ACK (DTLS 1.3 only, RFC 9147 Section 7).
-    Ack,
-    /// Unknown content type.
-    Unknown(u8),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct ContentType(u8);
 
-impl Default for ContentType {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
-
+#[allow(non_upper_case_globals)]
 impl ContentType {
+    /// Change Cipher Spec (used in DTLS 1.2, compatibility-only in 1.3).
+    pub const ChangeCipherSpec: Self = Self(20);
+    /// Alert message.
+    pub const Alert: Self = Self(21);
+    /// Handshake message.
+    pub const Handshake: Self = Self(22);
+    /// Application data.
+    pub const ApplicationData: Self = Self(23);
+    /// ACK (DTLS 1.3 only, RFC 9147 Section 7).
+    pub const Ack: Self = Self(26);
+
     /// Convert a u8 value to a `ContentType`.
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            20 => ContentType::ChangeCipherSpec,
-            21 => ContentType::Alert,
-            22 => ContentType::Handshake,
-            23 => ContentType::ApplicationData,
-            26 => ContentType::Ack,
-            _ => ContentType::Unknown(value),
-        }
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
     /// Convert this `ContentType` to its u8 value.
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            ContentType::ChangeCipherSpec => 20,
-            ContentType::Alert => 21,
-            ContentType::Handshake => 22,
-            ContentType::ApplicationData => 23,
-            ContentType::Ack => 26,
-            ContentType::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    /// Returns true if this is not a known DTLS record content type.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(*self, Self(20..=23 | 26))
     }
 
     /// Parse a `ContentType` from wire format.
     pub fn parse(input: &[u8]) -> IResult<&[u8], ContentType> {
         let (input, byte) = be_u8(input)?;
         Ok((input, Self::from_u8(byte)))
+    }
+}
+
+impl fmt::Debug for ContentType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            ContentType::ChangeCipherSpec => f.write_str("ChangeCipherSpec"),
+            ContentType::Alert => f.write_str("Alert"),
+            ContentType::Handshake => f.write_str("Handshake"),
+            ContentType::ApplicationData => f.write_str("ApplicationData"),
+            ContentType::Ack => f.write_str("Ack"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
     }
 }
 
@@ -535,83 +523,56 @@ impl PartialOrd for Sequence {
 /// In TLS 1.3, signature schemes combine the signature algorithm with the
 /// hash algorithm into a single identifier, unlike TLS 1.2 where they were
 /// separate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-#[non_exhaustive]
-pub enum SignatureScheme {
-    /// ECDSA with P-256 and SHA-256.
-    ECDSA_SECP256R1_SHA256,
-    /// ECDSA with P-384 and SHA-384.
-    ECDSA_SECP384R1_SHA384,
-    /// ECDSA with P-521 and SHA-512.
-    ECDSA_SECP521R1_SHA512,
-    /// Ed25519.
-    ED25519,
-    /// Ed448.
-    ED448,
-    /// RSA-PSS with SHA-256 (rsaEncryption OID).
-    RSA_PSS_RSAE_SHA256,
-    /// RSA-PSS with SHA-384 (rsaEncryption OID).
-    RSA_PSS_RSAE_SHA384,
-    /// RSA-PSS with SHA-512 (rsaEncryption OID).
-    RSA_PSS_RSAE_SHA512,
-    /// RSA-PSS with SHA-256 (id-rsassa-pss OID).
-    RSA_PSS_PSS_SHA256,
-    /// RSA-PSS with SHA-384 (id-rsassa-pss OID).
-    RSA_PSS_PSS_SHA384,
-    /// RSA-PSS with SHA-512 (id-rsassa-pss OID).
-    RSA_PSS_PSS_SHA512,
-    /// RSA PKCS#1 v1.5 with SHA-256 (legacy).
-    RSA_PKCS1_SHA256,
-    /// RSA PKCS#1 v1.5 with SHA-384 (legacy).
-    RSA_PKCS1_SHA384,
-    /// RSA PKCS#1 v1.5 with SHA-512 (legacy).
-    RSA_PKCS1_SHA512,
-    /// Unknown or unsupported signature scheme.
-    Unknown(u16),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct SignatureScheme(u16);
 
 impl SignatureScheme {
+    /// ECDSA with P-256 and SHA-256.
+    pub const ECDSA_SECP256R1_SHA256: Self = Self(0x0403);
+    /// ECDSA with P-384 and SHA-384.
+    pub const ECDSA_SECP384R1_SHA384: Self = Self(0x0503);
+    /// ECDSA with P-521 and SHA-512.
+    pub const ECDSA_SECP521R1_SHA512: Self = Self(0x0603);
+    /// Ed25519.
+    pub const ED25519: Self = Self(0x0807);
+    /// Ed448.
+    pub const ED448: Self = Self(0x0808);
+    /// RSA-PSS with SHA-256 (rsaEncryption OID).
+    pub const RSA_PSS_RSAE_SHA256: Self = Self(0x0804);
+    /// RSA-PSS with SHA-384 (rsaEncryption OID).
+    pub const RSA_PSS_RSAE_SHA384: Self = Self(0x0805);
+    /// RSA-PSS with SHA-512 (rsaEncryption OID).
+    pub const RSA_PSS_RSAE_SHA512: Self = Self(0x0806);
+    /// RSA-PSS with SHA-256 (id-rsassa-pss OID).
+    pub const RSA_PSS_PSS_SHA256: Self = Self(0x0809);
+    /// RSA-PSS with SHA-384 (id-rsassa-pss OID).
+    pub const RSA_PSS_PSS_SHA384: Self = Self(0x080a);
+    /// RSA-PSS with SHA-512 (id-rsassa-pss OID).
+    pub const RSA_PSS_PSS_SHA512: Self = Self(0x080b);
+    /// RSA PKCS#1 v1.5 with SHA-256 (legacy).
+    pub const RSA_PKCS1_SHA256: Self = Self(0x0401);
+    /// RSA PKCS#1 v1.5 with SHA-384 (legacy).
+    pub const RSA_PKCS1_SHA384: Self = Self(0x0501);
+    /// RSA PKCS#1 v1.5 with SHA-512 (legacy).
+    pub const RSA_PKCS1_SHA512: Self = Self(0x0601);
+
     /// Convert a wire format u16 value to a `SignatureScheme`.
-    pub fn from_u16(value: u16) -> Self {
-        match value {
-            0x0403 => SignatureScheme::ECDSA_SECP256R1_SHA256,
-            0x0503 => SignatureScheme::ECDSA_SECP384R1_SHA384,
-            0x0603 => SignatureScheme::ECDSA_SECP521R1_SHA512,
-            0x0807 => SignatureScheme::ED25519,
-            0x0808 => SignatureScheme::ED448,
-            0x0804 => SignatureScheme::RSA_PSS_RSAE_SHA256,
-            0x0805 => SignatureScheme::RSA_PSS_RSAE_SHA384,
-            0x0806 => SignatureScheme::RSA_PSS_RSAE_SHA512,
-            0x0809 => SignatureScheme::RSA_PSS_PSS_SHA256,
-            0x080a => SignatureScheme::RSA_PSS_PSS_SHA384,
-            0x080b => SignatureScheme::RSA_PSS_PSS_SHA512,
-            0x0401 => SignatureScheme::RSA_PKCS1_SHA256,
-            0x0501 => SignatureScheme::RSA_PKCS1_SHA384,
-            0x0601 => SignatureScheme::RSA_PKCS1_SHA512,
-            _ => SignatureScheme::Unknown(value),
-        }
+    pub const fn from_u16(value: u16) -> Self {
+        Self(value)
     }
 
     /// Convert this `SignatureScheme` to its wire format u16 value.
-    pub fn as_u16(&self) -> u16 {
-        match self {
-            SignatureScheme::ECDSA_SECP256R1_SHA256 => 0x0403,
-            SignatureScheme::ECDSA_SECP384R1_SHA384 => 0x0503,
-            SignatureScheme::ECDSA_SECP521R1_SHA512 => 0x0603,
-            SignatureScheme::ED25519 => 0x0807,
-            SignatureScheme::ED448 => 0x0808,
-            SignatureScheme::RSA_PSS_RSAE_SHA256 => 0x0804,
-            SignatureScheme::RSA_PSS_RSAE_SHA384 => 0x0805,
-            SignatureScheme::RSA_PSS_RSAE_SHA512 => 0x0806,
-            SignatureScheme::RSA_PSS_PSS_SHA256 => 0x0809,
-            SignatureScheme::RSA_PSS_PSS_SHA384 => 0x080a,
-            SignatureScheme::RSA_PSS_PSS_SHA512 => 0x080b,
-            SignatureScheme::RSA_PKCS1_SHA256 => 0x0401,
-            SignatureScheme::RSA_PKCS1_SHA384 => 0x0501,
-            SignatureScheme::RSA_PKCS1_SHA512 => 0x0601,
-            SignatureScheme::Unknown(value) => *value,
-        }
+    pub const fn as_u16(&self) -> u16 {
+        self.0
+    }
+
+    /// Returns true if this is not a known TLS signature scheme wire value.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(
+            *self,
+            Self(0x0401 | 0x0403 | 0x0501 | 0x0503 | 0x0601 | 0x0603 | 0x0804..=0x080b)
+        )
     }
 
     /// Parse a `SignatureScheme` from wire format.
@@ -626,7 +587,7 @@ impl SignatureScheme {
     }
 
     /// All recognized signature schemes (every non-`Unknown` variant).
-    pub fn all() -> &'static [SignatureScheme] {
+    pub const fn all() -> &'static [SignatureScheme] {
         &[
             SignatureScheme::ECDSA_SECP256R1_SHA256,
             SignatureScheme::ECDSA_SECP384R1_SHA384,
@@ -663,7 +624,7 @@ impl SignatureScheme {
     /// In DTLS 1.3, ECDSA signature schemes encode the expected curve.
     /// Returns `None` for non-ECDSA schemes.
     pub fn named_group(&self) -> Option<NamedGroup> {
-        match self {
+        match *self {
             SignatureScheme::ECDSA_SECP256R1_SHA256 => Some(NamedGroup::Secp256r1),
             SignatureScheme::ECDSA_SECP384R1_SHA384 => Some(NamedGroup::Secp384r1),
             _ => None,
@@ -672,7 +633,7 @@ impl SignatureScheme {
 
     /// Returns the hash algorithm associated with this signature scheme.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
-        match self {
+        match *self {
             SignatureScheme::ECDSA_SECP256R1_SHA256
             | SignatureScheme::RSA_PSS_RSAE_SHA256
             | SignatureScheme::RSA_PSS_PSS_SHA256
@@ -687,7 +648,29 @@ impl SignatureScheme {
             | SignatureScheme::RSA_PKCS1_SHA512 => HashAlgorithm::SHA512,
             // Ed25519 and Ed448 have intrinsic hash algorithms
             SignatureScheme::ED25519 | SignatureScheme::ED448 => HashAlgorithm::None,
-            SignatureScheme::Unknown(_) => HashAlgorithm::Unknown(0),
+            _ => HashAlgorithm::UNKNOWN_DERIVED,
+        }
+    }
+}
+
+impl fmt::Debug for SignatureScheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            SignatureScheme::ECDSA_SECP256R1_SHA256 => f.write_str("ECDSA_SECP256R1_SHA256"),
+            SignatureScheme::ECDSA_SECP384R1_SHA384 => f.write_str("ECDSA_SECP384R1_SHA384"),
+            SignatureScheme::ECDSA_SECP521R1_SHA512 => f.write_str("ECDSA_SECP521R1_SHA512"),
+            SignatureScheme::ED25519 => f.write_str("ED25519"),
+            SignatureScheme::ED448 => f.write_str("ED448"),
+            SignatureScheme::RSA_PSS_RSAE_SHA256 => f.write_str("RSA_PSS_RSAE_SHA256"),
+            SignatureScheme::RSA_PSS_RSAE_SHA384 => f.write_str("RSA_PSS_RSAE_SHA384"),
+            SignatureScheme::RSA_PSS_RSAE_SHA512 => f.write_str("RSA_PSS_RSAE_SHA512"),
+            SignatureScheme::RSA_PSS_PSS_SHA256 => f.write_str("RSA_PSS_PSS_SHA256"),
+            SignatureScheme::RSA_PSS_PSS_SHA384 => f.write_str("RSA_PSS_PSS_SHA384"),
+            SignatureScheme::RSA_PSS_PSS_SHA512 => f.write_str("RSA_PSS_PSS_SHA512"),
+            SignatureScheme::RSA_PKCS1_SHA256 => f.write_str("RSA_PKCS1_SHA256"),
+            SignatureScheme::RSA_PKCS1_SHA384 => f.write_str("RSA_PKCS1_SHA384"),
+            SignatureScheme::RSA_PKCS1_SHA512 => f.write_str("RSA_PKCS1_SHA512"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
         }
     }
 }
@@ -700,47 +683,35 @@ impl SignatureScheme {
 ///
 /// Unlike DTLS 1.2, TLS 1.3 cipher suites only specify the AEAD algorithm
 /// and hash function. Key exchange is negotiated separately via key_share.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-#[non_exhaustive]
-pub enum Dtls13CipherSuite {
-    /// TLS_AES_128_GCM_SHA256.
-    AES_128_GCM_SHA256,
-    /// TLS_AES_256_GCM_SHA384.
-    AES_256_GCM_SHA384,
-    /// TLS_CHACHA20_POLY1305_SHA256.
-    CHACHA20_POLY1305_SHA256,
-    /// TLS_AES_128_CCM_SHA256.
-    AES_128_CCM_SHA256,
-    /// TLS_AES_128_CCM_8_SHA256 (shorter tag, for constrained devices).
-    AES_128_CCM_8_SHA256,
-    /// Unknown or unsupported cipher suite.
-    Unknown(u16),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Dtls13CipherSuite(u16);
 
 impl Dtls13CipherSuite {
+    /// TLS_AES_128_GCM_SHA256.
+    pub const AES_128_GCM_SHA256: Self = Self(0x1301);
+    /// TLS_AES_256_GCM_SHA384.
+    pub const AES_256_GCM_SHA384: Self = Self(0x1302);
+    /// TLS_CHACHA20_POLY1305_SHA256.
+    pub const CHACHA20_POLY1305_SHA256: Self = Self(0x1303);
+    /// TLS_AES_128_CCM_SHA256.
+    pub const AES_128_CCM_SHA256: Self = Self(0x1304);
+    /// TLS_AES_128_CCM_8_SHA256 (shorter tag, for constrained devices).
+    pub const AES_128_CCM_8_SHA256: Self = Self(0x1305);
+
     /// Convert a wire format u16 value to a `Dtls13CipherSuite`.
-    pub fn from_u16(value: u16) -> Self {
-        match value {
-            0x1301 => Dtls13CipherSuite::AES_128_GCM_SHA256,
-            0x1302 => Dtls13CipherSuite::AES_256_GCM_SHA384,
-            0x1303 => Dtls13CipherSuite::CHACHA20_POLY1305_SHA256,
-            0x1304 => Dtls13CipherSuite::AES_128_CCM_SHA256,
-            0x1305 => Dtls13CipherSuite::AES_128_CCM_8_SHA256,
-            _ => Dtls13CipherSuite::Unknown(value),
-        }
+    pub const fn from_u16(value: u16) -> Self {
+        Self(value)
     }
 
     /// Convert this `Dtls13CipherSuite` to its wire format u16 value.
-    pub fn as_u16(&self) -> u16 {
-        match self {
-            Dtls13CipherSuite::AES_128_GCM_SHA256 => 0x1301,
-            Dtls13CipherSuite::AES_256_GCM_SHA384 => 0x1302,
-            Dtls13CipherSuite::CHACHA20_POLY1305_SHA256 => 0x1303,
-            Dtls13CipherSuite::AES_128_CCM_SHA256 => 0x1304,
-            Dtls13CipherSuite::AES_128_CCM_8_SHA256 => 0x1305,
-            Dtls13CipherSuite::Unknown(value) => *value,
-        }
+    pub const fn as_u16(&self) -> u16 {
+        self.0
+    }
+
+    /// Returns true if this is not a known DTLS 1.3 cipher suite wire value.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(*self, Self(0x1301..=0x1305))
     }
 
     /// Parse a `Dtls13CipherSuite` from wire format.
@@ -751,13 +722,13 @@ impl Dtls13CipherSuite {
 
     /// Returns the hash algorithm used by this cipher suite.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
-        match self {
+        match *self {
             Dtls13CipherSuite::AES_128_GCM_SHA256
             | Dtls13CipherSuite::CHACHA20_POLY1305_SHA256
             | Dtls13CipherSuite::AES_128_CCM_SHA256
             | Dtls13CipherSuite::AES_128_CCM_8_SHA256 => HashAlgorithm::SHA256,
             Dtls13CipherSuite::AES_256_GCM_SHA384 => HashAlgorithm::SHA384,
-            Dtls13CipherSuite::Unknown(_) => HashAlgorithm::Unknown(0),
+            _ => HashAlgorithm::UNKNOWN_DERIVED,
         }
     }
 
@@ -767,7 +738,7 @@ impl Dtls13CipherSuite {
     }
 
     /// All recognized DTLS 1.3 cipher suites (every non-`Unknown` variant).
-    pub fn all() -> &'static [Dtls13CipherSuite] {
+    pub const fn all() -> &'static [Dtls13CipherSuite] {
         &[
             Dtls13CipherSuite::AES_128_GCM_SHA256,
             Dtls13CipherSuite::AES_256_GCM_SHA384,
@@ -778,7 +749,7 @@ impl Dtls13CipherSuite {
     }
 
     /// Supported DTLS 1.3 cipher suites in preference order.
-    pub fn supported() -> &'static [Dtls13CipherSuite] {
+    pub const fn supported() -> &'static [Dtls13CipherSuite] {
         &[
             Dtls13CipherSuite::AES_128_GCM_SHA256,
             Dtls13CipherSuite::AES_256_GCM_SHA384,
@@ -792,6 +763,19 @@ impl Dtls13CipherSuite {
     }
 }
 
+impl fmt::Debug for Dtls13CipherSuite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Dtls13CipherSuite::AES_128_GCM_SHA256 => f.write_str("AES_128_GCM_SHA256"),
+            Dtls13CipherSuite::AES_256_GCM_SHA384 => f.write_str("AES_256_GCM_SHA384"),
+            Dtls13CipherSuite::CHACHA20_POLY1305_SHA256 => f.write_str("CHACHA20_POLY1305_SHA256"),
+            Dtls13CipherSuite::AES_128_CCM_SHA256 => f.write_str("AES_128_CCM_SHA256"),
+            Dtls13CipherSuite::AES_128_CCM_8_SHA256 => f.write_str("AES_128_CCM_8_SHA256"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
+    }
+}
+
 // ============================================================================
 // Protocol Version
 // ============================================================================
@@ -799,50 +783,53 @@ impl Dtls13CipherSuite {
 /// DTLS protocol version identifiers.
 ///
 /// Used in record headers and handshake messages for both DTLS 1.2 and 1.3.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProtocolVersion {
-    /// DTLS 1.0.
-    DTLS1_0,
-    /// DTLS 1.2.
-    DTLS1_2,
-    /// DTLS 1.3.
-    DTLS1_3,
-    /// Unknown protocol version.
-    Unknown(u16),
-}
-
-impl Default for ProtocolVersion {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct ProtocolVersion(u16);
 
 impl ProtocolVersion {
+    /// DTLS 1.0.
+    pub const DTLS1_0: Self = Self(0xFEFF);
+    /// DTLS 1.2.
+    pub const DTLS1_2: Self = Self(0xFEFD);
+    /// DTLS 1.3.
+    pub const DTLS1_3: Self = Self(0xFEFC);
+
+    /// Convert a wire format u16 value to a `ProtocolVersion`.
+    pub const fn from_u16(value: u16) -> Self {
+        Self(value)
+    }
+
     /// Convert this `ProtocolVersion` to its wire format u16 value.
-    pub fn as_u16(&self) -> u16 {
-        match self {
-            ProtocolVersion::DTLS1_0 => 0xFEFF,
-            ProtocolVersion::DTLS1_2 => 0xFEFD,
-            ProtocolVersion::DTLS1_3 => 0xFEFC,
-            ProtocolVersion::Unknown(value) => *value,
-        }
+    pub const fn as_u16(&self) -> u16 {
+        self.0
+    }
+
+    /// Returns true if this is not a known DTLS protocol version wire value.
+    pub const fn is_unknown(&self) -> bool {
+        !matches!(*self, Self(0xFEFF | 0xFEFD | 0xFEFC))
     }
 
     /// Parse a `ProtocolVersion` from wire format.
     pub fn parse(input: &[u8]) -> IResult<&[u8], ProtocolVersion> {
         let (input, version) = be_u16(input)?;
-        let protocol_version = match version {
-            0xFEFF => ProtocolVersion::DTLS1_0,
-            0xFEFD => ProtocolVersion::DTLS1_2,
-            0xFEFC => ProtocolVersion::DTLS1_3,
-            _ => ProtocolVersion::Unknown(version),
-        };
-        Ok((input, protocol_version))
+        Ok((input, ProtocolVersion::from_u16(version)))
     }
 
     /// Serialize this `ProtocolVersion` to wire format.
     pub fn serialize(&self, output: &mut Buf) {
         output.extend_from_slice(&self.as_u16().to_be_bytes());
+    }
+}
+
+impl fmt::Debug for ProtocolVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            ProtocolVersion::DTLS1_0 => f.write_str("DTLS1_0"),
+            ProtocolVersion::DTLS1_2 => f.write_str("DTLS1_2"),
+            ProtocolVersion::DTLS1_3 => f.write_str("DTLS1_3"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
     }
 }
 
@@ -854,30 +841,26 @@ impl ProtocolVersion {
 ///
 /// Used in ClientHello/ServerHello for both DTLS 1.2 and 1.3.
 /// TLS 1.3 only uses Null compression but includes it for compatibility.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompressionMethod {
-    /// No compression.
-    Null,
-    /// DEFLATE compression.
-    Deflate,
-    /// Unknown compression method.
-    Unknown(u8),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CompressionMethod(u8);
 
 impl Default for CompressionMethod {
     fn default() -> Self {
-        Self::Unknown(0)
+        Self::Null
     }
 }
 
+#[allow(non_upper_case_globals)]
 impl CompressionMethod {
+    /// No compression.
+    pub const Null: Self = Self(0x00);
+    /// DEFLATE compression.
+    pub const Deflate: Self = Self(0x01);
+
     /// Convert a u8 value to a `CompressionMethod`.
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            0x00 => CompressionMethod::Null,
-            0x01 => CompressionMethod::Deflate,
-            _ => CompressionMethod::Unknown(value),
-        }
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
     /// Returns true if this compression method is supported by this implementation.
@@ -900,12 +883,13 @@ impl CompressionMethod {
     }
 
     /// Convert this `CompressionMethod` to its u8 value.
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            CompressionMethod::Null => 0x00,
-            CompressionMethod::Deflate => 0x01,
-            CompressionMethod::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    /// Returns true if this is not a known TLS compression method wire value.
+    pub const fn is_unknown(&self) -> bool {
+        self.0 > Self::Deflate.0
     }
 
     /// Parse a `CompressionMethod` from wire format.
@@ -915,9 +899,304 @@ impl CompressionMethod {
     }
 }
 
+impl fmt::Debug for CompressionMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            CompressionMethod::Null => f.write_str("Null"),
+            CompressionMethod::Deflate => f.write_str("Deflate"),
+            _ => f.debug_tuple("Unknown").field(&self.0).finish(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_group_newtype_shape() {
+        assert_eq!(std::mem::size_of::<NamedGroup>(), 2);
+        assert_eq!(NamedGroup::default().as_u16(), 0);
+        assert!(NamedGroup::default().is_unknown());
+    }
+
+    #[test]
+    fn named_group_wire_roundtrip() {
+        for group in NamedGroup::all() {
+            assert_eq!(NamedGroup::from_u16(group.as_u16()), *group);
+            assert!(!group.is_unknown());
+        }
+
+        let unknown = NamedGroup::from_u16(0xFFFF);
+        assert_eq!(unknown.as_u16(), 0xFFFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn named_group_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", NamedGroup::Secp256r1), "Secp256r1");
+        assert_eq!(format!("{:?}", NamedGroup::X25519), "X25519");
+        assert_eq!(
+            format!("{:?}", NamedGroup::from_u16(0xFFFF)),
+            "Unknown(65535)"
+        );
+    }
+
+    #[test]
+    fn hash_algorithm_newtype_shape() {
+        assert_eq!(std::mem::size_of::<HashAlgorithm>(), 1);
+        assert_eq!(HashAlgorithm::default().as_u8(), 0);
+        assert_eq!(HashAlgorithm::default(), HashAlgorithm::None);
+    }
+
+    #[test]
+    fn hash_algorithm_wire_roundtrip() {
+        let known = [
+            (0, HashAlgorithm::None),
+            (1, HashAlgorithm::MD5),
+            (2, HashAlgorithm::SHA1),
+            (3, HashAlgorithm::SHA224),
+            (4, HashAlgorithm::SHA256),
+            (5, HashAlgorithm::SHA384),
+            (6, HashAlgorithm::SHA512),
+        ];
+
+        for (wire, algorithm) in known {
+            assert_eq!(HashAlgorithm::from_u8(wire), algorithm);
+            assert_eq!(algorithm.as_u8(), wire);
+            assert!(!algorithm.is_unknown());
+        }
+
+        let unknown = HashAlgorithm::from_u8(7);
+        assert_eq!(unknown.as_u8(), 7);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn hash_algorithm_output_len() {
+        assert_eq!(HashAlgorithm::None.output_len(), 0);
+        assert_eq!(HashAlgorithm::MD5.output_len(), 16);
+        assert_eq!(HashAlgorithm::SHA1.output_len(), 20);
+        assert_eq!(HashAlgorithm::SHA224.output_len(), 28);
+        assert_eq!(HashAlgorithm::SHA256.output_len(), 32);
+        assert_eq!(HashAlgorithm::SHA384.output_len(), 48);
+        assert_eq!(HashAlgorithm::SHA512.output_len(), 64);
+        assert_eq!(HashAlgorithm::from_u8(7).output_len(), 0);
+    }
+
+    #[test]
+    fn hash_algorithm_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", HashAlgorithm::None), "None");
+        assert_eq!(format!("{:?}", HashAlgorithm::SHA256), "SHA256");
+        assert_eq!(format!("{:?}", HashAlgorithm::from_u8(7)), "Unknown(7)");
+    }
+
+    #[test]
+    fn signature_algorithm_newtype_shape() {
+        assert_eq!(std::mem::size_of::<SignatureAlgorithm>(), 1);
+        assert_eq!(SignatureAlgorithm::default().as_u8(), 0);
+        assert_eq!(SignatureAlgorithm::default(), SignatureAlgorithm::Anonymous);
+    }
+
+    #[test]
+    fn signature_algorithm_wire_roundtrip() {
+        let known = [
+            (0, SignatureAlgorithm::Anonymous),
+            (1, SignatureAlgorithm::RSA),
+            (2, SignatureAlgorithm::DSA),
+            (3, SignatureAlgorithm::ECDSA),
+        ];
+
+        for (wire, algorithm) in known {
+            assert_eq!(SignatureAlgorithm::from_u8(wire), algorithm);
+            assert_eq!(algorithm.as_u8(), wire);
+            assert!(!algorithm.is_unknown());
+        }
+
+        let unknown = SignatureAlgorithm::from_u8(4);
+        assert_eq!(unknown.as_u8(), 4);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn signature_algorithm_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", SignatureAlgorithm::Anonymous), "Anonymous");
+        assert_eq!(format!("{:?}", SignatureAlgorithm::ECDSA), "ECDSA");
+        assert_eq!(
+            format!("{:?}", SignatureAlgorithm::from_u8(4)),
+            "Unknown(4)"
+        );
+    }
+
+    #[test]
+    fn compression_method_newtype_shape() {
+        assert_eq!(std::mem::size_of::<CompressionMethod>(), 1);
+        assert_eq!(CompressionMethod::default().as_u8(), 0);
+        assert_eq!(CompressionMethod::default(), CompressionMethod::Null);
+    }
+
+    #[test]
+    fn compression_method_wire_roundtrip() {
+        let known = [
+            (0x00, CompressionMethod::Null),
+            (0x01, CompressionMethod::Deflate),
+        ];
+
+        for (wire, method) in known {
+            assert_eq!(CompressionMethod::from_u8(wire), method);
+            assert_eq!(method.as_u8(), wire);
+            assert!(!method.is_unknown());
+        }
+
+        let unknown = CompressionMethod::from_u8(0x02);
+        assert_eq!(unknown.as_u8(), 0x02);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn compression_method_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", CompressionMethod::Null), "Null");
+        assert_eq!(format!("{:?}", CompressionMethod::Deflate), "Deflate");
+        assert_eq!(
+            format!("{:?}", CompressionMethod::from_u8(0x02)),
+            "Unknown(2)"
+        );
+    }
+
+    #[test]
+    fn content_type_newtype_shape() {
+        assert_eq!(std::mem::size_of::<ContentType>(), 1);
+        assert_eq!(ContentType::default().as_u8(), 0);
+        assert!(ContentType::default().is_unknown());
+    }
+
+    #[test]
+    fn content_type_wire_roundtrip() {
+        let known = [
+            (20, ContentType::ChangeCipherSpec),
+            (21, ContentType::Alert),
+            (22, ContentType::Handshake),
+            (23, ContentType::ApplicationData),
+            (26, ContentType::Ack),
+        ];
+
+        for (wire, content_type) in known {
+            assert_eq!(ContentType::from_u8(wire), content_type);
+            assert_eq!(content_type.as_u8(), wire);
+            assert!(!content_type.is_unknown());
+        }
+
+        let unknown = ContentType::from_u8(24);
+        assert_eq!(unknown.as_u8(), 24);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn content_type_debug_stays_enum_like() {
+        assert_eq!(
+            format!("{:?}", ContentType::ChangeCipherSpec),
+            "ChangeCipherSpec"
+        );
+        assert_eq!(format!("{:?}", ContentType::Handshake), "Handshake");
+        assert_eq!(format!("{:?}", ContentType::from_u8(24)), "Unknown(24)");
+    }
+
+    #[test]
+    fn signature_scheme_newtype_shape() {
+        assert_eq!(std::mem::size_of::<SignatureScheme>(), 2);
+        assert_eq!(SignatureScheme::default().as_u16(), 0);
+        assert!(SignatureScheme::default().is_unknown());
+    }
+
+    #[test]
+    fn signature_scheme_wire_roundtrip() {
+        for scheme in SignatureScheme::all() {
+            assert_eq!(SignatureScheme::from_u16(scheme.as_u16()), *scheme);
+            assert!(!scheme.is_unknown());
+        }
+
+        let unknown = SignatureScheme::from_u16(0xFFFF);
+        assert_eq!(unknown.as_u16(), 0xFFFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn signature_scheme_debug_stays_enum_like() {
+        assert_eq!(
+            format!("{:?}", SignatureScheme::ECDSA_SECP256R1_SHA256),
+            "ECDSA_SECP256R1_SHA256"
+        );
+        assert_eq!(
+            format!("{:?}", SignatureScheme::from_u16(0xFFFF)),
+            "Unknown(65535)"
+        );
+    }
+
+    #[test]
+    fn dtls13_cipher_suite_newtype_shape() {
+        assert_eq!(std::mem::size_of::<Dtls13CipherSuite>(), 2);
+        assert_eq!(Dtls13CipherSuite::default().as_u16(), 0);
+        assert!(Dtls13CipherSuite::default().is_unknown());
+    }
+
+    #[test]
+    fn dtls13_cipher_suite_wire_roundtrip() {
+        for suite in Dtls13CipherSuite::all() {
+            assert_eq!(Dtls13CipherSuite::from_u16(suite.as_u16()), *suite);
+            assert!(!suite.is_unknown());
+        }
+
+        let unknown = Dtls13CipherSuite::from_u16(0xFFFF);
+        assert_eq!(unknown.as_u16(), 0xFFFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn dtls13_cipher_suite_debug_stays_enum_like() {
+        assert_eq!(
+            format!("{:?}", Dtls13CipherSuite::AES_128_GCM_SHA256),
+            "AES_128_GCM_SHA256"
+        );
+        assert_eq!(
+            format!("{:?}", Dtls13CipherSuite::from_u16(0xFFFF)),
+            "Unknown(65535)"
+        );
+    }
+
+    #[test]
+    fn protocol_version_newtype_shape() {
+        assert_eq!(std::mem::size_of::<ProtocolVersion>(), 2);
+        assert_eq!(ProtocolVersion::default().as_u16(), 0);
+        assert!(ProtocolVersion::default().is_unknown());
+    }
+
+    #[test]
+    fn protocol_version_wire_roundtrip() {
+        let known = [
+            (0xFEFF, ProtocolVersion::DTLS1_0),
+            (0xFEFD, ProtocolVersion::DTLS1_2),
+            (0xFEFC, ProtocolVersion::DTLS1_3),
+        ];
+
+        for (wire, version) in known {
+            assert_eq!(ProtocolVersion::from_u16(wire), version);
+            assert_eq!(version.as_u16(), wire);
+            assert!(!version.is_unknown());
+        }
+
+        let unknown = ProtocolVersion::from_u16(0xFFFF);
+        assert_eq!(unknown.as_u16(), 0xFFFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn protocol_version_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", ProtocolVersion::DTLS1_2), "DTLS1_2");
+        assert_eq!(
+            format!("{:?}", ProtocolVersion::from_u16(0xFFFF)),
+            "Unknown(65535)"
+        );
+    }
 
     #[test]
     fn random_parse() {
@@ -976,7 +1255,7 @@ mod tests {
         assert_eq!(SignatureScheme::RSA_PSS_RSAE_SHA256.named_group(), None);
         assert_eq!(SignatureScheme::ED25519.named_group(), None);
         assert_eq!(SignatureScheme::ECDSA_SECP521R1_SHA512.named_group(), None);
-        assert_eq!(SignatureScheme::Unknown(0xFFFF).named_group(), None);
+        assert_eq!(SignatureScheme::from_u16(0xFFFF).named_group(), None);
     }
 
     #[test]

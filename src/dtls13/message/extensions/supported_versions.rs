@@ -29,7 +29,7 @@ impl SupportedVersionsClientHello {
         let mut rest = versions_data;
         while !rest.is_empty() {
             let (r, version) = ProtocolVersion::parse(rest)?;
-            if !matches!(version, ProtocolVersion::Unknown(_)) {
+            if !version.is_unknown() {
                 versions
                     .try_push(version)
                     .map_err(|_| Err::Failure(Error::new(rest, ErrorKind::LengthValue)))?;

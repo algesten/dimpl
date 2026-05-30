@@ -1,7 +1,7 @@
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
 use nom::{IResult, bytes::complete::take, number::complete::be_u16};
-use std::ops::Range;
+use std::{fmt, ops::Range};
 
 pub type ExtensionVec = ArrayVec<Extension, { ExtensionType::supported().len() }>;
 
@@ -51,142 +51,64 @@ impl Extension {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExtensionType {
-    ServerName,
-    MaxFragmentLength,
-    ClientCertificateUrl,
-    TrustedCaKeys,
-    TruncatedHmac,
-    StatusRequest,
-    UserMapping,
-    ClientAuthz,
-    ServerAuthz,
-    CertType,
-    SupportedGroups,
-    EcPointFormats,
-    Srp,
-    SignatureAlgorithms,
-    UseSrtp,
-    Heartbeat,
-    ApplicationLayerProtocolNegotiation,
-    StatusRequestV2,
-    SignedCertificateTimestamp,
-    ClientCertificateType,
-    ServerCertificateType,
-    Padding,
-    EncryptThenMac,
-    ExtendedMasterSecret,
-    TokenBinding,
-    CachedInfo,
-    SessionTicket,
-    PreSharedKey,
-    EarlyData,
-    SupportedVersions,
-    Cookie,
-    PskKeyExchangeModes,
-    CertificateAuthorities,
-    OidFilters,
-    PostHandshakeAuth,
-    SignatureAlgorithmsCert,
-    KeyShare,
-    RenegotiationInfo,
-    Unknown(u16),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct ExtensionType(u16);
 
-impl Default for ExtensionType {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
-
+#[allow(non_upper_case_globals)]
 impl ExtensionType {
-    pub fn from_u16(value: u16) -> Self {
-        match value {
-            0x0000 => ExtensionType::ServerName,
-            0x0001 => ExtensionType::MaxFragmentLength,
-            0x0002 => ExtensionType::ClientCertificateUrl,
-            0x0003 => ExtensionType::TrustedCaKeys,
-            0x0004 => ExtensionType::TruncatedHmac,
-            0x0005 => ExtensionType::StatusRequest,
-            0x0006 => ExtensionType::UserMapping,
-            0x0007 => ExtensionType::ClientAuthz,
-            0x0008 => ExtensionType::ServerAuthz,
-            0x0009 => ExtensionType::CertType,
-            0x000A => ExtensionType::SupportedGroups,
-            0x000B => ExtensionType::EcPointFormats,
-            0x000C => ExtensionType::Srp,
-            0x000D => ExtensionType::SignatureAlgorithms,
-            0x000E => ExtensionType::UseSrtp,
-            0x000F => ExtensionType::Heartbeat,
-            0x0010 => ExtensionType::ApplicationLayerProtocolNegotiation,
-            0x0011 => ExtensionType::StatusRequestV2,
-            0x0012 => ExtensionType::SignedCertificateTimestamp,
-            0x0013 => ExtensionType::ClientCertificateType,
-            0x0014 => ExtensionType::ServerCertificateType,
-            0x0015 => ExtensionType::Padding,
-            0x0016 => ExtensionType::EncryptThenMac,
-            0x0017 => ExtensionType::ExtendedMasterSecret,
-            0x0018 => ExtensionType::TokenBinding,
-            0x0019 => ExtensionType::CachedInfo,
-            0x0023 => ExtensionType::SessionTicket,
-            0x0029 => ExtensionType::PreSharedKey,
-            0x002A => ExtensionType::EarlyData,
-            0x002B => ExtensionType::SupportedVersions,
-            0x002C => ExtensionType::Cookie,
-            0x002D => ExtensionType::PskKeyExchangeModes,
-            0x002F => ExtensionType::CertificateAuthorities,
-            0x0030 => ExtensionType::OidFilters,
-            0x0031 => ExtensionType::PostHandshakeAuth,
-            0x0032 => ExtensionType::SignatureAlgorithmsCert,
-            0x0033 => ExtensionType::KeyShare,
-            0xFF01 => ExtensionType::RenegotiationInfo,
-            _ => ExtensionType::Unknown(value),
-        }
+    pub const ServerName: Self = Self(0x0000);
+    pub const MaxFragmentLength: Self = Self(0x0001);
+    pub const ClientCertificateUrl: Self = Self(0x0002);
+    pub const TrustedCaKeys: Self = Self(0x0003);
+    pub const TruncatedHmac: Self = Self(0x0004);
+    pub const StatusRequest: Self = Self(0x0005);
+    pub const UserMapping: Self = Self(0x0006);
+    pub const ClientAuthz: Self = Self(0x0007);
+    pub const ServerAuthz: Self = Self(0x0008);
+    pub const CertType: Self = Self(0x0009);
+    pub const SupportedGroups: Self = Self(0x000A);
+    pub const EcPointFormats: Self = Self(0x000B);
+    pub const Srp: Self = Self(0x000C);
+    pub const SignatureAlgorithms: Self = Self(0x000D);
+    pub const UseSrtp: Self = Self(0x000E);
+    pub const Heartbeat: Self = Self(0x000F);
+    pub const ApplicationLayerProtocolNegotiation: Self = Self(0x0010);
+    pub const StatusRequestV2: Self = Self(0x0011);
+    pub const SignedCertificateTimestamp: Self = Self(0x0012);
+    pub const ClientCertificateType: Self = Self(0x0013);
+    pub const ServerCertificateType: Self = Self(0x0014);
+    pub const Padding: Self = Self(0x0015);
+    pub const EncryptThenMac: Self = Self(0x0016);
+    pub const ExtendedMasterSecret: Self = Self(0x0017);
+    pub const TokenBinding: Self = Self(0x0018);
+    pub const CachedInfo: Self = Self(0x0019);
+    pub const SessionTicket: Self = Self(0x0023);
+    pub const PreSharedKey: Self = Self(0x0029);
+    pub const EarlyData: Self = Self(0x002A);
+    pub const SupportedVersions: Self = Self(0x002B);
+    pub const Cookie: Self = Self(0x002C);
+    pub const PskKeyExchangeModes: Self = Self(0x002D);
+    pub const CertificateAuthorities: Self = Self(0x002F);
+    pub const OidFilters: Self = Self(0x0030);
+    pub const PostHandshakeAuth: Self = Self(0x0031);
+    pub const SignatureAlgorithmsCert: Self = Self(0x0032);
+    pub const KeyShare: Self = Self(0x0033);
+    pub const RenegotiationInfo: Self = Self(0xFF01);
+
+    pub const fn from_u16(value: u16) -> Self {
+        Self(value)
     }
 
-    pub fn as_u16(&self) -> u16 {
-        match self {
-            ExtensionType::ServerName => 0x0000,
-            ExtensionType::MaxFragmentLength => 0x0001,
-            ExtensionType::ClientCertificateUrl => 0x0002,
-            ExtensionType::TrustedCaKeys => 0x0003,
-            ExtensionType::TruncatedHmac => 0x0004,
-            ExtensionType::StatusRequest => 0x0005,
-            ExtensionType::UserMapping => 0x0006,
-            ExtensionType::ClientAuthz => 0x0007,
-            ExtensionType::ServerAuthz => 0x0008,
-            ExtensionType::CertType => 0x0009,
-            ExtensionType::SupportedGroups => 0x000A,
-            ExtensionType::EcPointFormats => 0x000B,
-            ExtensionType::Srp => 0x000C,
-            ExtensionType::SignatureAlgorithms => 0x000D,
-            ExtensionType::UseSrtp => 0x000E,
-            ExtensionType::Heartbeat => 0x000F,
-            ExtensionType::ApplicationLayerProtocolNegotiation => 0x0010,
-            ExtensionType::StatusRequestV2 => 0x0011,
-            ExtensionType::SignedCertificateTimestamp => 0x0012,
-            ExtensionType::ClientCertificateType => 0x0013,
-            ExtensionType::ServerCertificateType => 0x0014,
-            ExtensionType::Padding => 0x0015,
-            ExtensionType::EncryptThenMac => 0x0016,
-            ExtensionType::ExtendedMasterSecret => 0x0017,
-            ExtensionType::TokenBinding => 0x0018,
-            ExtensionType::CachedInfo => 0x0019,
-            ExtensionType::SessionTicket => 0x0023,
-            ExtensionType::PreSharedKey => 0x0029,
-            ExtensionType::EarlyData => 0x002A,
-            ExtensionType::SupportedVersions => 0x002B,
-            ExtensionType::Cookie => 0x002C,
-            ExtensionType::PskKeyExchangeModes => 0x002D,
-            ExtensionType::CertificateAuthorities => 0x002F,
-            ExtensionType::OidFilters => 0x0030,
-            ExtensionType::PostHandshakeAuth => 0x0031,
-            ExtensionType::SignatureAlgorithmsCert => 0x0032,
-            ExtensionType::KeyShare => 0x0033,
-            ExtensionType::RenegotiationInfo => 0xFF01,
-            ExtensionType::Unknown(value) => *value,
-        }
+    pub const fn as_u16(&self) -> u16 {
+        self.0
+    }
+
+    const fn is_unknown(&self) -> bool {
+        !matches!(
+            *self,
+            Self(0x0000..=0x0019 | 0x0023 | 0x0029..=0x002D | 0x002F..=0x0033 | 0xFF01)
+        )
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], ExtensionType> {
@@ -214,6 +136,60 @@ impl ExtensionType {
     }
 }
 
+impl fmt::Debug for ExtensionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_unknown() {
+            return f.debug_tuple("Unknown").field(&self.0).finish();
+        }
+
+        let name = match *self {
+            ExtensionType::ServerName => "ServerName",
+            ExtensionType::MaxFragmentLength => "MaxFragmentLength",
+            ExtensionType::ClientCertificateUrl => "ClientCertificateUrl",
+            ExtensionType::TrustedCaKeys => "TrustedCaKeys",
+            ExtensionType::TruncatedHmac => "TruncatedHmac",
+            ExtensionType::StatusRequest => "StatusRequest",
+            ExtensionType::UserMapping => "UserMapping",
+            ExtensionType::ClientAuthz => "ClientAuthz",
+            ExtensionType::ServerAuthz => "ServerAuthz",
+            ExtensionType::CertType => "CertType",
+            ExtensionType::SupportedGroups => "SupportedGroups",
+            ExtensionType::EcPointFormats => "EcPointFormats",
+            ExtensionType::Srp => "Srp",
+            ExtensionType::SignatureAlgorithms => "SignatureAlgorithms",
+            ExtensionType::UseSrtp => "UseSrtp",
+            ExtensionType::Heartbeat => "Heartbeat",
+            ExtensionType::ApplicationLayerProtocolNegotiation => {
+                "ApplicationLayerProtocolNegotiation"
+            }
+            ExtensionType::StatusRequestV2 => "StatusRequestV2",
+            ExtensionType::SignedCertificateTimestamp => "SignedCertificateTimestamp",
+            ExtensionType::ClientCertificateType => "ClientCertificateType",
+            ExtensionType::ServerCertificateType => "ServerCertificateType",
+            ExtensionType::Padding => "Padding",
+            ExtensionType::EncryptThenMac => "EncryptThenMac",
+            ExtensionType::ExtendedMasterSecret => "ExtendedMasterSecret",
+            ExtensionType::TokenBinding => "TokenBinding",
+            ExtensionType::CachedInfo => "CachedInfo",
+            ExtensionType::SessionTicket => "SessionTicket",
+            ExtensionType::PreSharedKey => "PreSharedKey",
+            ExtensionType::EarlyData => "EarlyData",
+            ExtensionType::SupportedVersions => "SupportedVersions",
+            ExtensionType::Cookie => "Cookie",
+            ExtensionType::PskKeyExchangeModes => "PskKeyExchangeModes",
+            ExtensionType::CertificateAuthorities => "CertificateAuthorities",
+            ExtensionType::OidFilters => "OidFilters",
+            ExtensionType::PostHandshakeAuth => "PostHandshakeAuth",
+            ExtensionType::SignatureAlgorithmsCert => "SignatureAlgorithmsCert",
+            ExtensionType::KeyShare => "KeyShare",
+            ExtensionType::RenegotiationInfo => "RenegotiationInfo",
+            _ => unreachable!("known DTLS 1.2 extension type missing Debug label"),
+        };
+
+        f.write_str(name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +200,40 @@ mod tests {
         0x00, 0x08, // Extension length
         0x00, 0x06, 0x00, 0x17, 0x00, 0x18, 0x00, 0x19, // Extension data
     ];
+
+    #[test]
+    fn extension_type_newtype_shape() {
+        assert_eq!(std::mem::size_of::<ExtensionType>(), 2);
+        assert_eq!(ExtensionType::default().as_u16(), 0);
+        assert_eq!(ExtensionType::default(), ExtensionType::ServerName);
+    }
+
+    #[test]
+    fn extension_type_wire_roundtrip() {
+        for extension_type in ExtensionType::supported() {
+            assert_eq!(
+                ExtensionType::from_u16(extension_type.as_u16()),
+                *extension_type
+            );
+            assert!(!extension_type.is_unknown());
+        }
+
+        let unknown = ExtensionType::from_u16(0xFFFF);
+        assert_eq!(unknown.as_u16(), 0xFFFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn extension_type_debug_stays_enum_like() {
+        assert_eq!(
+            format!("{:?}", ExtensionType::SupportedGroups),
+            "SupportedGroups"
+        );
+        assert_eq!(
+            format!("{:?}", ExtensionType::from_u16(0xFFFF)),
+            "Unknown(65535)"
+        );
+    }
 
     #[test]
     fn roundtrip() {

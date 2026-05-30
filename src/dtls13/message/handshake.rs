@@ -1,3 +1,4 @@
+use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -266,57 +267,58 @@ impl Handshake {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MessageType {
-    ClientHello,
-    ServerHello,
-    EncryptedExtensions,
-    Certificate,
-    CertificateRequest,
-    CertificateVerify,
-    Finished,
-    KeyUpdate,
-    Unknown(u8),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct MessageType(u8);
 
-impl Default for MessageType {
-    fn default() -> Self {
-        Self::Unknown(0)
-    }
-}
-
+#[allow(non_upper_case_globals)]
 impl MessageType {
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            1 => MessageType::ClientHello,
-            2 => MessageType::ServerHello,
-            8 => MessageType::EncryptedExtensions,
-            11 => MessageType::Certificate,
-            13 => MessageType::CertificateRequest,
-            15 => MessageType::CertificateVerify,
-            20 => MessageType::Finished,
-            24 => MessageType::KeyUpdate,
-            _ => MessageType::Unknown(value),
-        }
+    pub const ClientHello: Self = Self(1);
+    pub const ServerHello: Self = Self(2);
+    pub const EncryptedExtensions: Self = Self(8);
+    pub const Certificate: Self = Self(11);
+    pub const CertificateRequest: Self = Self(13);
+    pub const CertificateVerify: Self = Self(15);
+    pub const Finished: Self = Self(20);
+    pub const KeyUpdate: Self = Self(24);
+
+    pub const fn from_u8(value: u8) -> Self {
+        Self(value)
     }
 
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            MessageType::ClientHello => 1,
-            MessageType::ServerHello => 2,
-            MessageType::EncryptedExtensions => 8,
-            MessageType::Certificate => 11,
-            MessageType::CertificateRequest => 13,
-            MessageType::CertificateVerify => 15,
-            MessageType::Finished => 20,
-            MessageType::KeyUpdate => 24,
-            MessageType::Unknown(value) => *value,
-        }
+    pub const fn as_u8(&self) -> u8 {
+        self.0
+    }
+
+    const fn is_unknown(&self) -> bool {
+        !matches!(*self, Self(1..=2 | 8 | 11 | 13 | 15 | 20 | 24))
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], MessageType> {
         let (input, byte) = be_u8(input)?;
         Ok((input, Self::from_u8(byte)))
+    }
+}
+
+impl fmt::Debug for MessageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_unknown() {
+            return f.debug_tuple("Unknown").field(&self.0).finish();
+        }
+
+        let name = match *self {
+            MessageType::ClientHello => "ClientHello",
+            MessageType::ServerHello => "ServerHello",
+            MessageType::EncryptedExtensions => "EncryptedExtensions",
+            MessageType::Certificate => "Certificate",
+            MessageType::CertificateRequest => "CertificateRequest",
+            MessageType::CertificateVerify => "CertificateVerify",
+            MessageType::Finished => "Finished",
+            MessageType::KeyUpdate => "KeyUpdate",
+            _ => unreachable!("known DTLS 1.3 handshake message type missing Debug label"),
+        };
+
+        f.write_str(name)
     }
 }
 
@@ -436,7 +438,7 @@ impl Body {
                     .ok_or_else(|| Err::Failure(Error::new(input, ErrorKind::Fail)))?;
                 Ok((input, Body::KeyUpdate(request)))
             }
-            MessageType::Unknown(value) => Ok((input, Body::Unknown(value))),
+            _ => Ok((input, Body::Unknown(m.as_u8()))),
         }
     }
 
@@ -507,6 +509,40 @@ mod tests {
         0x01, // CompressionMethods length
         0x00, // Null
     ];
+
+    #[test]
+    fn message_type_newtype_shape() {
+        assert_eq!(std::mem::size_of::<MessageType>(), 1);
+        assert_eq!(MessageType::default().as_u8(), 0);
+        assert!(MessageType::default().is_unknown());
+    }
+
+    #[test]
+    fn message_type_wire_roundtrip() {
+        for message_type in [
+            MessageType::ClientHello,
+            MessageType::ServerHello,
+            MessageType::EncryptedExtensions,
+            MessageType::Certificate,
+            MessageType::CertificateRequest,
+            MessageType::CertificateVerify,
+            MessageType::Finished,
+            MessageType::KeyUpdate,
+        ] {
+            assert_eq!(MessageType::from_u8(message_type.as_u8()), message_type);
+            assert!(!message_type.is_unknown());
+        }
+
+        let unknown = MessageType::from_u8(0xFF);
+        assert_eq!(unknown.as_u8(), 0xFF);
+        assert!(unknown.is_unknown());
+    }
+
+    #[test]
+    fn message_type_debug_stays_enum_like() {
+        assert_eq!(format!("{:?}", MessageType::ClientHello), "ClientHello");
+        assert_eq!(format!("{:?}", MessageType::from_u8(0xFF)), "Unknown(255)");
+    }
 
     #[test]
     fn handshake_size() {
