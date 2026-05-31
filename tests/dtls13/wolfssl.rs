@@ -1636,8 +1636,8 @@ fn dtls13_wolfssl_server_handshake_with_early_packet_loss() {
             let _ = dimpl_server.handle_packet(&packet);
         }
 
-        let _ = dimpl_server.handle_timeout(now);
-
+        // Drain fresh server output before processing another timeout tick;
+        // otherwise a retransmit can race the newly processed WolfSSL client flight.
         let server_out = drain_dimpl_outputs(&mut dimpl_server);
         if server_out.connected {
             server_connected = true;
