@@ -47,6 +47,7 @@ use crate::dtls13::message::CompressionMethod;
 use crate::dtls13::message::ContentType;
 use crate::dtls13::message::DistinguishedName;
 use crate::dtls13::message::Dtls13CipherSuite;
+use crate::dtls13::message::Dtls13Record;
 use crate::dtls13::message::Extension;
 use crate::dtls13::message::ExtensionType;
 use crate::dtls13::message::KeyShareClientHello;
@@ -238,21 +239,63 @@ impl Server {
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        // In auto-sense mode, buffer raw packets while still waiting for
-        // the ClientHello so they can be replayed to Server12 on fallback.
-        if self.auto_mode && self.state == State::AwaitClientHello {
-            // Cap buffered fragments to prevent unbounded growth from malicious traffic
-            if self.retained_hello.len() >= MAX_RETAINED_CLIENT_HELLO {
+        let awaiting_client_hello = self.state == State::AwaitClientHello;
+        let mut queueable_packet = None;
+
+        if awaiting_client_hello {
+            if self.auto_mode && self.retained_hello.len() >= MAX_RETAINED_CLIENT_HELLO {
                 return Err(Error::TooManyClientHelloFragments);
             }
-            self.retained_hello.push_back(packet.to_buf());
+
+            let expected_seq = self.engine.expected_peer_handshake_seq_no();
+            match self
+                .engine
+                .parse_packet_filtering_records(packet, self.auto_mode, |record| {
+                    !Dtls13Record::is_ciphertext_header(record.buffer()[0])
+                        && (record.record().content_type == ContentType::Alert
+                            || (record.record().content_type == ContentType::Handshake
+                                && record.first_handshake().is_some_and(|h| {
+                                    h.header.msg_type == MessageType::ClientHello
+                                        && (h.header.message_seq == expected_seq
+                                            || h.header.message_seq.saturating_add(1)
+                                                == expected_seq)
+                                })))
+                }) {
+                Ok(()) => {
+                    if self.auto_mode {
+                        queueable_packet = self.engine.take_last_parse_queueable_packet();
+                    } else {
+                        self.engine.clear_last_parse_queueable_packet();
+                    }
+                }
+                Err(e) => {
+                    self.engine.clear_last_parse_queueable_packet();
+                    if let Some(err) = e.into_public_error() {
+                        return Err(err);
+                    }
+                    return Ok(());
+                }
+            }
+        } else {
+            match self.engine.parse_packet(packet) {
+                Ok(()) => {}
+                Err(e) => {
+                    self.engine.clear_last_parse_queueable_packet();
+                    if let Some(err) = e.into_public_error() {
+                        return Err(err);
+                    }
+                    return Ok(());
+                }
+            }
         }
 
-        match self
-            .engine
-            .parse_packet(packet)
-            .and_then(|_| self.make_progress())
-        {
+        if self.auto_mode && awaiting_client_hello {
+            if let Some(packet) = queueable_packet {
+                self.retained_hello.push_back(packet);
+            }
+        }
+
+        match self.make_progress() {
             Ok(()) => {}
             Err(e) => {
                 if let Some(err) = e.into_public_error() {

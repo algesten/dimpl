@@ -55,6 +55,9 @@ pub struct Engine {
     /// Queue of incoming packets.
     queue_rx: QueueRx,
 
+    /// Last accepted pre-ClientHello packet after parser-side filtering.
+    last_parse_queueable_packet: Option<Buf>,
+
     /// Queue of outgoing packets.
     queue_tx: QueueTx,
 
@@ -220,6 +223,7 @@ impl Engine {
             buffers_free: BufferPool::default(),
             sequence_epoch_0: Sequence::new(0),
             queue_rx: QueueRx::new(),
+            last_parse_queueable_packet: None,
             queue_tx: QueueTx::new(),
             cipher_suite: None,
             hs_send_keys: None,
@@ -332,6 +336,7 @@ impl Engine {
     pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), InternalError> {
         let cs = self.cipher_suite;
         let incoming = Incoming::parse_packet(packet, self, cs)?;
+        self.last_parse_queueable_packet = None;
         if let Some(incoming) = incoming {
             self.insert_incoming(incoming)?;
         }
@@ -339,19 +344,46 @@ impl Engine {
         Ok(())
     }
 
-    fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
-        if self.queue_rx.len() >= self.config.max_queue_rx() {
-            warn!(
-                "Receive queue full (max {}): {:?}",
-                self.config.max_queue_rx(),
-                self.queue_rx
-            );
-            return Err(Error::ReceiveQueueFull);
+    pub(crate) fn parse_packet_filtering_records(
+        &mut self,
+        packet: &[u8],
+        retain_queueable_packet: bool,
+        keep_record: impl FnMut(&Record) -> bool,
+    ) -> Result<(), InternalError> {
+        let cs = self.cipher_suite;
+        let incoming = Incoming::parse_packet_filtering_records(packet, self, cs, keep_record)?;
+        self.last_parse_queueable_packet = None;
+        if let Some(incoming) = incoming {
+            let queueable_packet = (retain_queueable_packet
+                && incoming.first().first_handshake().is_some())
+            .then(|| incoming.to_datagram_buf());
+            self.insert_incoming(incoming)?;
+            self.last_parse_queueable_packet = queueable_packet;
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn take_last_parse_queueable_packet(&mut self) -> Option<Buf> {
+        self.last_parse_queueable_packet.take()
+    }
+
+    pub(crate) fn clear_last_parse_queueable_packet(&mut self) {
+        self.last_parse_queueable_packet = None;
+    }
+
+    fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
         if incoming.first().first_handshake().is_some() {
             self.insert_incoming_handshake(incoming)
         } else {
+            if self.queue_rx.len() >= self.config.max_queue_rx() {
+                warn!(
+                    "Receive queue full (max {}): {:?}",
+                    self.config.max_queue_rx(),
+                    self.queue_rx
+                );
+                return Err(Error::ReceiveQueueFull);
+            }
             self.insert_incoming_non_handshake(incoming)
         }
     }
@@ -406,6 +438,14 @@ impl Engine {
 
         match search_result {
             Err(index) => {
+                if self.queue_rx.len() >= self.config.max_queue_rx() {
+                    warn!(
+                        "Receive queue full (max {}): {:?}",
+                        self.config.max_queue_rx(),
+                        self.queue_rx
+                    );
+                    return Err(Error::ReceiveQueueFull);
+                }
                 // Track received record numbers for ACK generation
                 for record in incoming.records().iter() {
                     let seq = record.record().sequence;
@@ -724,6 +764,10 @@ impl Engine {
 
     pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
         self.has_complete_handshake_with_seq(wanted, self.peer_handshake_seq_no)
+    }
+
+    pub(crate) fn expected_peer_handshake_seq_no(&self) -> u16 {
+        self.peer_handshake_seq_no
     }
 
     fn has_complete_handshake_with_seq(&mut self, wanted: MessageType, expected_seq: u16) -> bool {

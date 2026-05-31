@@ -53,6 +53,14 @@ fn run_handshake(
     )
 }
 
+fn dtls13_future_epoch_ciphertext(seq: u16) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(0x2E); // fixed bits, S=1, L=1, epoch_bits=2
+    out.extend_from_slice(&seq.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes()); // empty ciphertext
+    out
+}
+
 // ============================================================================
 // Auto server + explicit DTLS 1.3 client → DTLS 1.3 (no fallback)
 // ============================================================================
@@ -132,6 +140,39 @@ fn auto_server_protocol_version_pending() {
 
     assert!(cc, "Client should connect after pending protocol check");
     assert!(sc, "Server should connect after pending protocol check");
+    assert_eq!(cv, Some(ProtocolVersion::DTLS1_2));
+    assert_eq!(sv, Some(ProtocolVersion::DTLS1_2));
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn auto_server_fallback_ignores_prehandshake_dtls13_ciphertext_poison() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().unwrap();
+    let server_cert = generate_self_signed_certificate().unwrap();
+    let config = Arc::new(
+        Config::builder()
+            .max_queue_rx(1)
+            .build()
+            .expect("build config"),
+    );
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, Instant::now());
+    client.set_active(true);
+
+    let mut server = Dtls::new_auto(config, server_cert, Instant::now());
+
+    server
+        .handle_packet(&dtls13_future_epoch_ciphertext(0))
+        .expect("pre-ClientHello DTLS 1.3 ciphertext should not poison fallback");
+
+    let (cc, sc, cv, sv) = run_handshake(&mut client, &mut server);
+
+    assert!(cc, "Client should connect");
+    assert!(sc, "Server should connect");
     assert_eq!(cv, Some(ProtocolVersion::DTLS1_2));
     assert_eq!(sv, Some(ProtocolVersion::DTLS1_2));
 }
