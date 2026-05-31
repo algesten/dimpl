@@ -67,6 +67,7 @@
 //! references into your provided buffer:
 //! - `Packet(&[u8])`: send on your UDP socket
 //! - `Timeout(Instant)`: schedule a timer and call `handle_timeout` at/after it
+//! - `BufferTooSmall { needed }`: grow the caller-owned poll buffer and retry
 //! - `Connected`: handshake complete
 //! - `PeerCert(&[u8])`: peer leaf certificate (DER) — validate in your app
 //! - `KeyingMaterial(KeyingMaterial, SrtpProfile)`: DTLS‑SRTP export
@@ -114,6 +115,9 @@
 //!             match dtls.poll_output(&mut out_buf) {
 //!                 Output::Packet(p) => send_udp(p),
 //!                 Output::Timeout(t) => { next_wake = Some(t); break; }
+//!                 Output::BufferTooSmall { needed } => {
+//!                     out_buf.resize(needed, 0);
+//!                 }
 //!                 Output::Connected => {
 //!                     // DTLS established — application may start sending
 //!                 }
@@ -844,6 +848,14 @@ pub enum Output<'a> {
     /// This is always the last variant returned by a poll cycle.
     /// Internal state is only consistent after reaching `Timeout`.
     Timeout(Instant),
+    /// The caller-provided output buffer is too small for the next pending
+    /// output. Grow the buffer to at least `needed` bytes and call
+    /// [`Dtls::poll_output`] again without waiting for a timer.
+    BufferTooSmall {
+        /// Minimum caller-provided buffer length required to emit the pending
+        /// output.
+        needed: usize,
+    },
     /// The handshake completed and the connection is established.
     Connected,
     /// The peer's leaf certificate in DER encoding.
@@ -864,6 +876,7 @@ impl fmt::Debug for Output<'_> {
         match self {
             Self::Packet(v) => write!(f, "Packet({})", v.len()),
             Self::Timeout(v) => write!(f, "Timeout({:?})", v),
+            Self::BufferTooSmall { needed } => write!(f, "BufferTooSmall({})", needed),
             Self::Connected => write!(f, "Connected"),
             Self::PeerCert(v) => write!(f, "PeerCert({})", v.len()),
             Self::KeyingMaterial(v, p) => write!(f, "KeyingMaterial({}, {:?})", v.len(), p),

@@ -585,6 +585,70 @@ fn dtls12_peer_certificate_exchange() {
 
 #[test]
 #[cfg(feature = "rcgen")]
+fn dtls12_peer_certificate_output_retries_after_small_buffer() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let expected_client_cert = client_cert.certificate.clone();
+    let expected_server_cert = server_cert.certificate.clone();
+
+    let config = dtls12_config();
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+
+    let mut client_peer_cert = None;
+    let mut server_peer_cert = None;
+    let mut client_cert_deferred = false;
+    let mut server_cert_deferred = false;
+
+    for _ in 0..30 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs_with_initial_buffer(&mut client, 1);
+        let server_out = drain_outputs_with_initial_buffer(&mut server, 1);
+
+        client_cert_deferred |= client_out.peer_cert_deferred_for_small_buffer;
+        server_cert_deferred |= server_out.peer_cert_deferred_for_small_buffer;
+
+        if let Some(cert) = client_out.peer_cert {
+            client_peer_cert = Some(cert);
+        }
+        if let Some(cert) = server_out.peer_cert {
+            server_peer_cert = Some(cert);
+        }
+
+        deliver_packets(&client_out.packets, &mut server);
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_peer_cert.is_some() && server_peer_cert.is_some() {
+            break;
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    assert_eq!(client_peer_cert, Some(expected_server_cert));
+    assert_eq!(server_peer_cert, Some(expected_client_cert));
+    assert!(
+        client_cert_deferred,
+        "client PeerCert should be deferred once"
+    );
+    assert!(
+        server_cert_deferred,
+        "server PeerCert should be deferred once"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
 fn dtls12_handshake_client_certificate_auth() {
     //! Configure the server to require a client certificate, complete the
     //! handshake, and verify the server received and validated the client

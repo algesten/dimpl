@@ -69,6 +69,7 @@ The output is an [`Output`][output] enum with borrowed
 references into your provided buffer:
 - `Packet(&[u8])`: send on your UDP socket
 - `Timeout(Instant)`: schedule a timer and call `handle_timeout` at/after it
+- `BufferTooSmall { needed }`: grow the caller-owned poll buffer and retry
 - `Connected`: handshake complete
 - `PeerCert(&[u8])`: peer leaf certificate (DER) — validate in your app
 - `KeyingMaterial(KeyingMaterial, SrtpProfile)`: DTLS‑SRTP export
@@ -114,6 +115,9 @@ fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
             match dtls.poll_output(&mut out_buf) {
                 Output::Packet(p) => send_udp(p),
                 Output::Timeout(t) => { next_wake = Some(t); break; }
+                Output::BufferTooSmall { needed } => {
+                    out_buf.resize(needed, 0);
+                }
                 Output::Connected => {
                     // DTLS established — application may start sending
                 }
