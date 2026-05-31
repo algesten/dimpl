@@ -2118,7 +2118,16 @@ impl Engine {
 
             for record in unhandled {
                 let buf = record.into_buffer();
-                self.parse_packet(&buf)?;
+                match self.parse_packet(&buf) {
+                    Ok(()) => {}
+                    Err(InternalError::Transient(err)) => {
+                        trace!("Discarding buffered protected record after reparse failed: {err}");
+                    }
+                    Err(err) => {
+                        self.buffers_free.push(buf);
+                        return Err(err);
+                    }
+                }
                 self.buffers_free.push(buf);
             }
         }
@@ -2511,6 +2520,29 @@ mod tests {
 
     struct PassthroughRecordHandler;
 
+    #[derive(Debug)]
+    struct PassthroughCipher;
+
+    impl Cipher for PassthroughCipher {
+        fn encrypt(
+            &mut self,
+            _plaintext: &mut Buf,
+            _aad: Aad,
+            _nonce: Nonce,
+        ) -> Result<(), crate::CryptoError> {
+            Ok(())
+        }
+
+        fn decrypt(
+            &mut self,
+            _ciphertext: &mut TmpBuf,
+            _aad: Aad,
+            _nonce: Nonce,
+        ) -> Result<(), crate::CryptoError> {
+            Ok(())
+        }
+    }
+
     impl RecordHandler for PassthroughRecordHandler {
         fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
             Ok(Some(record))
@@ -2572,6 +2604,25 @@ mod tests {
                 | 0b0000_1000 // 2-byte sequence number.
                 | 0b0000_0100 // explicit length.
                 | 0b0000_0010, // epoch bits resolved by PassthroughRecordHandler.
+        );
+        packet.extend_from_slice(&seq.to_be_bytes());
+        packet.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+        packet.extend_from_slice(&fragment);
+        packet
+    }
+
+    fn encrypted_malformed_handshake_tail_record(seq: u16) -> Vec<u8> {
+        let mut fragment = Vec::new();
+        fragment.push(0xff);
+        fragment.push(ContentType::Handshake.as_u8());
+        fragment.resize(17, 0);
+
+        let mut packet = Vec::new();
+        packet.push(
+            0b0010_0000
+                | 0b0000_1000 // 2-byte sequence number.
+                | 0b0000_0100 // explicit length.
+                | 0b0000_0010, // epoch bits.
         );
         packet.extend_from_slice(&seq.to_be_bytes());
         packet.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
@@ -2729,6 +2780,33 @@ mod tests {
             engine.received_record_numbers.capacity(),
             "overflowing ACK bookkeeping should keep existing entries and drop the extra one"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn enable_peer_encryption_discards_malformed_buffered_protected_handshake() {
+        let mut engine = test_engine();
+        engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+        let mut sn_key = Buf::new();
+        sn_key.extend_from_slice(&[0; 16]);
+        engine.hs_recv_keys = Some(EpochKeys {
+            cipher: Box::new(PassthroughCipher),
+            iv: [0; 12],
+            traffic_secret: Buf::new(),
+            sn_key,
+        });
+
+        engine
+            .parse_packet(&encrypted_malformed_handshake_tail_record(0))
+            .expect("pre-encryption protected record should queue");
+        assert_eq!(engine.queue_rx.len(), 1);
+
+        engine
+            .enable_peer_encryption()
+            .expect("malformed queued protected record should be discarded");
+
+        assert!(engine.peer_encryption_enabled);
+        assert!(engine.queue_rx.is_empty());
     }
 
     #[test]

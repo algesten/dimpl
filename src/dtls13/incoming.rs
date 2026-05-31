@@ -284,11 +284,6 @@ impl Record {
             buffer.len()
         };
 
-        // Decryption succeeded — now commit the replay window update.
-        // RFC 9147 §4.5.1: "The window MUST NOT be updated due to a received
-        // record until that record has been deprotected successfully."
-        decrypt.replay_update(full_sequence);
-
         // Recover inner content type from DTLSInnerPlaintext
         let decrypted = &buffer[header_end..header_end + new_len];
         let (inner_content_type, content_len) = match recover_inner_content_type(decrypted) {
@@ -308,8 +303,13 @@ impl Record {
             },
             &buffer,
             cs,
-        );
+        )?;
         let parsed = Box::new(parsed);
+
+        // Decryption and parsing both succeeded. Commit replay state only once
+        // the record is publishable, so a malformed protected handshake tail
+        // cannot consume the retransmission slot for a clean record.
+        decrypt.replay_update(full_sequence);
 
         Ok(Some(Record { buffer, parsed }))
     }
@@ -365,7 +365,7 @@ impl ParsedRecord {
 
         let handshakes = if record.content_type == ContentType::Handshake {
             let fragment_offset = record.fragment_range.start;
-            parse_handshakes(record.fragment(input), fragment_offset, cipher_suite)
+            parse_handshakes(record.fragment(input), fragment_offset, cipher_suite)?
         } else {
             ArrayVec::new()
         };
@@ -382,19 +382,19 @@ impl ParsedRecord {
         record: Dtls13Record,
         input: &[u8],
         cipher_suite: Option<Dtls13CipherSuite>,
-    ) -> ParsedRecord {
+    ) -> Result<ParsedRecord, InternalError> {
         let handshakes = if record.content_type == ContentType::Handshake {
             let fragment_offset = record.fragment_range.start;
-            parse_handshakes(record.fragment(input), fragment_offset, cipher_suite)
+            parse_handshakes(record.fragment(input), fragment_offset, cipher_suite)?
         } else {
             ArrayVec::new()
         };
 
-        ParsedRecord {
+        Ok(ParsedRecord {
             record,
             handshakes,
             handled: AtomicBool::new(false),
-        }
+        })
     }
 }
 
@@ -442,22 +442,18 @@ fn parse_handshakes(
     mut input: &[u8],
     mut base_offset: usize,
     cipher_suite: Option<Dtls13CipherSuite>,
-) -> ArrayVec<Handshake, 8> {
+) -> Result<ArrayVec<Handshake, 8>, InternalError> {
     let mut handshakes = ArrayVec::new();
     while !input.is_empty() {
-        if let Ok((remaining, handshake)) = Handshake::parse(input, base_offset, cipher_suite, true)
-        {
-            let len = input.len() - remaining.len();
-            base_offset += len;
-            input = remaining;
-            if handshakes.try_push(handshake).is_err() {
-                break;
-            }
-        } else {
-            break;
+        let (remaining, handshake) = Handshake::parse(input, base_offset, cipher_suite, true)?;
+        let len = input.len() - remaining.len();
+        base_offset += len;
+        input = remaining;
+        if handshakes.try_push(handshake).is_err() {
+            return Err(InternalError::too_many_records());
         }
     }
-    handshakes
+    Ok(handshakes)
 }
 
 /// Recover the inner content type from a decrypted DTLSInnerPlaintext.
@@ -531,11 +527,15 @@ impl std::panic::UnwindSafe for Incoming {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dtls13::message::MessageType;
 
     #[derive(Default)]
     struct TestHandler {
         classify_calls: usize,
         dropped_acks: usize,
+        peer_encryption_enabled: bool,
+        min_protected_fragment_len: usize,
+        replay_updates: usize,
     }
 
     impl RecordHandler for TestHandler {
@@ -549,29 +549,30 @@ mod tests {
         }
 
         fn is_peer_encryption_enabled(&self) -> bool {
-            false
+            self.peer_encryption_enabled
         }
 
-        fn resolve_epoch(&self, _epoch_bits: u8) -> u16 {
-            panic!("resolve_epoch should not be called when peer encryption is disabled");
+        fn resolve_epoch(&self, epoch_bits: u8) -> u16 {
+            assert!(self.peer_encryption_enabled);
+            epoch_bits as u16
         }
 
-        fn resolve_sequence(&self, _epoch: u16, _seq_bits: u64, _s_flag: bool) -> u64 {
-            panic!("resolve_sequence should not be called when peer encryption is disabled");
+        fn resolve_sequence(&self, _epoch: u16, seq_bits: u64, _s_flag: bool) -> u64 {
+            assert!(self.peer_encryption_enabled);
+            seq_bits
         }
 
         fn replay_check(&self, _seq: Sequence) -> bool {
-            panic!("replay_check should not be called when peer encryption is disabled");
+            assert!(self.peer_encryption_enabled);
+            true
         }
 
         fn replay_update(&mut self, _seq: Sequence) {
-            panic!("replay_update should not be called when peer encryption is disabled");
+            self.replay_updates += 1;
         }
 
         fn min_protected_fragment_len(&self) -> usize {
-            panic!(
-                "min_protected_fragment_len should not be called when peer encryption is disabled"
-            );
+            self.min_protected_fragment_len
         }
 
         fn decrypt_record(
@@ -580,7 +581,8 @@ mod tests {
             _seq: Sequence,
             _ciphertext: &mut TmpBuf,
         ) -> Result<(), Error> {
-            panic!("decrypt_record should not be called when peer encryption is disabled");
+            assert!(self.peer_encryption_enabled);
+            Ok(())
         }
 
         fn decrypt_sequence_number(
@@ -589,7 +591,7 @@ mod tests {
             _seq_bytes: &mut [u8],
             _ciphertext_sample: &[u8; 16],
         ) {
-            panic!("decrypt_sequence_number should not be called when peer encryption is disabled");
+            assert!(self.peer_encryption_enabled);
         }
     }
 
@@ -600,6 +602,18 @@ mod tests {
         out.extend_from_slice(&0u16.to_be_bytes());
         out.extend_from_slice(&seq.to_be_bytes()[2..]);
         out.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+        out.extend_from_slice(fragment);
+        out
+    }
+
+    fn handshake_fragment(msg_type: MessageType, message_seq: u16, fragment: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let len = fragment.len() as u32;
+        out.push(msg_type.as_u8());
+        out.extend_from_slice(&len.to_be_bytes()[1..]);
+        out.extend_from_slice(&message_seq.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes()[1..]);
+        out.extend_from_slice(&len.to_be_bytes()[1..]);
         out.extend_from_slice(fragment);
         out
     }
@@ -633,5 +647,47 @@ mod tests {
             ContentType::ApplicationData
         );
         assert_eq!(incoming.first().record().sequence.epoch, 2);
+    }
+
+    #[test]
+    fn parse_record_accepts_multiple_handshakes() {
+        let mut fragment = Vec::new();
+        fragment.extend_from_slice(&handshake_fragment(MessageType::CertificateRequest, 0, &[]));
+        fragment.extend_from_slice(&handshake_fragment(
+            MessageType::EncryptedExtensions,
+            1,
+            &[],
+        ));
+
+        let packet = build_plaintext_record(ContentType::Handshake, 1, &fragment);
+        let mut handler = TestHandler::default();
+        let incoming = Incoming::parse_packet(&packet, &mut handler, None)
+            .unwrap()
+            .expect("handshake record should remain");
+
+        assert_eq!(incoming.first().handshakes().len(), 2);
+    }
+
+    #[test]
+    fn post_decrypt_malformed_handshake_tail_is_rejected() {
+        let mut fragment = handshake_fragment(MessageType::CertificateRequest, 0, &[]);
+        fragment.push(0xff);
+        fragment.push(ContentType::Handshake.as_u8());
+        let packet = build_ciphertext_record(2, 1, &fragment);
+        let mut handler = TestHandler {
+            peer_encryption_enabled: true,
+            min_protected_fragment_len: 0,
+            ..Default::default()
+        };
+
+        let err = Incoming::parse_packet(
+            &packet,
+            &mut handler,
+            Some(Dtls13CipherSuite::AES_128_GCM_SHA256),
+        )
+        .expect_err("post-decrypt malformed handshake tail must be rejected");
+
+        assert!(matches!(err, InternalError::Transient(_)));
+        assert_eq!(handler.replay_updates, 0);
     }
 }
