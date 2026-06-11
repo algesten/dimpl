@@ -483,22 +483,31 @@ impl State {
 
             debug!("Received HelloRetryRequest");
 
-            // Extract selected group and cookie from HRR extensions
+            let mut hrr_selected_group = None;
+            let mut saved_cookie = None;
+            let mut hrr_version_ok = false;
+
             if let Some(ref extensions) = server_hello.extensions {
                 for ext in extensions {
                     match ext.extension_type {
                         ExtensionType::KeyShare => {
                             let ext_data = ext.extension_data(&client.defragment_buffer);
-                            if let Ok((_, hrr_ks)) = KeyShareHelloRetryRequest::parse(ext_data) {
-                                client.hrr_selected_group = Some(hrr_ks.selected_group);
-                            }
+                            let (_, hrr_ks) = KeyShareHelloRetryRequest::parse(ext_data)
+                                .map_err(InternalError::from)?;
+                            hrr_selected_group = Some(hrr_ks.selected_group);
                         }
                         ExtensionType::Cookie => {
                             let ext_data = ext.extension_data(&client.defragment_buffer);
                             parse_cookie_extension(ext_data).map_err(InternalError::from)?;
                             let mut cookie = Buf::new();
                             cookie.extend_from_slice(ext_data);
-                            client.saved_cookie = Some(cookie);
+                            saved_cookie = Some(cookie);
+                        }
+                        ExtensionType::SupportedVersions => {
+                            let ext_data = ext.extension_data(&client.defragment_buffer);
+                            let (_, sv) = SupportedVersionsServerHello::parse(ext_data)
+                                .map_err(InternalError::from)?;
+                            hrr_version_ok = sv.selected_version == ProtocolVersion::DTLS1_3;
                         }
                         _ => {}
                     }
@@ -515,25 +524,16 @@ impl State {
                 ))
                 .into());
             }
-            client.engine.set_cipher_suite(server_hello.cipher_suite);
 
-            // Validate HRR supported_versions
-            let mut hrr_version_ok = false;
-            if let Some(ref extensions) = server_hello.extensions {
-                for ext in extensions {
-                    if ext.extension_type == ExtensionType::SupportedVersions {
-                        let ext_data = ext.extension_data(&client.defragment_buffer);
-                        if let Ok((_, sv)) = SupportedVersionsServerHello::parse(ext_data) {
-                            hrr_version_ok = sv.selected_version == ProtocolVersion::DTLS1_3;
-                        }
-                    }
-                }
-            }
             if !hrr_version_ok {
                 return Err(
                     (Error::SecurityError(crate::SecurityError::HrrDidNotSelectDtls13)).into(),
                 );
             }
+
+            client.engine.set_cipher_suite(server_hello.cipher_suite);
+            client.hrr_selected_group = hrr_selected_group;
+            client.saved_cookie = saved_cookie;
 
             // Replace transcript with message_hash per RFC 8446 Section 4.4.1.
             // The HRR was already appended to the transcript by next_handshake().

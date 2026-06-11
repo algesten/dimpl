@@ -32,6 +32,17 @@ fn dtls12_epoch1_record(seq: u64, len: usize) -> Vec<u8> {
     out
 }
 
+fn dtls12_ccs_record(seq: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(20); // ChangeCipherSpec
+    out.extend_from_slice(&[0xFE, 0xFD]); // DTLS 1.2
+    out.extend_from_slice(&0u16.to_be_bytes()); // epoch 0
+    out.extend_from_slice(&seq.to_be_bytes()[2..]); // u48 sequence number
+    out.extend_from_slice(&1u16.to_be_bytes()); // payload length
+    out.push(1); // change_cipher_spec
+    out
+}
+
 fn dtls12_config_for_suite(suite: Dtls12CipherSuite) -> Arc<Config> {
     let mut provider = Config::default().crypto_provider().clone();
     let selected = provider
@@ -153,8 +164,10 @@ fn dtls12_malformed_client_hello_extension_does_not_consume_sequence() {
 
     let mut poisoned = client_hello[0].clone();
     poison_extension_vector_len(&mut poisoned, 0x000e); // use_srtp
+    let mut mixed_poisoned = dtls12_ccs_record(42);
+    mixed_poisoned.extend_from_slice(&poisoned);
     server
-        .handle_packet(&poisoned)
+        .handle_packet(&mixed_poisoned)
         .expect("malformed ClientHello extension should be discarded");
 
     server

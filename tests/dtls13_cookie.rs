@@ -118,18 +118,19 @@ fn dtls13_client_rejects_hrr_cookie_extension_trailing_bytes() {
 
     server.handle_timeout(now).expect("server timeout");
     let server_out = drain_outputs(&mut server);
-    let mut hrr = server_out
+    let hrr = server_out
         .packets
         .into_iter()
         .next()
         .expect("server should emit HRR");
+    let mut malformed_hrr = hrr.clone();
     assert!(
-        shrink_dtls13_cookie_extension_inner_len(&mut hrr),
+        shrink_dtls13_cookie_extension_inner_len(&mut malformed_hrr),
         "fixture should contain a Cookie extension"
     );
 
     client
-        .handle_packet(&hrr)
+        .handle_packet(&malformed_hrr)
         .expect("malformed HRR Cookie extension should be discarded");
 
     client
@@ -139,6 +140,18 @@ fn dtls13_client_rejects_hrr_cookie_extension_trailing_bytes() {
     assert!(
         client_out.packets.is_empty(),
         "client must not send CH2 after malformed HRR Cookie"
+    );
+
+    client
+        .handle_packet(&hrr)
+        .expect("clean HRR retransmission should be accepted");
+    client
+        .handle_timeout(now)
+        .expect("client timeout after clean HRR");
+    let client_out = drain_outputs(&mut client);
+    assert!(
+        !client_out.packets.is_empty(),
+        "client should send CH2 after clean HRR retransmission"
     );
 }
 

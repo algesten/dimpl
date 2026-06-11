@@ -340,6 +340,8 @@ impl Engine {
     }
 
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
+        self.purge_handled_queue_rx();
+
         if self.queue_rx.len() >= self.config.max_queue_rx() {
             warn!(
                 "Receive queue full (max {}): {:?}",
@@ -349,7 +351,13 @@ impl Engine {
             return Err(Error::ReceiveQueueFull);
         }
 
-        if incoming.first().first_handshake().is_some() {
+        if incoming.first().first_handshake().is_some()
+            || (!self.release_app_data
+                && incoming
+                    .records()
+                    .iter()
+                    .any(|r| !r.handshakes().is_empty()))
+        {
             self.insert_incoming_handshake(incoming)
         } else {
             self.insert_incoming_non_handshake(incoming)
@@ -357,16 +365,6 @@ impl Engine {
     }
 
     fn insert_incoming_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
-        let first_record = incoming.first();
-        let handshake = first_record
-            .first_handshake()
-            .expect("caller ensures handshake");
-
-        let key_current = (
-            handshake.header.message_seq,
-            handshake.header.fragment_offset,
-        );
-
         let maybe_dupe_seq = incoming
             .records()
             .iter()
@@ -380,10 +378,17 @@ impl Engine {
             }
         }
 
-        // Drop old duplicates we've already processed
-        if handshake.header.message_seq < self.peer_handshake_seq_no {
+        mark_stale_handshakes(&incoming, self.peer_handshake_seq_no);
+
+        let Some(handshake) = first_relevant_handshake(&incoming, self.peer_handshake_seq_no)
+        else {
             return Ok(());
-        }
+        };
+
+        let key_current = (
+            handshake.header.message_seq,
+            handshake.header.fragment_offset,
+        );
 
         // Reject new handshakes after initial handshake is complete,
         // but allow KeyUpdate (a post-handshake message).
@@ -395,10 +400,7 @@ impl Engine {
         }
 
         let search_result = self.queue_rx.binary_search_by(|item| {
-            let key_other = item
-                .first()
-                .first_handshake()
-                .as_ref()
+            let key_other = first_relevant_handshake(item, self.peer_handshake_seq_no)
                 .map(|h| (h.header.message_seq, h.header.fragment_offset))
                 .unwrap_or((u16::MAX, u32::MAX));
             key_other.cmp(&key_current)
@@ -868,22 +870,17 @@ impl Engine {
     pub(crate) fn rollback_handshake_progress(&mut self, snapshot: HandshakeProgressSnapshot) {
         self.transcript.resize(snapshot.transcript_len, 0);
 
-        let mut keep = QueueRx::new();
-        while let Some(incoming) = self.queue_rx.pop_front() {
-            let drop_incoming = incoming
-                .first()
-                .first_handshake()
-                .is_some_and(|h| h.header.message_seq >= snapshot.peer_handshake_seq_no);
+        for incoming in self.queue_rx.iter() {
+            let reject_incoming = incoming
+                .records()
+                .iter()
+                .flat_map(|r| r.handshakes())
+                .any(|h| h.header.message_seq >= snapshot.peer_handshake_seq_no);
 
-            if drop_incoming {
-                incoming
-                    .into_records()
-                    .for_each(|r| self.buffers_free.push(r.into_buffer()));
-            } else {
-                keep.push_back(incoming);
+            if reject_incoming {
+                mark_incoming_handled(incoming);
             }
         }
-        self.queue_rx = keep;
     }
 
     /// Advance the expected peer handshake sequence number.
@@ -2527,6 +2524,40 @@ impl RecordHandler for Engine {
 pub(crate) struct HandshakeProgressSnapshot {
     peer_handshake_seq_no: u16,
     transcript_len: usize,
+}
+
+fn first_relevant_handshake(incoming: &Incoming, peer_handshake_seq_no: u16) -> Option<&Handshake> {
+    incoming
+        .records()
+        .iter()
+        .flat_map(|r| r.handshakes())
+        .filter(|h| !h.is_handled())
+        .find(|h| h.header.message_seq >= peer_handshake_seq_no)
+}
+
+fn mark_stale_handshakes(incoming: &Incoming, peer_handshake_seq_no: u16) {
+    for handshake in incoming
+        .records()
+        .iter()
+        .flat_map(|r| r.handshakes())
+        .filter(|h| h.header.message_seq < peer_handshake_seq_no)
+    {
+        handshake.set_handled();
+    }
+}
+
+fn mark_incoming_handled(incoming: &Incoming) {
+    for record in incoming.records().iter() {
+        if record.handshakes().is_empty() {
+            if !record.is_handled() {
+                record.set_handled();
+            }
+        } else {
+            for handshake in record.handshakes() {
+                handshake.set_handled();
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -140,8 +140,10 @@ fn dtls13_malformed_client_hello_extension_does_not_poison_transcript() {
 
     let mut poisoned = client_hello[0].clone();
     poison_extension_vector_len(&mut poisoned, 0x0033); // key_share
+    let mut mixed_poisoned = dtls13_ack_record(42);
+    mixed_poisoned.extend_from_slice(&poisoned);
     server
-        .handle_packet(&poisoned)
+        .handle_packet(&mixed_poisoned)
         .expect("malformed ClientHello extension should be discarded");
 
     server
