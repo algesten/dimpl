@@ -684,6 +684,10 @@ impl InternalError {
         Self::Transient(TransientError::TooManyRecords)
     }
 
+    pub(crate) fn is_transient(&self) -> bool {
+        matches!(self, Self::Transient(_))
+    }
+
     pub(crate) fn into_public_error(self) -> Option<Error> {
         match self {
             Self::Transient(err) => {

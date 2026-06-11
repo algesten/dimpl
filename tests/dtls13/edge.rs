@@ -50,6 +50,29 @@ fn dtls13_ack_record_for_records(seq: u64, records: &[(u64, u64)]) -> Vec<u8> {
     out
 }
 
+fn poison_extension_vector_len(packet: &mut [u8], extension_type: u16) {
+    let marker = extension_type.to_be_bytes();
+
+    for i in 0..packet.len().saturating_sub(6) {
+        if packet[i..i + 2] != marker {
+            continue;
+        }
+
+        let extension_len = u16::from_be_bytes([packet[i + 2], packet[i + 3]]) as usize;
+        let extension_data_start = i + 4;
+        let extension_data_end = extension_data_start + extension_len;
+        if extension_len < 2 || extension_data_end > packet.len() {
+            continue;
+        }
+
+        packet[extension_data_start..extension_data_start + 2]
+            .copy_from_slice(&(extension_len as u16).to_be_bytes());
+        return;
+    }
+
+    panic!("extension {extension_type:#06x} not found");
+}
+
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_malformed_datagram_is_discarded_without_processing_alerts() {
@@ -93,6 +116,38 @@ fn dtls13_too_many_control_records_are_discarded() {
     server
         .handle_packet(&packet)
         .expect("too many records should be discarded");
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_malformed_client_hello_extension_does_not_poison_transcript() {
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let config = dtls13_config();
+    let now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    client.handle_timeout(now).expect("client timeout start");
+    let client_hello = collect_packets(&mut client);
+    assert_eq!(client_hello.len(), 1, "client should emit one ClientHello");
+
+    let mut poisoned = client_hello[0].clone();
+    poison_extension_vector_len(&mut poisoned, 0x0033); // key_share
+    server
+        .handle_packet(&poisoned)
+        .expect("malformed ClientHello extension should be discarded");
+
+    server
+        .handle_packet(&client_hello[0])
+        .expect("clean retransmission should still be accepted");
+    complete_dtls13_handshake(&mut client, &mut server, now);
 }
 
 #[test]

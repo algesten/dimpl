@@ -62,6 +62,29 @@ fn dtls12_min_protected_fragment_len(suite: Dtls12CipherSuite) -> usize {
     }
 }
 
+fn poison_extension_vector_len(packet: &mut [u8], extension_type: u16) {
+    let marker = extension_type.to_be_bytes();
+
+    for i in 0..packet.len().saturating_sub(6) {
+        if packet[i..i + 2] != marker {
+            continue;
+        }
+
+        let extension_len = u16::from_be_bytes([packet[i + 2], packet[i + 3]]) as usize;
+        let extension_data_start = i + 4;
+        let extension_data_end = extension_data_start + extension_len;
+        if extension_len < 2 || extension_data_end > packet.len() {
+            continue;
+        }
+
+        packet[extension_data_start..extension_data_start + 2]
+            .copy_from_slice(&(extension_len as u16).to_be_bytes());
+        return;
+    }
+
+    panic!("extension {extension_type:#06x} not found");
+}
+
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_malformed_datagram_is_discarded_without_processing_alerts() {
@@ -105,6 +128,48 @@ fn dtls12_too_many_control_records_are_discarded() {
     server
         .handle_packet(&packet)
         .expect("too many records should be discarded");
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_malformed_client_hello_extension_does_not_consume_sequence() {
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let config = dtls12_config();
+    let now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+
+    client.handle_timeout(now).expect("client timeout start");
+    client.handle_timeout(now).expect("client arm flight 1");
+    let client_hello = collect_packets(&mut client);
+    assert_eq!(client_hello.len(), 1, "client should emit one ClientHello");
+
+    let mut poisoned = client_hello[0].clone();
+    poison_extension_vector_len(&mut poisoned, 0x000e); // use_srtp
+    server
+        .handle_packet(&poisoned)
+        .expect("malformed ClientHello extension should be discarded");
+
+    server
+        .handle_packet(&client_hello[0])
+        .expect("clean retransmission should still be accepted");
+    server.handle_timeout(now).expect("server timeout");
+
+    let server_flight = collect_packets(&mut server);
+    assert!(
+        server_flight
+            .iter()
+            .flat_map(|packet| parse_handshake_types(packet))
+            .any(|ty| ty == HELLO_VERIFY_REQUEST),
+        "server should respond to the clean ClientHello retransmission"
+    );
 }
 
 #[test]

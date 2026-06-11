@@ -263,8 +263,17 @@ impl Client {
     fn make_progress(&mut self) -> Result<(), InternalError> {
         loop {
             let prev_state = self.state;
+            let snapshot = self.engine.handshake_progress_snapshot();
 
-            let new_state = prev_state.make_progress(self)?;
+            let new_state = match prev_state.make_progress(self) {
+                Ok(new_state) => new_state,
+                Err(err) => {
+                    if err.is_transient() {
+                        self.engine.rollback_handshake_progress(snapshot);
+                    }
+                    return Err(err);
+                }
+            };
             if prev_state != new_state {
                 self.state = new_state;
                 trace!("{:?} -> {:?}", prev_state, new_state);

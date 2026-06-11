@@ -674,6 +674,35 @@ impl Engine {
         Ok(Some(handshake))
     }
 
+    pub(crate) fn handshake_progress_snapshot(&self) -> HandshakeProgressSnapshot {
+        HandshakeProgressSnapshot {
+            peer_handshake_seq_no: self.peer_handshake_seq_no,
+            transcript_len: self.transcript.len(),
+        }
+    }
+
+    pub(crate) fn rollback_handshake_progress(&mut self, snapshot: HandshakeProgressSnapshot) {
+        self.peer_handshake_seq_no = snapshot.peer_handshake_seq_no;
+        self.transcript.resize(snapshot.transcript_len, 0);
+
+        let mut keep = QueueRx::new();
+        while let Some(incoming) = self.queue_rx.pop_front() {
+            let drop_incoming = incoming
+                .first()
+                .first_handshake()
+                .is_some_and(|h| h.header.message_seq >= snapshot.peer_handshake_seq_no);
+
+            if drop_incoming {
+                incoming
+                    .into_records()
+                    .for_each(|r| self.buffers_free.push(r.into_buffer()));
+            } else {
+                keep.push_back(incoming);
+            }
+        }
+        self.queue_rx = keep;
+    }
+
     pub(crate) fn next_record(&mut self, ctype: ContentType) -> Option<&Record> {
         let record = self
             .queue_rx
@@ -1231,6 +1260,12 @@ impl Engine {
 
         Ok(verify_data)
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct HandshakeProgressSnapshot {
+    peer_handshake_seq_no: u16,
+    transcript_len: usize,
 }
 
 impl RecordHandler for Engine {
