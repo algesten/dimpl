@@ -13,12 +13,15 @@ use super::HelloVerifyRequest;
 use super::ServerHello;
 use super::ServerKeyExchange;
 use crate::buffer::Buf;
+use arrayvec::ArrayVec;
 use nom::Err;
 use nom::IResult;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
 use nom::number::complete::{be_u16, be_u24};
+
+const MAX_DEFRAGMENT_HANDSHAKES: usize = 50;
 
 #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
 pub struct Header {
@@ -154,8 +157,11 @@ impl Handshake {
         let Body::Fragment(range) = &first_handshake.body else {
             unreachable!("Non-Fragment body in defragment()")
         };
+        let mut handled = ArrayVec::<&Handshake, MAX_DEFRAGMENT_HANDSHAKES>::new();
+        handled
+            .try_push(first_handshake)
+            .map_err(|_| crate::InternalError::too_many_records())?;
         buffer.extend_from_slice(&first_buffer[range.clone()]);
-        first_handshake.set_handled();
 
         for (handshake, source_buf) in iter {
             if handshake.header.msg_type != first_handshake.header.msg_type {
@@ -166,7 +172,9 @@ impl Handshake {
                 unreachable!("Non-Fragment body in defragment()")
             };
 
-            handshake.handled.store(true, Ordering::Relaxed);
+            handled
+                .try_push(handshake)
+                .map_err(|_| crate::InternalError::too_many_records())?;
 
             buffer.extend_from_slice(&source_buf[range.clone()]);
         }
@@ -176,7 +184,18 @@ impl Handshake {
             return Err(crate::InternalError::parse_incomplete());
         }
 
-        // If transcript is provided, write the handshake header + body before parsing
+        let (rest, body) = Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?;
+
+        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
+            debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
+            return Err(crate::InternalError::parse_incomplete());
+        }
+
+        for handshake in handled {
+            handshake.set_handled();
+        }
+
+        // If transcript is provided, write the handshake header + body after parsing succeeds.
         if let Some(transcript) = transcript {
             transcript.push(first_handshake.header.msg_type.as_u8());
             transcript.extend_from_slice(&first_handshake.header.length.to_be_bytes()[1..]);
@@ -185,13 +204,6 @@ impl Handshake {
             transcript.extend_from_slice(&0u32.to_be_bytes()[1..]);
             transcript.extend_from_slice(&first_handshake.header.length.to_be_bytes()[1..]);
             transcript.extend_from_slice(&buffer[..first_handshake.header.length as usize]);
-        }
-
-        let (rest, body) = Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?;
-
-        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
-            debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
-            return Err(crate::InternalError::parse_incomplete());
         }
 
         let handshake = Handshake {
@@ -694,5 +706,34 @@ mod tests {
         assert_eq!(parsed, handshake);
 
         assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn failed_defragment_parse_does_not_mark_handshake_or_write_transcript() {
+        let mut body = MESSAGE[12..].to_vec();
+        body[38] = 0;
+        body[39] = 3;
+
+        let handshake = Handshake::new(
+            MessageType::ClientHello,
+            body.len() as u32,
+            0,
+            0,
+            body.len() as u32,
+            Body::Fragment(0..body.len()),
+        );
+
+        let mut defragmented_buffer = Buf::new();
+        let mut transcript = Buf::new();
+        let result = Handshake::defragment(
+            std::iter::once((&handshake, body.as_slice())),
+            &mut defragmented_buffer,
+            None,
+            Some(&mut transcript),
+        );
+
+        assert!(result.is_err());
+        assert!(!handshake.is_handled());
+        assert!(transcript.is_empty());
     }
 }
