@@ -380,7 +380,7 @@ impl Engine {
 
         mark_stale_handshakes(&incoming, self.peer_handshake_seq_no);
 
-        let Some(handshake) = first_relevant_handshake(&incoming, self.peer_handshake_seq_no)
+        let Some((_, handshake)) = first_relevant_handshake(&incoming, self.peer_handshake_seq_no)
         else {
             return Ok(());
         };
@@ -401,6 +401,7 @@ impl Engine {
 
         let search_result = self.queue_rx.binary_search_by(|item| {
             let key_other = first_relevant_handshake(item, self.peer_handshake_seq_no)
+                .map(|(_, h)| h)
                 .map(|h| (h.header.message_seq, h.header.fragment_offset))
                 .unwrap_or((u16::MAX, u32::MAX));
             key_other.cmp(&key_current)
@@ -878,7 +879,7 @@ impl Engine {
                 .any(|h| h.header.message_seq >= snapshot.peer_handshake_seq_no);
 
             if reject_incoming {
-                mark_incoming_handled(incoming);
+                mark_rejected_handshakes(incoming, snapshot.peer_handshake_seq_no);
             }
         }
     }
@@ -2526,13 +2527,16 @@ pub(crate) struct HandshakeProgressSnapshot {
     transcript_len: usize,
 }
 
-fn first_relevant_handshake(incoming: &Incoming, peer_handshake_seq_no: u16) -> Option<&Handshake> {
+fn first_relevant_handshake(
+    incoming: &Incoming,
+    peer_handshake_seq_no: u16,
+) -> Option<(&Record, &Handshake)> {
     incoming
         .records()
         .iter()
-        .flat_map(|r| r.handshakes())
-        .filter(|h| !h.is_handled())
-        .find(|h| h.header.message_seq >= peer_handshake_seq_no)
+        .flat_map(|r| r.handshakes().iter().map(move |h| (r, h)))
+        .filter(|(_, h)| !h.is_handled())
+        .find(|(_, h)| h.header.message_seq >= peer_handshake_seq_no)
 }
 
 fn mark_stale_handshakes(incoming: &Incoming, peer_handshake_seq_no: u16) {
@@ -2546,16 +2550,14 @@ fn mark_stale_handshakes(incoming: &Incoming, peer_handshake_seq_no: u16) {
     }
 }
 
-fn mark_incoming_handled(incoming: &Incoming) {
+fn mark_rejected_handshakes(incoming: &Incoming, peer_handshake_seq_no: u16) {
     for record in incoming.records().iter() {
-        if record.handshakes().is_empty() {
-            if !record.is_handled() {
-                record.set_handled();
-            }
-        } else {
-            for handshake in record.handshakes() {
-                handshake.set_handled();
-            }
+        for handshake in record
+            .handshakes()
+            .iter()
+            .filter(|h| h.header.message_seq >= peer_handshake_seq_no)
+        {
+            handshake.set_handled();
         }
     }
 }
@@ -2644,14 +2646,36 @@ mod tests {
         packet
     }
 
-    fn parsed_key_update(seq: u16) -> Incoming {
+    fn encrypted_app_data_record(seq: u16, payload: &[u8]) -> Vec<u8> {
+        let mut fragment = Vec::new();
+        fragment.extend_from_slice(payload);
+        fragment.push(ContentType::ApplicationData.as_u8());
+
+        let mut packet = Vec::new();
+        packet.push(
+            0b0010_0000
+                | 0b0000_1000 // 2-byte sequence number.
+                | 0b0000_0100 // explicit length.
+                | 0b0000_0010, // epoch bits resolved by PassthroughRecordHandler.
+        );
+        packet.extend_from_slice(&seq.to_be_bytes());
+        packet.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+        packet.extend_from_slice(&fragment);
+        packet
+    }
+
+    fn parsed_packet(packet: &[u8]) -> Incoming {
         Incoming::parse_packet(
-            &encrypted_key_update_record(seq),
+            packet,
             &mut PassthroughRecordHandler,
             Some(Dtls13CipherSuite::AES_128_GCM_SHA256),
         )
-        .expect("parse key update packet")
+        .expect("parse packet")
         .expect("packet contains a record")
+    }
+
+    fn parsed_key_update(seq: u16) -> Incoming {
+        parsed_packet(&encrypted_key_update_record(seq))
     }
 
     /// Issue 2: Epoch-0 sequence number must have an overflow guard.
@@ -2819,6 +2843,44 @@ mod tests {
         assert!(
             !engine.flight_saved_records[0].acked,
             "malformed ACK vector length must not partially acknowledge records"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn rollback_preserves_coalesced_application_data() {
+        let mut packet = encrypted_app_data_record(0, b"still-pending");
+        packet.extend_from_slice(&encrypted_key_update_record(1));
+        let incoming = parsed_packet(&packet);
+
+        let app_record = incoming
+            .records()
+            .iter()
+            .find(|record| record.record().content_type == ContentType::ApplicationData)
+            .expect("packet contains application data");
+        let key_update = incoming
+            .records()
+            .iter()
+            .flat_map(|record| record.handshakes())
+            .find(|handshake| handshake.header.msg_type == MessageType::KeyUpdate)
+            .expect("packet contains KeyUpdate");
+
+        assert!(!app_record.is_handled());
+        assert!(!key_update.is_handled());
+
+        let snapshot = HandshakeProgressSnapshot {
+            peer_handshake_seq_no: key_update.header.message_seq,
+            transcript_len: 0,
+        };
+        mark_rejected_handshakes(&incoming, snapshot.peer_handshake_seq_no);
+
+        assert!(
+            !app_record.is_handled(),
+            "rollback must not consume application data coalesced with a rejected handshake"
+        );
+        assert!(
+            key_update.is_handled(),
+            "rollback should discard the rejected handshake"
         );
     }
 }

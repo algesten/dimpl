@@ -280,7 +280,8 @@ impl Engine {
 
         mark_stale_handshakes(&incoming, self.peer_handshake_seq_no);
 
-        let Some(handshake) = first_relevant_handshake(&incoming, self.peer_handshake_seq_no)
+        let Some((record, handshake)) =
+            first_relevant_handshake(&incoming, self.peer_handshake_seq_no)
         else {
             return Ok(());
         };
@@ -290,7 +291,7 @@ impl Engine {
             handshake.header.fragment_offset,
         );
 
-        if self.peer_encryption_enabled && incoming.first().record().sequence.epoch == 0 {
+        if self.peer_encryption_enabled && record.record().sequence.epoch == 0 {
             // Keep old plaintext handshake records available long enough to
             // trigger flight resends above, but never queue or process them as
             // new messages after peer encryption is enabled.
@@ -304,6 +305,7 @@ impl Engine {
 
         let search_result = self.queue_rx.binary_search_by(|item| {
             let key_other = first_relevant_handshake(item, self.peer_handshake_seq_no)
+                .map(|(_, h)| h)
                 .map(|h| (h.header.message_seq, h.header.fragment_offset))
                 .unwrap_or((u16::MAX, u32::MAX));
             key_other.cmp(&key_current)
@@ -697,7 +699,7 @@ impl Engine {
                 .any(|h| h.header.message_seq >= snapshot.peer_handshake_seq_no);
 
             if reject_incoming {
-                mark_incoming_handled(incoming);
+                mark_rejected_handshakes(incoming, snapshot.peer_handshake_seq_no);
             }
         }
     }
@@ -1267,13 +1269,16 @@ pub(crate) struct HandshakeProgressSnapshot {
     transcript_len: usize,
 }
 
-fn first_relevant_handshake(incoming: &Incoming, peer_handshake_seq_no: u16) -> Option<&Handshake> {
+fn first_relevant_handshake(
+    incoming: &Incoming,
+    peer_handshake_seq_no: u16,
+) -> Option<(&Record, &Handshake)> {
     incoming
         .records()
         .iter()
-        .flat_map(|r| r.handshakes())
-        .filter(|h| !h.is_handled())
-        .find(|h| h.header.message_seq >= peer_handshake_seq_no)
+        .flat_map(|r| r.handshakes().iter().map(move |h| (r, h)))
+        .filter(|(_, h)| !h.is_handled())
+        .find(|(_, h)| h.header.message_seq >= peer_handshake_seq_no)
 }
 
 fn mark_stale_handshakes(incoming: &Incoming, peer_handshake_seq_no: u16) {
@@ -1287,16 +1292,14 @@ fn mark_stale_handshakes(incoming: &Incoming, peer_handshake_seq_no: u16) {
     }
 }
 
-fn mark_incoming_handled(incoming: &Incoming) {
+fn mark_rejected_handshakes(incoming: &Incoming, peer_handshake_seq_no: u16) {
     for record in incoming.records().iter() {
-        if record.handshakes().is_empty() {
-            if !record.is_handled() {
-                record.set_handled();
-            }
-        } else {
-            for handshake in record.handshakes() {
-                handshake.set_handled();
-            }
+        for handshake in record
+            .handshakes()
+            .iter()
+            .filter(|h| h.header.message_seq >= peer_handshake_seq_no)
+        {
+            handshake.set_handled();
         }
     }
 }
@@ -1443,5 +1446,121 @@ impl RecordHandler for Engine {
 
     fn can_discard_bad_protected_record(&self) -> bool {
         self.release_app_data
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct PassthroughRecordHandler;
+
+    impl RecordHandler for PassthroughRecordHandler {
+        fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
+            Ok(Some(record))
+        }
+
+        fn is_peer_encryption_enabled(&self) -> bool {
+            true
+        }
+
+        fn replay_check(&self, _seq: Sequence) -> bool {
+            true
+        }
+
+        fn replay_update(&mut self, _seq: Sequence) {}
+
+        fn decryption_aad_and_nonce(&self, _dtls: &DTLSRecord, _buf: &[u8]) -> (Aad, Nonce) {
+            (
+                Aad::new_dtls12(ContentType::Handshake, Sequence::new(1), 0),
+                Nonce::xor(&[0; 12], 0),
+            )
+        }
+
+        fn explicit_nonce_len(&self) -> usize {
+            0
+        }
+
+        fn min_protected_fragment_len(&self) -> usize {
+            0
+        }
+
+        fn decrypt_data(
+            &mut self,
+            _ciphertext: &mut TmpBuf,
+            _aad: Aad,
+            _nonce: Nonce,
+        ) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
+    fn test_engine() -> Engine {
+        Engine::new(Arc::new(Config::default()), AuthMode::Psk)
+    }
+
+    fn handshake_record(content_type: ContentType, epoch: u16, seq: u64, msg_seq: u16) -> Vec<u8> {
+        let mut fragment = Vec::new();
+        fragment.push(MessageType::Finished.as_u8());
+        fragment.extend_from_slice(&0u32.to_be_bytes()[1..]);
+        fragment.extend_from_slice(&msg_seq.to_be_bytes());
+        fragment.extend_from_slice(&0u32.to_be_bytes()[1..]);
+        fragment.extend_from_slice(&0u32.to_be_bytes()[1..]);
+
+        let mut out = Vec::new();
+        out.push(content_type.as_u8());
+        out.extend_from_slice(&[0xFE, 0xFD]);
+        out.extend_from_slice(&epoch.to_be_bytes());
+        out.extend_from_slice(&seq.to_be_bytes()[2..]);
+        out.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+        out.extend_from_slice(&fragment);
+        out
+    }
+
+    fn ccs_record(seq: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.push(ContentType::ChangeCipherSpec.as_u8());
+        out.extend_from_slice(&[0xFE, 0xFD]);
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&seq.to_be_bytes()[2..]);
+        out.extend_from_slice(&1u16.to_be_bytes());
+        out.push(1);
+        out
+    }
+
+    #[test]
+    fn encrypted_relevant_handshake_after_stale_plaintext_is_queued() {
+        let mut engine = test_engine();
+        engine.peer_encryption_enabled = true;
+        engine.peer_handshake_seq_no = 1;
+
+        let mut packet = handshake_record(ContentType::Handshake, 0, 0, 0);
+        packet.extend_from_slice(&ccs_record(1));
+        packet.extend_from_slice(&handshake_record(ContentType::Handshake, 1, 0, 1));
+
+        let incoming = Incoming::parse_packet(
+            &packet,
+            &mut PassthroughRecordHandler,
+            Some(Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256),
+        )
+        .expect("parse packet")
+        .expect("packet contains records");
+
+        engine
+            .insert_incoming(incoming)
+            .expect("insert mixed retransmission");
+
+        assert_eq!(engine.queue_rx.len(), 1);
+        assert!(
+            engine.queue_rx[0]
+                .records()
+                .iter()
+                .any(|record| record.record().sequence.epoch == 1
+                    && record
+                        .handshakes()
+                        .iter()
+                        .any(|handshake| handshake.header.message_seq == 1)),
+            "relevant encrypted Finished must remain queued even when stale plaintext starts the datagram"
+        );
     }
 }
