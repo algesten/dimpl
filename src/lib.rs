@@ -68,6 +68,7 @@
 //! - `Packet(&[u8])`: send on your UDP socket
 //! - `Timeout(Instant)`: schedule a timer and call `handle_timeout` at/after it
 //! - `Connected`: handshake complete
+//! - `NegotiatedVersion(ProtocolVersion)`: the DTLS version that was negotiated
 //! - `PeerCert(&[u8])`: peer leaf certificate (DER) — validate in your app
 //! - `KeyingMaterial(KeyingMaterial, SrtpProfile)`: DTLS‑SRTP export
 //! - `ApplicationData(&[u8])`: plaintext received from peer
@@ -116,6 +117,9 @@
 //!                 Output::Timeout(t) => { next_wake = Some(t); break; }
 //!                 Output::Connected => {
 //!                     // DTLS established — application may start sending
+//!                 }
+//!                 Output::NegotiatedVersion(_v) => {
+//!                     // Inspect the negotiated DTLS protocol version if desired
 //!                 }
 //!                 Output::PeerCert(_der) => {
 //!                     // Inspect peer leaf certificate if desired
@@ -529,26 +533,6 @@ impl Dtls {
         Dtls { inner: Some(inner) }
     }
 
-    /// Returns the negotiated DTLS protocol version.
-    ///
-    /// Returns `None` for auto-sense instances that have not yet completed
-    /// version negotiation (i.e. still in a `Pending` state).
-    pub fn protocol_version(&self) -> Option<ProtocolVersion> {
-        match self.inner.as_ref()? {
-            Inner::Client12(_) | Inner::Server12(_) => Some(ProtocolVersion::DTLS1_2),
-            Inner::Client13(_) => Some(ProtocolVersion::DTLS1_3),
-            Inner::Server13(s) => {
-                // Still waiting for a complete ClientHello
-                if s.is_auto_mode() {
-                    None
-                } else {
-                    Some(ProtocolVersion::DTLS1_3)
-                }
-            }
-            Inner::ClientPending(_) => None,
-        }
-    }
-
     /// Return true if the instance is operating in the client role.
     pub fn is_active(&self) -> bool {
         matches!(
@@ -846,6 +830,12 @@ pub enum Output<'a> {
     Timeout(Instant),
     /// The handshake completed and the connection is established.
     Connected,
+    /// The negotiated DTLS protocol version.
+    ///
+    /// Emitted exactly once per connection, immediately after
+    /// [`Output::Connected`]. The value is always a concrete protocol
+    /// version (`DTLS1_2` or `DTLS1_3`).
+    NegotiatedVersion(ProtocolVersion),
     /// The peer's leaf certificate in DER encoding.
     ///
     /// Applications must validate this certificate independently (chain,
@@ -865,6 +855,7 @@ impl fmt::Debug for Output<'_> {
             Self::Packet(v) => write!(f, "Packet({})", v.len()),
             Self::Timeout(v) => write!(f, "Timeout({:?})", v),
             Self::Connected => write!(f, "Connected"),
+            Self::NegotiatedVersion(v) => write!(f, "NegotiatedVersion({:?})", v),
             Self::PeerCert(v) => write!(f, "PeerCert({})", v.len()),
             Self::KeyingMaterial(v, p) => write!(f, "KeyingMaterial({}, {:?})", v.len(), p),
             Self::ApplicationData(v) => write!(f, "ApplicationData({})", v.len()),
@@ -1031,24 +1022,6 @@ mod test {
         is_unwind_safe(new_instance());
         is_unwind_safe(new_instance_13());
         is_unwind_safe(new_instance_auto());
-    }
-
-    #[test]
-    fn test_protocol_version_12() {
-        let dtls = new_instance();
-        assert_eq!(dtls.protocol_version(), Some(ProtocolVersion::DTLS1_2));
-    }
-
-    #[test]
-    fn test_protocol_version_13() {
-        let dtls = new_instance_13();
-        assert_eq!(dtls.protocol_version(), Some(ProtocolVersion::DTLS1_3));
-    }
-
-    #[test]
-    fn test_protocol_version_auto_pending() {
-        let dtls = new_instance_auto();
-        assert_eq!(dtls.protocol_version(), None);
     }
 
     #[test]

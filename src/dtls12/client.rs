@@ -86,6 +86,7 @@ pub struct Client {
 pub(crate) enum LocalEvent {
     PeerCert,
     Connected,
+    NegotiatedVersion(ProtocolVersion),
     KeyingMaterial(ArrayVec<u8, 88>, SrtpProfile),
 }
 
@@ -1143,6 +1144,9 @@ impl State {
 
         // Emit Connected event
         client.local_events.push_back(LocalEvent::Connected);
+        client
+            .local_events
+            .push_back(LocalEvent::NegotiatedVersion(ProtocolVersion::DTLS1_2));
 
         // Extract and emit SRTP keying material if we have a negotiated profile
         if let Some(profile) = client.negotiated_srtp_profile {
@@ -1388,6 +1392,7 @@ impl LocalEvent {
                 Output::PeerCert(&buf[..l])
             }
             LocalEvent::Connected => Output::Connected,
+            LocalEvent::NegotiatedVersion(v) => Output::NegotiatedVersion(v),
             LocalEvent::KeyingMaterial(m, profile) => {
                 Output::KeyingMaterial(KeyingMaterial::new(&m), profile)
             }

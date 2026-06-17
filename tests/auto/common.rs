@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, Output, SrtpProfile};
+use dimpl::{Config, Dtls, Output, ProtocolVersion, SrtpProfile};
 
 /// Collected outputs from polling an endpoint to `Timeout`.
 #[derive(Default, Debug)]
@@ -17,6 +17,7 @@ pub struct DrainedOutputs {
     pub app_data: Vec<Vec<u8>>,
     pub timeout: Option<Instant>,
     pub close_notify: bool,
+    pub negotiated_version: Option<ProtocolVersion>,
 }
 
 /// Poll until `Timeout`, collecting only packets.
@@ -41,6 +42,7 @@ pub fn drain_outputs(endpoint: &mut Dtls) -> DrainedOutputs {
         match endpoint.poll_output(&mut buf) {
             Output::Packet(p) => result.packets.push(p.to_vec()),
             Output::Connected => result.connected = true,
+            Output::NegotiatedVersion(v) => result.negotiated_version = Some(v),
             Output::PeerCert(cert) => result.peer_cert = Some(cert.to_vec()),
             Output::KeyingMaterial(km, profile) => {
                 result.keying_material = Some((km.to_vec(), profile));

@@ -1133,6 +1133,9 @@ impl State {
 
         // Emit Connected event
         server.local_events.push_back(LocalEvent::Connected);
+        server
+            .local_events
+            .push_back(LocalEvent::NegotiatedVersion(ProtocolVersion::DTLS1_3));
 
         // Extract and emit SRTP keying material if negotiated
         if let Some(profile) = server.negotiated_srtp_profile {

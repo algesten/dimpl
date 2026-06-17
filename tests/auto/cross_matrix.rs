@@ -61,6 +61,8 @@ fn try_handshake(
     let mut now = Instant::now();
     let mut cc = false;
     let mut sc = false;
+    let mut cv: Option<ProtocolVersion> = None;
+    let mut sv: Option<ProtocolVersion> = None;
 
     for _ in 0..80 {
         if client.handle_timeout(now).is_err() {
@@ -79,6 +81,12 @@ fn try_handshake(
         if so.connected {
             sc = true;
         }
+        if let Some(v) = co.negotiated_version {
+            cv = Some(v);
+        }
+        if let Some(v) = so.negotiated_version {
+            sv = Some(v);
+        }
 
         // Deliver packets, ignoring errors (incompatible version → errors are expected)
         for p in &co.packets {
@@ -89,10 +97,7 @@ fn try_handshake(
         }
 
         if cc && sc {
-            return Some((
-                client.protocol_version().unwrap(),
-                server.protocol_version().unwrap(),
-            ));
+            return Some((cv.unwrap(), sv.unwrap()));
         }
 
         now += Duration::from_millis(10);

@@ -1075,6 +1075,9 @@ impl State {
         // Handshake complete
         debug!("Handshake complete; ready for application data");
         server.local_events.push_back(LocalEvent::Connected);
+        server
+            .local_events
+            .push_back(LocalEvent::NegotiatedVersion(ProtocolVersion::DTLS1_2));
 
         // Emit SRTP keying material if negotiated
         if let Some(profile) = server.negotiated_srtp_profile {

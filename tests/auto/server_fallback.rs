@@ -20,6 +20,8 @@ fn run_handshake(
     let mut now = Instant::now();
     let mut client_connected = false;
     let mut server_connected = false;
+    let mut client_ver: Option<ProtocolVersion> = None;
+    let mut server_ver: Option<ProtocolVersion> = None;
 
     for _ in 0..80 {
         client.handle_timeout(now).expect("client timeout");
@@ -34,6 +36,12 @@ fn run_handshake(
         if server_out.connected {
             server_connected = true;
         }
+        if let Some(v) = client_out.negotiated_version {
+            client_ver = Some(v);
+        }
+        if let Some(v) = server_out.negotiated_version {
+            server_ver = Some(v);
+        }
 
         deliver_packets(&client_out.packets, server);
         deliver_packets(&server_out.packets, client);
@@ -45,12 +53,7 @@ fn run_handshake(
         now += Duration::from_millis(10);
     }
 
-    (
-        client_connected,
-        server_connected,
-        client.protocol_version(),
-        server.protocol_version(),
-    )
+    (client_connected, server_connected, client_ver, server_ver)
 }
 
 // ============================================================================
@@ -108,30 +111,6 @@ fn auto_server_send_application_data_pending() {
 
     assert!(cc, "Client should connect after pending send");
     assert!(sc, "Server should connect after pending send");
-    assert_eq!(cv, Some(ProtocolVersion::DTLS1_2));
-    assert_eq!(sv, Some(ProtocolVersion::DTLS1_2));
-}
-
-#[test]
-#[cfg(feature = "rcgen")]
-fn auto_server_protocol_version_pending() {
-    use dimpl::certificate::generate_self_signed_certificate;
-
-    let client_cert = generate_self_signed_certificate().unwrap();
-    let server_cert = generate_self_signed_certificate().unwrap();
-    let config = default_config();
-
-    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, Instant::now());
-    client.set_active(true);
-
-    let mut server = Dtls::new_auto(config, server_cert, Instant::now());
-
-    assert_eq!(server.protocol_version(), None);
-
-    let (cc, sc, cv, sv) = run_handshake(&mut client, &mut server);
-
-    assert!(cc, "Client should connect after pending protocol check");
-    assert!(sc, "Server should connect after pending protocol check");
     assert_eq!(cv, Some(ProtocolVersion::DTLS1_2));
     assert_eq!(sv, Some(ProtocolVersion::DTLS1_2));
 }
