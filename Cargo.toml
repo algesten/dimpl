@@ -85,4 +85,4 @@ bytes = "1"
 
 # wolfssl doesn't build on Windows
 [target.'cfg(not(windows))'.dev-dependencies]
-wolfssl = "4.1.0"
+wolfssl = "7.2.0"
