@@ -219,7 +219,12 @@ impl Handshake {
             Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?
         };
 
-        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
+        if !rest.is_empty()
+            && first_handshake
+                .header
+                .msg_type
+                .rejects_trailing_body_bytes()
+        {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
             return Err(crate::InternalError::parse_incomplete());
         }
@@ -311,6 +316,10 @@ impl MessageType {
 
     const fn is_unknown(&self) -> bool {
         !matches!(*self, Self(1..=2 | 8 | 11 | 13 | 15 | 20 | 24))
+    }
+
+    const fn rejects_trailing_body_bytes(&self) -> bool {
+        !self.is_unknown()
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], MessageType> {
@@ -650,6 +659,32 @@ mod tests {
             result.is_err(),
             "KeyUpdate bodies with trailing bytes must be rejected"
         );
+        assert!(!handshake.is_handled());
+        assert!(transcript.is_empty());
+    }
+
+    #[test]
+    fn known_body_rejects_trailing_bytes() {
+        let source = [0, 0, 0];
+        let handshake = Handshake::new(
+            MessageType::EncryptedExtensions,
+            source.len() as u32,
+            0,
+            0,
+            source.len() as u32,
+            Body::Fragment(0..source.len()),
+        );
+
+        let mut buffer = Buf::new();
+        let mut transcript = Buf::new();
+        let result = Handshake::defragment(
+            std::iter::once((&handshake, source.as_slice())),
+            &mut buffer,
+            None,
+            Some(&mut transcript),
+        );
+
+        assert!(result.is_err());
         assert!(!handshake.is_handled());
         assert!(transcript.is_empty());
     }

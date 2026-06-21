@@ -186,7 +186,12 @@ impl Handshake {
 
         let (rest, body) = Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?;
 
-        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
+        if !rest.is_empty()
+            && first_handshake
+                .header
+                .msg_type
+                .rejects_trailing_body_bytes()
+        {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
             return Err(crate::InternalError::parse_incomplete());
         }
@@ -334,6 +339,10 @@ impl MessageType {
 
     const fn is_unknown(&self) -> bool {
         !matches!(*self, Self(0..=4 | 11..=16 | 20))
+    }
+
+    const fn rejects_trailing_body_bytes(&self) -> bool {
+        !self.is_unknown()
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], MessageType> {
@@ -722,6 +731,32 @@ mod tests {
 
         let handshake = Handshake::new(
             MessageType::ClientHello,
+            body.len() as u32,
+            0,
+            0,
+            body.len() as u32,
+            Body::Fragment(0..body.len()),
+        );
+
+        let mut defragmented_buffer = Buf::new();
+        let mut transcript = Buf::new();
+        let result = Handshake::defragment(
+            std::iter::once((&handshake, body.as_slice())),
+            &mut defragmented_buffer,
+            None,
+            Some(&mut transcript),
+        );
+
+        assert!(result.is_err());
+        assert!(!handshake.is_handled());
+        assert!(transcript.is_empty());
+    }
+
+    #[test]
+    fn known_body_rejects_trailing_bytes() {
+        let body = [0];
+        let handshake = Handshake::new(
+            MessageType::HelloRequest,
             body.len() as u32,
             0,
             0,
