@@ -209,14 +209,26 @@ impl Handshake {
         }
 
         let (rest, body) = if allow_unknown_client_hello_suites {
-            Body::parse_allow_unknown_client_hello_suites(
+            match Body::parse_allow_unknown_client_hello_suites(
                 buffer,
                 0,
                 first_handshake.header.msg_type,
                 cipher_suite,
-            )?
+            ) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    mark_handled(handled);
+                    return Err(err.into());
+                }
+            }
         } else {
-            Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?
+            match Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    mark_handled(handled);
+                    return Err(err.into());
+                }
+            }
         };
 
         if !rest.is_empty()
@@ -226,6 +238,7 @@ impl Handshake {
                 .rejects_trailing_body_bytes()
         {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
+            mark_handled(handled);
             return Err(crate::InternalError::parse_incomplete());
         }
 
@@ -235,9 +248,7 @@ impl Handshake {
         // extension payload fails later may therefore have been consumed here; that
         // recovery edge is accepted to keep this path parser-only and avoid the
         // broader transaction/rollback machinery.
-        for handshake in handled {
-            handshake.set_handled();
-        }
+        mark_handled(handled);
 
         // If transcript is provided, write the TLS 1.3-style header + body after parsing succeeds.
         // Per RFC 9147 Section 5.2, the transcript uses msg_type(1) + length(3)
@@ -288,6 +299,12 @@ impl Handshake {
 
     pub fn set_handled(&self) {
         self.handled.store(true, Ordering::Relaxed);
+    }
+}
+
+fn mark_handled(handled: ArrayVec<&Handshake, MAX_DEFRAGMENT_HANDSHAKES>) {
+    for handshake in handled {
+        handshake.set_handled();
     }
 }
 
@@ -659,7 +676,7 @@ mod tests {
             result.is_err(),
             "KeyUpdate bodies with trailing bytes must be rejected"
         );
-        assert!(!handshake.is_handled());
+        assert!(handshake.is_handled());
         assert!(transcript.is_empty());
     }
 
@@ -685,7 +702,7 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(!handshake.is_handled());
+        assert!(handshake.is_handled());
         assert!(transcript.is_empty());
     }
 }

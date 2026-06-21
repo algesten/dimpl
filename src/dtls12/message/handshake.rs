@@ -184,7 +184,14 @@ impl Handshake {
             return Err(crate::InternalError::parse_incomplete());
         }
 
-        let (rest, body) = Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?;
+        let (rest, body) =
+            match Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    mark_handled(handled);
+                    return Err(err.into());
+                }
+            };
 
         if !rest.is_empty()
             && first_handshake
@@ -193,6 +200,7 @@ impl Handshake {
                 .rejects_trailing_body_bytes()
         {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
+            mark_handled(handled);
             return Err(crate::InternalError::parse_incomplete());
         }
 
@@ -202,9 +210,7 @@ impl Handshake {
         // extension payload fails later may therefore have been consumed here; that
         // recovery edge is accepted to keep this path parser-only and avoid the
         // broader transaction/rollback machinery.
-        for handshake in handled {
-            handshake.set_handled();
-        }
+        mark_handled(handled);
 
         // If transcript is provided, write the handshake header + body after parsing succeeds.
         if let Some(transcript) = transcript {
@@ -307,6 +313,12 @@ impl Handshake {
 
     pub fn set_handled(&self) {
         self.handled.store(true, Ordering::Relaxed);
+    }
+}
+
+fn mark_handled(handled: ArrayVec<&Handshake, MAX_DEFRAGMENT_HANDSHAKES>) {
+    for handshake in handled {
+        handshake.set_handled();
     }
 }
 
@@ -724,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_defragment_parse_does_not_mark_handshake_or_write_transcript() {
+    fn failed_defragment_parse_discards_candidate_without_writing_transcript() {
         let mut body = MESSAGE[12..].to_vec();
         body[38] = 0;
         body[39] = 3;
@@ -748,7 +760,7 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(!handshake.is_handled());
+        assert!(handshake.is_handled());
         assert!(transcript.is_empty());
     }
 
@@ -774,7 +786,7 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(!handshake.is_handled());
+        assert!(handshake.is_handled());
         assert!(transcript.is_empty());
     }
 }
