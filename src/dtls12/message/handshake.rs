@@ -191,6 +191,12 @@ impl Handshake {
             return Err(crate::InternalError::parse_incomplete());
         }
 
+        // Intentional boundary: Body::parse validates the handshake body shape and
+        // extension envelopes, but known extension payloads remain validated by the
+        // client/server state handlers. A transiently corrupted UDP datagram whose
+        // extension payload fails later may therefore have been consumed here; that
+        // recovery edge is accepted to keep this path parser-only and avoid the
+        // broader transaction/rollback machinery.
         for handshake in handled {
             handshake.set_handled();
         }
