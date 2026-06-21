@@ -3,6 +3,7 @@
 mod wolfssl_helper;
 
 mod common;
+mod conformance;
 mod data;
 mod edge;
 mod fragmentation;

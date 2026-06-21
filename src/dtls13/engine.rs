@@ -158,6 +158,10 @@ pub struct Engine {
     /// Set when app_send_record_count reaches aead_encryption_threshold.
     needs_key_update: bool,
 
+    /// A locally sent KeyUpdate is awaiting its ACK. Send keys are rotated only
+    /// after that ACK arrives, so application data continues on the old epoch.
+    key_update_in_flight: bool,
+
     /// Sequence number of the received close_notify alert, if any.
     /// Per RFC 9147 §5.10, any data with an epoch/sequence number pair
     /// after this must be discarded; earlier records are still valid.
@@ -252,6 +256,7 @@ impl Engine {
             app_send_record_count: 0,
             aead_encryption_threshold,
             needs_key_update: false,
+            key_update_in_flight: false,
             close_notify_sequence: None,
             close_notify_reported: false,
         }
@@ -301,7 +306,7 @@ impl Engine {
     }
 
     pub fn is_key_update_in_flight(&self) -> bool {
-        self.prev_app_send_keys.is_some()
+        self.key_update_in_flight
     }
 
     /// Returns true if the AEAD encryption limit has been reached and a
@@ -409,7 +414,7 @@ impl Engine {
                 // Track received record numbers for ACK generation
                 for record in incoming.records().iter() {
                     let seq = record.record().sequence;
-                    if seq.epoch >= 2 {
+                    if seq.epoch >= 2 && record.record().content_type == ContentType::Handshake {
                         let _ = self
                             .received_record_numbers
                             .try_push((seq.epoch as u64, seq.sequence_number));
@@ -441,7 +446,8 @@ impl Engine {
                 if should_replace {
                     for record in incoming.records().iter() {
                         let seq = record.record().sequence;
-                        if seq.epoch >= 2 {
+                        if seq.epoch >= 2 && record.record().content_type == ContentType::Handshake
+                        {
                             let _ = self
                                 .received_record_numbers
                                 .try_push((seq.epoch as u64, seq.sequence_number));
@@ -1248,6 +1254,10 @@ impl Engine {
         self.hs_recv_keys = None;
     }
 
+    pub fn release_application_data_retaining_handshake_keys(&mut self) {
+        self.release_app_data = true;
+    }
+
     /// Whether a close_notify alert has been received from the peer.
     pub fn close_notify_received(&self) -> bool {
         self.close_notify_sequence.is_some()
@@ -1277,6 +1287,17 @@ impl Engine {
     ///
     /// ACK format: record_numbers_length(2) + N * (epoch(8) + sequence(8))
     pub fn send_ack(&mut self) -> Result<(), Error> {
+        self.send_ack_inner(false)
+    }
+
+    pub fn send_ack_retransmittable(&mut self) -> Result<(), Error> {
+        if !self.received_record_numbers.is_empty() {
+            self.flight_clear_resends();
+        }
+        self.send_ack_inner(true)
+    }
+
+    fn send_ack_inner(&mut self, save_fragment: bool) -> Result<(), Error> {
         if self.received_record_numbers.is_empty() {
             return Ok(());
         }
@@ -1288,7 +1309,7 @@ impl Engine {
             2
         };
 
-        self.create_ciphertext_record(ContentType::Ack, epoch, false, |fragment| {
+        self.create_ciphertext_record(ContentType::Ack, epoch, save_fragment, |fragment| {
             // record_numbers_length: 2 bytes, value = entries.len() * 16
             let len = (entries.len() * 16) as u16;
             fragment.extend_from_slice(&len.to_be_bytes());
@@ -1302,16 +1323,16 @@ impl Engine {
     }
 
     /// Process an incoming ACK record, marking acknowledged flight entries.
-    fn process_ack(&mut self, ack_data: &[u8]) {
+    fn process_ack(&mut self, ack_data: &[u8]) -> Result<(), Error> {
         if ack_data.len() < 2 {
-            return;
+            return Ok(());
         }
 
         let record_numbers_len = u16::from_be_bytes([ack_data[0], ack_data[1]]) as usize;
         let entries_data = &ack_data[2..];
 
         if entries_data.len() != record_numbers_len || record_numbers_len % 16 != 0 {
-            return;
+            return Ok(());
         }
 
         let num_entries = record_numbers_len / 16;
@@ -1351,17 +1372,21 @@ impl Engine {
             self.flight_clear_resends();
         }
 
-        // If all saved records are acked and we have prev send keys (KeyUpdate in flight),
-        // clear them and stop the flight timer.
-        if self.prev_app_send_keys.is_some()
+        // Rotate send keys only after the peer ACKs our KeyUpdate. Until then,
+        // application data continues on the old/current application epoch.
+        if self.key_update_in_flight
             && !self.flight_saved_records.is_empty()
             && self.flight_saved_records.iter().all(|e| e.acked)
         {
-            debug!("KeyUpdate ACKed; clearing previous send keys");
+            debug!("KeyUpdate ACKed; rotating send keys");
+            self.update_send_keys()?;
             self.prev_app_send_keys = None;
+            self.key_update_in_flight = false;
             self.flight_clear_resends();
             self.flight_timeout = Timeout::Disabled;
         }
+
+        Ok(())
     }
 
     // =========================================================================
@@ -1876,8 +1901,7 @@ impl Engine {
     /// Create and send a KeyUpdate handshake message.
     ///
     /// Arms the flight timer for retransmission. The KeyUpdate is sent on
-    /// the current app epoch, then send keys are rotated (old keys saved
-    /// in `prev_app_send_*` for retransmission).
+    /// the current app epoch. Send keys rotate only after its ACK arrives.
     pub fn create_key_update(&mut self, request: KeyUpdateRequest) -> Result<(), Error> {
         // Set up retransmission
         self.flight_backoff.reset(&mut self.rng);
@@ -1902,12 +1926,11 @@ impl Engine {
             fragment.push(request.as_u8());
         })?;
 
-        // Now rotate send keys (saves old keys for retransmission)
-        self.update_send_keys()?;
+        self.key_update_in_flight = true;
 
         debug!(
-            "KeyUpdate sent (request={:?}) on epoch {}, new send epoch {}",
-            request, epoch, self.app_send_epoch
+            "KeyUpdate sent (request={:?}) on epoch {}, awaiting ACK before rotating send keys",
+            request, epoch
         );
 
         Ok(())
@@ -2306,7 +2329,7 @@ impl RecordHandler for Engine {
         match record.record().content_type {
             ContentType::Ack => {
                 let fragment = record.record().fragment(record.buffer());
-                self.process_ack(fragment);
+                self.process_ack(fragment)?;
                 self.push_buffer(record.into_buffer());
                 Ok(None)
             }
@@ -2354,11 +2377,6 @@ impl RecordHandler for Engine {
         // After KeyUpdate, epoch_bits cycles: 3→0→1→2→3→...
         let epoch_bits = epoch_bits as u16;
 
-        // Check handshake epoch first
-        if self.hs_recv_keys.is_some() && (2 & 0x03) == epoch_bits {
-            return 2;
-        }
-
         // Check application recv epochs - return the newest (last) match
         // when multiple epochs share the same 2-bit value (e.g. epoch 3 and 7).
         let mut best = None;
@@ -2367,8 +2385,17 @@ impl RecordHandler for Engine {
                 best = Some(entry.epoch);
             }
         }
+
+        if self.hs_recv_keys.is_some() && (2 & 0x03) == epoch_bits && !self.release_app_data {
+            return 2;
+        }
+
         if let Some(epoch) = best {
             return epoch;
+        }
+
+        if self.hs_recv_keys.is_some() && (2 & 0x03) == epoch_bits {
+            return 2;
         }
 
         // Default to the epoch bits value
@@ -2579,6 +2606,24 @@ mod tests {
         packet
     }
 
+    fn encrypted_application_data_record(seq: u16, data: &[u8]) -> Vec<u8> {
+        let mut fragment = Vec::new();
+        fragment.extend_from_slice(data);
+        fragment.push(ContentType::ApplicationData.as_u8());
+
+        let mut packet = Vec::new();
+        packet.push(
+            0b0010_0000
+                | 0b0000_1000 // 2-byte sequence number.
+                | 0b0000_0100 // explicit length.
+                | 0b0000_0010, // epoch bits resolved by PassthroughRecordHandler.
+        );
+        packet.extend_from_slice(&seq.to_be_bytes());
+        packet.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+        packet.extend_from_slice(&fragment);
+        packet
+    }
+
     fn parsed_key_update(seq: u16) -> Incoming {
         Incoming::parse_packet(
             &encrypted_key_update_record(seq),
@@ -2587,6 +2632,18 @@ mod tests {
         )
         .expect("parse key update packet")
         .expect("packet contains a record")
+    }
+
+    fn parsed_key_update_with_app_data(key_update_seq: u16, app_seq: u16) -> Incoming {
+        let mut packet = encrypted_key_update_record(key_update_seq);
+        packet.extend_from_slice(&encrypted_application_data_record(app_seq, b"app-data"));
+        Incoming::parse_packet(
+            &packet,
+            &mut PassthroughRecordHandler,
+            Some(Dtls13CipherSuite::AES_128_GCM_SHA256),
+        )
+        .expect("parse coalesced packet")
+        .expect("packet contains records")
     }
 
     /// Issue 2: Epoch-0 sequence number must have an overflow guard.
@@ -2733,6 +2790,33 @@ mod tests {
 
     #[test]
     #[cfg(feature = "rcgen")]
+    fn ack_tracking_ignores_non_handshake_records_in_coalesced_datagram() {
+        let mut engine = test_engine();
+
+        let incoming = parsed_key_update_with_app_data(7, 8);
+        assert_eq!(incoming.records().len(), 2);
+        assert_eq!(
+            incoming.records()[0].record().content_type,
+            ContentType::Handshake
+        );
+        assert_eq!(
+            incoming.records()[1].record().content_type,
+            ContentType::ApplicationData
+        );
+
+        engine
+            .insert_incoming(incoming)
+            .expect("insert coalesced datagram");
+
+        assert_eq!(
+            engine.received_record_numbers.as_slice(),
+            &[(2, 7)],
+            "ACK bookkeeping must include only handshake records"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
     fn malformed_ack_record_number_vector_is_ignored() {
         let mut engine = test_engine();
         engine.flight_saved_records.push(Entry {
@@ -2749,7 +2833,7 @@ mod tests {
         malformed_ack.extend_from_slice(&7u64.to_be_bytes());
         malformed_ack.push(0);
 
-        engine.process_ack(&malformed_ack);
+        engine.process_ack(&malformed_ack).unwrap();
 
         assert!(
             !engine.flight_saved_records[0].acked,

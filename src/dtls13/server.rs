@@ -417,6 +417,13 @@ impl State {
             unreachable!()
         };
 
+        if !client_hello.legacy_cookie.is_empty() {
+            return Err(Error::SecurityError(
+                crate::SecurityError::InvalidLegacyCookieInClientHello,
+            )
+            .into());
+        }
+
         // Validate legacy_version
         if client_hello.legacy_version != ProtocolVersion::DTLS1_2 {
             return Err(Error::SecurityError(
@@ -792,7 +799,7 @@ impl State {
         // Truncate the metadata we appended
         server.extension_data.resize(meta_start, 0);
 
-        let client_session_id = server.client_session_id.unwrap_or_else(SessionId::empty);
+        let client_session_id = SessionId::empty();
 
         server.engine.flight_begin(2);
 
@@ -1126,7 +1133,7 @@ impl State {
         server.engine.advance_peer_handshake_seq();
 
         // ACK the client's epoch-2 flight so it stops retransmitting
-        server.engine.send_ack()?;
+        server.engine.send_ack_retransmittable()?;
 
         // Stop flight timers - handshake complete
         server.engine.flight_stop_resend_timers();
@@ -1150,7 +1157,9 @@ impl State {
             }
         }
 
-        server.engine.release_application_data();
+        server
+            .engine
+            .release_application_data_retaining_handshake_keys();
 
         debug!("Handshake complete; ready for application data");
 
@@ -1209,7 +1218,9 @@ impl State {
                 server.engine.send_ack()?;
 
                 // If peer requested us to update, schedule our own KeyUpdate
-                if request == KeyUpdateRequest::UpdateRequested {
+                if request == KeyUpdateRequest::UpdateRequested
+                    && !server.engine.is_key_update_in_flight()
+                {
                     server.pending_key_update_response = true;
                 }
 
@@ -1272,7 +1283,7 @@ fn send_hello_retry_request(
     selected_group: Option<NamedGroup>,
 ) -> Result<(), Error> {
     let hrr_random = Random { bytes: HRR_RANDOM };
-    let client_session_id = server.client_session_id.unwrap_or_else(SessionId::empty);
+    let client_session_id = SessionId::empty();
 
     server.engine.flight_begin(2);
 

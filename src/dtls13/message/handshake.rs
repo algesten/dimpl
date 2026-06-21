@@ -241,8 +241,8 @@ impl Handshake {
         Ok(handshake)
     }
 
-    // These are (unencrypted) handshakes that, when detected as
-    // duplicates, trigger a resend of the entire flight.
+    // These handshakes trigger a resend of the entire flight when detected as
+    // duplicates.
     pub fn dupe_triggers_resend(&self) -> Option<u16> {
         // Only trigger on the first fragment of a handshake message to avoid
         // multiple resends caused by fragmented duplicates of the same message.
@@ -253,6 +253,7 @@ impl Handshake {
         let qualifies = matches!(
             self.header.msg_type,
             MessageType::ClientHello // flight 1
+                | MessageType::Finished // client final flight
         );
 
         qualifies.then_some(self.header.message_seq)

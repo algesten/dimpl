@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Fix DTLS 1.3 RFC 9147 conformance issues #147
   * Represent DTLS wire-code identifiers as compact newtypes (breaking) #137
   * Make public errors structured and fatal-only (breaking) #134
 

@@ -463,13 +463,11 @@ impl State {
         // Check for HelloRetryRequest (magic random)
         if server_hello.is_hello_retry_request() {
             if client.hello_retry {
-                // Stale retransmission of the HRR we already processed.
-                // Roll back the transcript and silently discard. The CH2
-                // flight will be retransmitted by the normal flight timeout
-                // mechanism if the server hasn't responded.
-                debug!("Discarding stale HRR retransmission");
                 client.engine.transcript.resize(transcript_len_before, 0);
-                return Ok(self);
+                return Err(Error::SecurityError(
+                    crate::SecurityError::UnexpectedSecondHelloRetryRequest,
+                )
+                .into());
             }
 
             debug!("Received HelloRetryRequest");
@@ -1127,7 +1125,9 @@ impl State {
                 client.engine.send_ack()?;
 
                 // If peer requested us to update, schedule our own KeyUpdate
-                if request == KeyUpdateRequest::UpdateRequested {
+                if request == KeyUpdateRequest::UpdateRequested
+                    && !client.engine.is_key_update_in_flight()
+                {
                     client.pending_key_update_response = true;
                 }
 
