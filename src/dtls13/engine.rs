@@ -414,7 +414,7 @@ impl Engine {
                 // Track received record numbers for ACK generation
                 for record in incoming.records().iter() {
                     let seq = record.record().sequence;
-                    if seq.epoch >= 2 {
+                    if seq.epoch >= 2 && record.record().content_type == ContentType::Handshake {
                         let _ = self
                             .received_record_numbers
                             .try_push((seq.epoch as u64, seq.sequence_number));
@@ -446,7 +446,8 @@ impl Engine {
                 if should_replace {
                     for record in incoming.records().iter() {
                         let seq = record.record().sequence;
-                        if seq.epoch >= 2 {
+                        if seq.epoch >= 2 && record.record().content_type == ContentType::Handshake
+                        {
                             let _ = self
                                 .received_record_numbers
                                 .try_push((seq.epoch as u64, seq.sequence_number));
@@ -2605,6 +2606,24 @@ mod tests {
         packet
     }
 
+    fn encrypted_application_data_record(seq: u16, data: &[u8]) -> Vec<u8> {
+        let mut fragment = Vec::new();
+        fragment.extend_from_slice(data);
+        fragment.push(ContentType::ApplicationData.as_u8());
+
+        let mut packet = Vec::new();
+        packet.push(
+            0b0010_0000
+                | 0b0000_1000 // 2-byte sequence number.
+                | 0b0000_0100 // explicit length.
+                | 0b0000_0010, // epoch bits resolved by PassthroughRecordHandler.
+        );
+        packet.extend_from_slice(&seq.to_be_bytes());
+        packet.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+        packet.extend_from_slice(&fragment);
+        packet
+    }
+
     fn parsed_key_update(seq: u16) -> Incoming {
         Incoming::parse_packet(
             &encrypted_key_update_record(seq),
@@ -2613,6 +2632,18 @@ mod tests {
         )
         .expect("parse key update packet")
         .expect("packet contains a record")
+    }
+
+    fn parsed_key_update_with_app_data(key_update_seq: u16, app_seq: u16) -> Incoming {
+        let mut packet = encrypted_key_update_record(key_update_seq);
+        packet.extend_from_slice(&encrypted_application_data_record(app_seq, b"app-data"));
+        Incoming::parse_packet(
+            &packet,
+            &mut PassthroughRecordHandler,
+            Some(Dtls13CipherSuite::AES_128_GCM_SHA256),
+        )
+        .expect("parse coalesced packet")
+        .expect("packet contains records")
     }
 
     /// Issue 2: Epoch-0 sequence number must have an overflow guard.
@@ -2754,6 +2785,33 @@ mod tests {
             engine.received_record_numbers.len(),
             engine.received_record_numbers.capacity(),
             "overflowing ACK bookkeeping should keep existing entries and drop the extra one"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn ack_tracking_ignores_non_handshake_records_in_coalesced_datagram() {
+        let mut engine = test_engine();
+
+        let incoming = parsed_key_update_with_app_data(7, 8);
+        assert_eq!(incoming.records().len(), 2);
+        assert_eq!(
+            incoming.records()[0].record().content_type,
+            ContentType::Handshake
+        );
+        assert_eq!(
+            incoming.records()[1].record().content_type,
+            ContentType::ApplicationData
+        );
+
+        engine
+            .insert_incoming(incoming)
+            .expect("insert coalesced datagram");
+
+        assert_eq!(
+            engine.received_record_numbers.as_slice(),
+            &[(2, 7)],
+            "ACK bookkeeping must include only handshake records"
         );
     }
 
