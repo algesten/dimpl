@@ -21,6 +21,10 @@ use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
 use nom::number::complete::{be_u16, be_u24};
 
+// Defensive stack cap over flattened handshake fragments selected for one
+// defragmentation attempt. This intentionally does not mirror the receive
+// queue's record-count cap; exceeding 50 fragments for one handshake implies
+// pathologically tiny records and is treated as invalid input.
 const MAX_DEFRAGMENT_HANDSHAKES: usize = 50;
 
 #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
