@@ -13,12 +13,19 @@ use super::HelloVerifyRequest;
 use super::ServerHello;
 use super::ServerKeyExchange;
 use crate::buffer::Buf;
+use arrayvec::ArrayVec;
 use nom::Err;
 use nom::IResult;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
 use nom::number::complete::{be_u16, be_u24};
+
+// Defensive stack cap over flattened handshake fragments selected for one
+// defragmentation attempt. This intentionally does not mirror the receive
+// queue's record-count cap; exceeding 50 fragments for one handshake implies
+// pathologically tiny records and is treated as invalid input.
+const MAX_DEFRAGMENT_HANDSHAKES: usize = 50;
 
 #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
 pub struct Header {
@@ -154,8 +161,11 @@ impl Handshake {
         let Body::Fragment(range) = &first_handshake.body else {
             unreachable!("Non-Fragment body in defragment()")
         };
+        let mut handled = ArrayVec::<&Handshake, MAX_DEFRAGMENT_HANDSHAKES>::new();
+        handled
+            .try_push(first_handshake)
+            .map_err(|_| crate::InternalError::too_many_records())?;
         buffer.extend_from_slice(&first_buffer[range.clone()]);
-        first_handshake.set_handled();
 
         for (handshake, source_buf) in iter {
             if handshake.header.msg_type != first_handshake.header.msg_type {
@@ -166,7 +176,9 @@ impl Handshake {
                 unreachable!("Non-Fragment body in defragment()")
             };
 
-            handshake.handled.store(true, Ordering::Relaxed);
+            handled
+                .try_push(handshake)
+                .map_err(|_| crate::InternalError::too_many_records())?;
 
             buffer.extend_from_slice(&source_buf[range.clone()]);
         }
@@ -176,7 +188,35 @@ impl Handshake {
             return Err(crate::InternalError::parse_incomplete());
         }
 
-        // If transcript is provided, write the handshake header + body before parsing
+        let (rest, body) =
+            match Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    mark_handled(handled);
+                    return Err(err.into());
+                }
+            };
+
+        if !rest.is_empty()
+            && first_handshake
+                .header
+                .msg_type
+                .rejects_trailing_body_bytes()
+        {
+            debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
+            mark_handled(handled);
+            return Err(crate::InternalError::parse_incomplete());
+        }
+
+        // Intentional boundary: Body::parse validates the handshake body shape and
+        // extension envelopes, but known extension payloads remain validated by the
+        // client/server state handlers. A transiently corrupted UDP datagram whose
+        // extension payload fails later may therefore have been consumed here; that
+        // recovery edge is accepted to keep this path parser-only and avoid the
+        // broader transaction/rollback machinery.
+        mark_handled(handled);
+
+        // If transcript is provided, write the handshake header + body after parsing succeeds.
         if let Some(transcript) = transcript {
             transcript.push(first_handshake.header.msg_type.as_u8());
             transcript.extend_from_slice(&first_handshake.header.length.to_be_bytes()[1..]);
@@ -185,13 +225,6 @@ impl Handshake {
             transcript.extend_from_slice(&0u32.to_be_bytes()[1..]);
             transcript.extend_from_slice(&first_handshake.header.length.to_be_bytes()[1..]);
             transcript.extend_from_slice(&buffer[..first_handshake.header.length as usize]);
-        }
-
-        let (rest, body) = Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite)?;
-
-        if !rest.is_empty() && first_handshake.header.msg_type == MessageType::Finished {
-            debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
-            return Err(crate::InternalError::parse_incomplete());
         }
 
         let handshake = Handshake {
@@ -287,6 +320,12 @@ impl Handshake {
     }
 }
 
+fn mark_handled(handled: ArrayVec<&Handshake, MAX_DEFRAGMENT_HANDSHAKES>) {
+    for handshake in handled {
+        handshake.set_handled();
+    }
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct MessageType(u8);
@@ -316,6 +355,10 @@ impl MessageType {
 
     const fn is_unknown(&self) -> bool {
         !matches!(*self, Self(0..=4 | 11..=16 | 20))
+    }
+
+    const fn rejects_trailing_body_bytes(&self) -> bool {
+        !self.is_unknown()
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], MessageType> {
@@ -694,5 +737,60 @@ mod tests {
         assert_eq!(parsed, handshake);
 
         assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn failed_defragment_parse_discards_candidate_without_writing_transcript() {
+        let mut body = MESSAGE[12..].to_vec();
+        body[38] = 0;
+        body[39] = 3;
+
+        let handshake = Handshake::new(
+            MessageType::ClientHello,
+            body.len() as u32,
+            0,
+            0,
+            body.len() as u32,
+            Body::Fragment(0..body.len()),
+        );
+
+        let mut defragmented_buffer = Buf::new();
+        let mut transcript = Buf::new();
+        let result = Handshake::defragment(
+            std::iter::once((&handshake, body.as_slice())),
+            &mut defragmented_buffer,
+            None,
+            Some(&mut transcript),
+        );
+
+        assert!(result.is_err());
+        assert!(handshake.is_handled());
+        assert!(transcript.is_empty());
+    }
+
+    #[test]
+    fn known_body_rejects_trailing_bytes() {
+        let body = [0];
+        let handshake = Handshake::new(
+            MessageType::HelloRequest,
+            body.len() as u32,
+            0,
+            0,
+            body.len() as u32,
+            Body::Fragment(0..body.len()),
+        );
+
+        let mut defragmented_buffer = Buf::new();
+        let mut transcript = Buf::new();
+        let result = Handshake::defragment(
+            std::iter::once((&handshake, body.as_slice())),
+            &mut defragmented_buffer,
+            None,
+            Some(&mut transcript),
+        );
+
+        assert!(result.is_err());
+        assert!(handshake.is_handled());
+        assert!(transcript.is_empty());
     }
 }
