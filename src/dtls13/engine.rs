@@ -1253,6 +1253,10 @@ impl Engine {
         self.hs_recv_keys = None;
     }
 
+    pub fn release_application_data_retaining_handshake_keys(&mut self) {
+        self.release_app_data = true;
+    }
+
     /// Whether a close_notify alert has been received from the peer.
     pub fn close_notify_received(&self) -> bool {
         self.close_notify_sequence.is_some()
@@ -1282,6 +1286,17 @@ impl Engine {
     ///
     /// ACK format: record_numbers_length(2) + N * (epoch(8) + sequence(8))
     pub fn send_ack(&mut self) -> Result<(), Error> {
+        self.send_ack_inner(false)
+    }
+
+    pub fn send_ack_retransmittable(&mut self) -> Result<(), Error> {
+        if !self.received_record_numbers.is_empty() {
+            self.flight_clear_resends();
+        }
+        self.send_ack_inner(true)
+    }
+
+    fn send_ack_inner(&mut self, save_fragment: bool) -> Result<(), Error> {
         if self.received_record_numbers.is_empty() {
             return Ok(());
         }
@@ -1293,7 +1308,7 @@ impl Engine {
             2
         };
 
-        self.create_ciphertext_record(ContentType::Ack, epoch, false, |fragment| {
+        self.create_ciphertext_record(ContentType::Ack, epoch, save_fragment, |fragment| {
             // record_numbers_length: 2 bytes, value = entries.len() * 16
             let len = (entries.len() * 16) as u16;
             fragment.extend_from_slice(&len.to_be_bytes());
@@ -2361,11 +2376,6 @@ impl RecordHandler for Engine {
         // After KeyUpdate, epoch_bits cycles: 3→0→1→2→3→...
         let epoch_bits = epoch_bits as u16;
 
-        // Check handshake epoch first
-        if self.hs_recv_keys.is_some() && (2 & 0x03) == epoch_bits {
-            return 2;
-        }
-
         // Check application recv epochs - return the newest (last) match
         // when multiple epochs share the same 2-bit value (e.g. epoch 3 and 7).
         let mut best = None;
@@ -2374,8 +2384,17 @@ impl RecordHandler for Engine {
                 best = Some(entry.epoch);
             }
         }
+
+        if self.hs_recv_keys.is_some() && (2 & 0x03) == epoch_bits && !self.release_app_data {
+            return 2;
+        }
+
         if let Some(epoch) = best {
             return epoch;
+        }
+
+        if self.hs_recv_keys.is_some() && (2 & 0x03) == epoch_bits {
+            return 2;
         }
 
         // Default to the epoch bits value

@@ -1133,7 +1133,7 @@ impl State {
         server.engine.advance_peer_handshake_seq();
 
         // ACK the client's epoch-2 flight so it stops retransmitting
-        server.engine.send_ack()?;
+        server.engine.send_ack_retransmittable()?;
 
         // Stop flight timers - handshake complete
         server.engine.flight_stop_resend_timers();
@@ -1157,7 +1157,9 @@ impl State {
             }
         }
 
-        server.engine.release_application_data();
+        server
+            .engine
+            .release_application_data_retaining_handshake_keys();
 
         debug!("Handshake complete; ready for application data");
 
