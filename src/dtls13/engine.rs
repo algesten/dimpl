@@ -158,6 +158,10 @@ pub struct Engine {
     /// Set when app_send_record_count reaches aead_encryption_threshold.
     needs_key_update: bool,
 
+    /// A locally sent KeyUpdate is awaiting its ACK. Send keys are rotated only
+    /// after that ACK arrives, so application data continues on the old epoch.
+    key_update_in_flight: bool,
+
     /// Sequence number of the received close_notify alert, if any.
     /// Per RFC 9147 §5.10, any data with an epoch/sequence number pair
     /// after this must be discarded; earlier records are still valid.
@@ -252,6 +256,7 @@ impl Engine {
             app_send_record_count: 0,
             aead_encryption_threshold,
             needs_key_update: false,
+            key_update_in_flight: false,
             close_notify_sequence: None,
             close_notify_reported: false,
         }
@@ -301,7 +306,7 @@ impl Engine {
     }
 
     pub fn is_key_update_in_flight(&self) -> bool {
-        self.prev_app_send_keys.is_some()
+        self.key_update_in_flight
     }
 
     /// Returns true if the AEAD encryption limit has been reached and a
@@ -1302,16 +1307,16 @@ impl Engine {
     }
 
     /// Process an incoming ACK record, marking acknowledged flight entries.
-    fn process_ack(&mut self, ack_data: &[u8]) {
+    fn process_ack(&mut self, ack_data: &[u8]) -> Result<(), Error> {
         if ack_data.len() < 2 {
-            return;
+            return Ok(());
         }
 
         let record_numbers_len = u16::from_be_bytes([ack_data[0], ack_data[1]]) as usize;
         let entries_data = &ack_data[2..];
 
         if entries_data.len() != record_numbers_len || record_numbers_len % 16 != 0 {
-            return;
+            return Ok(());
         }
 
         let num_entries = record_numbers_len / 16;
@@ -1351,17 +1356,21 @@ impl Engine {
             self.flight_clear_resends();
         }
 
-        // If all saved records are acked and we have prev send keys (KeyUpdate in flight),
-        // clear them and stop the flight timer.
-        if self.prev_app_send_keys.is_some()
+        // Rotate send keys only after the peer ACKs our KeyUpdate. Until then,
+        // application data continues on the old/current application epoch.
+        if self.key_update_in_flight
             && !self.flight_saved_records.is_empty()
             && self.flight_saved_records.iter().all(|e| e.acked)
         {
-            debug!("KeyUpdate ACKed; clearing previous send keys");
+            debug!("KeyUpdate ACKed; rotating send keys");
+            self.update_send_keys()?;
             self.prev_app_send_keys = None;
+            self.key_update_in_flight = false;
             self.flight_clear_resends();
             self.flight_timeout = Timeout::Disabled;
         }
+
+        Ok(())
     }
 
     // =========================================================================
@@ -1876,8 +1885,7 @@ impl Engine {
     /// Create and send a KeyUpdate handshake message.
     ///
     /// Arms the flight timer for retransmission. The KeyUpdate is sent on
-    /// the current app epoch, then send keys are rotated (old keys saved
-    /// in `prev_app_send_*` for retransmission).
+    /// the current app epoch. Send keys rotate only after its ACK arrives.
     pub fn create_key_update(&mut self, request: KeyUpdateRequest) -> Result<(), Error> {
         // Set up retransmission
         self.flight_backoff.reset(&mut self.rng);
@@ -1902,12 +1910,11 @@ impl Engine {
             fragment.push(request.as_u8());
         })?;
 
-        // Now rotate send keys (saves old keys for retransmission)
-        self.update_send_keys()?;
+        self.key_update_in_flight = true;
 
         debug!(
-            "KeyUpdate sent (request={:?}) on epoch {}, new send epoch {}",
-            request, epoch, self.app_send_epoch
+            "KeyUpdate sent (request={:?}) on epoch {}, awaiting ACK before rotating send keys",
+            request, epoch
         );
 
         Ok(())
@@ -2306,7 +2313,7 @@ impl RecordHandler for Engine {
         match record.record().content_type {
             ContentType::Ack => {
                 let fragment = record.record().fragment(record.buffer());
-                self.process_ack(fragment);
+                self.process_ack(fragment)?;
                 self.push_buffer(record.into_buffer());
                 Ok(None)
             }
@@ -2749,7 +2756,7 @@ mod tests {
         malformed_ack.extend_from_slice(&7u64.to_be_bytes());
         malformed_ack.push(0);
 
-        engine.process_ack(&malformed_ack);
+        engine.process_ack(&malformed_ack).unwrap();
 
         assert!(
             !engine.flight_saved_records[0].acked,

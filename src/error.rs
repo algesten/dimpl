@@ -450,8 +450,12 @@ pub enum SecurityError {
     ClientHelloMustOfferNullCompression,
     /// The ClientHello cookie did not match the expected cookie.
     InvalidCookieInClientHello,
+    /// A DTLS 1.3 ClientHello carried a non-empty legacy_cookie field.
+    InvalidLegacyCookieInClientHello,
     /// The server attempted to send a second HelloRetryRequest.
     CannotSendSecondHelloRetryRequest,
+    /// The client received a second HelloRetryRequest.
+    UnexpectedSecondHelloRetryRequest,
     /// No common DTLS 1.3 cipher suite was found.
     NoCommonCipherSuite,
     /// No common DTLS 1.3 key exchange group was found.
@@ -1134,8 +1138,14 @@ impl fmt::Display for SecurityError {
                 write!(f, "ClientHello must offer null compression")
             }
             Self::InvalidCookieInClientHello => write!(f, "invalid cookie in ClientHello"),
+            Self::InvalidLegacyCookieInClientHello => {
+                write!(f, "ClientHello legacy_cookie must be empty")
+            }
             Self::CannotSendSecondHelloRetryRequest => {
                 write!(f, "cannot send second HelloRetryRequest")
+            }
+            Self::UnexpectedSecondHelloRetryRequest => {
+                write!(f, "received second HelloRetryRequest")
             }
             Self::NoCommonCipherSuite => write!(f, "no common cipher suite found"),
             Self::NoCommonKeyExchangeGroup => write!(f, "no common key exchange group"),
