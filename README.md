@@ -68,6 +68,7 @@ Drive the engine with three calls:
 The output is an [`Output`][output] enum with borrowed
 references into your provided buffer:
 - `Packet(&[u8])`: send on your UDP socket
+- `BufferTooSmall { needed }`: resize the poll buffer and retry
 - `Timeout(Instant)`: schedule a timer and call `handle_timeout` at/after it
 - `Connected`: handshake complete
 - `PeerCert(&[u8])`: peer leaf certificate (DER) — validate in your app
@@ -113,6 +114,9 @@ fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
         loop {
             match dtls.poll_output(&mut out_buf) {
                 Output::Packet(p) => send_udp(p),
+                Output::BufferTooSmall { needed } => {
+                    out_buf.resize(needed, 0);
+                }
                 Output::Timeout(t) => { next_wake = Some(t); break; }
                 Output::Connected => {
                     // DTLS established — application may start sending

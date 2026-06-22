@@ -66,6 +66,7 @@
 //! The output is an [`Output`][output] enum with borrowed
 //! references into your provided buffer:
 //! - `Packet(&[u8])`: send on your UDP socket
+//! - `BufferTooSmall { needed }`: resize the poll buffer and retry
 //! - `Timeout(Instant)`: schedule a timer and call `handle_timeout` at/after it
 //! - `Connected`: handshake complete
 //! - `PeerCert(&[u8])`: peer leaf certificate (DER) — validate in your app
@@ -113,6 +114,9 @@
 //!         loop {
 //!             match dtls.poll_output(&mut out_buf) {
 //!                 Output::Packet(p) => send_udp(p),
+//!                 Output::BufferTooSmall { needed } => {
+//!                     out_buf.resize(needed, 0);
+//!                 }
 //!                 Output::Timeout(t) => { next_wake = Some(t); break; }
 //!                 Output::Connected => {
 //!                     // DTLS established — application may start sending
@@ -839,6 +843,14 @@ impl fmt::Debug for Dtls {
 pub enum Output<'a> {
     /// A DTLS record to transmit on the wire.
     Packet(&'a [u8]),
+    /// The provided output buffer is too small for the next pending output.
+    ///
+    /// Retry [`Dtls::poll_output`] with a buffer of at least `needed` bytes.
+    /// The pending output is retained until it can be emitted.
+    BufferTooSmall {
+        /// Minimum buffer length required to emit the pending output.
+        needed: usize,
+    },
     /// Schedule a timer and call [`Dtls::handle_timeout`] at this instant.
     ///
     /// This is always the last variant returned by a poll cycle.
@@ -863,6 +875,7 @@ impl fmt::Debug for Output<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Packet(v) => write!(f, "Packet({})", v.len()),
+            Self::BufferTooSmall { needed } => write!(f, "BufferTooSmall({needed})"),
             Self::Timeout(v) => write!(f, "Timeout({:?})", v),
             Self::Connected => write!(f, "Connected"),
             Self::PeerCert(v) => write!(f, "PeerCert({})", v.len()),

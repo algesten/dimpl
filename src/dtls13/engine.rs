@@ -201,6 +201,12 @@ struct Entry {
     acked: bool,
 }
 
+enum PollOutput<'a> {
+    Data(&'a [u8]),
+    BufferTooSmall { needed: usize },
+    None(&'a mut [u8]),
+}
+
 impl Engine {
     pub fn new(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
         let mut rng = SeededRng::new(config.rng_seed());
@@ -535,14 +541,17 @@ impl Engine {
         self.purge_handled_queue_rx();
 
         let buf = match self.poll_app_data(buf) {
-            Ok(p) => return Output::ApplicationData(p),
-            Err(b) => b,
+            PollOutput::Data(p) => return Output::ApplicationData(p),
+            PollOutput::BufferTooSmall { needed } => return Output::BufferTooSmall { needed },
+            PollOutput::None(b) => b,
         };
 
         self.maybe_schedule_handshake_ack(now);
 
-        if let Ok(p) = self.poll_packet_tx(buf) {
-            return Output::Packet(p);
+        match self.poll_packet_tx(buf) {
+            PollOutput::Data(p) => return Output::Packet(p),
+            PollOutput::BufferTooSmall { needed } => return Output::BufferTooSmall { needed },
+            PollOutput::None(_) => {}
         }
 
         if self.close_notify_sequence.is_some() && !self.close_notify_reported {
@@ -555,9 +564,9 @@ impl Engine {
         Output::Timeout(next_timeout)
     }
 
-    fn poll_app_data<'a>(&mut self, buf: &'a mut [u8]) -> Result<&'a [u8], &'a mut [u8]> {
+    fn poll_app_data<'a>(&mut self, buf: &'a mut [u8]) -> PollOutput<'a> {
         if !self.release_app_data {
-            return Err(buf);
+            return PollOutput::None(buf);
         }
 
         let mut unhandled = self
@@ -568,24 +577,21 @@ impl Engine {
             .skip_while(|r| r.is_handled());
 
         let Some(next) = unhandled.next() else {
-            return Err(buf);
+            return PollOutput::None(buf);
         };
 
         let record_buffer = next.buffer();
         let fragment = next.record().fragment(record_buffer);
         let len = fragment.len();
 
-        assert!(
-            len <= buf.len(),
-            "Output buffer too small for application data {} > {}",
-            len,
-            buf.len()
-        );
+        if len > buf.len() {
+            return PollOutput::BufferTooSmall { needed: len };
+        }
 
         buf[..len].copy_from_slice(fragment);
         next.set_handled();
 
-        Ok(&buf[..len])
+        PollOutput::Data(&buf[..len])
     }
 
     fn purge_handled_queue_rx(&mut self) {
@@ -603,22 +609,23 @@ impl Engine {
         }
     }
 
-    fn poll_packet_tx<'a>(&mut self, buf: &'a mut [u8]) -> Result<&'a [u8], &'a mut [u8]> {
-        let Some(p) = self.queue_tx.pop_front() else {
-            return Err(buf);
+    fn poll_packet_tx<'a>(&mut self, buf: &'a mut [u8]) -> PollOutput<'a> {
+        let Some(p) = self.queue_tx.front() else {
+            return PollOutput::None(buf);
         };
 
-        assert!(
-            p.len() <= buf.len(),
-            "Output buffer too small for packet {} > {}",
-            p.len(),
-            buf.len()
-        );
+        if p.len() > buf.len() {
+            return PollOutput::BufferTooSmall { needed: p.len() };
+        }
 
+        let p = self
+            .queue_tx
+            .pop_front()
+            .expect("queue front checked above");
         let len = p.len();
         buf[..len].copy_from_slice(&p);
 
-        Ok(&buf[..len])
+        PollOutput::Data(&buf[..len])
     }
 
     /// Prevent subsequent records from being appended to the current last
