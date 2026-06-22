@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Fix DTLS handshake defragmentation across message sequences #151
   * Return `BufferTooSmall` instead of panicking on undersized poll buffers #150
   * Fix DTLS 1.3 RFC 9147 conformance issues #147
   * Reject malformed fragmented DTLS handshakes before consuming fragments #144
