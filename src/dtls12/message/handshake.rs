@@ -168,7 +168,9 @@ impl Handshake {
         buffer.extend_from_slice(&first_buffer[range.clone()]);
 
         for (handshake, source_buf) in iter {
-            if handshake.header.msg_type != first_handshake.header.msg_type {
+            if handshake.header.msg_type != first_handshake.header.msg_type
+                || handshake.header.message_seq != first_handshake.header.message_seq
+            {
                 break;
             }
 
@@ -284,7 +286,7 @@ impl Handshake {
             let mut fragment = to_clone.do_clone();
             fragment.header.fragment_offset = offset as u32;
             fragment.header.fragment_length = fragment_length;
-            fragment.header.message_seq = to_clone.header.message_seq + i as u16;
+            fragment.header.message_seq = to_clone.header.message_seq;
             fragment.body = Body::Fragment(fragment_range);
 
             fragment
@@ -766,6 +768,44 @@ mod tests {
         assert!(result.is_err());
         assert!(handshake.is_handled());
         assert!(transcript.is_empty());
+    }
+
+    #[test]
+    fn defragment_stops_at_cross_sequence_fragment() {
+        let body = &MESSAGE[12..];
+        let mut source = body.to_vec();
+        source.push(0);
+
+        let handshake = Handshake::new(
+            MessageType::ClientHello,
+            body.len() as u32,
+            0,
+            0,
+            body.len() as u32,
+            Body::Fragment(0..body.len()),
+        );
+        let decoy = Handshake::new(
+            MessageType::ClientHello,
+            body.len() as u32 + 1,
+            1,
+            body.len() as u32,
+            1,
+            Body::Fragment(body.len()..body.len() + 1),
+        );
+
+        let mut defragmented_buffer = Buf::new();
+        let defragmented_handshake = Handshake::defragment(
+            [(&handshake, source.as_slice()), (&decoy, source.as_slice())].into_iter(),
+            &mut defragmented_buffer,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(defragmented_handshake.header.message_seq, 0);
+        assert_eq!(&defragmented_buffer[..body.len()], body);
+        assert!(handshake.is_handled());
+        assert!(!decoy.is_handled());
     }
 
     #[test]
