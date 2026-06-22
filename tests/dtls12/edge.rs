@@ -32,6 +32,41 @@ fn dtls12_epoch1_record(seq: u64, len: usize) -> Vec<u8> {
     out
 }
 
+#[test]
+#[cfg(feature = "rcgen")]
+fn oversized_application_data_reports_buffer_too_small() {
+    let now = Instant::now();
+    let (mut client, mut server, _now) = setup_connected_12_pair(now);
+    let payload = vec![0x5a; 4000];
+
+    client
+        .send_application_data(&payload)
+        .expect("send application data");
+
+    let mut large_buf = vec![0u8; 8192];
+    let mut packets = Vec::new();
+    loop {
+        match client.poll_output(&mut large_buf) {
+            Output::Packet(packet) => packets.push(packet.to_vec()),
+            Output::Timeout(_) => break,
+            _ => {}
+        }
+    }
+
+    deliver_packets(&packets, &mut server);
+
+    let mut small_buf = vec![0u8; 2048];
+    match server.poll_output(&mut small_buf) {
+        Output::BufferTooSmall { needed } => assert_eq!(needed, payload.len()),
+        output => panic!("expected BufferTooSmall, got {output:?}"),
+    }
+
+    match server.poll_output(&mut large_buf) {
+        Output::ApplicationData(data) => assert_eq!(data, payload.as_slice()),
+        output => panic!("expected retained application data, got {output:?}"),
+    }
+}
+
 fn dtls12_config_for_suite(suite: Dtls12CipherSuite) -> Arc<Config> {
     let mut provider = Config::default().crypto_provider().clone();
     let selected = provider

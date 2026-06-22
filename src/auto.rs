@@ -318,12 +318,8 @@ impl ClientPending {
         if self.needs_send {
             let len = self.wire_packet.len();
             if buf.len() < len {
-                // Buffer too small; keep needs_send armed so the packet
-                // is emitted on the next poll with a sufficiently large buffer.
-                let next = self
-                    .retransmit_at
-                    .unwrap_or(self.last_now + Duration::from_secs(1));
-                return Output::Timeout(next);
+                // Keep needs_send armed so the packet is emitted on retry.
+                return Output::BufferTooSmall { needed: len };
             }
             self.needs_send = false;
             buf[..len].copy_from_slice(&self.wire_packet);
