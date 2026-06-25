@@ -28,13 +28,16 @@ macro_rules! wrapped_slice {
 
                 Ok((input, $name(start..end)))
             }
-
-            pub fn as_slice<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
-                &buf[self.0.clone()]
-            }
         }
     };
 }
 
 wrapped_slice!(Asn1Cert, be_u24, 0);
 wrapped_slice!(DistinguishedName, be_u16, 1);
+
+impl Asn1Cert {
+    /// Resolve this certificate's byte range within `buf`.
+    pub fn as_slice<'a>(&self, buf: &'a [u8]) -> &'a [u8] {
+        &buf[self.0.clone()]
+    }
+}

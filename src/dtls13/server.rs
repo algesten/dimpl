@@ -45,7 +45,6 @@ use crate::dtls13::engine::Engine;
 use crate::dtls13::message::Body;
 use crate::dtls13::message::CompressionMethod;
 use crate::dtls13::message::ContentType;
-use crate::dtls13::message::DistinguishedName;
 use crate::dtls13::message::Dtls13CipherSuite;
 use crate::dtls13::message::Extension;
 use crate::dtls13::message::ExtensionType;
@@ -1460,15 +1459,8 @@ fn handshake_create_certificate_request(body: &mut Buf) -> Result<(), Error> {
         extension_data_range: sa_start..sa_end,
     });
 
-    // certificate_authorities extension (empty list)
-    let ca_start = ext_buf.len();
-    let cas: ArrayVec<DistinguishedName, 32> = ArrayVec::new();
-    serialize_certificate_authorities(&cas, &[], &mut ext_buf);
-    let ca_end = ext_buf.len();
-    extensions.push(Extension {
-        extension_type: ExtensionType::CertificateAuthorities,
-        extension_data_range: ca_start..ca_end,
-    });
+    // No certificate_authorities extension: it is optional, but if present, it
+    // must not be empty (RFC 8446 4.2.4).
 
     // Calculate total extensions length
     let mut extensions_len = 0usize;
@@ -1484,21 +1476,4 @@ fn handshake_create_certificate_request(body: &mut Buf) -> Result<(), Error> {
     }
 
     Ok(())
-}
-
-/// Serialize a list of DistinguishedNames for the certificate_authorities extension.
-///
-/// Format: DistinguishedName<3..2^16-1> (outer length + entries)
-fn serialize_certificate_authorities(
-    cas: &ArrayVec<DistinguishedName, 32>,
-    buf: &[u8],
-    output: &mut Buf,
-) {
-    let total_len: usize = cas.iter().map(|dn| 2 + dn.as_slice(buf).len()).sum();
-    output.extend_from_slice(&(total_len as u16).to_be_bytes());
-    for dn in cas {
-        let data = dn.as_slice(buf);
-        output.extend_from_slice(&(data.len() as u16).to_be_bytes());
-        output.extend_from_slice(data);
-    }
 }
