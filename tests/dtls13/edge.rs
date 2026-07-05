@@ -1797,28 +1797,51 @@ fn dtls13_half_closed_local_transitions_to_closed() {
     let (mut client, mut server, now_hs) = setup_connected_13_pair(now);
     now = now_hs;
 
+    assert!(!client.is_closing());
+    assert!(!client.is_closed());
+    assert!(!server.is_closing());
+    assert!(!server.is_closed());
+
     // Client calls close() → HalfClosedLocal
     client.close().unwrap();
+    assert!(client.is_closing());
+    assert!(!client.is_closed());
+
     now += Duration::from_millis(10);
     client.handle_timeout(now).expect("client timeout");
     let client_out = drain_outputs(&mut client);
+    assert!(client.is_closing());
+    assert!(!client.is_closed());
 
     // Deliver client's close_notify to server
     deliver_packets(&client_out.packets, &mut server);
     server.handle_timeout(now).expect("server timeout");
+    assert!(server.is_closing());
+    assert!(!server.is_closed());
+
     let server_out = drain_outputs(&mut server);
     assert!(server_out.close_notify, "Server should see CloseNotify");
+    assert!(!server.is_closing());
+    assert!(!server.is_closed());
 
     // Server calls close() → sends its own close_notify
     server.close().unwrap();
     now += Duration::from_millis(10);
     server.handle_timeout(now).expect("server timeout");
+    assert!(server.is_closing());
+    assert!(!server.is_closed());
+
     let server_out = drain_outputs(&mut server);
+    assert!(!server.is_closing());
+    assert!(server.is_closed());
 
     // Deliver server's close_notify to client
     deliver_packets(&server_out.packets, &mut client);
     now += Duration::from_millis(10);
     client.handle_timeout(now).expect("client timeout");
+    assert!(client.is_closing());
+    assert!(!client.is_closed());
+
     let client_out = drain_outputs(&mut client);
 
     // Client should emit CloseNotify (peer's close_notify received)
@@ -1826,6 +1849,77 @@ fn dtls13_half_closed_local_transitions_to_closed() {
         client_out.close_notify,
         "Client should emit CloseNotify after receiving peer's close_notify"
     );
+    assert!(!client.is_closing());
+    assert!(client.is_closed());
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_close_state_matrix() {
+    let mut now = Instant::now();
+    let (mut client, mut server, now_hs) = setup_connected_13_pair(now);
+    now = now_hs;
+
+    assert!(!client.is_closing());
+    assert!(!client.is_closed());
+    assert!(!server.is_closing());
+    assert!(!server.is_closed());
+
+    client.close().unwrap();
+    assert!(client.is_closing(), "local close pending");
+    assert!(!client.is_closed(), "local close not terminal");
+
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    assert!(!client_out.packets.is_empty(), "local close_notify packet");
+    assert!(
+        client.is_closing(),
+        "local close remains pending until peer close_notify"
+    );
+    assert!(!client.is_closed(), "local half-close is not terminal");
+
+    deliver_packets(&client_out.packets, &mut server);
+    server.handle_timeout(now).expect("server timeout");
+    assert!(server.is_closing(), "remote close pending");
+    assert!(!server.is_closed(), "remote close not drained");
+
+    let server_out = drain_outputs(&mut server);
+    assert!(server_out.close_notify, "remote CloseNotify event");
+    assert!(!server.is_closing(), "remote close event drained");
+    assert!(
+        !server.is_closed(),
+        "remote half-close leaves write side open"
+    );
+
+    server.close().unwrap();
+    now += Duration::from_millis(10);
+    server
+        .handle_timeout(now)
+        .expect("server timeout after close");
+    assert!(server.is_closing(), "remote reciprocal close pending");
+    assert!(!server.is_closed(), "remote reciprocal close not drained");
+
+    let server_out = drain_outputs(&mut server);
+    assert!(
+        !server_out.packets.is_empty(),
+        "remote reciprocal close_notify packet"
+    );
+    assert!(!server.is_closing(), "remote reciprocal close drained");
+    assert!(server.is_closed(), "remote close terminal");
+
+    deliver_packets(&server_out.packets, &mut client);
+    now += Duration::from_millis(10);
+    client
+        .handle_timeout(now)
+        .expect("client timeout after reciprocal");
+    assert!(client.is_closing(), "local close peer response pending");
+    assert!(!client.is_closed(), "local close peer response not drained");
+
+    let client_out = drain_outputs(&mut client);
+    assert!(client_out.close_notify, "local CloseNotify event");
+    assert!(!client.is_closing(), "local close drained");
+    assert!(client.is_closed(), "local close terminal");
 }
 
 #[test]

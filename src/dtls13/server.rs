@@ -236,6 +236,17 @@ impl Server {
         self.state.name()
     }
 
+    pub fn is_closing(&self) -> bool {
+        (matches!(self.state, State::HalfClosedLocal | State::Closed) && !self.is_closed())
+            || self.engine.close_notify_pending()
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.state == State::Closed
+            && self.local_events.is_empty()
+            && !self.engine.has_pending_close_output()
+    }
+
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         // In auto-sense mode, buffer raw packets while still waiting for
         // the ClientHello so they can be replayed to Server12 on fallback.

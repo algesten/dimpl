@@ -1270,6 +1270,16 @@ impl Engine {
         self.close_notify_sequence.is_some()
     }
 
+    /// Whether a received close_notify still needs to be surfaced.
+    pub fn close_notify_pending(&self) -> bool {
+        self.close_notify_sequence.is_some() && !self.close_notify_reported
+    }
+
+    /// Whether close-related output remains to be polled.
+    pub fn has_pending_close_output(&self) -> bool {
+        !self.queue_tx.is_empty() || self.close_notify_pending()
+    }
+
     /// Cancel in-flight retransmissions without clearing the transmit queue.
     /// Used by close() to stop retransmitting control records while still
     /// allowing the queued close_notify alert to be sent.

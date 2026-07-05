@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Add `Dtls::is_closing()` and `Dtls::is_closed()` shutdown predicates #155
+
 # 0.7.0
 
   * Omit empty DTLS 1.3 CertificateRequest certificate authorities #153

@@ -186,6 +186,16 @@ impl Client {
         self.state.name()
     }
 
+    pub fn is_closing(&self) -> bool {
+        self.state == State::Closed && !self.is_closed()
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.state == State::Closed
+            && self.local_events.is_empty()
+            && !self.engine.has_pending_close_output()
+    }
+
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         match self
             .engine

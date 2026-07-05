@@ -553,6 +553,63 @@ impl Dtls {
         }
     }
 
+    /// Return true while DTLS shutdown is in progress.
+    ///
+    /// This becomes true after local shutdown starts, or while a received
+    /// `close_notify` still needs to be reported by
+    /// [`poll_output`](Self::poll_output). Callers should continue polling
+    /// until this returns false or [`is_closed`](Self::is_closed) returns true.
+    ///
+    /// Pending auto-sense handshakes are neither closing nor closed.
+    pub fn is_closing(&self) -> bool {
+        let Some(inner) = self.inner.as_ref() else {
+            return false;
+        };
+
+        match inner {
+            Inner::Client12(client) => client.is_closing(),
+            Inner::Server12(server) => server.is_closing(),
+            Inner::Client13(client) => client.is_closing(),
+            Inner::Server13(server) => {
+                if server.is_auto_mode() {
+                    false
+                } else {
+                    server.is_closing()
+                }
+            }
+            Inner::ClientPending(_) => false,
+        }
+    }
+
+    /// Return true once DTLS shutdown is terminal for the embedder.
+    ///
+    /// This only becomes true after no application data can be sent and no
+    /// close-related packets or events remain to be drained through
+    /// [`poll_output`](Self::poll_output). In particular, DTLS 1.2 can enter
+    /// its internal closed state before the queued `close_notify` packet has
+    /// been polled out; this method remains false until that output is drained.
+    ///
+    /// Pending auto-sense handshakes are neither closing nor closed.
+    pub fn is_closed(&self) -> bool {
+        let Some(inner) = self.inner.as_ref() else {
+            return false;
+        };
+
+        match inner {
+            Inner::Client12(client) => client.is_closed(),
+            Inner::Server12(server) => server.is_closed(),
+            Inner::Client13(client) => client.is_closed(),
+            Inner::Server13(server) => {
+                if server.is_auto_mode() {
+                    false
+                } else {
+                    server.is_closed()
+                }
+            }
+            Inner::ClientPending(_) => false,
+        }
+    }
+
     /// Return true if the instance is operating in the client role.
     pub fn is_active(&self) -> bool {
         matches!(

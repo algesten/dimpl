@@ -916,8 +916,16 @@ fn dtls12_reciprocal_close_notify_and_no_further_sends() {
     let (mut client, mut server, now_hs) = setup_connected_12_pair(now);
     now = now_hs;
 
+    assert!(!client.is_closing());
+    assert!(!client.is_closed());
+    assert!(!server.is_closing());
+    assert!(!server.is_closed());
+
     // Client sends close_notify
     client.close().unwrap();
+    assert!(client.is_closing());
+    assert!(!client.is_closed());
+
     now += Duration::from_millis(10);
     client.handle_timeout(now).expect("client timeout");
     let client_out = drain_outputs(&mut client);
@@ -925,10 +933,15 @@ fn dtls12_reciprocal_close_notify_and_no_further_sends() {
         !client_out.packets.is_empty(),
         "Client should emit close_notify alert"
     );
+    assert!(!client.is_closing());
+    assert!(client.is_closed());
 
     // Deliver to server
     deliver_packets(&client_out.packets, &mut server);
     server.handle_timeout(now).expect("server timeout");
+    assert!(server.is_closing());
+    assert!(!server.is_closed());
+
     let server_out = drain_outputs(&mut server);
 
     // Server should emit CloseNotify event
@@ -942,17 +955,24 @@ fn dtls12_reciprocal_close_notify_and_no_further_sends() {
         !server_out.packets.is_empty(),
         "Server should emit a reciprocal close_notify packet"
     );
+    assert!(!server.is_closing());
+    assert!(server.is_closed());
 
     // Deliver reciprocal back to client and verify it sees CloseNotify.
     deliver_packets(&server_out.packets, &mut client);
     client
         .handle_timeout(now)
         .expect("client timeout after reciprocal");
+    assert!(client.is_closing());
+    assert!(!client.is_closed());
+
     let client_out2 = drain_outputs(&mut client);
     assert!(
         client_out2.close_notify,
         "Client should emit Output::CloseNotify after receiving reciprocal close_notify"
     );
+    assert!(!client.is_closing());
+    assert!(client.is_closed());
 
     // No half-close in DTLS 1.2: both sides must reject further sends.
     assert!(
@@ -963,6 +983,44 @@ fn dtls12_reciprocal_close_notify_and_no_further_sends() {
         client.send_application_data(b"after-close").is_err(),
         "send_application_data must fail after close() in DTLS 1.2"
     );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_close_state_matrix() {
+    let mut now = Instant::now();
+    let (mut client, mut server, now_hs) = setup_connected_12_pair(now);
+    now = now_hs;
+
+    assert!(!client.is_closing());
+    assert!(!client.is_closed());
+    assert!(!server.is_closing());
+    assert!(!server.is_closed());
+
+    client.close().unwrap();
+    assert!(client.is_closing(), "local close pending");
+    assert!(!client.is_closed(), "local close not drained");
+
+    now += Duration::from_millis(10);
+    client.handle_timeout(now).expect("client timeout");
+    let client_out = drain_outputs(&mut client);
+    assert!(!client_out.packets.is_empty(), "local close_notify packet");
+    assert!(!client.is_closing(), "local close drained");
+    assert!(client.is_closed(), "local close terminal");
+
+    deliver_packets(&client_out.packets, &mut server);
+    server.handle_timeout(now).expect("server timeout");
+    assert!(server.is_closing(), "remote close pending");
+    assert!(!server.is_closed(), "remote close not drained");
+
+    let server_out = drain_outputs(&mut server);
+    assert!(server_out.close_notify, "remote CloseNotify event");
+    assert!(
+        !server_out.packets.is_empty(),
+        "remote reciprocal close_notify packet"
+    );
+    assert!(!server.is_closing(), "remote close drained");
+    assert!(server.is_closed(), "remote close terminal");
 }
 
 #[test]

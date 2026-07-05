@@ -1018,6 +1018,16 @@ impl Engine {
         self.close_notify_received
     }
 
+    /// Whether a received close_notify still needs to be surfaced.
+    pub fn close_notify_pending(&self) -> bool {
+        self.close_notify_received && !self.close_notify_reported
+    }
+
+    /// Whether close-related output remains to be polled.
+    pub fn has_pending_close_output(&self) -> bool {
+        !self.queue_tx.is_empty() || self.close_notify_pending()
+    }
+
     /// Discard all pending outgoing data.
     ///
     /// RFC 5246 §7.2.1: on receiving close_notify, discard any pending writes.
