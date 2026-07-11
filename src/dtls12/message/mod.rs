@@ -307,7 +307,7 @@ impl fmt::Debug for ClientCertificateType {
 // SignatureAlgorithm and HashAlgorithm are now in crate::types
 
 pub type SignatureAndHashAlgorithmVec =
-    ArrayVec<SignatureAndHashAlgorithm, { SignatureAndHashAlgorithm::supported().len() }>;
+    ArrayVec<SignatureAndHashAlgorithm, { SignatureAndHashAlgorithm::all().len() }>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SignatureAndHashAlgorithm {
@@ -335,19 +335,24 @@ impl SignatureAndHashAlgorithm {
         Ok((input, SignatureAndHashAlgorithm::from_u16(value)))
     }
 
-    /// All recognized signature+hash combinations (same as `supported()`).
+    /// All recognized signature+hash combinations.
     #[allow(dead_code)]
     pub const fn all() -> &'static [SignatureAndHashAlgorithm; 4] {
-        Self::supported()
-    }
-
-    /// Supported signature+hash combinations.
-    pub const fn supported() -> &'static [SignatureAndHashAlgorithm; 4] {
-        const SUPPORTED: &[SignatureAndHashAlgorithm; 4] = &[
+        const ALL: &[SignatureAndHashAlgorithm; 4] = &[
             SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA),
             SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::ECDSA),
             SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA),
             SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::RSA),
+        ];
+
+        ALL
+    }
+
+    /// Supported signature+hash combinations.
+    pub const fn supported() -> &'static [SignatureAndHashAlgorithm; 2] {
+        const SUPPORTED: &[SignatureAndHashAlgorithm; 2] = &[
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA),
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA384, SignatureAlgorithm::ECDSA),
         ];
 
         SUPPORTED
@@ -362,6 +367,16 @@ impl SignatureAndHashAlgorithm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rsa_signature_algorithms_are_recognized_but_not_supported() {
+        let rsa_sha256 =
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::RSA);
+
+        assert!(SignatureAndHashAlgorithm::all().contains(&rsa_sha256));
+        assert!(!rsa_sha256.is_supported());
+        assert_eq!(SignatureAndHashAlgorithm::supported().len(), 2);
+    }
 
     #[test]
     fn dtls12_cipher_suite_newtype_shape() {

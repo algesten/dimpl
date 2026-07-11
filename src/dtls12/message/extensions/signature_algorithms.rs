@@ -14,10 +14,13 @@ pub struct SignatureAlgorithmsExtension {
 impl SignatureAlgorithmsExtension {
     /// Create a default SignatureAlgorithmsExtension with standard algorithms
     pub fn default() -> Self {
+        let mut supported_signature_algorithms = SignatureAndHashAlgorithmVec::new();
+        for algorithm in SignatureAndHashAlgorithm::supported() {
+            supported_signature_algorithms.push(*algorithm);
+        }
+
         SignatureAlgorithmsExtension {
-            supported_signature_algorithms: SignatureAndHashAlgorithmVec::from(
-                *SignatureAndHashAlgorithm::supported(),
-            ),
+            supported_signature_algorithms,
         }
     }
 
@@ -101,13 +104,17 @@ mod tests {
 
         let (_, parsed) = SignatureAlgorithmsExtension::parse(&serialized).unwrap();
 
-        assert_eq!(parsed.supported_signature_algorithms, algorithms);
+        assert_eq!(parsed.supported_signature_algorithms.len(), 1);
+        assert_eq!(
+            parsed.supported_signature_algorithms[0],
+            SignatureAndHashAlgorithm::new(HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA,)
+        );
     }
 
     #[test]
     fn too_many_supported_signature_algorithms_are_rejected() {
         let mut bytes = Vec::new();
-        let count = SignatureAndHashAlgorithm::supported().len() + 1;
+        let count = SignatureAndHashAlgorithm::all().len() + 1;
         bytes.extend_from_slice(&(count as u16 * 2).to_be_bytes());
         for _ in 0..count {
             bytes.extend_from_slice(

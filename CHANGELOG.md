@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Stop advertising unsupported RSA signatures in DTLS 1.2 CertificateRequest
+
 # 0.7.1
 
   * Add `Dtls::is_closing()` and `Dtls::is_closed()` shutdown predicates #155

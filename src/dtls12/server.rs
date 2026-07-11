@@ -1395,7 +1395,7 @@ fn select_ske_signature_algorithm(
 fn select_certificate_request_sig_algs(
     client_algs: Option<&SignatureAndHashAlgorithmVec>,
 ) -> SignatureAndHashAlgorithmVec {
-    // Our supported set (RSA/ECDSA with SHA256/384)
+    // Only select algorithms supported by dimpl's signature verifiers.
     let ours = SignatureAndHashAlgorithm::supported();
 
     // Build intersection preserving client preference order
@@ -1466,5 +1466,24 @@ mod tests {
         let selected = select_named_group(Some(&client), &provider);
 
         assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn certificate_request_does_not_select_rsa_signatures() {
+        let mut client = SignatureAndHashAlgorithmVec::new();
+        client.push(SignatureAndHashAlgorithm::new(
+            HashAlgorithm::SHA256,
+            SignatureAlgorithm::ECDSA,
+        ));
+        client.push(SignatureAndHashAlgorithm::new(
+            HashAlgorithm::SHA256,
+            SignatureAlgorithm::RSA,
+        ));
+
+        let selected = select_certificate_request_sig_algs(Some(&client));
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].signature, SignatureAlgorithm::ECDSA);
+        assert_eq!(selected[0].hash, HashAlgorithm::SHA256);
     }
 }
