@@ -129,17 +129,13 @@ impl Records {
 
             // This is the ONLY copy: packet -> record buffer
             let record_slice = &packet[..record_end];
-            match Record::parse(record_slice, decrypt, cs) {
-                Ok(record) => {
-                    if let Some(record) = record {
-                        if parsed_records.try_push(record).is_err() {
-                            return Err(InternalError::too_many_records());
-                        }
-                    } else {
-                        trace!("Discarding replayed rec");
-                    }
+            let record = Record::parse(record_slice, decrypt, cs)?;
+            if let Some(record) = record {
+                if parsed_records.try_push(record).is_err() {
+                    return Err(InternalError::too_many_records());
                 }
-                Err(e) => return Err(e),
+            } else {
+                trace!("Discarding replayed rec");
             }
 
             packet = &packet[record_end..];
