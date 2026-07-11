@@ -1486,4 +1486,17 @@ mod tests {
         assert_eq!(selected[0].signature, SignatureAlgorithm::ECDSA);
         assert_eq!(selected[0].hash, HashAlgorithm::SHA256);
     }
+
+    #[test]
+    fn certificate_request_rejects_rsa_only_signatures() {
+        let mut client = SignatureAndHashAlgorithmVec::new();
+        client.push(SignatureAndHashAlgorithm::new(
+            HashAlgorithm::SHA256,
+            SignatureAlgorithm::RSA,
+        ));
+
+        let selected = select_certificate_request_sig_algs(Some(&client));
+
+        assert!(selected.is_empty());
+    }
 }

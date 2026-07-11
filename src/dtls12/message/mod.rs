@@ -307,7 +307,7 @@ impl fmt::Debug for ClientCertificateType {
 // SignatureAlgorithm and HashAlgorithm are now in crate::types
 
 pub type SignatureAndHashAlgorithmVec =
-    ArrayVec<SignatureAndHashAlgorithm, { SignatureAndHashAlgorithm::all().len() }>;
+    ArrayVec<SignatureAndHashAlgorithm, { SignatureAndHashAlgorithm::supported().len() }>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SignatureAndHashAlgorithm {

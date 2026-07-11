@@ -14,13 +14,10 @@ pub struct SignatureAlgorithmsExtension {
 impl SignatureAlgorithmsExtension {
     /// Create a default SignatureAlgorithmsExtension with standard algorithms
     pub fn default() -> Self {
-        let mut supported_signature_algorithms = SignatureAndHashAlgorithmVec::new();
-        for algorithm in SignatureAndHashAlgorithm::supported() {
-            supported_signature_algorithms.push(*algorithm);
-        }
-
         SignatureAlgorithmsExtension {
-            supported_signature_algorithms,
+            supported_signature_algorithms: SignatureAndHashAlgorithmVec::from(
+                *SignatureAndHashAlgorithm::supported(),
+            ),
         }
     }
 
@@ -112,9 +109,31 @@ mod tests {
     }
 
     #[test]
+    fn default_does_not_advertise_rsa() {
+        let extension = SignatureAlgorithmsExtension::default();
+
+        assert!(
+            extension
+                .supported_signature_algorithms
+                .iter()
+                .all(|algorithm| algorithm.signature != SignatureAlgorithm::RSA)
+        );
+    }
+
+    #[test]
+    fn capacity_matches_supported() {
+        let extension = SignatureAlgorithmsExtension::default();
+
+        assert_eq!(
+            extension.supported_signature_algorithms.capacity(),
+            SignatureAndHashAlgorithm::supported().len()
+        );
+    }
+
+    #[test]
     fn too_many_supported_signature_algorithms_are_rejected() {
         let mut bytes = Vec::new();
-        let count = SignatureAndHashAlgorithm::all().len() + 1;
+        let count = SignatureAndHashAlgorithm::supported().len() + 1;
         bytes.extend_from_slice(&(count as u16 * 2).to_be_bytes());
         for _ in 0..count {
             bytes.extend_from_slice(
