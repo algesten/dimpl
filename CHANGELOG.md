@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.7.3
+
   * Fix DTLS 1.2 ClientHello retransmissions #160
 
 # 0.7.2
