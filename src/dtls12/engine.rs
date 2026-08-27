@@ -514,6 +514,13 @@ impl Engine {
         }
 
         match (self.connect_timeout, self.flight_timeout) {
+            // Keep this before the `(Armed, _)` arms. Starting a new flight resets its timer to
+            // `Unarmed`, but leaves the overall connection timer armed. If that mixed state
+            // returned the connection deadline, the caller would not drive `handle_timeout` to
+            // arm the flight timer until the whole handshake expired, so the flight would never
+            // be retransmitted. Returning `now` requests that immediate drive; the next poll sees
+            // both concrete deadlines and can return the earlier one.
+            (Timeout::Unarmed, _) | (_, Timeout::Unarmed) => now,
             (Timeout::Armed(c), Timeout::Armed(f)) => {
                 if c < f {
                     c
@@ -523,8 +530,6 @@ impl Engine {
             }
             (Timeout::Armed(c), _) => c,
             (_, Timeout::Armed(f)) => f,
-            // Both Unarmed or mixed Unarmed/Disabled: return current time
-            // to trigger handle_timeout on the next cycle.
             _ => now,
         }
     }

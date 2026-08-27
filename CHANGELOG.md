@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Fix DTLS 1.2 ClientHello retransmissions #160
+
 # 0.7.2
 
   * Stop advertising unsupported RSA signatures in DTLS 1.2 CertificateRequest #157
