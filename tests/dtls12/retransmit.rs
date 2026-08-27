@@ -157,6 +157,50 @@ fn first_record_matching(datagrams: &[Vec<u8>], content_type: u8, epoch: u16) ->
 
 #[test]
 #[cfg(feature = "rcgen")]
+fn dtls12_client_hello_retransmits_using_advertised_deadlines() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let now = Instant::now();
+    let certificate = generate_self_signed_certificate().expect("generate client certificate");
+    let mut client = Dtls::new_12(Arc::new(Config::default()), certificate, now);
+    client.set_active(true);
+
+    client.handle_timeout(now).expect("start client handshake");
+    let initial_output = drain_outputs(&mut client);
+    assert!(
+        !initial_output.packets.is_empty(),
+        "client should emit ClientHello"
+    );
+
+    // Drop the initial flight and handle the timeout.
+    let arm_at = initial_output
+        .timeout
+        .expect("client should advertise a deadline");
+    client
+        .handle_timeout(arm_at)
+        .expect("arm ClientHello retransmission");
+    let after_timer_arming = drain_outputs(&mut client);
+    assert!(
+        after_timer_arming.packets.is_empty(),
+        "arming should not retransmit early"
+    );
+
+    let retransmit_at = after_timer_arming
+        .timeout
+        .expect("client should advertise a retransmission deadline");
+    client
+        .handle_timeout(retransmit_at)
+        .expect("retransmit ClientHello");
+    let retransmission_output = drain_outputs(&mut client);
+
+    assert!(
+        !retransmission_output.packets.is_empty(),
+        "the dropped ClientHello flight was not retransmitted"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
 fn dtls12_resends_each_flight_epoch_and_sequence_increase() {
     let now0 = Instant::now();
     let mut now = now0;
