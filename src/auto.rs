@@ -538,7 +538,18 @@ mod tests {
                 match server.poll_output(&mut buffer) {
                     Output::Packet(packet) => response = Some(packet.to_vec()),
                     Output::Timeout(_) => break,
-                    _ => panic!("unexpected server output"),
+                    Output::BufferTooSmall { needed } => {
+                        panic!("unexpected server output: BufferTooSmall({needed})")
+                    }
+                    Output::Connected => panic!("unexpected server output: Connected"),
+                    Output::PeerCert(_) => panic!("unexpected server output: PeerCert"),
+                    Output::KeyingMaterial(_, _) => {
+                        panic!("unexpected server output: KeyingMaterial")
+                    }
+                    Output::ApplicationData(_) => {
+                        panic!("unexpected server output: ApplicationData")
+                    }
+                    Output::CloseNotify => panic!("unexpected server output: CloseNotify"),
                 }
             }
             pending.last_now = now + budget;
