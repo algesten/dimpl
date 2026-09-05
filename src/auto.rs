@@ -538,7 +538,7 @@ mod tests {
                 match server.poll_output(&mut buffer) {
                     Output::Packet(packet) => response = Some(packet.to_vec()),
                     Output::Timeout(_) => break,
-                    other => panic!("unexpected response: {other:?}"),
+                    _ => panic!("unexpected server output"),
                 }
             }
             pending.last_now = now + budget;

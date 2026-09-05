@@ -61,7 +61,7 @@ fn drain(endpoint: &mut Dtls) -> (Vec<Vec<u8>>, Instant) {
         match endpoint.poll_output(&mut buffer) {
             Output::Packet(packet) => packets.push(packet.to_vec()),
             Output::Timeout(deadline) => return (packets, deadline),
-            Output::BufferTooSmall { needed } => panic!("unexpected buffer requirement: {needed}"),
+            Output::BufferTooSmall { .. } => panic!("unexpected buffer requirement"),
             _ => {}
         }
     }
