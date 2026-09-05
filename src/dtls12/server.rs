@@ -36,6 +36,7 @@ use crate::dtls12::message::{ServerHello, SessionId, SignatureAlgorithm};
 use crate::dtls12::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm};
 use crate::dtls12::message::{SignatureAndHashAlgorithmVec, SrtpProfileId};
 use crate::dtls12::message::{SrtpProfileVec, SupportedGroupsExtension, UseSrtpExtension};
+use crate::timer::Timeout;
 use crate::{Config, Error, InternalError, Output};
 
 /// Length of the random dummy PSK used when identity resolution fails.
@@ -200,14 +201,25 @@ impl Server {
             && !self.engine.has_pending_close_output()
     }
 
+    pub fn set_handshake_deadline(&mut self, deadline: Timeout) {
+        self.engine.set_handshake_deadline(deadline);
+    }
+
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+        let deadline = self.engine.handshake_deadline();
         match self
             .engine
             .parse_packet(packet)
             .and_then(|_| self.make_progress())
         {
             Ok(()) => Ok(()),
-            Err(e) => e.into_public_error().map_or(Ok(()), Err),
+            Err(e) => {
+                // A rejected ClientHello must not start the handshake clock.
+                if self.state == State::AwaitClientHello {
+                    self.engine.set_handshake_deadline(deadline);
+                }
+                e.into_public_error().map_or(Ok(()), Err)
+            }
         }
     }
 

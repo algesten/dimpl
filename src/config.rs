@@ -362,8 +362,8 @@ impl ConfigBuilder {
 
     /// Set the time of first retry.
     ///
-    /// Every flight restarts with this value.
-    /// Doubled for every retry with a ±25% jitter.
+    /// Every flight, including a DTLS 1.3 KeyUpdate, restarts with this value.
+    /// Doubled for every retry with a ±25% jitter. Must be nonzero.
     /// Defaults to 1 second.
     pub fn flight_start_rto(mut self, rto: Duration) -> Self {
         self.flight_start_rto = rto;
@@ -372,6 +372,10 @@ impl ConfigBuilder {
 
     /// Set the max number of retries per flight.
     ///
+    /// Excludes the initial send; 0 disables retransmission. Timer-driven and
+    /// duplicate-triggered resends share this budget. Exhausting it fails the
+    /// handshake, which may happen before [`Self::handshake_timeout`]: with the
+    /// defaults an unanswered flight gives up after roughly 31 seconds.
     /// Defaults to 4.
     pub fn flight_retries(mut self, retries: usize) -> Self {
         self.flight_retries = retries;
@@ -380,7 +384,11 @@ impl ConfigBuilder {
 
     /// Set the timeout for the entire handshake, regardless of flights.
     ///
-    /// Defaults to 40 seconds.
+    /// Starts when a client emits its first ClientHello packet, or a server
+    /// accepts its first ClientHello fragment, and is one absolute deadline
+    /// across cookie exchanges, retransmissions and Auto version selection.
+    /// Idle time before that is free. It no longer applies once connected.
+    /// Must be nonzero. Defaults to 40 seconds.
     pub fn handshake_timeout(mut self, timeout: Duration) -> Self {
         self.handshake_timeout = timeout;
         self
@@ -516,6 +524,13 @@ impl ConfigBuilder {
         // Validate aead_encryption_limit: must be at least 1
         if self.aead_encryption_limit == 0 {
             return Err(Error::ConfigError(ConfigError::AeadEncryptionLimitTooSmall));
+        }
+
+        if self.handshake_timeout.is_zero() {
+            return Err(Error::ConfigError(ConfigError::HandshakeTimeoutTooSmall));
+        }
+        if self.flight_start_rto.is_zero() {
+            return Err(Error::ConfigError(ConfigError::FlightStartRtoTooSmall));
         }
 
         // Validate cipher suite filters: at least one version must have suites.
@@ -732,6 +747,19 @@ mod tests {
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!("expected error for aead_encryption_limit=0"),
         }
+    }
+
+    #[test]
+    fn rejects_zero_timing() {
+        let zero = Duration::ZERO;
+        assert_eq!(
+            Config::builder().handshake_timeout(zero).build().err(),
+            Some(Error::ConfigError(ConfigError::HandshakeTimeoutTooSmall))
+        );
+        assert_eq!(
+            Config::builder().flight_start_rto(zero).build().err(),
+            Some(Error::ConfigError(ConfigError::FlightStartRtoTooSmall))
+        );
     }
 
     #[test]

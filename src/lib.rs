@@ -724,7 +724,7 @@ impl Dtls {
         let Inner::ClientPending(cp) = inner else {
             unreachable!()
         };
-        let (hybrid, config, certificate, now) = cp.into_parts();
+        let (hybrid, config, certificate, now, timers) = cp.into_parts();
         match version {
             auto::DetectedVersion::Dtls12 => {
                 let mut client12 = Client12::new_from_hybrid(
@@ -733,6 +733,7 @@ impl Dtls {
                     config,
                     certificate,
                     now,
+                    timers,
                 )?;
                 // Feed the HVR to Client12 — it enters
                 // AwaitHelloVerifyRequest and processes the cookie.
@@ -744,7 +745,8 @@ impl Dtls {
                 Ok(())
             }
             auto::DetectedVersion::Dtls13 => {
-                let mut client13 = Client13::new_from_hybrid(hybrid, config, certificate, now)?;
+                let mut client13 =
+                    Client13::new_from_hybrid(hybrid, config, certificate, now, timers)?;
                 if let Err(e) = client13.handle_packet(packet) {
                     self.inner = Some(Inner::Client13(client13));
                     return Err(e);
@@ -767,6 +769,7 @@ impl Dtls {
             _ => unreachable!(),
         };
 
+        let deadline = server.handshake_deadline();
         let (config, cert, now, buffered) = server.into_parts();
 
         // A Server12 instance is either cert-auth or PSK-auth — the auth
@@ -782,6 +785,8 @@ impl Dtls {
             Server12::new(config, cert, now)
         };
         server12.handle_timeout(now)?;
+        // Set after the clock update above so a pending deadline arms with fresh time.
+        server12.set_handshake_deadline(deadline);
 
         self.inner = Some(Inner::Server12(server12));
 
@@ -803,6 +808,10 @@ impl Dtls {
     }
 
     /// Handle time-based events such as retransmission timers.
+    ///
+    /// This is also how dimpl learns the time. Timers started by sending or
+    /// receiving a packet use the `now` of the next call, which dimpl requests
+    /// by returning an [`Output::Timeout`] that is already due.
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
             Inner::Client12(client) => client.handle_timeout(now),
