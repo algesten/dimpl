@@ -526,3 +526,87 @@ fn server_retransmits_final_ack_for_retransmitted_client_final_flight() {
         "server must retransmit its final ACK when the client final flight is retransmitted"
     );
 }
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn server_final_ack_gets_fresh_duplicate_resend_budget() {
+    let client_config = Arc::new(
+        Config::builder()
+            .dangerously_set_rng_seed(42)
+            .use_server_cookie(false)
+            .require_client_certificate(false)
+            .handshake_timeout(Duration::from_secs(60))
+            .flight_start_rto(Duration::from_secs(5))
+            .flight_retries(2)
+            .build()
+            .expect("client config"),
+    );
+    let server_config = Arc::new(
+        Config::builder()
+            .dangerously_set_rng_seed(42)
+            .use_server_cookie(false)
+            .require_client_certificate(false)
+            .handshake_timeout(Duration::from_secs(60))
+            .flight_start_rto(Duration::from_millis(20))
+            .flight_retries(1)
+            .build()
+            .expect("server config"),
+    );
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let now = Instant::now();
+    let mut client = Dtls::new_13(client_config, client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_13(server_config, server_cert, now);
+
+    client.handle_timeout(now).expect("start client");
+    server.handle_timeout(now).expect("initialize server clock");
+    let client_hello = drain_outputs(&mut client).packets;
+    deliver_packets(&client_hello, &mut server);
+    let first_server_flight = drain_outputs(&mut server);
+    assert!(!first_server_flight.packets.is_empty());
+
+    let server_retry_at = first_server_flight.timeout.expect("server retry");
+    server
+        .handle_timeout(server_retry_at)
+        .expect("use the only server-flight retry");
+    let retried_server_flight = drain_outputs(&mut server).packets;
+    assert!(!retried_server_flight.is_empty());
+
+    client
+        .handle_timeout(server_retry_at)
+        .expect("advance client clock");
+    deliver_packets(&retried_server_flight, &mut client);
+    let client_final = drain_outputs(&mut client);
+    assert!(client_final.connected);
+    assert!(!client_final.packets.is_empty());
+
+    server
+        .handle_timeout(server_retry_at)
+        .expect("advance server clock");
+    deliver_packets(&client_final.packets, &mut server);
+    let completion = drain_outputs(&mut server);
+    assert!(completion.connected);
+    assert!(!completion.packets.is_empty(), "server completion ACK");
+
+    let client_retry_at = client_final.timeout.expect("client final-flight retry");
+    client
+        .handle_timeout(client_retry_at)
+        .expect("retransmit unacknowledged final flight");
+    let retransmitted_final = drain_outputs(&mut client).packets;
+    assert!(!retransmitted_final.is_empty());
+
+    server
+        .handle_timeout(client_retry_at)
+        .expect("advance completed server clock");
+    assert!(
+        drain_outputs(&mut server).packets.is_empty(),
+        "completion ACK must not retransmit on a timer"
+    );
+    deliver_packets(&retransmitted_final, &mut server);
+    let replacement_ack = drain_outputs(&mut server).packets;
+    assert!(
+        !replacement_ack.is_empty(),
+        "server must retransmit its completion ACK with a fresh flight budget"
+    );
+}

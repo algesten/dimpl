@@ -1,6 +1,24 @@
+use std::ops::Range;
+
 use arrayvec::ArrayVec;
 use nom::error::{ErrorKind, ParseError, make_error};
 use nom::{Err, IResult, Input, Parser};
+
+/// Check parsed 24-bit fragment bounds, parsing the body only when complete.
+pub fn accepts_client_hello_fragment<'a, Message>(
+    length: u32,
+    fragment_offset: u32,
+    fragment_length: u32,
+    buffer: &'a [u8],
+    range: Range<usize>,
+    parser: impl FnOnce(&'a [u8], usize) -> IResult<&'a [u8], Message>,
+) -> bool {
+    length >= 42
+        && fragment_length > 0
+        && fragment_offset + fragment_length <= length
+        && (fragment_length < length
+            || parser(&buffer[range.clone()], range.start).is_ok_and(|(rest, _)| rest.is_empty()))
+}
 
 /// A combinator that parses items using the provided parser but only collects
 /// items that pass a filter predicate. Allows zero matches.
@@ -115,5 +133,86 @@ where
         }
 
         Ok((input.take_from(bound), res))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_hello_invalid_bounds_skip_parser() {
+        for (length, offset, fragment_length) in [
+            (0, 0, 0),
+            (41, 0, 41),
+            (42, 0, 0),
+            (42, 42, 1),
+            (42, 1, 42),
+            (0x00ff_ffff, 0x00ff_ffff, 0x00ff_ffff),
+        ] {
+            assert!(!accepts_client_hello_fragment::<()>(
+                length,
+                offset,
+                fragment_length,
+                &[],
+                0..0,
+                |_, _| panic!("invalid fragment must not reach the body parser"),
+            ));
+        }
+    }
+
+    #[test]
+    fn client_hello_incomplete_fragments_skip_parser() {
+        for (length, offset, fragment_length) in [
+            (42, 0, 1),
+            (42, 41, 1),
+            (84, 21, 42),
+            (0x00ff_ffff, 0x00ff_fffe, 1),
+        ] {
+            assert!(accepts_client_hello_fragment::<()>(
+                length,
+                offset,
+                fragment_length,
+                &[],
+                0..0,
+                |_, _| panic!("incomplete fragment must not reach the body parser"),
+            ));
+        }
+    }
+
+    #[test]
+    fn client_hello_complete_body_requires_successful_full_parse() {
+        let buffer = [7; 50];
+        let mut parsed = false;
+        assert!(accepts_client_hello_fragment(
+            42,
+            0,
+            42,
+            &buffer,
+            3..45,
+            |input, offset| {
+                parsed = true;
+                assert_eq!(input, &buffer[3..45]);
+                assert_eq!(offset, 3);
+                Ok((&input[input.len()..], ()))
+            },
+        ));
+        assert!(parsed);
+        assert!(!accepts_client_hello_fragment(
+            42,
+            0,
+            42,
+            &buffer,
+            3..45,
+            |input, _| Ok((&input[1..], ())),
+        ));
+        assert!(!accepts_client_hello_fragment::<()>(
+            42,
+            0,
+            42,
+            &buffer,
+            3..45,
+            |input, _| Err(Err::Error(make_error(input, ErrorKind::Verify))),
+        ));
     }
 }

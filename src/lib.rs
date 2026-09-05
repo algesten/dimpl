@@ -102,12 +102,13 @@
 //! use dimpl::{certificate, Config, Dtls, Output};
 //!
 //! // Stub I/O to keep the example focused on the state machine
-//! enum Event { Udp(Vec<u8>), Timer(Instant) }
-//! fn wait_next_event(_next_wake: Option<Instant>) -> Event { Event::Udp(Vec::new()) }
+//! enum Event { Udp(Vec<u8>, Instant), Timer(Instant) }
+//! fn wait_next_event(_next_wake: Option<Instant>) -> Event { Event::Udp(Vec::new(), Instant::now()) }
 //! fn send_udp(_bytes: &[u8]) {}
 //!
 //! fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
 //!     let mut next_wake: Option<Instant> = None;
+//!     let mut received_packet: Option<Vec<u8>> = None;
 //!     loop {
 //!         // Drain engine output until we have to wait for I/O or a timer
 //!         let mut out_buf = vec![0u8; 2048];
@@ -138,9 +139,17 @@
 //!             }
 //!         }
 //!
+//!         if let Some(packet) = received_packet.take() {
+//!             dtls.handle_packet(&packet)?;
+//!             continue;
+//!         }
+//!
 //!         // Block waiting for either UDP input or the scheduled timeout
 //!         match wait_next_event(next_wake) {
-//!             Event::Udp(pkt) => dtls.handle_packet(&pkt)?,
+//!             Event::Udp(pkt, now) => {
+//!                 dtls.handle_timeout(now)?;
+//!                 received_packet = Some(pkt);
+//!             }
 //!             Event::Timer(now) => dtls.handle_timeout(now)?,
 //!         }
 //!     }
@@ -651,7 +660,7 @@ impl Dtls {
                     }
                     Inner::Server13(s) => {
                         if s.is_auto_mode() {
-                            let (config, certificate, now, _) = s.into_parts();
+                            let (config, certificate, now, _, _) = s.into_parts();
                             let cp = ClientPending::new(config, certificate, now)
                                 .expect("failed to build hybrid ClientHello");
                             self.inner = Some(Inner::ClientPending(cp));
@@ -668,6 +677,12 @@ impl Dtls {
     }
 
     /// Process an incoming DTLS datagram.
+    ///
+    /// Refresh the logical clock with [`Self::handle_timeout`] before receiving
+    /// packets at a new instant, even if no advertised timer is due. A server's
+    /// overall handshake deadline starts at that time when the first valid
+    /// ClientHello fragment is accepted. Rejected or unrelated input does not
+    /// start the deadline. Poll until [`Output::Timeout`] after each mutation.
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         // unwrap is ok. The inner is only Option to work around borrowing
         // issues when doing auto-sensing of DTLS version.
@@ -724,15 +739,16 @@ impl Dtls {
         let Inner::ClientPending(cp) = inner else {
             unreachable!()
         };
-        let (hybrid, config, certificate, now) = cp.into_parts();
+        let (hybrid, config, certificate, now, timers) = cp.into_parts();
         match version {
             auto::DetectedVersion::Dtls12 => {
                 let mut client12 = Client12::new_from_hybrid(
                     hybrid.random,
-                    &hybrid.handshake_fragment,
+                    hybrid.handshake_fragment,
                     config,
                     certificate,
                     now,
+                    timers,
                 )?;
                 // Feed the HVR to Client12 — it enters
                 // AwaitHelloVerifyRequest and processes the cookie.
@@ -744,7 +760,8 @@ impl Dtls {
                 Ok(())
             }
             auto::DetectedVersion::Dtls13 => {
-                let mut client13 = Client13::new_from_hybrid(hybrid, config, certificate, now)?;
+                let mut client13 =
+                    Client13::new_from_hybrid(hybrid, config, certificate, now, timers)?;
                 if let Err(e) = client13.handle_packet(packet) {
                     self.inner = Some(Inner::Client13(client13));
                     return Err(e);
@@ -767,7 +784,7 @@ impl Dtls {
             _ => unreachable!(),
         };
 
-        let (config, cert, now, buffered) = server.into_parts();
+        let (config, cert, now, buffered, deadline) = server.into_parts();
 
         // A Server12 instance is either cert-auth or PSK-auth — the auth
         // mode must be chosen before construction. Peek at the buffered
@@ -781,6 +798,7 @@ impl Dtls {
         } else {
             Server12::new(config, cert, now)
         };
+        server12.set_handshake_deadline(deadline);
         server12.handle_timeout(now)?;
 
         self.inner = Some(Inner::Server12(server12));
@@ -792,6 +810,16 @@ impl Dtls {
     }
 
     /// Poll for pending output from the DTLS engine.
+    ///
+    /// A client's overall handshake deadline starts when the first ClientHello
+    /// packet (or fragment) is returned as [`Output::Packet`], using the latest
+    /// logical time supplied to [`Self::handle_timeout`]. Refresh that time
+    /// before polling if time has advanced. Queuing a packet internally or
+    /// returning [`Output::BufferTooSmall`] does not start the deadline.
+    ///
+    /// Emission is the Sans-IO send boundary, not a socket-write timestamp.
+    /// Any subsequent caller-side queuing or transport delay is outside dimpl.
+    /// Continue polling until [`Output::Timeout`].
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
         match self.inner.as_mut().unwrap() {
             Inner::Client12(client) => client.poll_output(buf),
@@ -803,6 +831,16 @@ impl Dtls {
     }
 
     /// Handle time-based events such as retransmission timers.
+    ///
+    /// Also advances the logical clock used by subsequent send/receive calls;
+    /// it may be called before an advertised timeout. Advancing time alone does
+    /// not activate the overall handshake timer or an unsent flight's retry
+    /// timer. Supply monotonically increasing instants and poll until
+    /// [`Output::Timeout`] after driving the endpoint.
+    ///
+    /// The overall deadline is absolute across flights and Auto version
+    /// transitions. Retry exhaustion can fail earlier. Timeout errors are
+    /// terminal: stop driving the failed instance.
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
             Inner::Client12(client) => client.handle_timeout(now),

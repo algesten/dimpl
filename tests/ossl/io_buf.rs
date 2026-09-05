@@ -52,7 +52,7 @@ impl io::Read for IoBuffer {
         if max == self.incoming.len() {
             // The typical case is that the entire input is consumed at once,
             // which means the happy path is cheap.
-            self.incoming.truncate(0);
+            self.incoming.clear();
         } else {
             // Shifting data inside a vector is not good. This should be rare.
             self.incoming.drain(..max);

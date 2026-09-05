@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Start handshake clocks at ClientHello and honor timing settings across DTLS 1.2/1.3 and Auto #161
+
 # 0.7.3
 
   * Fix DTLS 1.2 ClientHello retransmissions #160
