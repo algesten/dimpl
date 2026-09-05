@@ -16,7 +16,7 @@
 /// and falls back to DTLS 1.2 via [`Error::Dtls12Fallback`] if the
 /// reassembled ClientHello does not offer DTLS 1.3.
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use arrayvec::ArrayVec;
 
@@ -28,6 +28,7 @@ use crate::dtls13::message::Random;
 use crate::dtls13::message::SignatureAlgorithmsExtension;
 use crate::dtls13::message::SupportedGroupsExtension;
 use crate::dtls13::message::UseSrtpExtension;
+use crate::timer::HandshakeTimers;
 use crate::types::NamedGroup;
 use crate::{Config, CryptoError, DtlsCertificate, Error, Output, SeededRng, TimeoutError};
 // Extension type constants
@@ -265,10 +266,8 @@ pub(crate) struct ClientPending {
     needs_send: bool,
     /// Last time handle_timeout was called.
     last_now: Instant,
-    /// When to retransmit the wire_packet.
-    retransmit_at: Option<Instant>,
-    /// How many retransmits have occurred.
-    retransmit_count: usize,
+    timers: HandshakeTimers,
+    rng: SeededRng,
 }
 
 impl ClientPending {
@@ -279,6 +278,9 @@ impl ClientPending {
     ) -> Result<Self, Error> {
         let hybrid = HybridClientHello::new(&config)?;
         let wire_packet = hybrid.wire_packet();
+        let mut rng = SeededRng::new(config.rng_seed());
+        let mut timers = HandshakeTimers::new(&config, &mut rng);
+        timers.begin_flight(&mut rng);
         Ok(ClientPending {
             hybrid,
             config,
@@ -286,30 +288,24 @@ impl ClientPending {
             wire_packet,
             needs_send: true,
             last_now: now,
-            retransmit_at: None,
-            retransmit_count: 0,
+            timers,
+            rng,
         })
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         self.last_now = now;
-        // Arm initial retransmit timer on first call
-        if self.retransmit_at.is_none() {
-            self.retransmit_at = Some(now + Duration::from_secs(1));
-            return Ok(());
-        }
-        if let Some(deadline) = self.retransmit_at {
-            if now >= deadline {
-                if self.retransmit_count >= self.config.flight_retries() {
-                    return Err(Error::Timeout(TimeoutError::HybridClientHello));
-                }
-                self.retransmit_count += 1;
-                self.needs_send = true;
-                // Exponential backoff: 2s, 4s, 8s, ...
-                let shift = self.retransmit_count.min(5) as u32;
-                let rto = Duration::from_secs(1u64 << shift);
-                self.retransmit_at = Some(now + rto);
-            }
+        let resend = self
+            .timers
+            .handle_timeout(now, &mut self.rng)
+            .map_err(|error| {
+                Error::Timeout(match error {
+                    TimeoutError::Handshake => TimeoutError::HybridClientHello,
+                    other => other,
+                })
+            })?;
+        if resend {
+            self.needs_send = true;
         }
         Ok(())
     }
@@ -323,16 +319,30 @@ impl ClientPending {
             }
             self.needs_send = false;
             buf[..len].copy_from_slice(&self.wire_packet);
+            self.timers.start_handshake(self.last_now);
+            self.timers.flight_sent(self.last_now);
             return Output::Packet(&buf[..len]);
         }
-        let next = self
-            .retransmit_at
-            .unwrap_or(self.last_now + Duration::from_secs(1));
+        let next = self.timers.poll_timeout(self.last_now);
         Output::Timeout(next)
     }
 
-    pub fn into_parts(self) -> (HybridClientHello, Arc<Config>, DtlsCertificate, Instant) {
-        (self.hybrid, self.config, self.certificate, self.last_now)
+    pub fn into_parts(
+        self,
+    ) -> (
+        HybridClientHello,
+        Arc<Config>,
+        DtlsCertificate,
+        Instant,
+        HandshakeTimers,
+    ) {
+        (
+            self.hybrid,
+            self.config,
+            self.certificate,
+            self.last_now,
+            self.timers,
+        )
     }
 }
 
@@ -450,6 +460,9 @@ fn server_hello_version_inner(packet: &[u8]) -> Option<DetectedVersion> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "rcgen")]
+    use std::time::Duration;
+
     use super::*;
     use crate::PskResolver;
     use crate::dtls12::message::Dtls12CipherSuite;
@@ -478,6 +491,75 @@ mod tests {
     impl PskResolver for DummyResolver {
         fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
             Some(b"0123456789abcdef".to_vec())
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn timing_expired_deadline_is_fatal_during_either_client_handoff() {
+        use crate::certificate::generate_self_signed_certificate;
+        use crate::{Dtls, Inner};
+
+        let now = Instant::now();
+        let budget = Duration::from_millis(10);
+        let config = Arc::new(
+            Config::builder()
+                .dangerously_set_rng_seed(42)
+                .handshake_timeout(budget)
+                .build()
+                .expect("valid config"),
+        );
+        let certificate = generate_self_signed_certificate().expect("certificate");
+        for dtls13 in [false, true] {
+            let mut pending = ClientPending::new(config.clone(), certificate.clone(), now)
+                .expect("pending client");
+            let mut buffer = [0; 2048];
+            let Output::Packet(hello) = pending.poll_output(&mut buffer) else {
+                panic!("expected hybrid ClientHello");
+            };
+            let hello = hello.to_vec();
+            assert!(matches!(
+                pending.poll_output(&mut buffer),
+                Output::Timeout(_)
+            ));
+            let mut server = if dtls13 {
+                Dtls::new_13(config.clone(), certificate.clone(), now)
+            } else {
+                Dtls::new_12(config.clone(), certificate.clone(), now)
+            };
+            server.handle_timeout(now).expect("server clock");
+            assert!(matches!(
+                server.poll_output(&mut buffer),
+                Output::Timeout(_)
+            ));
+            server.handle_packet(&hello).expect("accept ClientHello");
+            let mut response = None;
+            loop {
+                match server.poll_output(&mut buffer) {
+                    Output::Packet(packet) => response = Some(packet.to_vec()),
+                    Output::Timeout(_) => break,
+                    Output::BufferTooSmall { .. } => {
+                        panic!("unexpected server output: buffer too small")
+                    }
+                    Output::Connected => panic!("unexpected server output: connected"),
+                    Output::PeerCert(_) => panic!("unexpected server output: peer certificate"),
+                    Output::KeyingMaterial(_, _) => {
+                        panic!("unexpected server output: keying material")
+                    }
+                    Output::ApplicationData(_) => {
+                        panic!("unexpected server output: application data")
+                    }
+                    Output::CloseNotify => panic!("unexpected server output: close notify"),
+                }
+            }
+            pending.last_now = now + budget;
+            let mut client = Dtls {
+                inner: Some(Inner::ClientPending(pending)),
+            };
+            assert_eq!(
+                client.handle_packet(&response.expect("server response")),
+                Err(Error::Timeout(TimeoutError::Connect))
+            );
         }
     }
 

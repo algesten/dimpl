@@ -29,6 +29,7 @@ use crate::dtls12::message::{CompressionMethod, ContentType, Cookie};
 use crate::dtls12::message::{DigitallySigned, Dtls12CipherSuite};
 use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
+use crate::timer::HandshakeTimers;
 use crate::{Config, DtlsCertificate, Error, InternalError, KeyingMaterial, Output};
 
 /// DTLS client
@@ -123,10 +124,11 @@ impl Client {
     /// clears the transcript anyway, so the injected bytes are harmless.
     pub(crate) fn new_from_hybrid(
         random: Random,
-        handshake_fragment: &[u8],
+        handshake_fragment: Buf,
         config: std::sync::Arc<Config>,
         certificate: DtlsCertificate,
         now: Instant,
+        timers: HandshakeTimers,
     ) -> Result<Client, Error> {
         assert!(
             !certificate.certificate.is_empty(),
@@ -147,15 +149,7 @@ impl Client {
         };
         let mut engine = Engine::new(config, auth);
         engine.set_client(true);
-        // The hybrid ClientHello was sent with message_seq=0 outside this
-        // engine. Advance the counter so the with-cookie CH gets message_seq=1
-        // per RFC 6347 §4.2.2.
-        engine.set_next_handshake_seq_no(1);
-        // Inject the hybrid CH into the transcript so it matches the server's
-        // transcript when the server skips HelloVerifyRequest.
-        engine.transcript.extend_from_slice(handshake_fragment);
-        // Advance epoch-0 record sequence past the hybrid CH record.
-        engine.advance_epoch_0_sequence();
+        engine.inject_hybrid_client_hello(handshake_fragment, timers);
 
         let mut client = Client {
             state: State::AwaitHelloVerifyRequest,
@@ -199,7 +193,7 @@ impl Client {
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         match self
             .engine
-            .parse_packet(packet)
+            .handle_packet(packet, self.last_now)
             .and_then(|_| self.make_progress())
         {
             Ok(()) => Ok(()),
@@ -208,6 +202,9 @@ impl Client {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
+        if self.state == State::SendClientHello {
+            return Output::Timeout(self.last_now);
+        }
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.server_certificates);
         }

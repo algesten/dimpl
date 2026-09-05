@@ -172,22 +172,20 @@ fn dtls12_client_hello_retransmits_using_advertised_deadlines() {
         "client should emit ClientHello"
     );
 
-    // Drop the initial flight and handle the timeout.
-    let arm_at = initial_output
-        .timeout
-        .expect("client should advertise a deadline");
-    client
-        .handle_timeout(arm_at)
-        .expect("arm ClientHello retransmission");
-    let after_timer_arming = drain_outputs(&mut client);
-    assert!(
-        after_timer_arming.packets.is_empty(),
-        "arming should not retransmit early"
-    );
-
-    let retransmit_at = after_timer_arming
+    let retransmit_at = initial_output
         .timeout
         .expect("client should advertise a retransmission deadline");
+    assert!(retransmit_at >= now + Duration::from_millis(750));
+    assert!(retransmit_at <= now + Duration::from_millis(1250));
+    client
+        .handle_timeout(retransmit_at - Duration::from_nanos(1))
+        .expect("before ClientHello retransmission");
+    let before_retransmission = drain_outputs(&mut client);
+    assert!(
+        before_retransmission.packets.is_empty(),
+        "must not retransmit early"
+    );
+    assert_eq!(before_retransmission.timeout, Some(retransmit_at));
     client
         .handle_timeout(retransmit_at)
         .expect("retransmit ClientHello");

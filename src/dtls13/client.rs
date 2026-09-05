@@ -59,6 +59,7 @@ use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
 use crate::dtls13::message::parse_cookie_extension;
+use crate::timer::HandshakeTimers;
 use crate::{Error, InternalError, KeyingMaterial, Output};
 
 /// DTLS 1.3 client
@@ -175,13 +176,18 @@ impl Client {
         config: std::sync::Arc<crate::Config>,
         certificate: crate::DtlsCertificate,
         now: Instant,
+        timers: HandshakeTimers,
     ) -> Result<Client, Error> {
         let mut engine = Engine::new(config, certificate);
         engine.set_client(true);
 
         // Inject transcript + sequence state from the hybrid CH that was
         // already sent on the wire by ClientPending.
-        engine.inject_hybrid_client_hello(&hybrid.transcript_bytes);
+        engine.inject_hybrid_client_hello(
+            &hybrid.transcript_bytes,
+            hybrid.handshake_fragment,
+            timers,
+        );
 
         let mut client = Client {
             state: State::AwaitServerHello,
@@ -232,7 +238,7 @@ impl Client {
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         match self
             .engine
-            .parse_packet(packet)
+            .handle_packet(packet, self.last_now)
             .and_then(|_| self.make_progress())
         {
             Ok(()) => Ok(()),
@@ -241,6 +247,9 @@ impl Client {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
+        if self.state == State::SendClientHello {
+            return Output::Timeout(self.last_now);
+        }
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.server_certificates);
         }

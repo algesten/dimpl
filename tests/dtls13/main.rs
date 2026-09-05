@@ -1,3 +1,5 @@
+#![cfg(feature = "rcgen")]
+
 #[cfg(not(windows))]
 #[path = "../wolfssl/mod.rs"]
 mod wolfssl_helper;

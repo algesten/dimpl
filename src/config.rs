@@ -9,6 +9,8 @@ use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, NamedGroup};
 use crate::{ConfigError, Error};
 
+const MAX_TIMING_DURATION: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
+
 /// Callback for resolving PSK identities to shared secrets.
 ///
 /// Implement this trait and provide it via [`ConfigBuilder::with_psk_client`]
@@ -148,20 +150,23 @@ impl Config {
 
     /// Time of first retry.
     ///
-    /// Every flight restarts with this value.
-    /// Doubled for every retry with a ±25% jitter.
+    /// See [`ConfigBuilder::flight_start_rto`] for the backoff policy.
     #[inline(always)]
     pub fn flight_start_rto(&self) -> Duration {
         self.flight_start_rto
     }
 
     /// Max number of retries per flight.
+    ///
+    /// Excludes the initial transmission. Also applies to DTLS 1.3 KeyUpdate.
     #[inline(always)]
     pub fn flight_retries(&self) -> usize {
         self.flight_retries
     }
 
     /// Timeout for the entire handshake, regardless of flights.
+    ///
+    /// See [`ConfigBuilder::handshake_timeout`] for the clock-start events.
     #[inline(always)]
     pub fn handshake_timeout(&self) -> Duration {
         self.handshake_timeout
@@ -362,9 +367,13 @@ impl ConfigBuilder {
 
     /// Set the time of first retry.
     ///
-    /// Every flight restarts with this value.
-    /// Doubled for every retry with a ±25% jitter.
-    /// Defaults to 1 second.
+    /// Each flight starts its timer when its first packet is emitted. The base
+    /// interval doubles after every retry, with independent +/-25% jitter on
+    /// each interval. This is proportional even for sub-second values; the
+    /// minimum jittered interval is 1 nanosecond. Backoff arithmetic saturates
+    /// on overflow. Also governs DTLS 1.3 KeyUpdate flights.
+    ///
+    /// Defaults to 1 second. Must be nonzero and at most ten years (3650 days).
     pub fn flight_start_rto(mut self, rto: Duration) -> Self {
         self.flight_start_rto = rto;
         self
@@ -372,7 +381,9 @@ impl ConfigBuilder {
 
     /// Set the max number of retries per flight.
     ///
-    /// Defaults to 4.
+    /// Excludes the initial transmission: zero disables retransmissions.
+    /// Timer-driven and duplicate-triggered retransmissions share this budget.
+    /// Also governs DTLS 1.3 KeyUpdate flights. Defaults to 4.
     pub fn flight_retries(mut self, retries: usize) -> Self {
         self.flight_retries = retries;
         self
@@ -380,7 +391,20 @@ impl ConfigBuilder {
 
     /// Set the timeout for the entire handshake, regardless of flights.
     ///
-    /// Defaults to 40 seconds.
+    /// Starts when the client emits its first ClientHello packet through
+    /// [`crate::Output::Packet`], or when the server accepts its first
+    /// ClientHello fragment. Construction and idle time do not consume this
+    /// budget. Uses the logical time supplied to [`crate::Dtls::handle_timeout`].
+    ///
+    /// The absolute deadline survives Auto version selection, cookie exchanges,
+    /// later flights, and retransmissions. It is disabled after completion and
+    /// does not apply to application traffic or DTLS 1.3 KeyUpdate.
+    ///
+    /// Retry exhaustion may fail earlier; increasing this timeout does not
+    /// increase [`Self::flight_retries`]. With the defaults, an unanswered flight
+    /// exhausts retries after roughly 31 seconds, before the 40-second deadline.
+    ///
+    /// Defaults to 40 seconds. Must be nonzero and at most ten years (3650 days).
     pub fn handshake_timeout(mut self, timeout: Duration) -> Self {
         self.handshake_timeout = timeout;
         self
@@ -476,8 +500,8 @@ impl ConfigBuilder {
 
     /// Build the configuration.
     ///
-    /// This validates the crypto provider before returning the configuration.
-    /// Returns `Error::ConfigError` if the provider is invalid.
+    /// Validates timing settings and the crypto provider before returning the
+    /// configuration. Returns `Error::ConfigError` for invalid settings.
     ///
     /// The crypto provider is selected in the following priority order:
     /// 1. Explicit provider set via `with_crypto_provider()`
@@ -486,6 +510,13 @@ impl ConfigBuilder {
     /// 4. RustCrypto provider (if `rust-crypto` feature is enabled)
     /// 5. Panic if no provider is available
     pub fn build(self) -> Result<Config, Error> {
+        if self.handshake_timeout.is_zero() || self.handshake_timeout > MAX_TIMING_DURATION {
+            return Err(ConfigError::InvalidHandshakeTimeout.into());
+        }
+        if self.flight_start_rto.is_zero() || self.flight_start_rto > MAX_TIMING_DURATION {
+            return Err(ConfigError::InvalidFlightStartRto.into());
+        }
+
         let crypto_provider = self
             .crypto_provider
             .or_else(|| CryptoProvider::get_default().cloned());
@@ -692,6 +723,61 @@ impl fmt::Debug for ConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timing_defaults() {
+        let config = Config::default();
+        assert_eq!(config.handshake_timeout(), Duration::from_secs(40));
+        assert_eq!(config.flight_start_rto(), Duration::from_secs(1));
+        assert_eq!(config.flight_retries(), 4);
+    }
+
+    #[test]
+    fn timing_duration_bounds() {
+        for duration in [
+            Duration::ZERO,
+            MAX_TIMING_DURATION + Duration::from_nanos(1),
+            Duration::MAX,
+        ] {
+            let error = Config::builder()
+                .handshake_timeout(duration)
+                .build()
+                .expect_err("unsupported handshake timeout");
+            assert_eq!(
+                error,
+                Error::ConfigError(ConfigError::InvalidHandshakeTimeout)
+            );
+            assert_eq!(
+                error.to_string(),
+                "config error: handshake_timeout must be nonzero and at most 3650 days"
+            );
+            let error = Config::builder()
+                .flight_start_rto(duration)
+                .build()
+                .expect_err("unsupported initial RTO");
+            assert_eq!(
+                error,
+                Error::ConfigError(ConfigError::InvalidFlightStartRto)
+            );
+            assert_eq!(
+                error.to_string(),
+                "config error: flight_start_rto must be nonzero and at most 3650 days"
+            );
+        }
+        for duration in [Duration::from_nanos(1), MAX_TIMING_DURATION] {
+            for retries in [0, usize::MAX] {
+                let config = Config::builder()
+                    .handshake_timeout(duration)
+                    .flight_start_rto(duration)
+                    .flight_retries(retries)
+                    .build()
+                    .expect("supported timing boundaries");
+                assert_eq!(config.handshake_timeout(), duration);
+                assert_eq!(config.flight_start_rto(), duration);
+                assert_eq!(config.flight_retries(), retries);
+            }
+        }
+    }
 
     #[test]
     fn rejects_zero_mtu() {

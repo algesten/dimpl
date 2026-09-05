@@ -3,7 +3,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, SrtpProfile};
+use dimpl::Dtls;
+#[cfg(feature = "rcgen")]
+use dimpl::{Config, SrtpProfile};
 
 use crate::common::*;
 

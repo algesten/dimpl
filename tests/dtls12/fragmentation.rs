@@ -2,10 +2,13 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+#[cfg(feature = "rcgen")]
+use std::time::Duration;
+use std::time::Instant;
 
 use dimpl::{Config, Dtls, Output};
 
+#[cfg(feature = "rcgen")]
 use crate::common::*;
 use crate::ossl_helper::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
 

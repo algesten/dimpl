@@ -66,6 +66,7 @@ use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
 use crate::dtls13::message::parse_cookie_extension;
+use crate::timer::Timeout;
 use crate::{Config, DtlsCertificate, Error, InternalError, Output};
 
 /// Magic random value indicating HelloRetryRequest (RFC 8446 Section 4.1.3).
@@ -227,9 +228,17 @@ impl Server {
     ///
     /// 1. Switching a server pending (auto-mode) to dtls12 server
     /// 2. set_active(true), turning a server pending (auto-mode) to a ClientPending
-    pub fn into_parts(self) -> (Arc<Config>, DtlsCertificate, Instant, VecDeque<Buf>) {
-        let (config, cert) = self.engine.into_fallback();
-        (config, cert, self.last_now, self.retained_hello)
+    pub fn into_parts(
+        self,
+    ) -> (
+        Arc<Config>,
+        DtlsCertificate,
+        Instant,
+        VecDeque<Buf>,
+        Timeout,
+    ) {
+        let (config, cert, deadline) = self.engine.into_fallback();
+        (config, cert, self.last_now, self.retained_hello, deadline)
     }
 
     pub(crate) fn state_name(&self) -> &'static str {
@@ -248,6 +257,7 @@ impl Server {
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
+        let handshake_was_idle = self.engine.handshake_deadline() == Timeout::Unarmed;
         // In auto-sense mode, buffer raw packets while still waiting for
         // the ClientHello so they can be replayed to Server12 on fallback.
         if self.auto_mode && self.state == State::AwaitClientHello {
@@ -260,13 +270,17 @@ impl Server {
 
         match self
             .engine
-            .parse_packet(packet)
+            .handle_packet(packet, self.last_now)
             .and_then(|_| self.make_progress())
         {
             Ok(()) => {}
             Err(e) => {
                 if let Some(err) = e.into_public_error() {
                     return Err(err);
+                }
+                if handshake_was_idle && self.state == State::AwaitClientHello {
+                    self.engine.discard_initial_client_hello();
+                    self.retained_hello.clear();
                 }
                 return Ok(());
             }

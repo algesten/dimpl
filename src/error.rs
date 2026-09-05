@@ -547,6 +547,10 @@ pub enum ConfigError {
     },
     /// The configured AEAD encryption limit is too small.
     AeadEncryptionLimitTooSmall,
+    /// The handshake timeout is zero or greater than 3650 days.
+    InvalidHandshakeTimeout,
+    /// The initial flight RTO is zero or greater than 3650 days.
+    InvalidFlightStartRto,
     /// Cipher-suite filtering removed every available suite.
     NoCipherSuitesAfterFiltering,
     /// A PSK resolver is configured but no PSK cipher suite remains enabled.
@@ -1228,6 +1232,12 @@ impl fmt::Display for ConfigError {
             }
             Self::AeadEncryptionLimitTooSmall => {
                 write!(f, "aead_encryption_limit must be at least 1")
+            }
+            Self::InvalidHandshakeTimeout => {
+                write!(f, "handshake_timeout must be nonzero and at most 3650 days")
+            }
+            Self::InvalidFlightStartRto => {
+                write!(f, "flight_start_rto must be nonzero and at most 3650 days")
             }
             Self::NoCipherSuitesAfterFiltering => write!(
                 f,
