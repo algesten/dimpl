@@ -400,11 +400,7 @@ impl Engine {
 
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
         if self.queue_rx.len() >= self.config.max_queue_rx() {
-            warn!(
-                "Receive queue full (max {}, len {})",
-                self.config.max_queue_rx(),
-                self.queue_rx.len()
-            );
+            warn!("Receive queue full");
             return Err(Error::ReceiveQueueFull);
         }
 
@@ -917,11 +913,7 @@ impl Engine {
                 .unwrap_or(false);
 
         if !can_append && self.queue_tx.len() >= self.config.max_queue_tx() {
-            warn!(
-                "Transmit queue full (max {}, len {})",
-                self.config.max_queue_tx(),
-                self.queue_tx.len()
-            );
+            warn!("Transmit queue full");
             return Err(Error::TransmitQueueFull);
         }
 
@@ -1069,11 +1061,7 @@ impl Engine {
                 .unwrap_or(false);
 
         if !can_append && self.queue_tx.len() >= self.config.max_queue_tx() {
-            warn!(
-                "Transmit queue full (max {}, len {})",
-                self.config.max_queue_tx(),
-                self.queue_tx.len()
-            );
+            warn!("Transmit queue full");
             return Err(Error::TransmitQueueFull);
         }
 
