@@ -1,17 +1,20 @@
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::queue::{QueueRx, QueueTx};
 use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::{Aad, Iv, Nonce};
 use crate::dtls12::context::{AuthMode, CryptoContext};
 use crate::dtls12::incoming::{Incoming, Record, RecordHandler};
-use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
+use crate::dtls12::message::{
+    Body, ClientHello, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence,
+};
 use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
 use crate::error::bounded_error_len;
-use crate::timer::ExponentialBackoff;
+use crate::timer::{HandshakeTimers, Timeout, deadline};
+use crate::util::accepts_client_hello_fragment;
 use crate::window::ReplayWindow;
 use crate::{Config, Error, InternalError, Output, SeededRng};
 
@@ -83,19 +86,12 @@ pub struct Engine {
     /// The records that have been sent in the current flight.
     flight_saved_records: Vec<Entry>,
 
-    /// Flight backoff
-    flight_backoff: ExponentialBackoff,
-
-    /// Timeout for the current flight
-    flight_timeout: Timeout,
+    timers: HandshakeTimers,
 
     /// Cooldown for duplicate-triggered resends of the current flight.
     /// Disabled allows a resend; Unarmed and Armed suppress it. Expiry only
     /// allows another duplicate response, including after periodic retries stop.
     flight_dupe_timeout: Timeout,
-
-    /// Global timeout for the entire connect operation.
-    connect_timeout: Timeout,
 
     /// Whether we are ready to release application data from poll_output.
     release_app_data: bool,
@@ -119,13 +115,6 @@ pub struct Engine {
     close_notify_reported: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Timeout {
-    Disabled,
-    Unarmed,
-    Armed(Instant),
-}
-
 #[derive(Debug)]
 struct Entry {
     content_type: ContentType,
@@ -143,8 +132,7 @@ impl Engine {
     pub fn new(config: Arc<Config>, auth: AuthMode) -> Self {
         let mut rng = SeededRng::new(config.rng_seed());
 
-        let flight_backoff =
-            ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries(), &mut rng);
+        let timers = HandshakeTimers::new(&config, &mut rng);
 
         let crypto_context = CryptoContext::new(auth, Arc::clone(&config));
         let mut buffers_free = BufferPool::default();
@@ -169,10 +157,8 @@ impl Engine {
             transcript,
             replay: ReplayWindow::new(),
             flight_saved_records: Vec::new(),
-            flight_backoff,
-            flight_timeout: Timeout::Unarmed,
+            timers,
             flight_dupe_timeout: Timeout::Disabled,
-            connect_timeout: Timeout::Unarmed,
             release_app_data: false,
             peer_handshake_confirmed: false,
             close_notify_received: false,
@@ -184,19 +170,32 @@ impl Engine {
         self.is_client = is_client;
     }
 
-    /// Set the next outgoing handshake message sequence number.
-    ///
-    /// Used by `Client::new_from_hybrid` to account for the hybrid
-    /// ClientHello (message_seq=0) that was already sent outside this engine.
-    pub fn set_next_handshake_seq_no(&mut self, seq: u16) {
-        self.next_handshake_seq_no = seq;
+    pub fn set_handshake_deadline(&mut self, deadline: Timeout) {
+        self.timers.set_handshake_deadline(deadline);
     }
 
-    /// Advance the epoch-0 record sequence number by one.
-    ///
-    /// Used by `Client::new_from_hybrid` so subsequent epoch-0 records
-    /// don't reuse the sequence number of the hybrid ClientHello record.
-    pub fn advance_epoch_0_sequence(&mut self) {
+    pub fn handshake_deadline(&self) -> Timeout {
+        self.timers.handshake_deadline()
+    }
+
+    pub fn discard_initial_client_hello(&mut self) {
+        self.timers.set_handshake_deadline(Timeout::Unarmed);
+        self.peer_handshake_seq_no = 0;
+        self.transcript.clear();
+    }
+
+    /// Restore an already emitted hybrid ClientHello and its outstanding timers.
+    pub fn inject_hybrid_client_hello(&mut self, fragment: &[u8], timers: HandshakeTimers) {
+        self.timers = timers;
+        self.transcript.extend_from_slice(fragment);
+        let mut saved_fragment = self.pop_buffer();
+        saved_fragment.extend_from_slice(fragment);
+        self.flight_saved_records.push(Entry {
+            content_type: ContentType::Handshake,
+            epoch: 0,
+            fragment: saved_fragment,
+        });
+        self.next_handshake_seq_no = 1;
         self.sequence_epoch_0.sequence_number += 1;
     }
 
@@ -231,6 +230,42 @@ impl Engine {
     /// Get a mutable reference to the crypto context
     pub fn crypto_context_mut(&mut self) -> &mut CryptoContext {
         &mut self.crypto_context
+    }
+
+    pub fn handle_packet(&mut self, packet: &[u8], now: Instant) -> Result<(), InternalError> {
+        self.parse_packet(packet)?;
+        if !self.is_client
+            && self.timers.handshake_deadline() == Timeout::Unarmed
+            && self
+                .queue_rx
+                .iter()
+                .flat_map(|incoming| incoming.records().iter())
+                .any(|record| {
+                    record.record().sequence.epoch == 0
+                        && record.handshakes().iter().any(|handshake| {
+                            let header = &handshake.header;
+                            match &handshake.body {
+                                Body::Fragment(range)
+                                    if header.msg_type == MessageType::ClientHello
+                                        && header.message_seq == self.peer_handshake_seq_no =>
+                                {
+                                    accepts_client_hello_fragment(
+                                        header.length,
+                                        header.fragment_offset,
+                                        header.fragment_length,
+                                        record.buffer(),
+                                        range.clone(),
+                                        ClientHello::parse,
+                                    )
+                                }
+                                _ => false,
+                            }
+                        })
+                })
+        {
+            self.timers.start_handshake(now);
+        }
+        Ok(())
     }
 
     pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), InternalError> {
@@ -393,58 +428,18 @@ impl Engine {
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
-        if self.connect_timeout == Timeout::Unarmed {
-            debug!(
-                "Connect timeout in: {:.03}s",
-                self.config.handshake_timeout().as_secs_f32()
-            );
-            let timeout = now + self.config.handshake_timeout();
-            self.connect_timeout = Timeout::Armed(timeout);
-        }
-        if self.flight_timeout == Timeout::Unarmed {
-            debug!(
-                "Flight timeout in: {:.03}s",
-                self.flight_backoff.rto().as_secs_f32()
-            );
-            let timeout = now + self.flight_backoff.rto();
-            self.flight_timeout = Timeout::Armed(timeout);
-        }
-        match self.flight_dupe_timeout {
-            Timeout::Unarmed => {
-                self.flight_dupe_timeout = Timeout::Armed(now + self.flight_backoff.rto());
-            }
-            Timeout::Armed(deadline) if now >= deadline => {
+        if let Timeout::Armed(deadline) = self.flight_dupe_timeout {
+            if now >= deadline {
                 self.flight_dupe_timeout = Timeout::Disabled;
             }
-            _ => {}
         }
-
-        // The connect timeout is the overall timeout for establishing the connection
-        if let Timeout::Armed(connect_timeout) = self.connect_timeout {
-            if now >= connect_timeout {
-                return Err(Error::Timeout(crate::TimeoutError::Connect));
-            }
-        }
-
-        // If there is no flight timeout, we have already checked the global connect timeout.
-        let Timeout::Armed(flight_timeout) = self.flight_timeout else {
-            return Ok(());
-        };
-
-        if now >= flight_timeout {
-            if self.flight_backoff.can_retry() {
-                self.flight_backoff.attempt(&mut self.rng);
-                debug!(
-                    "Re-arm flight timeout due to resend in {}",
-                    self.flight_backoff.rto().as_secs_f32()
-                );
-                let timeout = now + self.flight_backoff.rto();
-                self.flight_timeout = Timeout::Armed(timeout);
-                self.flight_resend("flight timeout")?;
-                self.flight_dupe_timeout = Timeout::Armed(timeout);
-            } else {
-                return Err(Error::Timeout(crate::TimeoutError::Handshake));
-            }
+        if self
+            .timers
+            .handle_timeout(now, &mut self.rng)
+            .map_err(Error::Timeout)?
+        {
+            self.flight_resend("flight timeout")?;
+            self.flight_dupe_timeout = Timeout::Unarmed;
         }
 
         Ok(())
@@ -461,7 +456,16 @@ impl Engine {
         };
 
         match self.poll_packet_tx(buf) {
-            PollOutput::Data(p) => return Output::Packet(p),
+            PollOutput::Data(p) => {
+                if self.is_client {
+                    self.timers.start_handshake(now);
+                }
+                self.timers.flight_sent(now);
+                if self.flight_dupe_timeout == Timeout::Unarmed {
+                    self.flight_dupe_timeout = Timeout::Armed(deadline(now, self.timers.rto()));
+                }
+                return Output::Packet(p);
+            }
             PollOutput::BufferTooSmall { needed } => return Output::BufferTooSmall { needed },
             PollOutput::None(_) => {}
         }
@@ -541,39 +545,23 @@ impl Engine {
     }
 
     fn poll_timeout(&self, now: Instant) -> Instant {
-        let timeouts = [
-            self.connect_timeout,
-            self.flight_timeout,
-            self.flight_dupe_timeout,
-        ];
-        // Request an immediate handle_timeout(now) to arm pending timers with
-        // fresh caller time. An armed connection deadline must not hide them.
-        if timeouts.contains(&Timeout::Unarmed) {
-            return now;
+        let timeout = self.timers.poll_timeout(now);
+        match self.flight_dupe_timeout {
+            Timeout::Armed(deadline) => timeout.min(deadline),
+            _ => timeout,
         }
-        const DISTANT_FUTURE: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
-        timeouts
-            .into_iter()
-            .filter_map(|timeout| match timeout {
-                Timeout::Armed(deadline) => Some(deadline),
-                _ => None,
-            })
-            .min()
-            .unwrap_or(now + DISTANT_FUTURE)
     }
 
     pub fn flight_begin(&mut self, flight_no: u8) {
         debug!("Begin flight {}", flight_no);
-        self.flight_backoff.reset(&mut self.rng);
+        self.timers.begin_flight(&mut self.rng);
         self.flight_clear_resends();
-        self.flight_timeout = Timeout::Unarmed;
         self.flight_dupe_timeout = Timeout::Disabled;
     }
 
     pub fn flight_stop_resend_timers(&mut self) {
         debug!("Stop connect and flight timeouts");
-        self.flight_timeout = Timeout::Disabled;
-        self.connect_timeout = Timeout::Disabled;
+        self.timers.stop();
 
         // The client stops its resend timer only once it has received the
         // server's final flight, which proves the server received the client's
@@ -594,18 +582,14 @@ impl Engine {
     }
 
     fn flight_resend_on_dupe(&mut self) -> Result<(), Error> {
-        if self.flight_dupe_timeout != Timeout::Disabled {
+        if self.flight_dupe_timeout != Timeout::Disabled
+            || self.flight_saved_records.is_empty()
+            || !self.timers.request_resend(&mut self.rng)
+        {
             return Ok(());
         }
         self.flight_resend("dupe triggers resend")?;
-        self.flight_backoff.attempt(&mut self.rng);
         self.flight_dupe_timeout = Timeout::Unarmed;
-        // Restart the regular flight timer too, so its old deadline cannot
-        // produce another resend immediately after this one. Keep final-flight
-        // periodic retries disabled; only the duplicate cooldown remains active.
-        if self.flight_timeout != Timeout::Disabled {
-            self.flight_timeout = Timeout::Unarmed;
-        }
         Ok(())
     }
 
@@ -1091,9 +1075,8 @@ impl Engine {
     pub fn abort(&mut self) {
         self.queue_tx.clear();
         self.flight_saved_records.clear();
-        self.flight_timeout = Timeout::Disabled;
         self.flight_dupe_timeout = Timeout::Disabled;
-        self.connect_timeout = Timeout::Disabled;
+        self.timers.stop();
     }
 
     /// Pop a buffer from the buffer pool for temporary use
@@ -1457,6 +1440,8 @@ impl RecordHandler for Engine {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn poll_packets(engine: &mut Engine, now: Instant) -> (usize, Instant) {
@@ -1535,12 +1520,13 @@ mod tests {
         engine
             .parse_packet(&duplicate_handshake(1))
             .expect("first duplicate");
-        assert_eq!(poll_packets(&mut engine, resend_at), (1, resend_at));
+        let (packets, deadline) = poll_packets(&mut engine, resend_at);
+        assert_eq!(packets, 1);
+        assert_eq!(deadline, resend_at + engine.timers.rto());
         engine
             .handle_timeout(resend_at)
-            .expect("arm resend backoff");
-        let (packets, deadline) = poll_packets(&mut engine, resend_at);
-        assert_eq!(packets, 0);
+            .expect("resend backoff remains armed");
+        assert_eq!(poll_packets(&mut engine, resend_at), (0, deadline));
         assert!(deadline > initial_deadline + Duration::from_secs(1));
 
         for seq in [1, 2, 1, 2] {
@@ -1585,12 +1571,13 @@ mod tests {
         engine
             .parse_packet(&duplicate_handshake(1))
             .expect("first final-flight duplicate");
-        assert_eq!(poll_packets(&mut engine, now), (1, now));
+        let (packets, deadline) = poll_packets(&mut engine, now);
+        assert_eq!(packets, 1);
+        assert_eq!(deadline, now + engine.timers.rto());
         engine
             .handle_timeout(now)
-            .expect("arm final-flight cooldown");
-        let (packets, deadline) = poll_packets(&mut engine, now);
-        assert_eq!(packets, 0);
+            .expect("final-flight cooldown remains armed");
+        assert_eq!(poll_packets(&mut engine, now), (0, deadline));
         assert!(deadline < now + Duration::from_secs(10));
         engine
             .parse_packet(&duplicate_handshake(2))
@@ -1602,13 +1589,41 @@ mod tests {
         engine
             .parse_packet(&duplicate_handshake(2))
             .expect("retry after cooldown");
-        assert_eq!(poll_packets(&mut engine, deadline), (1, deadline));
+        let (packets, next_deadline) = poll_packets(&mut engine, deadline);
+        assert_eq!(packets, 1);
+        assert_eq!(next_deadline, deadline + engine.timers.rto());
         engine
             .handle_timeout(deadline)
-            .expect("arm longer cooldown");
-        let (packets, next_deadline) = poll_packets(&mut engine, deadline);
-        assert_eq!(packets, 0);
+            .expect("longer cooldown remains armed");
+        assert_eq!(poll_packets(&mut engine, deadline), (0, next_deadline));
         assert!(next_deadline - deadline > deadline - now);
+    }
+
+    #[test]
+    fn duplicate_cooldown_starts_when_resend_is_emitted() {
+        let now = Instant::now();
+        let mut engine = resend_engine(now);
+        engine.flight_stop_resend_timers();
+        engine
+            .parse_packet(&duplicate_handshake(1))
+            .expect("queue final-flight resend");
+        assert!(matches!(
+            engine.poll_output(&mut [], now),
+            Output::BufferTooSmall { .. }
+        ));
+
+        let emitted_at = now + Duration::from_secs(10);
+        engine
+            .handle_timeout(emitted_at)
+            .expect("unsent resend has no cooldown");
+        assert_eq!(engine.flight_dupe_timeout, Timeout::Unarmed);
+        let (packets, deadline) = poll_packets(&mut engine, emitted_at);
+        assert_eq!(packets, 1);
+        assert_eq!(deadline, emitted_at + engine.timers.rto());
+        engine
+            .parse_packet(&duplicate_handshake(2))
+            .expect("suppress duplicate during cooldown");
+        assert_eq!(poll_packets(&mut engine, emitted_at), (0, deadline));
     }
 
     #[test]
@@ -1642,6 +1657,40 @@ mod tests {
         assert!(
             engine.pop_buffer().into_vec().capacity() >= 2048,
             "discarding a duplicate must preserve its reusable receive allocation"
+        );
+    }
+
+    #[test]
+    fn timing_resend_queue_failure_is_fatal() {
+        let now = Instant::now();
+        let config = Arc::new(
+            Config::builder()
+                .dangerously_set_rng_seed(42)
+                .build()
+                .expect("valid config"),
+        );
+        let mut engine = Engine::new(config, AuthMode::Psk);
+        engine.flight_begin(1);
+        engine
+            .create_record(ContentType::Handshake, 0, true, |fragment| fragment.push(1))
+            .expect("queue original flight");
+        let mut buffer = [0; 64];
+        assert!(matches!(
+            engine.poll_output(&mut buffer, now),
+            Output::Packet(_)
+        ));
+        let Output::Timeout(retry_at) = engine.poll_output(&mut buffer, now) else {
+            panic!("expected flight timer");
+        };
+        engine.config = Arc::new(
+            Config::builder()
+                .max_queue_tx(0)
+                .build()
+                .expect("inject exhausted transmit capacity"),
+        );
+        assert_eq!(
+            engine.handle_timeout(retry_at),
+            Err(Error::TransmitQueueFull)
         );
     }
 }

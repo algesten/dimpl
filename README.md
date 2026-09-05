@@ -102,12 +102,15 @@ use std::time::Instant;
 use dimpl::{certificate, Config, Dtls, Output};
 
 // Stub I/O to keep the example focused on the state machine
-enum Event { Udp(Vec<u8>), Timer(Instant) }
-fn wait_next_event(_next_wake: Option<Instant>) -> Event { Event::Udp(Vec::new()) }
+enum Event { Udp(Vec<u8>, Instant), Timer(Instant) }
+fn wait_next_event(_next_wake: Option<Instant>) -> Event {
+    Event::Udp(Vec::new(), Instant::now())
+}
 fn send_udp(_bytes: &[u8]) {}
 
 fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
     let mut next_wake: Option<Instant> = None;
+    let mut received_packet: Option<Vec<u8>> = None;
     loop {
         // Drain engine output until we have to wait for I/O or a timer
         let mut out_buf = vec![0u8; 2048];
@@ -138,9 +141,17 @@ fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
             }
         }
 
+        if let Some(packet) = received_packet.take() {
+            dtls.handle_packet(&packet)?;
+            continue;
+        }
+
         // Block waiting for either UDP input or the scheduled timeout
         match wait_next_event(next_wake) {
-            Event::Udp(pkt) => dtls.handle_packet(&pkt)?,
+            Event::Udp(pkt, now) => {
+                dtls.handle_timeout(now)?;
+                received_packet = Some(pkt);
+            }
             Event::Timer(now) => dtls.handle_timeout(now)?,
         }
     }

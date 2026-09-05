@@ -5,6 +5,12 @@
   * Return accepted byte counts from `send_application_data` #175
   * Parse DTLS 1.2/1.3 handshake payloads before committing transcript state #174
   * Accept DTLS 1.3 ACKs for earlier handshake and KeyUpdate transmissions #173
+  * Start handshake clocks at ClientHello and honor timing settings across DTLS 1.2/1.3 and Auto #161
+  * Arm handshake and flight timers from the last `handle_timeout` time; refresh it before `handle_packet` and `poll_output` #161
+  * Reject zero or over-3650-day `handshake_timeout` and `flight_start_rto` in `ConfigBuilder::build` #161
+  * Apply retransmission jitter as ±25% of the RTO instead of ±250 ms with a 50 ms floor #161
+  * Limit duplicate-triggered flight resends to `flight_retries`, except answers to the peer's final flight #161
+  * Accept a valid ClientHello after a server rejects a malformed first ClientHello #161
 
 # 0.7.6
 

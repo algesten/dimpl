@@ -16,7 +16,7 @@
 /// and falls back to DTLS 1.2 via [`Error::Dtls12Fallback`] if the
 /// reassembled ClientHello does not offer DTLS 1.3.
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use arrayvec::ArrayVec;
 
@@ -28,6 +28,7 @@ use crate::dtls13::message::Random;
 use crate::dtls13::message::SignatureAlgorithmsExtension;
 use crate::dtls13::message::SupportedGroupsExtension;
 use crate::dtls13::message::UseSrtpExtension;
+use crate::timer::HandshakeTimers;
 use crate::types::NamedGroup;
 use crate::{Config, CryptoError, DtlsCertificate, Error, Output, SeededRng, TimeoutError};
 // Extension type constants
@@ -269,10 +270,8 @@ pub(crate) struct ClientPending {
     needs_send: bool,
     /// Last time handle_timeout was called.
     last_now: Instant,
-    /// When to retransmit the wire_packet.
-    retransmit_at: Option<Instant>,
-    /// How many retransmits have occurred.
-    retransmit_count: usize,
+    timers: HandshakeTimers,
+    rng: SeededRng,
     closed: bool,
 }
 
@@ -284,6 +283,9 @@ impl ClientPending {
     ) -> Result<Self, Error> {
         let hybrid = HybridClientHello::new(&config)?;
         let wire_packet = hybrid.wire_packet();
+        let mut rng = SeededRng::new(config.rng_seed());
+        let mut timers = HandshakeTimers::new(&config, &mut rng);
+        timers.begin_flight(&mut rng);
         Ok(ClientPending {
             hybrid,
             config,
@@ -291,8 +293,8 @@ impl ClientPending {
             wire_packet,
             needs_send: true,
             last_now: now,
-            retransmit_at: None,
-            retransmit_count: 0,
+            timers,
+            rng,
             closed: false,
         })
     }
@@ -302,23 +304,17 @@ impl ClientPending {
         if self.closed {
             return Ok(());
         }
-        // Arm initial retransmit timer on first call
-        if self.retransmit_at.is_none() {
-            self.retransmit_at = Some(now + Duration::from_secs(1));
-            return Ok(());
-        }
-        if let Some(deadline) = self.retransmit_at {
-            if now >= deadline {
-                if self.retransmit_count >= self.config.flight_retries() {
-                    return Err(Error::Timeout(TimeoutError::HybridClientHello));
-                }
-                self.retransmit_count += 1;
-                self.needs_send = true;
-                // Exponential backoff: 2s, 4s, 8s, ...
-                let shift = self.retransmit_count.min(5) as u32;
-                let rto = Duration::from_secs(1u64 << shift);
-                self.retransmit_at = Some(now + rto);
-            }
+        let resend = self
+            .timers
+            .handle_timeout(now, &mut self.rng)
+            .map_err(|error| {
+                Error::Timeout(match error {
+                    TimeoutError::Handshake => TimeoutError::HybridClientHello,
+                    other => other,
+                })
+            })?;
+        if resend {
+            self.needs_send = true;
         }
         Ok(())
     }
@@ -335,11 +331,11 @@ impl ClientPending {
             }
             self.needs_send = false;
             buf[..len].copy_from_slice(&self.wire_packet);
+            self.timers.start_handshake(self.last_now);
+            self.timers.flight_sent(self.last_now);
             return Output::Packet(&buf[..len]);
         }
-        let next = self
-            .retransmit_at
-            .unwrap_or(self.last_now + Duration::from_secs(1));
+        let next = self.timers.poll_timeout(self.last_now);
         Output::Timeout(next)
     }
 
@@ -350,12 +346,26 @@ impl ClientPending {
     pub fn close(&mut self) -> Result<(), Error> {
         self.closed = true;
         self.needs_send = false;
-        self.retransmit_at = None;
+        self.timers.stop();
         Ok(())
     }
 
-    pub fn into_parts(self) -> (HybridClientHello, Arc<Config>, DtlsCertificate, Instant) {
-        (self.hybrid, self.config, self.certificate, self.last_now)
+    pub fn into_parts(
+        self,
+    ) -> (
+        HybridClientHello,
+        Arc<Config>,
+        DtlsCertificate,
+        Instant,
+        HandshakeTimers,
+    ) {
+        (
+            self.hybrid,
+            self.config,
+            self.certificate,
+            self.last_now,
+            self.timers,
+        )
     }
 }
 

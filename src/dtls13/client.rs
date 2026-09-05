@@ -54,6 +54,7 @@ use crate::dtls13::message::SignatureScheme;
 use crate::dtls13::message::SupportedGroupsExtension;
 use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::UseSrtpExtension;
+use crate::timer::HandshakeTimers;
 use crate::{Error, InternalError, KeyingMaterial, Output};
 
 /// DTLS 1.3 client
@@ -167,22 +168,30 @@ impl Client {
     /// number is advanced to 1 (one CH has been sent). The hybrid CH was
     /// already sent on the wire by `ClientPending`, so no record is
     /// enqueued for output.
+    ///
+    /// The inherited timers may already have expired, so the caller drives
+    /// the first `handle_timeout` once it owns the client.
     pub(crate) fn new_from_hybrid(
         hybrid: crate::auto::HybridClientHello,
         config: std::sync::Arc<crate::Config>,
         certificate: crate::DtlsCertificate,
         now: Instant,
-    ) -> Result<Client, Error> {
+        timers: HandshakeTimers,
+    ) -> Client {
         let mut engine = Engine::new(config, certificate);
         engine.set_client(true);
 
         // Inject transcript + sequence state from the hybrid CH that was
         // already sent on the wire by ClientPending.
-        engine.inject_hybrid_client_hello(&hybrid.transcript_bytes);
+        engine.inject_hybrid_client_hello(
+            &hybrid.transcript_bytes,
+            &hybrid.handshake_fragment,
+            timers,
+        );
         let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
 
-        let mut client = Client {
+        Client {
             state: State::AwaitServerHello,
             engine,
             random: Some(hybrid.random),
@@ -204,9 +213,7 @@ impl Client {
             handshake_secret: None,
             client_hs_traffic_secret: None,
             server_hs_traffic_secret: None,
-        };
-        client.handle_timeout(now)?;
-        Ok(client)
+        }
     }
 
     pub fn into_server(self) -> Server {
@@ -231,7 +238,7 @@ impl Client {
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         match self
             .engine
-            .parse_packet(packet)
+            .handle_packet(packet, self.last_now)
             .and_then(|_| self.make_progress())
         {
             Ok(()) => Ok(()),
@@ -240,6 +247,9 @@ impl Client {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
+        if self.state == State::SendClientHello {
+            return Output::Timeout(self.last_now);
+        }
         if let Some(event) = self.local_events.pop_front() {
             return event.into_output(buf, &self.server_certificates);
         }
