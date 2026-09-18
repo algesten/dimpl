@@ -1,15 +1,26 @@
-#![cfg(feature = "rcgen")]
+#![cfg(any(feature = "aws-lc-rs", feature = "rust-crypto"))]
 
 #[path = "dtls13/common.rs"]
 mod common;
 
+#[path = "ossl/mod.rs"]
+mod ossl_helper;
+
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::Dtls;
-use dimpl::certificate::generate_self_signed_certificate;
+use dimpl::{Dtls, DtlsCertificate};
 
 use crate::common::{drain_outputs, dtls13_config};
+use crate::ossl_helper::{DtlsCertOptions, OsslDtlsCert};
+
+fn certificate() -> DtlsCertificate {
+    let cert = OsslDtlsCert::new(DtlsCertOptions::default());
+    DtlsCertificate {
+        certificate: cert.x509.to_der().expect("certificate DER"),
+        private_key: cert.pkey.private_key_to_pkcs8().expect("private key DER"),
+    }
+}
 
 fn cookie_extensions_start(body: &[u8], msg_type: u8) -> Option<usize> {
     let mut pos = 0;
@@ -98,8 +109,8 @@ fn shrink_dtls13_cookie_extension_inner_len(packet: &mut [u8]) -> bool {
 fn dtls13_client_rejects_hrr_cookie_extension_trailing_bytes() {
     let _ = env_logger::try_init();
 
-    let client_cert = generate_self_signed_certificate().expect("gen client cert");
-    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let client_cert = certificate();
+    let server_cert = certificate();
     let config = dtls13_config();
     let now = Instant::now();
 
@@ -146,8 +157,8 @@ fn dtls13_client_rejects_hrr_cookie_extension_trailing_bytes() {
 fn dtls13_server_rejects_clienthello_cookie_extension_trailing_bytes() {
     let _ = env_logger::try_init();
 
-    let client_cert = generate_self_signed_certificate().expect("gen client cert");
-    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let client_cert = certificate();
+    let server_cert = certificate();
     let config = dtls13_config();
     let now = Instant::now();
 
@@ -191,4 +202,60 @@ fn dtls13_server_rejects_clienthello_cookie_extension_trailing_bytes() {
     server
         .handle_packet(&ch2)
         .expect("malformed ClientHello Cookie extension should be discarded");
+}
+
+#[test]
+fn dtls13_cookie_only_retry_preserves_key_share() {
+    const COOKIE: u16 = 44;
+    const KEY_SHARE: u16 = 51;
+
+    let config = dtls13_config();
+    let now = Instant::now();
+    let mut client = Dtls::new_13(Arc::clone(&config), certificate(), now);
+    client.set_active(true);
+    let mut server = Dtls::new_13(config, certificate(), now);
+    server.set_active(false);
+    server.handle_timeout(now).expect("start server");
+    assert!(drain_outputs(&mut server).packets.is_empty());
+
+    client.handle_timeout(now).expect("send CH1");
+    let ch1 = drain_outputs(&mut client).packets;
+    assert_eq!(ch1.len(), 1);
+    let key_share = hello_extension(&ch1[0], 1, KEY_SHARE).expect("CH1 key_share");
+
+    server.handle_packet(&ch1[0]).expect("receive CH1");
+    let hrr = drain_outputs(&mut server).packets;
+    assert_eq!(hrr.len(), 1);
+    let cookie = hello_extension(&hrr[0], 2, COOKIE).expect("HRR cookie");
+    assert!(
+        hello_extension(&hrr[0], 2, KEY_SHARE).is_none(),
+        "cookie-only HRR"
+    );
+
+    client.handle_packet(&hrr[0]).expect("receive HRR");
+    let ch2 = drain_outputs(&mut client).packets;
+    assert_eq!(ch2.len(), 1);
+    assert_eq!(hello_extension(&ch2[0], 1, COOKIE), Some(cookie));
+    assert_eq!(hello_extension(&ch2[0], 1, KEY_SHARE), Some(key_share));
+}
+
+fn hello_extension(packet: &[u8], message_type: u8, extension_type: u16) -> Option<&[u8]> {
+    assert_eq!(packet[0], 22);
+    assert_eq!(&packet[3..5], &[0, 0]);
+    assert_eq!(packet[13], message_type);
+    assert_eq!(&packet[19..22], &[0, 0, 0]);
+    assert_eq!(&packet[14..17], &packet[22..25]);
+    let body = &packet[25..];
+    let start = cookie_extensions_start(body, message_type).expect("hello extensions");
+    let length = u16::from_be_bytes([body[start], body[start + 1]]) as usize;
+    let mut extensions = &body[start + 2..start + 2 + length];
+    while !extensions.is_empty() {
+        let kind = u16::from_be_bytes([extensions[0], extensions[1]]);
+        let length = u16::from_be_bytes([extensions[2], extensions[3]]) as usize;
+        if kind == extension_type {
+            return Some(&extensions[4..4 + length]);
+        }
+        extensions = &extensions[4 + length..];
+    }
+    None
 }
