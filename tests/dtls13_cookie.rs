@@ -6,6 +6,10 @@ mod common;
 #[path = "ossl/mod.rs"]
 mod ossl_helper;
 
+#[cfg(not(windows))]
+#[path = "wolfssl/mod.rs"]
+mod wolfssl_helper;
+
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -258,4 +262,96 @@ fn hello_extension(packet: &[u8], message_type: u8, extension_type: u16) -> Opti
         extensions = &extensions[4 + length..];
     }
     None
+}
+
+#[test]
+#[cfg(not(windows))]
+fn dtls13_wolfssl_cookie_only_retry_preserves_key_share() {
+    use std::collections::VecDeque;
+    use std::time::Duration;
+
+    use crate::wolfssl_helper::WolfDtlsCert;
+
+    const COOKIE: u16 = 44;
+    const KEY_SHARE: u16 = 51;
+
+    let server_cert = certificate();
+    let wolf_cert = WolfDtlsCert::new(server_cert.certificate, server_cert.private_key);
+    let mut server = wolf_cert.new_dtls13_impl(true).expect("wolfSSL server");
+    let mut events = VecDeque::new();
+    let mut now = Instant::now();
+    let mut client = Dtls::new_13(dtls13_config(), certificate(), now);
+    client.set_active(true);
+
+    client.handle_timeout(now).expect("send CH1");
+    let ch1 = drain_outputs(&mut client).packets;
+    assert_eq!(ch1.len(), 1);
+    let key_share = hello_extension(&ch1[0], 1, KEY_SHARE).expect("CH1 key_share");
+    server
+        .handle_receive(&ch1[0], &mut events)
+        .expect("receive CH1");
+
+    let hrr = server.poll_datagram().expect("wolfSSL HRR");
+    let cookie = hello_extension(&hrr, 2, COOKIE).expect("HRR cookie");
+    assert!(
+        hello_extension(&hrr, 2, KEY_SHARE).is_none(),
+        "cookie-only HRR"
+    );
+    client.handle_packet(&hrr).expect("receive HRR");
+    let ch2 = drain_outputs(&mut client).packets;
+    assert_eq!(ch2.len(), 1);
+    assert_eq!(hello_extension(&ch2[0], 1, COOKIE), Some(cookie));
+    assert_eq!(hello_extension(&ch2[0], 1, KEY_SHARE), Some(key_share));
+    server
+        .handle_receive(&ch2[0], &mut events)
+        .expect("receive CH2");
+
+    let mut connected = false;
+    for _ in 0..50 {
+        while let Some(packet) = server.poll_datagram() {
+            client
+                .handle_packet(&packet)
+                .expect("receive wolfSSL flight");
+            let out = drain_outputs(&mut client);
+            connected |= out.connected;
+            for packet in out.packets {
+                server
+                    .handle_receive(&packet, &mut events)
+                    .expect("receive client flight");
+            }
+        }
+        if connected && server.is_connected() {
+            break;
+        }
+        now += Duration::from_millis(10);
+        client.handle_timeout(now).expect("client timeout");
+        let out = drain_outputs(&mut client);
+        connected |= out.connected;
+        for packet in out.packets {
+            server
+                .handle_receive(&packet, &mut events)
+                .expect("receive client retry");
+        }
+    }
+    assert!(connected, "dimpl client connected");
+    assert!(server.is_connected(), "wolfSSL server connected");
+
+    let payload = b"cookie retry interop";
+    server.write(payload).expect("wolfSSL write");
+    let mut received = Vec::new();
+    while let Some(packet) = server.poll_datagram() {
+        client
+            .handle_packet(&packet)
+            .expect("receive encrypted data");
+        let out = drain_outputs(&mut client);
+        for data in out.app_data {
+            received.extend_from_slice(&data);
+        }
+        for packet in out.packets {
+            server
+                .handle_receive(&packet, &mut events)
+                .expect("receive client ACK");
+        }
+    }
+    assert_eq!(received, payload);
 }
