@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Preserve DTLS 1.3 client key shares on cookie-only retries #163
+
 # 0.7.3
 
   * Fix DTLS 1.2 ClientHello retransmissions #160
