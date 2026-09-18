@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.7.4
+
   * Preserve DTLS 1.3 client key shares on cookie-only retries #163
 
 # 0.7.3
