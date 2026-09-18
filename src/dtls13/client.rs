@@ -411,10 +411,14 @@ impl State {
                 crate::CryptoError::KeyExchangeGroupNotFound(group),
             ))?;
 
-        let kx_buf = client.engine.pop_buffer();
-        let key_exchange = kx_group
-            .start_exchange(kx_buf)
-            .map_err(Error::CryptoError)?;
+        let key_exchange = if let Some(key_exchange) = client.active_key_exchange.take() {
+            key_exchange
+        } else {
+            let kx_buf = client.engine.pop_buffer();
+            kx_group
+                .start_exchange(kx_buf)
+                .map_err(Error::CryptoError)?
+        };
 
         // Build the key_share extension data into extension_data buffer
         client.extension_data.clear();
@@ -545,8 +549,13 @@ impl State {
             client.engine.reset_for_hello_retry();
             client.hello_retry = true;
 
-            // Drop the old key exchange
-            client.active_key_exchange = None;
+            // Per RFC 9846 Section 4.2.2: a retry may replace key_share only when HRR
+            // contains key_share. Keep the original exchange for cookie-only
+            // retries so ClientHello2 and the eventual shared secret use the
+            // same key pair as ClientHello1.
+            if client.hrr_selected_group.is_some() {
+                client.active_key_exchange = None;
+            }
 
             return Ok(Self::SendClientHello);
         }
