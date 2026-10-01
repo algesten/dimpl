@@ -401,3 +401,165 @@ fn dtls12_handles_delayed_burst_delivery() {
         "Server should connect despite delayed delivery"
     );
 }
+
+/// Reverse the order of the records in a DTLS 1.2 datagram (whole records only).
+#[cfg(feature = "rcgen")]
+fn reverse_records(datagram: &[u8]) -> Vec<u8> {
+    let mut records = Vec::new();
+    let mut i = 0usize;
+    while i + 13 <= datagram.len() {
+        let len = u16::from_be_bytes([datagram[i + 11], datagram[i + 12]]) as usize;
+        let end = (i + 13 + len).min(datagram.len());
+        records.push(&datagram[i..end]);
+        i = end;
+    }
+    records.into_iter().rev().flatten().copied().collect()
+}
+
+/// The most datagrams one side may send in [`run_reversed_final_flight`]'s 3 s.
+///
+/// A side sends at most 3 flights, and each flight goes out once, plus at most one early
+/// resend per retransmission timer period when duplicates arrive (two periods fit in 3 s),
+/// plus a resend of the final flight for each duplicate of the peer's final flight. At
+/// MTU 300 a flight is at most 5 datagrams. A resend storm sends one flight per round trip
+/// (here one per 10 ms step, so hundreds).
+#[cfg(feature = "rcgen")]
+const MAX_DATAGRAMS_PER_SIDE: usize = 30;
+
+/// Run a handshake where the first client datagram carrying ChangeCipherSpec has its
+/// records reversed (Finished before ChangeCipherSpec, and the flight's handshake
+/// messages in reverse order). With `duplicate`, every datagram is also delivered twice.
+///
+/// Asserts that neither side sends more than [`MAX_DATAGRAMS_PER_SIDE`] datagrams over
+/// 3 s, and returns the time until both sides are connected.
+#[cfg(feature = "rcgen")]
+fn run_reversed_final_flight(config: Arc<dimpl::Config>, duplicate: bool) -> Duration {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let mtu = config.mtu();
+    let cookie = config.use_server_cookie();
+
+    let start = Instant::now();
+    let mut now = start;
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+
+    let mut reversed = false;
+    let mut client_connected = false;
+    let mut server_connected = false;
+    let mut connected_after = None;
+    let mut client_sent = 0;
+    let mut server_sent = 0;
+
+    // 3 s: past the first retransmission timer, so a resend storm cannot hide.
+    for _ in 0..300 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+
+        client_connected |= client_out.connected;
+        server_connected |= server_out.connected;
+        if client_connected && server_connected && connected_after.is_none() {
+            connected_after = Some(now - start);
+        }
+
+        client_sent += client_out.packets.len();
+        server_sent += server_out.packets.len();
+
+        let copies = if duplicate { 2 } else { 1 };
+
+        for p in &client_out.packets {
+            let has_ccs = parse_records(p).iter().any(|r| r.ctype == 20);
+            let p = if has_ccs && !reversed {
+                reversed = true;
+                reverse_records(p)
+            } else {
+                p.clone()
+            };
+            for _ in 0..copies {
+                let _ = server.handle_packet(&p);
+            }
+        }
+        for p in &server_out.packets {
+            for _ in 0..copies {
+                let _ = client.handle_packet(p);
+            }
+        }
+
+        now += Duration::from_millis(10);
+    }
+
+    println!(
+        "mtu {mtu} cookie {cookie} duplicate {duplicate}: client sent {client_sent}, \
+         server sent {server_sent} datagrams, connected after {connected_after:?}"
+    );
+
+    assert!(
+        reversed,
+        "the client's final flight should have been reversed"
+    );
+    assert!(
+        client_sent <= MAX_DATAGRAMS_PER_SIDE && server_sent <= MAX_DATAGRAMS_PER_SIDE,
+        "mtu {mtu} cookie {cookie} duplicate {duplicate}: resend storm: client sent \
+         {client_sent}, server sent {server_sent} datagrams in 3 s (at most \
+         {MAX_DATAGRAMS_PER_SIDE} each)"
+    );
+
+    connected_after.unwrap_or_else(|| {
+        panic!(
+            "mtu {mtu} cookie {cookie} duplicate {duplicate}: handshake should complete \
+             with a reversed final flight (client sent {client_sent}, server sent \
+             {server_sent} datagrams)"
+        )
+    })
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_reversed_final_flight_completes_without_resend_storm() {
+    //! RFC 6347 §4.2.2: handshake messages are processed in message_seq order whatever
+    //! order their records arrive in, and a record of the next epoch (Finished) that
+    //! arrives before the ChangeCipherSpec starting that epoch waits for it. One
+    //! reordered copy of the final flight must complete the handshake on its own: no
+    //! retransmission, and (RFC 6347 §4.2.4) no flights bounced between the peers, also
+    //! when the network duplicates datagrams.
+
+    let _ = env_logger::try_init();
+
+    let configs = [
+        // As WebRTC stacks use it (ICE has already proved return routability).
+        Arc::new(
+            dimpl::Config::builder()
+                .use_server_cookie(false)
+                .build()
+                .expect("Failed to build config"),
+        ),
+        dtls12_config(),
+        // Small MTU: the final flight spans several datagrams and fragments.
+        dtls12_config_with_mtu(300),
+    ];
+
+    for config in configs {
+        for duplicate in [false, true] {
+            let mtu = config.mtu();
+            let connected_after = run_reversed_final_flight(Arc::clone(&config), duplicate);
+
+            // Below the 1 s initial retransmission timer (less its jitter): the reordered
+            // copy alone completed the handshake.
+            assert!(
+                connected_after < Duration::from_millis(500),
+                "mtu {mtu} duplicate {duplicate}: handshake should complete without a \
+                 retransmission, took {connected_after:?}"
+            );
+        }
+    }
+}

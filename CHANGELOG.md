@@ -1,6 +1,7 @@
 # Unreleased
 
   * Restore DTLS buffer reuse and reject unpooled buffer returns #167
+  * Process DTLS 1.2 handshake messages by sequence number when records arrive out of order
 
 # 0.7.4
 

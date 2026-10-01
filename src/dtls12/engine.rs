@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
+use arrayvec::ArrayVec;
+
 use super::queue::{QueueRx, QueueTx};
 use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::{Aad, Iv, Nonce};
@@ -616,58 +618,15 @@ impl Engine {
     }
 
     pub fn has_complete_handshake(&mut self, wanted: MessageType) -> bool {
-        self.has_complete_handshake_with_seq(wanted, self.peer_handshake_seq_no)
-    }
+        self.discard_stale_handshakes();
 
-    fn has_complete_handshake_with_seq(&mut self, wanted: MessageType, expected_seq: u16) -> bool {
-        let mut skip_handled = self
-            .queue_rx
-            .iter()
-            .flat_map(|i| i.records().iter())
-            .skip_while(|r| r.is_handled())
-            // Cap to MAX_DEFRAGMENT_PACKETS to avoid misbehaving peers
-            .take(MAX_DEFRAGMENT_PACKETS)
-            .flat_map(|r| r.handshakes().iter())
-            .skip_while(|h| h.is_handled())
-            .peekable();
-
-        let maybe_first_handshake = skip_handled.peek();
-
-        let Some(first) = maybe_first_handshake else {
-            return false;
-        };
-
-        if first.header.message_seq != expected_seq {
-            return false;
-        }
-
-        if first.header.msg_type != wanted {
-            return false;
-        }
-
-        let wanted_seq = first.header.message_seq;
-        let wanted_length = first.header.length;
-        let mut last_fragment_end = 0;
-
-        for h in skip_handled {
-            // A different seq means we're looking at a different handshake
-            if wanted_seq != h.header.message_seq {
-                continue;
-            }
-
-            // Check fragment contiguity
-            if h.header.fragment_offset != last_fragment_end {
-                return false;
-            }
-            last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
-
-            // Found the last fragment to complete the wanted handshake.
-            if last_fragment_end == wanted_length {
-                return true;
-            }
-        }
-
-        false
+        complete_handshake_fragments(
+            &self.queue_rx,
+            self.peer_encryption_enabled,
+            wanted,
+            self.peer_handshake_seq_no,
+        )
+        .is_some()
     }
 
     pub fn next_handshake(
@@ -675,23 +634,22 @@ impl Engine {
         wanted: MessageType,
         defragment_buffer: &mut Buf,
     ) -> Result<Option<Handshake>, InternalError> {
-        if !self.has_complete_handshake(wanted) {
-            return Ok(None);
-        }
+        self.discard_stale_handshakes();
 
-        let iter = self
-            .queue_rx
-            .iter()
-            .flat_map(|i| i.records().iter())
-            .skip_while(|r| r.is_handled())
-            .flat_map(|r| r.handshakes().iter().map(move |h| (h, r.buffer())))
-            .skip_while(|(h, _)| h.is_handled());
+        let Some(fragments) = complete_handshake_fragments(
+            &self.queue_rx,
+            self.peer_encryption_enabled,
+            wanted,
+            self.peer_handshake_seq_no,
+        ) else {
+            return Ok(None);
+        };
 
         // This sets the handled flag on the handshake.
         // Passing Some(&mut self.transcript) to have defragment write to transcript
         // before creating the handshake, avoiding borrow conflicts.
         let handshake = Handshake::defragment(
-            iter,
+            fragments.into_iter(),
             defragment_buffer,
             self.cipher_suite,
             Some(&mut self.transcript),
@@ -700,15 +658,25 @@ impl Engine {
         // Move the expected seq_no along
         self.peer_handshake_seq_no = handshake.header.message_seq + 1;
 
+        // Other copies of this message (resends) are stale now.
+        self.discard_stale_handshakes();
+
         Ok(Some(handshake))
     }
 
     pub(crate) fn next_record(&mut self, ctype: ContentType) -> Option<&Record> {
+        self.discard_stale_handshakes();
+
+        let peer_encryption_enabled = self.peer_encryption_enabled;
+
         let record = self
             .queue_rx
             .iter()
             .flat_map(|i| i.records().iter())
-            .find(|r| !r.is_handled())?;
+            .filter(|r| !r.is_handled())
+            // A record of the next epoch can arrive before the ChangeCipherSpec that
+            // starts the epoch. It waits for the keys and must not block that record.
+            .find(|r| peer_encryption_enabled || r.record().sequence.epoch == 0)?;
 
         if record.record().content_type != ctype {
             return None;
@@ -717,6 +685,28 @@ impl Engine {
         record.set_handled();
 
         Some(record)
+    }
+
+    /// Mark queued copies of handshake messages that were already processed as handled.
+    ///
+    /// A datagram can carry both new messages and copies of processed ones (a resent
+    /// flight, or a copy whose records were reordered). The stale copies must neither
+    /// block the next message nor keep their datagram in the receive queue.
+    fn discard_stale_handshakes(&self) {
+        let records = self
+            .queue_rx
+            .iter()
+            .flat_map(|i| i.records().iter())
+            // Records of an epoch whose keys are not in place are not parsed yet.
+            .filter(|r| self.peer_encryption_enabled || r.record().sequence.epoch == 0);
+
+        for record in records {
+            for handshake in record.handshakes() {
+                if handshake.header.message_seq < self.peer_handshake_seq_no {
+                    handshake.set_handled();
+                }
+            }
+        }
     }
 
     /// Mark any pending ChangeCipherSpec records as handled and purge them.
@@ -1270,6 +1260,81 @@ impl Engine {
 
         Ok(verify_data)
     }
+}
+
+/// The fragments of handshake message `seq`, in fragment order, if they are all queued
+/// and the message is of type `wanted`.
+///
+/// RFC 6347 §4.2.2: handshake messages can arrive out of order, and so can the records
+/// inside one datagram. The next message is looked up by its message_seq wherever it
+/// sits in the queue, and later messages stay buffered until it is their turn.
+fn complete_handshake_fragments(
+    queue_rx: &QueueRx,
+    peer_encryption_enabled: bool,
+    wanted: MessageType,
+    seq: u16,
+) -> Option<ArrayVec<(&Handshake, &[u8]), MAX_DEFRAGMENT_PACKETS>> {
+    let records = queue_rx
+        .iter()
+        .flat_map(|i| i.records().iter())
+        .filter(|r| !r.is_handled())
+        // Records of an epoch whose keys are not in place are not parsed yet.
+        .filter(|r| peer_encryption_enabled || r.record().sequence.epoch == 0)
+        // Cap to MAX_DEFRAGMENT_PACKETS to avoid misbehaving peers
+        .take(MAX_DEFRAGMENT_PACKETS);
+
+    let mut fragments: ArrayVec<(&Handshake, &[u8]), MAX_DEFRAGMENT_PACKETS> = ArrayVec::new();
+
+    for record in records {
+        for h in record.handshakes() {
+            if h.is_handled() || h.header.message_seq != seq {
+                continue;
+            }
+
+            // A resent copy of a fragment we already have.
+            let offset = h.header.fragment_offset;
+            if fragments
+                .iter()
+                .any(|(f, _)| f.header.fragment_offset == offset)
+            {
+                continue;
+            }
+
+            fragments.try_push((h, record.buffer())).ok()?;
+        }
+    }
+
+    fragments.sort_by_key(|(h, _)| h.header.fragment_offset);
+
+    let (first, _) = fragments.first()?;
+    if first.header.msg_type != wanted {
+        return None;
+    }
+
+    let length = first.header.length;
+    let mut last_fragment_end = 0;
+    let mut complete_at = None;
+
+    for (index, (h, _)) in fragments.iter().enumerate() {
+        // Check fragment contiguity
+        if h.header.msg_type != wanted
+            || h.header.length != length
+            || h.header.fragment_offset != last_fragment_end
+        {
+            return None;
+        }
+        last_fragment_end = h.header.fragment_offset + h.header.fragment_length;
+
+        // Found the last fragment to complete the wanted handshake.
+        if last_fragment_end == length {
+            complete_at = Some(index);
+            break;
+        }
+    }
+
+    fragments.truncate(complete_at? + 1);
+
+    Some(fragments)
 }
 
 impl RecordHandler for Engine {
