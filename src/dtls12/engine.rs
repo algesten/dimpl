@@ -246,6 +246,7 @@ impl Engine {
                 self.config.max_queue_rx(),
                 self.queue_rx
             );
+            self.recycle_incoming(incoming);
             return Err(Error::ReceiveQueueFull);
         }
 
@@ -282,12 +283,16 @@ impl Engine {
         // drive a resend.
         if let Some(dupe_seq) = maybe_dupe_seq {
             if dupe_seq < self.peer_handshake_seq_no && !self.peer_handshake_confirmed {
-                self.flight_resend("dupe triggers resend")?;
+                if let Err(error) = self.flight_resend("dupe triggers resend") {
+                    self.recycle_incoming(incoming);
+                    return Err(error);
+                }
             }
         }
 
         // Drop old duplicates we've already processed - don't let them block newer messages.
         if handshake.header.message_seq < self.peer_handshake_seq_no {
+            self.recycle_incoming(incoming);
             return Ok(());
         }
 
@@ -295,11 +300,13 @@ impl Engine {
             // Keep old plaintext handshake records available long enough to
             // trigger flight resends above, but never queue or process them as
             // new messages after peer encryption is enabled.
+            self.recycle_incoming(incoming);
             return Ok(());
         }
 
         // Reject new handshakes after initial handshake is complete (renegotiation not supported).
         if self.release_app_data && handshake.header.message_seq >= self.peer_handshake_seq_no {
+            self.recycle_incoming(incoming);
             return Err(Error::RenegotiationAttempt);
         }
 
@@ -320,6 +327,7 @@ impl Engine {
             }
             Ok(_) => {
                 // Exact duplicate handshake fragment
+                self.recycle_incoming(incoming);
             }
         }
 
@@ -334,6 +342,7 @@ impl Engine {
             && seq_current.epoch == 0
             && first.record().content_type == ContentType::Handshake
         {
+            self.recycle_incoming(incoming);
             return Ok(());
         }
 
@@ -364,10 +373,17 @@ impl Engine {
                 // For epoch 1, we have the replay window and there should
                 // be no duplicates.
                 assert_eq!(seq_current.epoch, 0);
+                self.recycle_incoming(incoming);
             }
         }
 
         Ok(())
+    }
+
+    fn recycle_incoming(&mut self, incoming: Incoming) {
+        for record in incoming.into_records() {
+            self.push_buffer(record.into_buffer());
+        }
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {

@@ -359,6 +359,7 @@ impl Engine {
                 self.config.max_queue_rx(),
                 self.queue_rx
             );
+            self.recycle_incoming(incoming);
             return Err(Error::ReceiveQueueFull);
         }
 
@@ -389,12 +390,16 @@ impl Engine {
 
         if let Some(dupe_seq) = maybe_dupe_seq {
             if dupe_seq < self.peer_handshake_seq_no {
-                self.flight_resend("dupe triggers resend")?;
+                if let Err(error) = self.flight_resend("dupe triggers resend") {
+                    self.recycle_incoming(incoming);
+                    return Err(error);
+                }
             }
         }
 
         // Drop old duplicates we've already processed
         if handshake.header.message_seq < self.peer_handshake_seq_no {
+            self.recycle_incoming(incoming);
             return Ok(());
         }
 
@@ -404,6 +409,7 @@ impl Engine {
             && handshake.header.message_seq >= self.peer_handshake_seq_no
             && handshake.header.msg_type != MessageType::KeyUpdate
         {
+            self.recycle_incoming(incoming);
             return Err(Error::RenegotiationAttempt);
         }
 
@@ -461,7 +467,10 @@ impl Engine {
                                 .try_push((seq.epoch as u64, seq.sequence_number));
                         }
                     }
-                    self.queue_rx[index] = incoming;
+                    let replaced = std::mem::replace(&mut self.queue_rx[index], incoming);
+                    self.recycle_incoming(replaced);
+                } else {
+                    self.recycle_incoming(incoming);
                 }
             }
         }
@@ -483,10 +492,17 @@ impl Engine {
                 // Duplicate - silently drop. For encrypted records (epoch >= 2) the replay
                 // window filters most duplicates, but undecrypted ciphertext records can
                 // reach here before enable_peer_encryption is called.
+                self.recycle_incoming(incoming);
             }
         }
 
         Ok(())
+    }
+
+    fn recycle_incoming(&mut self, incoming: Incoming) {
+        for record in incoming.into_records() {
+            self.push_buffer(record.into_buffer());
+        }
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {

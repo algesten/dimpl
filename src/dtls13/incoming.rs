@@ -67,12 +67,36 @@ pub struct Records {
 
 impl Records {
     pub fn parse(
-        mut packet: &[u8],
+        packet: &[u8],
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls13CipherSuite>,
     ) -> Result<Records, InternalError> {
         let mut parsed_records: ArrayVec<Record, 16> = ArrayVec::new();
+        if let Err(error) = Self::parse_records(packet, decrypt, cs, &mut parsed_records) {
+            for record in parsed_records {
+                decrypt.push_buffer(record.into_buffer());
+            }
+            return Err(error);
+        }
 
+        let mut records = ArrayVec::new();
+        for record in parsed_records {
+            if let Some(record) = decrypt.classify_record(record)? {
+                records
+                    .try_push(record)
+                    .expect("filtered records cannot exceed parsed records");
+            }
+        }
+
+        Ok(Records { records })
+    }
+
+    fn parse_records(
+        mut packet: &[u8],
+        decrypt: &mut dyn RecordHandler,
+        cs: Option<Dtls13CipherSuite>,
+        parsed_records: &mut ArrayVec<Record, 16>,
+    ) -> Result<(), InternalError> {
         // Find record boundaries and copy each record ONCE from the packet
         while !packet.is_empty() {
             let record_end = if Dtls13Record::is_ciphertext_header(packet[0]) {
@@ -131,7 +155,8 @@ impl Records {
             let record_slice = &packet[..record_end];
             let record = Record::parse(record_slice, decrypt, cs)?;
             if let Some(record) = record {
-                if parsed_records.try_push(record).is_err() {
+                if let Err(error) = parsed_records.try_push(record) {
+                    decrypt.push_buffer(error.element().into_buffer());
                     return Err(InternalError::too_many_records());
                 }
             } else {
@@ -141,16 +166,7 @@ impl Records {
             packet = &packet[record_end..];
         }
 
-        let mut records = ArrayVec::new();
-        for record in parsed_records {
-            if let Some(record) = decrypt.classify_record(record)? {
-                records
-                    .try_push(record)
-                    .expect("filtered records cannot exceed parsed records");
-            }
-        }
-
-        Ok(Records { records })
+        Ok(())
     }
 }
 
