@@ -416,16 +416,20 @@ mod tests {
     #[derive(Default)]
     struct TestHandler {
         buffers: BufferPool,
+        buffers_acquired: usize,
+        buffers_returned: usize,
         classify_calls: usize,
         dropped_alerts: usize,
     }
 
     impl RecordHandler for TestHandler {
         fn pop_buffer(&mut self) -> Buf {
+            self.buffers_acquired += 1;
             self.buffers.pop()
         }
 
         fn push_buffer(&mut self, buffer: Buf) {
+            self.buffers_returned += 1;
             self.buffers.push(buffer);
         }
 
@@ -546,5 +550,40 @@ mod tests {
         let reused = handler.pop_buffer();
         assert!(reused.is_empty());
         assert_eq!(reused.as_ptr(), allocation);
+    }
+
+    #[test]
+    fn truncated_datagram_recycles_all_pooled_records() {
+        let mut handler = TestHandler::default();
+        let mut packet = build_record(ContentType::ApplicationData, 1, 1, &[0x11; 1500]);
+        packet.push(0xFF);
+
+        assert!(Incoming::parse_packet(&packet, &mut handler, None).is_err());
+        assert_eq!(handler.classify_calls, 0);
+        assert_eq!(
+            handler.buffers_returned, handler.buffers_acquired,
+            "discarding a malformed datagram must recycle its accepted records"
+        );
+    }
+
+    #[test]
+    fn oversized_datagram_recycles_all_pooled_records() {
+        let mut handler = TestHandler::default();
+        let mut packet = Vec::new();
+        for sequence in 0..9 {
+            packet.extend_from_slice(&build_record(
+                ContentType::ApplicationData,
+                1,
+                sequence,
+                &[0x11; 32],
+            ));
+        }
+
+        assert!(Incoming::parse_packet(&packet, &mut handler, None).is_err());
+        assert_eq!(handler.classify_calls, 0);
+        assert_eq!(
+            handler.buffers_returned, handler.buffers_acquired,
+            "discarding a datagram with too many records must recycle every record"
+        );
     }
 }

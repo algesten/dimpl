@@ -2663,6 +2663,36 @@ mod tests {
         packet
     }
 
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn duplicate_datagram_recycles_its_pooled_buffer() {
+        let mut engine = test_engine();
+        let packet = encrypted_application_data_record(1, b"buffered ciphertext");
+        engine.parse_packet(&packet).expect("queue first datagram");
+        let mut output = [0u8; 2048];
+        assert!(matches!(
+            engine.poll_output(&mut output, Instant::now()),
+            Output::Timeout(_)
+        ));
+
+        let mut buffer = engine.pop_buffer();
+        buffer.resize(2048, 0xAA);
+        engine.push_buffer(buffer);
+
+        engine
+            .parse_packet(&packet)
+            .expect("discard duplicate datagram");
+        assert!(matches!(
+            engine.poll_output(&mut output, Instant::now()),
+            Output::Timeout(_)
+        ));
+        assert_eq!(engine.queue_rx.len(), 1);
+        assert!(
+            engine.pop_buffer().into_vec().capacity() >= 2048,
+            "discarding a duplicate must preserve its reusable receive allocation"
+        );
+    }
+
     fn parsed_key_update(seq: u16) -> Incoming {
         Incoming::parse_packet(
             &encrypted_key_update_record(seq),
