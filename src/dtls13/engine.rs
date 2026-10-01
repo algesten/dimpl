@@ -137,6 +137,15 @@ pub struct Engine {
     /// Timeout for the current flight
     flight_timeout: Timeout,
 
+    /// Whether a duplicate of the peer's previous flight may still trigger a resend
+    /// of the current flight before the flight timer fires.
+    ///
+    /// Retransmission is driven by the timer, with exponential backoff (RFC 9147
+    /// §5.8.1). A duplicate says the peer is missing our flight, but answering every
+    /// duplicate datagram lets two waiting peers bounce flights at network speed. One
+    /// early resend per timer period is enough; the timer does the rest.
+    flight_dupe_resend_allowed: bool,
+
     /// Global timeout for the entire connect operation.
     connect_timeout: Timeout,
 
@@ -258,6 +267,7 @@ impl Engine {
             flight_saved_records: ArrayVec::new(),
             flight_backoff,
             flight_timeout: Timeout::Unarmed,
+            flight_dupe_resend_allowed: true,
             connect_timeout: Timeout::Unarmed,
             release_app_data: false,
             exporter_master_secret: None,
@@ -390,7 +400,7 @@ impl Engine {
 
         if let Some(dupe_seq) = maybe_dupe_seq {
             if dupe_seq < self.peer_handshake_seq_no {
-                if let Err(error) = self.flight_resend("dupe triggers resend") {
+                if let Err(error) = self.flight_resend_on_dupe() {
                     self.recycle_incoming(incoming);
                     return Err(error);
                 }
@@ -542,6 +552,7 @@ impl Engine {
                 );
                 let timeout = now + self.flight_backoff.rto();
                 self.flight_timeout = Timeout::Armed(timeout);
+                self.flight_dupe_resend_allowed = true;
                 self.flight_resend("flight timeout")?;
             } else {
                 return Err(Error::Timeout(crate::TimeoutError::Handshake));
@@ -688,6 +699,7 @@ impl Engine {
         self.flight_backoff.reset(&mut self.rng);
         self.flight_clear_resends();
         self.flight_timeout = Timeout::Unarmed;
+        self.flight_dupe_resend_allowed = true;
     }
 
     pub fn flight_stop_resend_timers(&mut self) {
@@ -700,6 +712,23 @@ impl Engine {
         for entry in self.flight_saved_records.drain(..) {
             self.buffers_free.push(entry.fragment);
         }
+    }
+
+    /// Resend the current flight because the peer resent its previous one.
+    fn flight_resend_on_dupe(&mut self) -> Result<(), Error> {
+        // With the timers stopped (our last flight is sent or ACKed), each
+        // retransmission of the peer's last flight is answered; the peer's own timer
+        // paces those. While we still wait for the peer, at most one duplicate per
+        // timer period triggers a resend.
+        if self.flight_timeout != Timeout::Disabled {
+            if !self.flight_dupe_resend_allowed {
+                trace!("Duplicate ignored: flight already resent in this timer period");
+                return Ok(());
+            }
+            self.flight_dupe_resend_allowed = false;
+        }
+
+        self.flight_resend("dupe triggers resend")
     }
 
     pub fn flight_resend(&mut self, reason: &str) -> Result<(), Error> {
@@ -1943,6 +1972,7 @@ impl Engine {
         self.flight_backoff.reset(&mut self.rng);
         self.flight_clear_resends();
         self.flight_timeout = Timeout::Unarmed;
+        self.flight_dupe_resend_allowed = true;
 
         let msg_seq = self.next_handshake_seq_no;
         self.next_handshake_seq_no += 1;

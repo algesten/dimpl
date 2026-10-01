@@ -2,6 +2,7 @@
 
   * Restore DTLS buffer reuse and reject unpooled buffer returns #167
   * Process DTLS 1.2 handshake messages by sequence number when records arrive out of order
+  * Resend a handshake flight at most once per timer period on duplicates of the peer's flight
 
 # 0.7.4
 

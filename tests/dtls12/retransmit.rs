@@ -1030,6 +1030,111 @@ fn dtls12_retransmit_exponential_backoff() {
     }
 }
 
+/// RFC 6347 §4.2.4: retransmission is driven by the timer. Duplicates of the peer's
+/// previous flight (network duplication, or a peer that resends on every duplicate it
+/// sees) trigger at most one early resend per timer period, never one per datagram.
+/// Otherwise two waiting peers bounce their flights back and forth at network speed.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_duplicate_flights_resend_at_most_once_per_timer_period() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+
+    let config = Arc::new(
+        Config::builder()
+            .use_server_cookie(false)
+            .build()
+            .expect("Failed to build config"),
+    );
+
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+
+    client.handle_timeout(now).expect("client timeout start");
+    client.handle_timeout(now).expect("client arm flight 1");
+    server.handle_timeout(now).expect("server timeout start");
+    let f1 = collect_packets(&mut client);
+    deliver_packets(&f1, &mut server);
+
+    server.handle_timeout(now).expect("server arm flight 4");
+    let f4 = collect_packets(&mut server);
+    assert!(!f4.is_empty(), "server should emit flight 4 after CH");
+
+    // The server waits for flight 5. 20 duplicate ClientHellos, each polled for output as
+    // a socket loop would, resend flight 4 once, not once per duplicate.
+    let sent = send_duplicates(&f1, &mut server);
+    assert_eq!(
+        sent,
+        f4.len(),
+        "20 duplicates should resend flight 4 ({} datagrams) once, server sent {sent}",
+        f4.len()
+    );
+
+    // More duplicates in the same timer period resend nothing.
+    let sent = send_duplicates(&f1, &mut server);
+    assert_eq!(
+        sent, 0,
+        "no second early resend within one timer period, server sent {sent}"
+    );
+
+    // The timer fires (a resend of its own) and starts the next period, which again
+    // allows one early resend.
+    now += Duration::from_secs(2);
+    server.handle_timeout(now).expect("server flight timeout");
+    assert_eq!(
+        collect_packets(&mut server).len(),
+        f4.len(),
+        "the flight timer should resend flight 4"
+    );
+    let sent = send_duplicates(&f1, &mut server);
+    assert_eq!(
+        sent,
+        f4.len(),
+        "one early resend in the next timer period, server sent {sent}"
+    );
+
+    // The same holds for the client waiting for flight 6: duplicate ServerHelloDones
+    // resend flight 5 once per timer period.
+    deliver_packets(&f4, &mut client);
+    client.handle_timeout(now).expect("client arm flight 5");
+    let f5 = collect_packets(&mut client);
+    assert!(!f5.is_empty(), "client should emit flight 5");
+
+    let sent = send_duplicates(&f4, &mut client);
+    assert_eq!(
+        sent,
+        f5.len(),
+        "20 duplicates should resend flight 5 ({} datagrams) once, client sent {sent}",
+        f5.len()
+    );
+    let sent = send_duplicates(&f4, &mut client);
+    assert_eq!(
+        sent, 0,
+        "no second early resend of flight 5 within one timer period, client sent {sent}"
+    );
+}
+
+/// Deliver `flight` 20 times, polling the endpoint after each copy. Returns the number of
+/// datagrams it sent in response.
+#[cfg(feature = "rcgen")]
+fn send_duplicates(flight: &[Vec<u8>], endpoint: &mut Dtls) -> usize {
+    let mut sent = 0;
+    for _ in 0..20 {
+        deliver_packets(flight, endpoint);
+        sent += collect_packets(endpoint).len();
+    }
+    sent
+}
+
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_handshake_timeout_aborts() {
