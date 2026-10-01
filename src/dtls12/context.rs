@@ -138,14 +138,14 @@ impl CryptoContext {
     pub fn compute_shared_secret(
         &mut self,
         peer_public_key: &[u8],
-        buf: &mut Buf,
+        mut buf: Buf,
     ) -> Result<(), CryptoError> {
         let ke = self
             .key_exchange
             .take()
             .ok_or(CryptoError::KeyExchangeNotInitialized)?;
-        ke.complete(peer_public_key, buf)?;
-        self.pre_master_secret = Some(core::mem::take(buf));
+        ke.complete(peer_public_key, &mut buf)?;
+        self.pre_master_secret = Some(buf);
         // Note: we keep key_exchange_public_key since it may be needed later
         Ok(())
     }
@@ -163,6 +163,7 @@ impl CryptoContext {
         let psk = self.psk.as_ref().ok_or(CryptoError::PskNotSet)?;
         let n = psk.len();
         // Total: 2 + N + 2 + N = 2N + 4
+        // This secret is dropped after deriving the master secret, never pooled.
         let mut pms = Buf::new();
         pms.extend_from_slice(&(n as u16).to_be_bytes());
         pms.resize(pms.len() + n, 0);
@@ -176,7 +177,7 @@ impl CryptoContext {
     pub fn init_ecdh_server(
         &mut self,
         named_group: NamedGroup,
-        kx_buf: &mut Buf,
+        kx_buf: Buf,
     ) -> Result<&[u8], CryptoError> {
         // Find the matching key exchange group from the provider
         let kx_group = self
@@ -185,8 +186,7 @@ impl CryptoContext {
             .find(|g| g.name() == named_group)
             .ok_or(CryptoError::UnsupportedEcdheNamedGroup(named_group))?;
 
-        kx_buf.clear();
-        self.key_exchange = Some(kx_group.start_exchange(core::mem::take(kx_buf))?);
+        self.key_exchange = Some(kx_group.start_exchange(kx_buf)?);
         self.maybe_init_key_exchange()
     }
 
@@ -195,7 +195,8 @@ impl CryptoContext {
         &mut self,
         group: NamedGroup,
         server_public: &[u8],
-        kx_buf: &mut Buf,
+        kx_buf: Buf,
+        shared_secret: Buf,
     ) -> Result<(), CryptoError> {
         // Find the matching key exchange group from the provider
         let kx_group = self
@@ -205,14 +206,13 @@ impl CryptoContext {
             .ok_or(CryptoError::UnsupportedEcdheNamedGroup(group))?;
 
         // Create a new ECDH key exchange
-        kx_buf.clear();
-        self.key_exchange = Some(kx_group.start_exchange(core::mem::take(kx_buf))?);
+        self.key_exchange = Some(kx_group.start_exchange(kx_buf)?);
 
         // Generate our keypair
         let _our_public = self.maybe_init_key_exchange()?;
 
         // Compute shared secret with the server's public key
-        self.compute_shared_secret(server_public, kx_buf)?;
+        self.compute_shared_secret(server_public, shared_secret)?;
 
         Ok(())
     }

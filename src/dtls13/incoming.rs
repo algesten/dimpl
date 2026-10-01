@@ -1,8 +1,8 @@
+use std::fmt;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use arrayvec::ArrayVec;
-use std::fmt;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::dtls13::message::{ContentType, Dtls13CipherSuite, Dtls13Record, Handshake, Sequence};
@@ -67,12 +67,36 @@ pub struct Records {
 
 impl Records {
     pub fn parse(
-        mut packet: &[u8],
+        packet: &[u8],
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls13CipherSuite>,
     ) -> Result<Records, InternalError> {
         let mut parsed_records: ArrayVec<Record, 16> = ArrayVec::new();
+        if let Err(error) = Self::parse_records(packet, decrypt, cs, &mut parsed_records) {
+            for record in parsed_records {
+                decrypt.push_buffer(record.into_buffer());
+            }
+            return Err(error);
+        }
 
+        let mut records = ArrayVec::new();
+        for record in parsed_records {
+            if let Some(record) = decrypt.classify_record(record)? {
+                records
+                    .try_push(record)
+                    .expect("filtered records cannot exceed parsed records");
+            }
+        }
+
+        Ok(Records { records })
+    }
+
+    fn parse_records(
+        mut packet: &[u8],
+        decrypt: &mut dyn RecordHandler,
+        cs: Option<Dtls13CipherSuite>,
+        parsed_records: &mut ArrayVec<Record, 16>,
+    ) -> Result<(), InternalError> {
         // Find record boundaries and copy each record ONCE from the packet
         while !packet.is_empty() {
             let record_end = if Dtls13Record::is_ciphertext_header(packet[0]) {
@@ -131,7 +155,8 @@ impl Records {
             let record_slice = &packet[..record_end];
             let record = Record::parse(record_slice, decrypt, cs)?;
             if let Some(record) = record {
-                if parsed_records.try_push(record).is_err() {
+                if let Err(error) = parsed_records.try_push(record) {
+                    decrypt.push_buffer(error.element().into_buffer());
                     return Err(InternalError::too_many_records());
                 }
             } else {
@@ -141,16 +166,7 @@ impl Records {
             packet = &packet[record_end..];
         }
 
-        let mut records = ArrayVec::new();
-        for record in parsed_records {
-            if let Some(record) = decrypt.classify_record(record)? {
-                records
-                    .try_push(record)
-                    .expect("filtered records cannot exceed parsed records");
-            }
-        }
-
-        Ok(Records { records })
+        Ok(())
     }
 }
 
@@ -178,9 +194,23 @@ impl Record {
         cs: Option<Dtls13CipherSuite>,
     ) -> Result<Option<Record>, InternalError> {
         // ONLY COPY: UDP packet slice -> pooled buffer
-        let mut buffer = Buf::new();
+        let mut buffer = decrypt.pop_buffer();
         buffer.extend_from_slice(record_slice);
 
+        match Self::parse_buffer(&mut buffer, decrypt, cs) {
+            Ok(Some(parsed)) => Ok(Some(Record { buffer, parsed })),
+            result => {
+                decrypt.push_buffer(buffer);
+                result.map(|_| None)
+            }
+        }
+    }
+
+    fn parse_buffer(
+        buffer: &mut Buf,
+        decrypt: &mut dyn RecordHandler,
+        cs: Option<Dtls13CipherSuite>,
+    ) -> Result<Option<Box<ParsedRecord>>, InternalError> {
         let is_ciphertext = Dtls13Record::is_ciphertext_header(buffer[0]);
 
         // Decrypt record number in-place before parsing (RFC 9147 Section 4.2.3)
@@ -210,7 +240,7 @@ impl Record {
             }
         }
 
-        let parsed = match ParsedRecord::parse(&buffer, cs) {
+        let parsed = match ParsedRecord::parse(buffer, cs) {
             Ok(p) => p,
             Err(e) => {
                 trace!("Discarding record: parse failed: {}", e);
@@ -218,20 +248,19 @@ impl Record {
             }
         };
         let parsed = Box::new(parsed);
-        let record = Record { buffer, parsed };
 
         // Plaintext records (epoch 0) are not encrypted
         if !is_ciphertext || !decrypt.is_peer_encryption_enabled() {
-            return Ok(Some(record));
+            return Ok(Some(parsed));
         }
 
         // Resolve the full epoch from the 2-bit value in the unified header
-        let epoch_bits = record.record().sequence.epoch as u8;
+        let epoch_bits = parsed.record.sequence.epoch as u8;
         let full_epoch = decrypt.resolve_epoch(epoch_bits);
 
         // Resolve the full sequence number from the (now decrypted) partial value
-        let seq_bits = record.record().sequence.sequence_number;
-        let s_flag = record_slice[0] & 0b0000_1000 != 0;
+        let seq_bits = parsed.record.sequence.sequence_number;
+        let s_flag = buffer[0] & 0b0000_1000 != 0;
         let full_seq = decrypt.resolve_sequence(full_epoch, seq_bits, s_flag);
 
         let full_sequence = Sequence {
@@ -246,20 +275,17 @@ impl Record {
 
         // Save the raw header bytes for AAD before mutating the buffer.
         // Max unified header without CID: flags(1) + seq(2) + length(2) = 5 bytes.
-        let header_end = record.record().fragment_range.start;
+        let header_end = parsed.record.fragment_range.start;
 
         // Reject protected records whose encrypted fragment is shorter than
         // the per-suite minimum — they cannot hold a valid ciphertext + tag,
         // so decryption would necessarily fail. Catching it here keeps the
         // cipher impls' bounds-checking from being the only line of defence.
-        if record.buffer.len() - header_end < decrypt.min_protected_fragment_len() {
+        if buffer.len() - header_end < decrypt.min_protected_fragment_len() {
             return Ok(None);
         }
         let mut header_buf = [0u8; 5];
-        header_buf[..header_end].copy_from_slice(&record.buffer[..header_end]);
-
-        // Extract the buffer for decryption
-        let mut buffer = record.buffer;
+        header_buf[..header_end].copy_from_slice(&buffer[..header_end]);
 
         // The encrypted part starts right after the unified header.
         let ciphertext = &mut buffer[header_end..];
@@ -302,12 +328,12 @@ impl Record {
                 length: content_len as u16,
                 fragment_range: header_end..(header_end + content_len),
             },
-            &buffer,
+            buffer,
             cs,
         );
         let parsed = Box::new(parsed);
 
-        Ok(Some(Record { buffer, parsed }))
+        Ok(Some(parsed))
     }
 
     pub fn record(&self) -> &Dtls13Record {
@@ -397,9 +423,13 @@ impl ParsedRecord {
 /// Trait abstracting record parsing-time handling for incoming records.
 ///
 /// This decouples the record parser from the full `Engine`, allowing the parse loop
-/// to decrypt records, classify control records, and queue only the records that
+/// to acquire buffers, decrypt records, classify control records, and queue only the records that
 /// should survive into `Incoming`.
 pub trait RecordHandler {
+    /// Acquire an empty buffer whose allocation can be reused for a record.
+    fn pop_buffer(&mut self) -> Buf;
+    /// Recycle a buffer when parsing fails or silently discards a record.
+    fn push_buffer(&mut self, buffer: Buf);
     fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error>;
     fn is_peer_encryption_enabled(&self) -> bool;
     fn resolve_epoch(&self, epoch_bits: u8) -> u16;
@@ -526,19 +556,35 @@ impl std::panic::UnwindSafe for Incoming {}
 
 #[cfg(test)]
 mod tests {
+    use crate::buffer::BufferPool;
+
     use super::*;
 
     #[derive(Default)]
     struct TestHandler {
+        buffers: BufferPool,
+        buffers_acquired: usize,
+        buffers_returned: usize,
         classify_calls: usize,
         dropped_acks: usize,
     }
 
     impl RecordHandler for TestHandler {
+        fn pop_buffer(&mut self) -> Buf {
+            self.buffers_acquired += 1;
+            self.buffers.pop()
+        }
+
+        fn push_buffer(&mut self, buffer: Buf) {
+            self.buffers_returned += 1;
+            self.buffers.push(buffer);
+        }
+
         fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
             self.classify_calls += 1;
             if record.record().content_type == ContentType::Ack {
                 self.dropped_acks += 1;
+                self.push_buffer(record.into_buffer());
                 return Ok(None);
             }
             Ok(Some(record))
@@ -629,5 +675,73 @@ mod tests {
             ContentType::ApplicationData
         );
         assert_eq!(incoming.first().record().sequence.epoch, 2);
+    }
+
+    #[test]
+    fn receive_records_reuse_pooled_buffers() {
+        let mut handler = TestHandler::default();
+        let mut buffer = handler.pop_buffer();
+        buffer.resize(2048, 0xAA);
+        let allocation = buffer.as_ptr();
+        handler.push_buffer(buffer);
+
+        let packet = build_ciphertext_record(2, 1, &[0x11; 1500]);
+        for _ in 0..10_000 {
+            let incoming = Incoming::parse_packet(&packet, &mut handler, None)
+                .expect("parse application data")
+                .expect("packet contains a record");
+            assert_eq!(incoming.first().buffer().as_ptr(), allocation);
+            assert_eq!(incoming.first().buffer(), packet);
+            for record in incoming.into_records() {
+                handler.push_buffer(record.into_buffer());
+            }
+        }
+    }
+
+    #[test]
+    fn discarded_records_return_pooled_buffers() {
+        let mut handler = TestHandler::default();
+        let mut buffer = handler.pop_buffer();
+        buffer.resize(2048, 0xAA);
+        let allocation = buffer.as_ptr();
+        handler.push_buffer(buffer);
+
+        let packet = build_plaintext_record(ContentType::ApplicationData, 1, &[0x11; 1500]);
+        let incoming = Incoming::parse_packet(&packet, &mut handler, None)
+            .expect("invalid plaintext application data is discarded");
+        assert!(incoming.is_none());
+        let reused = handler.pop_buffer();
+        assert!(reused.is_empty());
+        assert_eq!(reused.as_ptr(), allocation);
+    }
+
+    #[test]
+    fn truncated_datagram_recycles_all_pooled_records() {
+        let mut handler = TestHandler::default();
+        let mut packet = build_ciphertext_record(2, 1, &[0x11; 1500]);
+        packet.push(0xFF);
+
+        assert!(Incoming::parse_packet(&packet, &mut handler, None).is_err());
+        assert_eq!(handler.classify_calls, 0);
+        assert_eq!(
+            handler.buffers_returned, handler.buffers_acquired,
+            "discarding a malformed datagram must recycle its accepted records"
+        );
+    }
+
+    #[test]
+    fn oversized_datagram_recycles_all_pooled_records() {
+        let mut handler = TestHandler::default();
+        let mut packet = Vec::new();
+        for sequence in 0..17 {
+            packet.extend_from_slice(&build_ciphertext_record(2, sequence, &[0x11; 32]));
+        }
+
+        assert!(Incoming::parse_packet(&packet, &mut handler, None).is_err());
+        assert_eq!(handler.classify_calls, 0);
+        assert_eq!(
+            handler.buffers_returned, handler.buffers_acquired,
+            "discarding a datagram with too many records must recycle every record"
+        );
     }
 }

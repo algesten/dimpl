@@ -142,11 +142,13 @@ impl Engine {
             ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries(), &mut rng);
 
         let crypto_context = CryptoContext::new(auth, Arc::clone(&config));
+        let mut buffers_free = BufferPool::default();
+        let transcript = buffers_free.pop();
 
         Self {
             config,
             rng,
-            buffers_free: BufferPool::default(),
+            buffers_free,
             sequence_epoch_0: Sequence::new(0),
             sequence_epoch_n: Sequence::new(1),
             queue_rx: QueueRx::new(),
@@ -159,7 +161,7 @@ impl Engine {
             is_client: false,
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
-            transcript: Buf::new(),
+            transcript,
             replay: ReplayWindow::new(),
             flight_saved_records: Vec::new(),
             flight_backoff,
@@ -244,6 +246,7 @@ impl Engine {
                 self.config.max_queue_rx(),
                 self.queue_rx
             );
+            self.recycle_incoming(incoming);
             return Err(Error::ReceiveQueueFull);
         }
 
@@ -280,12 +283,16 @@ impl Engine {
         // drive a resend.
         if let Some(dupe_seq) = maybe_dupe_seq {
             if dupe_seq < self.peer_handshake_seq_no && !self.peer_handshake_confirmed {
-                self.flight_resend("dupe triggers resend")?;
+                if let Err(error) = self.flight_resend("dupe triggers resend") {
+                    self.recycle_incoming(incoming);
+                    return Err(error);
+                }
             }
         }
 
         // Drop old duplicates we've already processed - don't let them block newer messages.
         if handshake.header.message_seq < self.peer_handshake_seq_no {
+            self.recycle_incoming(incoming);
             return Ok(());
         }
 
@@ -293,11 +300,13 @@ impl Engine {
             // Keep old plaintext handshake records available long enough to
             // trigger flight resends above, but never queue or process them as
             // new messages after peer encryption is enabled.
+            self.recycle_incoming(incoming);
             return Ok(());
         }
 
         // Reject new handshakes after initial handshake is complete (renegotiation not supported).
         if self.release_app_data && handshake.header.message_seq >= self.peer_handshake_seq_no {
+            self.recycle_incoming(incoming);
             return Err(Error::RenegotiationAttempt);
         }
 
@@ -318,6 +327,7 @@ impl Engine {
             }
             Ok(_) => {
                 // Exact duplicate handshake fragment
+                self.recycle_incoming(incoming);
             }
         }
 
@@ -332,6 +342,7 @@ impl Engine {
             && seq_current.epoch == 0
             && first.record().content_type == ContentType::Handshake
         {
+            self.recycle_incoming(incoming);
             return Ok(());
         }
 
@@ -362,10 +373,17 @@ impl Engine {
                 // For epoch 1, we have the replay window and there should
                 // be no duplicates.
                 assert_eq!(seq_current.epoch, 0);
+                self.recycle_incoming(incoming);
             }
         }
 
         Ok(())
+    }
+
+    fn recycle_incoming(&mut self, incoming: Incoming) {
+        for record in incoming.into_records() {
+            self.push_buffer(record.into_buffer());
+        }
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
@@ -1255,6 +1273,14 @@ impl Engine {
 }
 
 impl RecordHandler for Engine {
+    fn pop_buffer(&mut self) -> Buf {
+        Engine::pop_buffer(self)
+    }
+
+    fn push_buffer(&mut self, buffer: Buf) {
+        Engine::push_buffer(self, buffer);
+    }
+
     fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
         let epoch = record.record().sequence.epoch;
 
@@ -1396,5 +1422,44 @@ impl RecordHandler for Engine {
 
     fn can_discard_bad_protected_record(&self) -> bool {
         self.release_app_data
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_datagram_recycles_its_pooled_buffer() {
+        let mut engine = Engine::new(Arc::new(Config::default()), AuthMode::Psk);
+        let packet = [
+            0x14, 0xFE, 0xFD, // ChangeCipherSpec, DTLS 1.2.
+            0, 0, // Epoch 0.
+            0, 0, 0, 0, 0, 1, // Record sequence 1.
+            0, 1, 1, // Fragment length 1 and ChangeCipherSpec body.
+        ];
+        engine.parse_packet(&packet).expect("queue first datagram");
+        let mut output = [0u8; 2048];
+        assert!(matches!(
+            engine.poll_output(&mut output, Instant::now()),
+            Output::Timeout(_)
+        ));
+
+        let mut buffer = engine.pop_buffer();
+        buffer.resize(2048, 0xAA);
+        engine.push_buffer(buffer);
+
+        engine
+            .parse_packet(&packet)
+            .expect("discard duplicate datagram");
+        assert!(matches!(
+            engine.poll_output(&mut output, Instant::now()),
+            Output::Timeout(_)
+        ));
+        assert_eq!(engine.queue_rx.len(), 1);
+        assert!(
+            engine.pop_buffer().into_vec().capacity() >= 2048,
+            "discarding a duplicate must preserve its reusable receive allocation"
+        );
     }
 }

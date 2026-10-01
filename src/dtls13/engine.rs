@@ -222,12 +222,14 @@ impl Engine {
 
         let aead_encryption_threshold =
             jittered_aead_threshold(config.aead_encryption_limit(), &mut rng);
+        let mut buffers_free = BufferPool::default();
+        let transcript = buffers_free.pop();
 
         Self {
             config,
             certificate,
             rng,
-            buffers_free: BufferPool::default(),
+            buffers_free,
             sequence_epoch_0: Sequence::new(0),
             queue_rx: QueueRx::new(),
             queue_tx: QueueTx::new(),
@@ -248,7 +250,7 @@ impl Engine {
             is_client: false,
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
-            transcript: Buf::new(),
+            transcript,
             hs_replay: ReplayWindow::new(),
             received_record_numbers: ArrayVec::new(),
             handshake_ack_deadline: None,
@@ -357,6 +359,7 @@ impl Engine {
                 self.config.max_queue_rx(),
                 self.queue_rx
             );
+            self.recycle_incoming(incoming);
             return Err(Error::ReceiveQueueFull);
         }
 
@@ -387,12 +390,16 @@ impl Engine {
 
         if let Some(dupe_seq) = maybe_dupe_seq {
             if dupe_seq < self.peer_handshake_seq_no {
-                self.flight_resend("dupe triggers resend")?;
+                if let Err(error) = self.flight_resend("dupe triggers resend") {
+                    self.recycle_incoming(incoming);
+                    return Err(error);
+                }
             }
         }
 
         // Drop old duplicates we've already processed
         if handshake.header.message_seq < self.peer_handshake_seq_no {
+            self.recycle_incoming(incoming);
             return Ok(());
         }
 
@@ -402,6 +409,7 @@ impl Engine {
             && handshake.header.message_seq >= self.peer_handshake_seq_no
             && handshake.header.msg_type != MessageType::KeyUpdate
         {
+            self.recycle_incoming(incoming);
             return Err(Error::RenegotiationAttempt);
         }
 
@@ -459,7 +467,10 @@ impl Engine {
                                 .try_push((seq.epoch as u64, seq.sequence_number));
                         }
                     }
-                    self.queue_rx[index] = incoming;
+                    let replaced = std::mem::replace(&mut self.queue_rx[index], incoming);
+                    self.recycle_incoming(replaced);
+                } else {
+                    self.recycle_incoming(incoming);
                 }
             }
         }
@@ -481,10 +492,17 @@ impl Engine {
                 // Duplicate - silently drop. For encrypted records (epoch >= 2) the replay
                 // window filters most duplicates, but undecrypted ciphertext records can
                 // reach here before enable_peer_encryption is called.
+                self.recycle_incoming(incoming);
             }
         }
 
         Ok(())
+    }
+
+    fn recycle_incoming(&mut self, incoming: Incoming) {
+        for record in incoming.into_records() {
+            self.push_buffer(record.into_buffer());
+        }
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
@@ -1647,6 +1665,9 @@ impl Engine {
     ) -> Result<(Buf, Buf, Buf), Error> {
         // Call derive_early_secret first (needs &mut self) before borrowing hmac
         let early_secret = self.derive_early_secret()?;
+        let mut handshake_secret = self.buffers_free.pop();
+        let mut c_hs_traffic = self.buffers_free.pop();
+        let mut s_hs_traffic = self.buffers_free.pop();
 
         let hash = self.hash_algorithm();
         let hash_len = hash.output_len();
@@ -1667,7 +1688,6 @@ impl Engine {
         .map_err(Error::CryptoError)?;
 
         // handshake_secret = HKDF-Extract(derived, shared_secret)
-        let mut handshake_secret = Buf::new();
         prf_hkdf::hkdf_extract(hmac, hash, &derived, shared_secret, &mut handshake_secret)
             .map_err(Error::CryptoError)?;
 
@@ -1676,7 +1696,6 @@ impl Engine {
         self.transcript_hash(&mut transcript_hash);
 
         // client_handshake_traffic_secret
-        let mut c_hs_traffic = Buf::new();
         prf_hkdf::hkdf_expand_label_dtls13(
             hmac,
             hash,
@@ -1689,7 +1708,6 @@ impl Engine {
         .map_err(Error::CryptoError)?;
 
         // server_handshake_traffic_secret
-        let mut s_hs_traffic = Buf::new();
         prf_hkdf::hkdf_expand_label_dtls13(
             hmac,
             hash,
@@ -1701,6 +1719,7 @@ impl Engine {
         )
         .map_err(Error::CryptoError)?;
 
+        self.buffers_free.push(early_secret);
         Ok((c_hs_traffic, s_hs_traffic, handshake_secret))
     }
 
@@ -1732,6 +1751,9 @@ impl Engine {
         &mut self,
         handshake_secret: &[u8],
     ) -> Result<(Buf, Buf), Error> {
+        let mut exp_master = self.buffers_free.pop();
+        let mut c_ap_traffic = self.buffers_free.pop();
+        let mut s_ap_traffic = self.buffers_free.pop();
         let hash = self.hash_algorithm();
         let hash_len = hash.output_len();
         let hmac = self.hmac();
@@ -1762,7 +1784,6 @@ impl Engine {
         self.transcript_hash(&mut transcript_hash);
 
         // exporter_master_secret = Derive-Secret(master_secret, "exp master", transcript_hash)
-        let mut exp_master = Buf::new();
         prf_hkdf::hkdf_expand_label_dtls13(
             hmac,
             hash,
@@ -1775,7 +1796,6 @@ impl Engine {
         .map_err(Error::CryptoError)?;
 
         // client_application_traffic_secret_0
-        let mut c_ap_traffic = Buf::new();
         prf_hkdf::hkdf_expand_label_dtls13(
             hmac,
             hash,
@@ -1788,7 +1808,6 @@ impl Engine {
         .map_err(Error::CryptoError)?;
 
         // server_application_traffic_secret_0
-        let mut s_ap_traffic = Buf::new();
         prf_hkdf::hkdf_expand_label_dtls13(
             hmac,
             hash,
@@ -1967,7 +1986,9 @@ impl Engine {
     }
 
     /// Derive epoch keys (cipher + IV + sn_key) from a traffic secret.
-    fn derive_epoch_keys(&self, traffic_secret: &Buf) -> Result<EpochKeys, Error> {
+    fn derive_epoch_keys(&mut self, traffic_secret: &Buf) -> Result<EpochKeys, Error> {
+        let mut sn_key = self.buffers_free.pop();
+        let mut secret = self.buffers_free.pop();
         let hash = self.hash_algorithm();
         let suite = self.suite_provider();
         let hmac = self.hmac();
@@ -1999,7 +2020,6 @@ impl Engine {
         .map_err(Error::CryptoError)?;
 
         // sn_key = HKDF-Expand-Label(secret, "sn", "", key_length)
-        let mut sn_key = Buf::new();
         prf_hkdf::hkdf_expand_label_dtls13(
             hmac,
             hash,
@@ -2016,7 +2036,6 @@ impl Engine {
         let mut iv = [0u8; 12];
         iv.copy_from_slice(&iv_buf);
 
-        let mut secret = Buf::new();
         secret.extend_from_slice(traffic_secret);
 
         Ok(EpochKeys {
@@ -2321,6 +2340,14 @@ fn reconstruct_sequence(partial: u64, expected: u64, bits: u32) -> u64 {
 // =========================================================================
 
 impl RecordHandler for Engine {
+    fn pop_buffer(&mut self) -> Buf {
+        Engine::pop_buffer(self)
+    }
+
+    fn push_buffer(&mut self, buffer: Buf) {
+        Engine::push_buffer(self, buffer);
+    }
+
     fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
         if let Some(cn_seq) = self.close_notify_sequence {
             if record.record().sequence > cn_seq {
@@ -2553,9 +2580,20 @@ mod tests {
         Engine::new(config, cert)
     }
 
-    struct PassthroughRecordHandler;
+    #[derive(Default)]
+    struct PassthroughRecordHandler {
+        buffers: BufferPool,
+    }
 
     impl RecordHandler for PassthroughRecordHandler {
+        fn pop_buffer(&mut self) -> Buf {
+            self.buffers.pop()
+        }
+
+        fn push_buffer(&mut self, buffer: Buf) {
+            self.buffers.push(buffer);
+        }
+
         fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
             Ok(Some(record))
         }
@@ -2641,10 +2679,40 @@ mod tests {
         packet
     }
 
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn duplicate_datagram_recycles_its_pooled_buffer() {
+        let mut engine = test_engine();
+        let packet = encrypted_application_data_record(1, b"buffered ciphertext");
+        engine.parse_packet(&packet).expect("queue first datagram");
+        let mut output = [0u8; 2048];
+        assert!(matches!(
+            engine.poll_output(&mut output, Instant::now()),
+            Output::Timeout(_)
+        ));
+
+        let mut buffer = engine.pop_buffer();
+        buffer.resize(2048, 0xAA);
+        engine.push_buffer(buffer);
+
+        engine
+            .parse_packet(&packet)
+            .expect("discard duplicate datagram");
+        assert!(matches!(
+            engine.poll_output(&mut output, Instant::now()),
+            Output::Timeout(_)
+        ));
+        assert_eq!(engine.queue_rx.len(), 1);
+        assert!(
+            engine.pop_buffer().into_vec().capacity() >= 2048,
+            "discarding a duplicate must preserve its reusable receive allocation"
+        );
+    }
+
     fn parsed_key_update(seq: u16) -> Incoming {
         Incoming::parse_packet(
             &encrypted_key_update_record(seq),
-            &mut PassthroughRecordHandler,
+            &mut PassthroughRecordHandler::default(),
             Some(Dtls13CipherSuite::AES_128_GCM_SHA256),
         )
         .expect("parse key update packet")
@@ -2656,7 +2724,7 @@ mod tests {
         packet.extend_from_slice(&encrypted_application_data_record(app_seq, b"app-data"));
         Incoming::parse_packet(
             &packet,
-            &mut PassthroughRecordHandler,
+            &mut PassthroughRecordHandler::default(),
             Some(Dtls13CipherSuite::AES_128_GCM_SHA256),
         )
         .expect("parse coalesced packet")
@@ -2747,7 +2815,7 @@ mod tests {
 
         // Pre-fill the pool with a buffer that has allocated capacity.
         // BufferPool::push clears contents but retains the allocation.
-        let mut marked = Buf::new();
+        let mut marked = engine.pop_buffer();
         marked.extend_from_slice(&[0xAA; 256]);
         engine.buffers_free.push(marked);
 
@@ -2836,11 +2904,12 @@ mod tests {
     #[cfg(feature = "rcgen")]
     fn malformed_ack_record_number_vector_is_ignored() {
         let mut engine = test_engine();
+        let fragment = engine.pop_buffer();
         engine.flight_saved_records.push(Entry {
             content_type: ContentType::Handshake,
             epoch: 2,
             send_seq: 7,
-            fragment: Buf::new(),
+            fragment,
             acked: false,
         });
 

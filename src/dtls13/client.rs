@@ -137,16 +137,18 @@ pub(crate) enum LocalEvent {
 impl Client {
     pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Client {
         engine.set_client(true);
+        let extension_data = engine.pop_buffer();
+        let defragment_buffer = engine.pop_buffer();
 
         Client {
             state: State::SendClientHello,
             engine,
             random: None,
             session_id: None,
-            extension_data: Buf::new(),
+            extension_data,
             negotiated_srtp_profile: None,
             server_certificates: Vec::with_capacity(3),
-            defragment_buffer: Buf::new(),
+            defragment_buffer,
             client_auth_requested: false,
             cert_request_context: None,
             saved_cookie: None,
@@ -182,16 +184,18 @@ impl Client {
         // Inject transcript + sequence state from the hybrid CH that was
         // already sent on the wire by ClientPending.
         engine.inject_hybrid_client_hello(&hybrid.transcript_bytes);
+        let extension_data = engine.pop_buffer();
+        let defragment_buffer = engine.pop_buffer();
 
         let mut client = Client {
             state: State::AwaitServerHello,
             engine,
             random: Some(hybrid.random),
             session_id: None,
-            extension_data: Buf::new(),
+            extension_data,
             negotiated_srtp_profile: None,
             server_certificates: Vec::with_capacity(3),
-            defragment_buffer: Buf::new(),
+            defragment_buffer,
             client_auth_requested: false,
             cert_request_context: None,
             saved_cookie: None,
@@ -500,7 +504,7 @@ impl State {
                         ExtensionType::Cookie => {
                             let ext_data = ext.extension_data(&client.defragment_buffer);
                             parse_cookie_extension(ext_data).map_err(InternalError::from)?;
-                            let mut cookie = Buf::new();
+                            let mut cookie = client.engine.pop_buffer();
                             cookie.extend_from_slice(ext_data);
                             client.saved_cookie = Some(cookie);
                         }
@@ -677,18 +681,14 @@ impl State {
         client.handshake_secret = Some(handshake_secret);
         client.engine.push_buffer(shared_secret);
 
-        // Save traffic secrets for Finished verification and client flight
-        let mut s_hs_copy = Buf::new();
-        s_hs_copy.extend_from_slice(&s_hs_traffic);
-        client.server_hs_traffic_secret = Some(s_hs_copy);
-        let mut c_hs_copy = Buf::new();
-        c_hs_copy.extend_from_slice(&c_hs_traffic);
-        client.client_hs_traffic_secret = Some(c_hs_copy);
-
         // Install handshake keys (recv for server messages, send installed later)
         client
             .engine
             .install_handshake_keys(&c_hs_traffic, &s_hs_traffic)?;
+
+        // Retain the derived buffers for Finished verification and client flight.
+        client.server_hs_traffic_secret = Some(s_hs_traffic);
+        client.client_hs_traffic_secret = Some(c_hs_traffic);
 
         // Enable peer encryption for server's epoch 2 messages
         client.engine.enable_peer_encryption()?;
@@ -757,7 +757,7 @@ impl State {
         let cr_range = range.clone();
         drop(maybe);
         let cr_data = &client.defragment_buffer[cr_range.clone()];
-        let context = parse_certificate_request(cr_data, cr_range.start)?;
+        let context = parse_certificate_request(cr_data, cr_range.start, &mut client.engine)?;
         if let Some(ctx) = context {
             client.cert_request_context = Some(ctx);
         }
@@ -813,7 +813,7 @@ impl State {
 
         for (i, cert_data) in cert_ranges.iter().enumerate() {
             trace!("Certificate #{} size: {} bytes", i + 1, cert_data.len());
-            let mut buf = Buf::new();
+            let mut buf = client.engine.pop_buffer();
             buf.extend_from_slice(cert_data);
             client.server_certificates.push(buf);
         }
@@ -1490,7 +1490,11 @@ pub(crate) fn verify_scheme_curve(scheme: SignatureScheme, cert_der: &[u8]) -> R
 ///
 /// Extracts the certificate_request_context and parses extensions including
 /// certificate_authorities. Returns the context if non-empty.
-fn parse_certificate_request(cr_data: &[u8], base_offset: usize) -> Result<Option<Buf>, Error> {
+fn parse_certificate_request(
+    cr_data: &[u8],
+    base_offset: usize,
+    engine: &mut Engine,
+) -> Result<Option<Buf>, Error> {
     if cr_data.is_empty() {
         return Ok(None);
     }
@@ -1505,7 +1509,7 @@ fn parse_certificate_request(cr_data: &[u8], base_offset: usize) -> Result<Optio
                 crate::UnexpectedMessageError::CertificateRequestContextTruncated,
             ));
         }
-        let mut ctx = Buf::new();
+        let mut ctx = engine.pop_buffer();
         ctx.extend_from_slice(&cr_data[pos..pos + context_len]);
         context = Some(ctx);
         pos += context_len;

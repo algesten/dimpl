@@ -185,16 +185,18 @@ impl Server {
 
     pub fn new_with_engine(mut engine: Engine, now: Instant, auto_mode: bool) -> Server {
         let cookie_secret = engine.random_arr();
+        let extension_data = engine.pop_buffer();
+        let defragment_buffer = engine.pop_buffer();
 
         Server {
             state: State::AwaitClientHello,
             engine,
             random: None,
             client_session_id: None,
-            extension_data: Buf::new(),
+            extension_data,
             negotiated_srtp_profile: None,
             client_certificates: Vec::with_capacity(3),
-            defragment_buffer: Buf::new(),
+            defragment_buffer,
             last_now: now,
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
@@ -839,18 +841,14 @@ impl State {
         server.handshake_secret = Some(handshake_secret);
         server.engine.push_buffer(shared_secret);
 
-        // Save traffic secrets
-        let mut s_hs_copy = Buf::new();
-        s_hs_copy.extend_from_slice(&s_hs_traffic);
-        server.server_hs_traffic_secret = Some(s_hs_copy);
-        let mut c_hs_copy = Buf::new();
-        c_hs_copy.extend_from_slice(&c_hs_traffic);
-        server.client_hs_traffic_secret = Some(c_hs_copy);
-
         // Install handshake keys
         server
             .engine
             .install_handshake_keys(&c_hs_traffic, &s_hs_traffic)?;
+
+        // Retain the derived buffers for Finished verification.
+        server.server_hs_traffic_secret = Some(s_hs_traffic);
+        server.client_hs_traffic_secret = Some(c_hs_traffic);
 
         Ok(Self::SendEncryptedExtensions)
     }
@@ -1003,7 +1001,7 @@ impl State {
                 i + 1,
                 cert_data.len()
             );
-            let mut buf = Buf::new();
+            let mut buf = server.engine.pop_buffer();
             buf.extend_from_slice(cert_data);
             server.client_certificates.push(buf);
         }

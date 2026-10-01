@@ -158,6 +158,8 @@ impl Server {
         engine.set_client(false);
 
         let cookie_secret: [u8; 32] = engine.rng.random();
+        let extension_data = engine.pop_buffer();
+        let defragment_buffer = engine.pop_buffer();
 
         Server {
             state: State::AwaitClientHello,
@@ -165,13 +167,13 @@ impl Server {
             random: None,
             session_id: None,
             cookie_secret,
-            extension_data: Buf::new(),
+            extension_data,
             negotiated_srtp_profile: None,
             client_supported_groups: None,
             client_signature_algorithms: None,
             client_random: None,
             client_certificates: Vec::with_capacity(3),
-            defragment_buffer: Buf::new(),
+            defragment_buffer,
             captured_session_hash: None,
             psk_valid: None,
             last_now: now,
@@ -825,13 +827,12 @@ impl State {
             let client_pub = &server.defragment_buffer[public_key_range];
 
             // Compute shared secret
-            let mut buf = server.engine.pop_buffer();
+            let buf = server.engine.pop_buffer();
             server
                 .engine
                 .crypto_context_mut()
-                .compute_shared_secret(client_pub, &mut buf)
+                .compute_shared_secret(client_pub, buf)
                 .map_err(Error::CryptoError)?;
-            server.engine.push_buffer(buf);
         }
 
         // Capture session hash for EMS now (up to ClientKeyExchange)
@@ -1252,10 +1253,10 @@ fn handshake_create_server_key_exchange(
     match key_exchange_algorithm {
         KeyExchangeAlgorithm::EECDH => {
             let (curve_type, named_group) = (CurveType::NamedCurve, named_group);
-            let mut kx_buf = engine.pop_buffer();
+            let kx_buf = engine.pop_buffer();
             let pubkey = engine
                 .crypto_context_mut()
-                .init_ecdh_server(named_group, &mut kx_buf)
+                .init_ecdh_server(named_group, kx_buf)
                 .map_err(Error::CryptoError)?;
 
             trace!(
@@ -1273,8 +1274,6 @@ fn handshake_create_server_key_exchange(
             signed_data.extend_from_slice(&named_group.as_u16().to_be_bytes());
             signed_data.push(pubkey.len() as u8);
             signed_data.extend_from_slice(pubkey);
-
-            engine.push_buffer(kx_buf);
 
             let mut signature = engine.pop_buffer();
 

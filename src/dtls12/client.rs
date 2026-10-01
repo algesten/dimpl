@@ -92,6 +92,8 @@ pub(crate) enum LocalEvent {
 impl Client {
     pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Client {
         engine.set_client(true);
+        let extension_data = engine.pop_buffer();
+        let defragment_buffer = engine.pop_buffer();
 
         Client {
             state: State::SendClientHello,
@@ -99,11 +101,11 @@ impl Client {
             random: None,
             session_id: None,
             cookie: None,
-            extension_data: Buf::new(),
+            extension_data,
             negotiated_srtp_profile: None,
             server_random: None,
             server_certificates: Vec::with_capacity(3),
-            defragment_buffer: Buf::new(),
+            defragment_buffer,
             certificate_verify: false,
             captured_session_hash: None,
             last_now: now,
@@ -156,6 +158,8 @@ impl Client {
         engine.transcript.extend_from_slice(handshake_fragment);
         // Advance epoch-0 record sequence past the hybrid CH record.
         engine.advance_epoch_0_sequence();
+        let extension_data = engine.pop_buffer();
+        let defragment_buffer = engine.pop_buffer();
 
         let mut client = Client {
             state: State::AwaitHelloVerifyRequest,
@@ -163,11 +167,11 @@ impl Client {
             random: Some(random),
             session_id: None,
             cookie: None,
-            extension_data: Buf::new(),
+            extension_data,
             negotiated_srtp_profile: None,
             server_random: None,
             server_certificates: Vec::with_capacity(3),
-            defragment_buffer: Buf::new(),
+            defragment_buffer,
             certificate_verify: false,
             captured_session_hash: None,
             last_now: now,
@@ -740,13 +744,13 @@ impl State {
 
         // Process the server key exchange parameters
         // We already have the curve and public key extracted
-        let mut kx_buf = client.engine.pop_buffer();
+        let kx_buf = client.engine.pop_buffer();
+        let shared_secret = client.engine.pop_buffer();
         client
             .engine
             .crypto_context_mut()
-            .process_ecdh_params(named_group, public_key_vec, &mut kx_buf)
+            .process_ecdh_params(named_group, public_key_vec, kx_buf, shared_secret)
             .map_err(Error::CryptoError)?;
-        client.engine.push_buffer(kx_buf);
 
         Ok(Self::AwaitCertificateRequest)
     }
@@ -930,7 +934,7 @@ impl State {
         ))?;
 
         let suite_hash = cipher_suite.hash_algorithm();
-        let mut buf = Buf::new();
+        let mut buf = client.engine.pop_buffer();
         client.engine.transcript_hash(suite_hash, &mut buf);
         client.captured_session_hash = Some(buf);
 
