@@ -50,6 +50,10 @@ const EXT_RENEGOTIATION_INFO: u16 = 0xFF01;
 ///   into a `Client13` via `new_from_hybrid`.
 /// - **DTLS 1.2 fork**: all state is discarded (HelloVerifyRequest clears
 ///   the transcript), and a fresh `Client12` is created.
+///
+/// These buffers are temporary probe state created before an engine exists.
+/// The selected engine copies the needed bytes into its own buffers; probe
+/// buffers are dropped and never returned to the engine's pool.
 pub(crate) struct HybridClientHello {
     /// Client random used in the ClientHello.
     pub random: Random,

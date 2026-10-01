@@ -1,8 +1,8 @@
+use std::fmt;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use arrayvec::ArrayVec;
-use std::fmt;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
@@ -139,9 +139,24 @@ impl Record {
         cs: Option<Dtls12CipherSuite>,
     ) -> Result<Option<Record>, InternalError> {
         // ONLY COPY: UDP packet slice -> pooled buffer
-        let mut buffer = Buf::new();
+        let mut buffer = decrypt.pop_buffer();
         buffer.extend_from_slice(record_slice);
-        let parsed = match ParsedRecord::parse(&buffer, cs, 0) {
+
+        match Self::parse_buffer(&mut buffer, decrypt, cs) {
+            Ok(Some(parsed)) => Ok(Some(Record { buffer, parsed })),
+            result => {
+                decrypt.push_buffer(buffer);
+                result.map(|_| None)
+            }
+        }
+    }
+
+    fn parse_buffer(
+        buffer: &mut Buf,
+        decrypt: &mut dyn RecordHandler,
+        cs: Option<Dtls12CipherSuite>,
+    ) -> Result<Option<Box<ParsedRecord>>, InternalError> {
+        let parsed = match ParsedRecord::parse(buffer, cs, 0) {
             Ok(p) => p,
             Err(e) => {
                 // RFC 6347 §4.1.2.7: Invalid records SHOULD be silently discarded.
@@ -151,18 +166,17 @@ impl Record {
             }
         };
         let parsed = Box::new(parsed);
-        let record = Record { buffer, parsed };
 
         // It is not enough to only look at the epoch, since to be able to decrypt the entire
         // preceeding set of flights sets up the cryptographic context. In a situation with
         // packet loss, we can end up seeing epoch 1 records before we can decrypt them.
-        let is_epoch_0 = record.record().sequence.epoch == 0;
+        let is_epoch_0 = parsed.record.sequence.epoch == 0;
         if is_epoch_0 || !decrypt.is_peer_encryption_enabled() {
-            return Ok(Some(record));
+            return Ok(Some(parsed));
         }
 
         // We need to decrypt the record and redo the parsing.
-        let dtls = record.record();
+        let dtls = &parsed.record;
         let sequence = dtls.sequence;
         let content_type = dtls.content_type;
 
@@ -177,10 +191,7 @@ impl Record {
         }
 
         // Get a reference to the buffer
-        let (aad, nonce) = decrypt.decryption_aad_and_nonce(dtls, &record.buffer);
-
-        // Extract the buffer for decryption
-        let mut buffer = record.buffer;
+        let (aad, nonce) = decrypt.decryption_aad_and_nonce(dtls, buffer);
 
         // Local shorthand for where the encrypted ciphertext starts
         let ciph = DTLSRecord::HEADER_LEN + explicit_nonce_len;
@@ -219,10 +230,10 @@ impl Record {
         buffer[11] = (new_len >> 8) as u8;
         buffer[12] = new_len as u8;
 
-        let parsed = ParsedRecord::parse(&buffer, cs, explicit_nonce_len)?;
+        let parsed = ParsedRecord::parse(buffer, cs, explicit_nonce_len)?;
         let parsed = Box::new(parsed);
 
-        Ok(Some(Record { buffer, parsed }))
+        Ok(Some(parsed))
     }
 
     pub fn record(&self) -> &DTLSRecord {
@@ -295,9 +306,13 @@ impl ParsedRecord {
 /// Trait abstracting record parsing-time handling for incoming records.
 ///
 /// This decouples the record parser from the full `Engine`, allowing the parse loop
-/// to decrypt records, classify control records, and queue only the records that
+/// to acquire buffers, decrypt records, classify control records, and queue only the records that
 /// should survive into `Incoming`.
 pub trait RecordHandler {
+    /// Acquire an empty buffer whose allocation can be reused for a record.
+    fn pop_buffer(&mut self) -> Buf;
+    /// Recycle a buffer when parsing fails or silently discards a record.
+    fn push_buffer(&mut self, buffer: Buf);
     fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error>;
     fn is_peer_encryption_enabled(&self) -> bool;
     fn replay_check(&self, seq: Sequence) -> bool;
@@ -394,19 +409,31 @@ impl std::panic::UnwindSafe for Incoming {}
 
 #[cfg(test)]
 mod tests {
+    use crate::buffer::BufferPool;
+
     use super::*;
 
     #[derive(Default)]
     struct TestHandler {
+        buffers: BufferPool,
         classify_calls: usize,
         dropped_alerts: usize,
     }
 
     impl RecordHandler for TestHandler {
+        fn pop_buffer(&mut self) -> Buf {
+            self.buffers.pop()
+        }
+
+        fn push_buffer(&mut self, buffer: Buf) {
+            self.buffers.push(buffer);
+        }
+
         fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
             self.classify_calls += 1;
             if record.record().content_type == ContentType::Alert {
                 self.dropped_alerts += 1;
+                self.push_buffer(record.into_buffer());
                 return Ok(None);
             }
             Ok(Some(record))
@@ -481,5 +508,43 @@ mod tests {
             ContentType::ApplicationData
         );
         assert_eq!(incoming.first().record().sequence.epoch, 1);
+    }
+
+    #[test]
+    fn receive_records_reuse_pooled_buffers() {
+        let mut handler = TestHandler::default();
+        let mut buffer = handler.pop_buffer();
+        buffer.resize(2048, 0xAA);
+        let allocation = buffer.as_ptr();
+        handler.push_buffer(buffer);
+
+        let packet = build_record(ContentType::ApplicationData, 1, 1, &[0x11; 1500]);
+        for _ in 0..10_000 {
+            let incoming = Incoming::parse_packet(&packet, &mut handler, None)
+                .expect("parse application data")
+                .expect("packet contains a record");
+            assert_eq!(incoming.first().buffer().as_ptr(), allocation);
+            assert_eq!(incoming.first().buffer(), packet);
+            for record in incoming.into_records() {
+                handler.push_buffer(record.into_buffer());
+            }
+        }
+    }
+
+    #[test]
+    fn discarded_records_return_pooled_buffers() {
+        let mut handler = TestHandler::default();
+        let mut buffer = handler.pop_buffer();
+        buffer.resize(2048, 0xAA);
+        let allocation = buffer.as_ptr();
+        handler.push_buffer(buffer);
+
+        let packet = build_record(ContentType::ApplicationData, 0, 1, &[0x11; 1500]);
+        let incoming = Incoming::parse_packet(&packet, &mut handler, None)
+            .expect("invalid plaintext application data is discarded");
+        assert!(incoming.is_none());
+        let reused = handler.pop_buffer();
+        assert!(reused.is_empty());
+        assert_eq!(reused.as_ptr(), allocation);
     }
 }

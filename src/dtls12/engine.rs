@@ -142,11 +142,13 @@ impl Engine {
             ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries(), &mut rng);
 
         let crypto_context = CryptoContext::new(auth, Arc::clone(&config));
+        let mut buffers_free = BufferPool::default();
+        let transcript = buffers_free.pop();
 
         Self {
             config,
             rng,
-            buffers_free: BufferPool::default(),
+            buffers_free,
             sequence_epoch_0: Sequence::new(0),
             sequence_epoch_n: Sequence::new(1),
             queue_rx: QueueRx::new(),
@@ -159,7 +161,7 @@ impl Engine {
             is_client: false,
             peer_handshake_seq_no: 0,
             next_handshake_seq_no: 0,
-            transcript: Buf::new(),
+            transcript,
             replay: ReplayWindow::new(),
             flight_saved_records: Vec::new(),
             flight_backoff,
@@ -1255,6 +1257,14 @@ impl Engine {
 }
 
 impl RecordHandler for Engine {
+    fn pop_buffer(&mut self) -> Buf {
+        Engine::pop_buffer(self)
+    }
+
+    fn push_buffer(&mut self, buffer: Buf) {
+        Engine::push_buffer(self, buffer);
+    }
+
     fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
         let epoch = record.record().sequence.epoch;
 
