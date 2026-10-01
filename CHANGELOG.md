@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Restore DTLS buffer reuse and reject unpooled buffer returns #167
+
 # 0.7.4
 
   * Preserve DTLS 1.3 client key shares on cookie-only retries #163
