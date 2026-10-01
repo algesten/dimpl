@@ -8,6 +8,13 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
+/// Maximum number of free buffers retained by a [`BufferPool`].
+///
+/// The receive path allocates a fresh buffer per incoming record and returns it to the
+/// pool once handled, while only the send/handshake paths take buffers back out. Without
+/// a cap, a connection that mostly receives grows the pool by one buffer per record.
+const MAX_POOLED_BUFFERS: usize = 64;
+
 /// Buffer pool for reusing allocated buffers.
 ///
 /// This pool manages a collection of reusable `Buf` instances to reduce allocations
@@ -31,7 +38,13 @@ impl BufferPool {
     }
 
     /// Return a buffer to the pool.
+    ///
+    /// The buffer is dropped instead when the pool already holds
+    /// [`MAX_POOLED_BUFFERS`] free buffers.
     pub fn push(&mut self, mut buffer: Buf) {
+        if self.free.len() >= MAX_POOLED_BUFFERS {
+            return;
+        }
         buffer.clear();
         self.free.push_front(buffer);
     }
@@ -216,5 +229,32 @@ impl aes_gcm::aead::Buffer for Buf {
 
     fn truncate(&mut self, len: usize) {
         self.0.truncate(len);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pool_is_bounded_when_pushes_outnumber_pops() {
+        let mut pool = BufferPool::default();
+        for _ in 0..10_000 {
+            let mut buf = Buf::new();
+            buf.extend_from_slice(&[0u8; 1500]);
+            pool.push(buf);
+        }
+        assert_eq!(pool.free.len(), MAX_POOLED_BUFFERS);
+    }
+
+    #[test]
+    fn pooled_buffers_keep_capacity_and_are_cleared() {
+        let mut pool = BufferPool::default();
+        let mut buf = Buf::new();
+        buf.extend_from_slice(&[0xAA; 256]);
+        pool.push(buf);
+        let reused = pool.pop();
+        assert!(reused.is_empty());
+        assert!(reused.into_vec().capacity() >= 256);
     }
 }
