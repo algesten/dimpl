@@ -3,6 +3,7 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use arrayvec::ArrayVec;
+use nom::error::ErrorKind;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
@@ -80,18 +81,6 @@ impl Records {
             return Err(error);
         }
 
-        // The receive queue preserves each datagram's internal order. Discard an
-        // unordered datagram before classifying controls or retaining any of it,
-        // so a subsequent clean retransmission can recover.
-        if !Self::is_ordered(&parsed_records, decrypt.is_peer_encryption_enabled()) {
-            for record in parsed_records {
-                decrypt.push_buffer(record.into_buffer());
-            }
-            return Ok(Records {
-                records: ArrayVec::new(),
-            });
-        }
-
         let mut records = ArrayVec::new();
         for record in parsed_records {
             if let Some(record) = decrypt.classify_record(record)? {
@@ -137,6 +126,14 @@ impl Records {
             }
 
             packet = &packet[record_end..];
+        }
+
+        // The receive queue preserves each datagram's internal order. Reject an
+        // unordered datagram before classifying controls or retaining any of it,
+        // so a subsequent clean retransmission can recover. The caller recycles
+        // all parsed records through the normal parser-error cleanup path.
+        if !Self::is_ordered(parsed_records, decrypt.is_peer_encryption_enabled()) {
+            return Err(InternalError::parse(ErrorKind::Verify));
         }
 
         Ok(())
@@ -601,9 +598,9 @@ mod tests {
             }
 
             let mut handler = TestHandler::default();
-            let incoming = Incoming::parse_packet(&packet, &mut handler, None)
-                .expect("unordered datagrams are silently discarded");
-            assert!(incoming.is_none());
+            let error = Incoming::parse_packet(&packet, &mut handler, None)
+                .expect_err("unordered datagrams produce an internal parse error");
+            assert!(error.into_public_error().is_none());
             assert_eq!(handler.classify_calls, 0);
             assert_eq!(handler.buffers_returned, handler.buffers_acquired);
         }
@@ -618,11 +615,9 @@ mod tests {
         handshakes.extend_from_slice(&build_handshake(0, 0, &[0; 4]));
         let packet = build_record(ContentType::Handshake, 0, 0, &handshakes);
         let mut handler = TestHandler::default();
-        assert!(
-            Incoming::parse_packet(&packet, &mut handler, None)
-                .expect("unordered datagrams are silently discarded")
-                .is_none()
-        );
+        let error = Incoming::parse_packet(&packet, &mut handler, None)
+            .expect_err("unordered datagrams produce an internal parse error");
+        assert!(error.into_public_error().is_none());
         assert_eq!(handler.classify_calls, 0);
         assert_eq!(handler.buffers_returned, handler.buffers_acquired);
     }
@@ -661,9 +656,9 @@ mod tests {
         );
         for packet in [[finished, ccs.clone()].concat(), [ccs, handshake].concat()] {
             let mut handler = TestHandler::default();
-            let incoming = Incoming::parse_packet(&packet, &mut handler, None)
-                .expect("unordered datagrams are silently discarded");
-            assert!(incoming.is_none());
+            let error = Incoming::parse_packet(&packet, &mut handler, None)
+                .expect_err("unordered datagrams produce an internal parse error");
+            assert!(error.into_public_error().is_none());
             assert_eq!(handler.classify_calls, 0);
             assert_eq!(handler.buffers_returned, handler.buffers_acquired);
         }
