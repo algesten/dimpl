@@ -80,6 +80,18 @@ impl Records {
             return Err(error);
         }
 
+        // The receive queue preserves each datagram's internal order. Discard an
+        // unordered datagram before classifying controls or retaining any of it,
+        // so a subsequent clean retransmission can recover.
+        if !Self::is_ordered(&parsed_records, decrypt.is_peer_encryption_enabled()) {
+            for record in parsed_records {
+                decrypt.push_buffer(record.into_buffer());
+            }
+            return Ok(Records {
+                records: ArrayVec::new(),
+            });
+        }
+
         let mut records = ArrayVec::new();
         for record in parsed_records {
             if let Some(record) = decrypt.classify_record(record)? {
@@ -128,6 +140,58 @@ impl Records {
         }
 
         Ok(())
+    }
+
+    fn is_ordered(records: &[Record], peer_encryption_enabled: bool) -> bool {
+        let mut previous_epoch = 0;
+        let mut previous_seq = None;
+        let mut seen_ccs = false;
+
+        for record in records {
+            let header = record.record();
+            let epoch = header.sequence.epoch;
+            // After peer encryption is enabled, late plaintext records are
+            // discarded separately and may trail authenticated application data.
+            if !peer_encryption_enabled && epoch < previous_epoch {
+                return false;
+            }
+            previous_epoch = epoch;
+
+            if header.content_type == ContentType::ChangeCipherSpec {
+                seen_ccs = true;
+            }
+            if header.content_type != ContentType::Handshake {
+                continue;
+            }
+            if !peer_encryption_enabled && seen_ccs && epoch == 0 {
+                return false;
+            }
+            // A queued future-epoch Finished is still ciphertext until CCS has
+            // enabled decryption; its bytes cannot be treated as message_seq.
+            if epoch > 0 && !peer_encryption_enabled {
+                continue;
+            }
+
+            // Check the full payload, including messages beyond the bounded
+            // parsed handshake list. Match its handling of malformed tails.
+            let mut fragment = header.fragment(record.buffer());
+            while !fragment.is_empty() {
+                let Ok((body, handshake)) = Handshake::parse_header(fragment) else {
+                    break;
+                };
+                let Some(remaining) = body.get(handshake.fragment_length as usize..) else {
+                    break;
+                };
+                let seq = handshake.message_seq;
+                if previous_seq.is_some_and(|previous| seq < previous) {
+                    return false;
+                }
+                // Equal sequences are normal for fragments of one message.
+                previous_seq = Some(seq);
+                fragment = remaining;
+            }
+        }
+        true
     }
 }
 
@@ -502,6 +566,107 @@ mod tests {
         out.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
         out.extend_from_slice(fragment);
         out
+    }
+
+    fn build_handshake(seq: u16, offset: u32, body: &[u8]) -> Vec<u8> {
+        let mut out = vec![14]; // ServerHelloDone; only the fragment header is parsed here.
+        out.extend_from_slice(&4u32.to_be_bytes()[1..]);
+        out.extend_from_slice(&seq.to_be_bytes());
+        out.extend_from_slice(&offset.to_be_bytes()[1..]);
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
+        out.extend_from_slice(body);
+        out
+    }
+
+    #[test]
+    fn unordered_handshakes_discard_the_whole_datagram_before_classification() {
+        for separate_records in [false, true] {
+            let mut packet = build_record(ContentType::Alert, 0, 0, &[2, 40]);
+            let mut handshakes = Vec::new();
+            for seq in [3, 1, 2] {
+                let handshake = build_handshake(seq, 0, &[0; 4]);
+                if separate_records {
+                    packet.extend_from_slice(&build_record(
+                        ContentType::Handshake,
+                        0,
+                        u64::from(seq),
+                        &handshake,
+                    ));
+                } else {
+                    handshakes.extend_from_slice(&handshake);
+                }
+            }
+            if !separate_records {
+                packet.extend_from_slice(&build_record(ContentType::Handshake, 0, 1, &handshakes));
+            }
+
+            let mut handler = TestHandler::default();
+            let incoming = Incoming::parse_packet(&packet, &mut handler, None)
+                .expect("unordered datagrams are silently discarded");
+            assert!(incoming.is_none());
+            assert_eq!(handler.classify_calls, 0);
+            assert_eq!(handler.buffers_returned, handler.buffers_acquired);
+        }
+    }
+
+    #[test]
+    fn unordered_handshakes_beyond_the_parsed_capacity_are_discarded() {
+        let mut handshakes = Vec::new();
+        for seq in 0..8 {
+            handshakes.extend_from_slice(&build_handshake(seq, 0, &[0; 4]));
+        }
+        handshakes.extend_from_slice(&build_handshake(0, 0, &[0; 4]));
+        let packet = build_record(ContentType::Handshake, 0, 0, &handshakes);
+        let mut handler = TestHandler::default();
+        assert!(
+            Incoming::parse_packet(&packet, &mut handler, None)
+                .expect("unordered datagrams are silently discarded")
+                .is_none()
+        );
+        assert_eq!(handler.classify_calls, 0);
+        assert_eq!(handler.buffers_returned, handler.buffers_acquired);
+    }
+
+    #[test]
+    fn ordered_datagrams_allow_fragments_and_arbitrary_starting_sequences() {
+        let mut packet = Vec::new();
+        for (seq, offset, body) in [
+            (4, 0, &[0; 2][..]),
+            (4, 2, &[0; 2][..]),
+            (5, 0, &[0; 4][..]),
+        ] {
+            packet.extend_from_slice(&build_record(
+                ContentType::Handshake,
+                0,
+                u64::from(seq),
+                &build_handshake(seq, offset, body),
+            ));
+        }
+        let mut handler = TestHandler::default();
+        let incoming = Incoming::parse_packet(&packet, &mut handler, None)
+            .expect("parse ordered fragments")
+            .expect("ordered fragments must remain available");
+        assert_eq!(incoming.records().len(), 3);
+    }
+
+    #[test]
+    fn unordered_ccs_and_epochs_discard_the_whole_datagram() {
+        let ccs = build_record(ContentType::ChangeCipherSpec, 0, 1, &[1]);
+        let finished = build_record(ContentType::Handshake, 1, 0, &[0; 16]);
+        let handshake = build_record(
+            ContentType::Handshake,
+            0,
+            0,
+            &build_handshake(4, 0, &[0; 4]),
+        );
+        for packet in [[finished, ccs.clone()].concat(), [ccs, handshake].concat()] {
+            let mut handler = TestHandler::default();
+            let incoming = Incoming::parse_packet(&packet, &mut handler, None)
+                .expect("unordered datagrams are silently discarded");
+            assert!(incoming.is_none());
+            assert_eq!(handler.classify_calls, 0);
+            assert_eq!(handler.buffers_returned, handler.buffers_acquired);
+        }
     }
 
     #[test]
