@@ -122,6 +122,10 @@ fn prepare_server_final_flight_resend(max_queue_rx: usize) -> FinalFlightResend 
         "resend flight 6 should include epoch 1 Finished"
     );
     assert_epochs_and_seq_increased(&f6_init_hdrs, &f6_resend_hdrs);
+    server
+        .handle_timeout(now)
+        .expect("arm server resend cooldown");
+    assert!(collect_packets(&mut server).is_empty());
 
     FinalFlightResend {
         client,
@@ -466,6 +470,12 @@ fn dtls12_final_flight_resend_can_share_post_release_appdata_tail() {
         stale_epoch0_handshake,
         ..
     } = prepare_server_final_flight_resend(Config::default().max_queue_rx());
+
+    let cooldown = drain_outputs(&mut server).timeout.expect("resend cooldown");
+    server
+        .handle_timeout(cooldown)
+        .expect("expire previous resend cooldown");
+    assert!(collect_packets(&mut server).is_empty());
 
     let filler = vec![0x55; 50];
     for i in 0..9 {
@@ -1100,6 +1110,12 @@ fn dtls12_stale_client_hello_before_peer_confirmed_triggers_resend() {
         stale_epoch0_handshake,
         ..
     } = prepare_server_final_flight_resend(RX_QUEUE_LIMIT);
+
+    let cooldown = drain_outputs(&mut server).timeout.expect("resend cooldown");
+    server
+        .handle_timeout(cooldown)
+        .expect("expire previous resend cooldown");
+    assert!(collect_packets(&mut server).is_empty());
 
     // The server has sent flight 6 but has no confirmation the client received
     // it (no authenticated application data has arrived). A stale ClientHello

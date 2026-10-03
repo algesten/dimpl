@@ -8,6 +8,113 @@ use dimpl::Dtls;
 use crate::common::*;
 
 #[test]
+fn dtls12_discards_scrambled_datagram_and_accepts_clean_retransmission() {
+    use dimpl::{Config, DtlsCertificate};
+
+    use crate::ossl_helper::{DtlsCertOptions, OsslDtlsCert};
+
+    let certificate = || {
+        let cert = OsslDtlsCert::new(DtlsCertOptions::default());
+        DtlsCertificate {
+            certificate: cert.x509.to_der().expect("certificate DER"),
+            private_key: cert.pkey.private_key_to_der().expect("private key DER"),
+        }
+    };
+    let config = Arc::new(
+        Config::builder()
+            .use_server_cookie(false)
+            .build()
+            .expect("valid config"),
+    );
+    let now = Instant::now();
+    let mut client = Dtls::new_12(Arc::clone(&config), certificate(), now);
+    client.set_active(true);
+    let mut server = Dtls::new_12(config, certificate(), now);
+    server.set_active(false);
+    server.handle_timeout(now).expect("initialize server");
+    assert!(drain_outputs(&mut server).packets.is_empty());
+
+    client.handle_timeout(now).expect("start ClientHello");
+    let client_hello = drain_outputs(&mut client);
+    client.handle_timeout(now).expect("arm client flight timer");
+    assert!(drain_outputs(&mut client).packets.is_empty());
+    let mut server_flight = Vec::new();
+    for packet in &client_hello.packets {
+        server.handle_packet(packet).expect("receive ClientHello");
+        server_flight.extend(drain_outputs(&mut server).packets);
+    }
+    server.handle_timeout(now).expect("arm server flight timer");
+    assert!(drain_outputs(&mut server).packets.is_empty());
+    let mut client_flight = Vec::new();
+    for packet in &server_flight {
+        client.handle_packet(packet).expect("receive server flight");
+        client_flight.extend(drain_outputs(&mut client).packets);
+    }
+    assert_eq!(
+        client_flight.len(),
+        1,
+        "reproduce reordering within one datagram"
+    );
+    client
+        .handle_timeout(now)
+        .expect("arm client final-flight timer");
+    let deadline = drain_outputs(&mut client)
+        .timeout
+        .expect("client retry deadline");
+
+    let mut remaining = &client_flight[0][..];
+    let mut records = Vec::new();
+    while !remaining.is_empty() {
+        let length = 13 + usize::from(u16::from_be_bytes([remaining[11], remaining[12]]));
+        records.push(&remaining[..length]);
+        remaining = &remaining[length..];
+    }
+    assert!(
+        records.len() >= 5,
+        "client flight includes certificate, key exchange, verify, CCS and Finished"
+    );
+    let scrambled: Vec<u8> = records
+        .iter()
+        .rev()
+        .flat_map(|record| record.iter().copied())
+        .collect();
+    server
+        .handle_packet(&scrambled)
+        .expect("silently discard scrambled datagram");
+    let discarded = drain_outputs(&mut server);
+    assert!(discarded.packets.is_empty());
+    assert!(!discarded.connected);
+
+    client
+        .handle_timeout(deadline)
+        .expect("retransmit clean final flight");
+    let retry = drain_outputs(&mut client);
+    assert!(!retry.packets.is_empty());
+    let mut final_flight = Vec::new();
+    let mut server_connected = false;
+    for packet in &retry.packets {
+        server
+            .handle_packet(packet)
+            .expect("accept clean retransmission");
+        let output = drain_outputs(&mut server);
+        server_connected |= output.connected;
+        final_flight.extend(output.packets);
+    }
+    assert!(
+        server_connected,
+        "scrambled copy must not poison the receive queue"
+    );
+    let mut client_connected = false;
+    for packet in &final_flight {
+        client
+            .handle_packet(packet)
+            .expect("receive server final flight");
+        client_connected |= drain_outputs(&mut client).connected;
+    }
+    assert!(client_connected);
+}
+
+#[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_handles_duplicate_packets() {
     use dimpl::certificate::generate_self_signed_certificate;

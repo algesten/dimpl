@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Reject internally reordered DTLS 1.2 datagrams #169
+  * Back off duplicate DTLS 1.2 flight resends #169
   * Restore DTLS buffer reuse and reject unpooled buffer returns #167
 
 # 0.7.4
