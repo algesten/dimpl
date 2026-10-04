@@ -628,6 +628,7 @@ fn dtls13_retransmit_exponential_backoff() {
     // Use enough retries to observe several backoff steps
     let config = Arc::new(
         Config::builder()
+            .dangerously_set_rng_seed(42)
             .flight_retries(6)
             .handshake_timeout(Duration::from_secs(300))
             .build()
@@ -643,10 +644,10 @@ fn dtls13_retransmit_exponential_backoff() {
 
     // Kick off the handshake
     client.handle_timeout(now).expect("client start");
-    client.handle_timeout(now).expect("client arm");
 
     // Collect initial packets (ClientHello) without delivering them
     let _initial_packets = collect_packets(&mut client);
+    client.handle_timeout(now).expect("client arm");
 
     // Record successive timeout values by triggering retransmissions
     let mut timeouts: Vec<Duration> = Vec::new();
@@ -686,16 +687,11 @@ fn dtls13_retransmit_exponential_backoff() {
         );
     }
 
-    // Verify rough doubling: each timeout should be at least 1.5x the previous
-    // (accounting for jitter of +/- 0.25s)
-    for i in 1..timeouts.len() {
-        let ratio = timeouts[i].as_secs_f64() / timeouts[i - 1].as_secs_f64();
+    for (attempt, timeout) in timeouts.iter().enumerate() {
+        let nominal = Duration::from_secs(1 << attempt);
         assert!(
-            ratio > 1.4,
-            "Timeout ratio {}/{} = {:.2} should be > 1.4 (exponential backoff)",
-            i,
-            i - 1,
-            ratio
+            *timeout >= nominal.mul_f64(0.75) && *timeout <= nominal.mul_f64(1.25),
+            "Timeout {attempt} ({timeout:?}) must be within +/-25% of {nominal:?}"
         );
     }
 

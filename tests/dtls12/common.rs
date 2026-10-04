@@ -152,6 +152,8 @@ pub fn deliver_packets(packets: &[Vec<u8>], dest: &mut Dtls) {
 
 /// Trigger a timeout by advancing time 2 seconds.
 pub fn trigger_timeout(ep: &mut Dtls, now: &mut Instant) {
+    // Honor the immediate timeout requested after emitting a flight.
+    ep.handle_timeout(*now).expect("handle_timeout");
     *now += Duration::from_secs(2);
     ep.handle_timeout(*now).expect("handle_timeout");
 }

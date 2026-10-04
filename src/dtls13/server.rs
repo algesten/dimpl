@@ -66,6 +66,7 @@ use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
 use crate::dtls13::message::parse_cookie_extension;
+use crate::timer::Timeout;
 use crate::{Config, DtlsCertificate, Error, InternalError, Output};
 
 /// Magic random value indicating HelloRetryRequest (RFC 8446 Section 4.1.3).
@@ -234,6 +235,10 @@ impl Server {
         (config, cert, self.last_now, self.retained_hello)
     }
 
+    pub fn handshake_deadline(&self) -> Timeout {
+        self.engine.handshake_deadline()
+    }
+
     pub(crate) fn state_name(&self) -> &'static str {
         self.state.name()
     }
@@ -260,6 +265,7 @@ impl Server {
             self.retained_hello.push_back(packet.to_buf());
         }
 
+        let deadline = self.engine.handshake_deadline();
         match self
             .engine
             .parse_packet(packet)
@@ -267,6 +273,10 @@ impl Server {
         {
             Ok(()) => {}
             Err(e) => {
+                // A rejected ClientHello must not start the handshake clock.
+                if self.state == State::AwaitClientHello {
+                    self.engine.set_handshake_deadline(deadline);
+                }
                 if let Some(err) = e.into_public_error() {
                     return Err(err);
                 }

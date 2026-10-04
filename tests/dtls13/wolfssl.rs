@@ -515,12 +515,12 @@ fn dtls13_wolfssl_client_retransmit_on_timeout() {
 
     // Get initial ClientHello
     dimpl_client.handle_timeout(now).expect("client start");
-    dimpl_client.handle_timeout(now).expect("client arm");
     let initial_out = drain_dimpl_outputs(&mut dimpl_client);
     assert!(
         !initial_out.packets.is_empty(),
         "Client should send ClientHello"
     );
+    dimpl_client.handle_timeout(now).expect("client arm");
 
     // Don't deliver to server, trigger timeout
     now += Duration::from_secs(2);

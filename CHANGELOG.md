@@ -1,5 +1,8 @@
 # Unreleased
 
+  * Start the handshake deadline at the first sent packet, not at construction #161
+  * Apply flight retry jitter as ±25% of the RTO instead of ±250ms #161
+
 # 0.7.5
 
   * Reject internally reordered DTLS 1.2 datagrams #169
