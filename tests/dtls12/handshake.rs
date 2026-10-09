@@ -61,6 +61,13 @@ fn dtls12_empty_client_certificate_is_rejected_when_required() {
                         CertificateError::NoClientCertificateReceived
                     ))
                 ));
+                let output = drain_outputs(&mut server);
+                assert_eq!(output.packets.len(), 1, "one fatal alert packet");
+                let alert = &output.packets[0];
+                assert_eq!(alert[0], 21, "DTLS Alert record");
+                assert_eq!(&alert[3..5], &[0, 0], "pre-key-exchange epoch");
+                assert_eq!(&alert[13..], &[2, 40], "fatal handshake_failure");
+                assert!(server.is_closed());
                 return;
             }
             server.handle_packet(packet).expect("server packet");

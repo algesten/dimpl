@@ -36,6 +36,19 @@ fn dtls13_empty_client_certificate_is_rejected_when_required() {
         for packet in &client_out.packets {
             match server.handle_packet(packet) {
                 Err(Error::CertificateError(CertificateError::NoClientCertificateReceived)) => {
+                    let output = drain_outputs(&mut server);
+                    assert_eq!(output.packets.len(), 1, "one fatal alert packet");
+                    let alert_result = client.handle_packet(&output.packets[0]);
+                    assert!(
+                        matches!(
+                            alert_result,
+                            Err(Error::SecurityError(dimpl::SecurityError::FatalAlert {
+                                description: 116
+                            }))
+                        ),
+                        "client result: {alert_result:?}"
+                    );
+                    assert!(server.is_closed());
                     return;
                 }
                 Err(error) => panic!("unexpected server error: {error}"),

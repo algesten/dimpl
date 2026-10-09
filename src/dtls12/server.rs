@@ -724,6 +724,15 @@ impl State {
         drop(maybe);
 
         if cert_ranges.is_empty() {
+            // The handshake has no key material yet, so send a fatal alert in epoch 0.
+            server.engine.abort();
+            server
+                .engine
+                .create_record(ContentType::Alert, 0, false, |body| {
+                    body.push(2); // fatal
+                    body.push(40); // handshake_failure
+                })?;
+            server.state = State::Closed;
             return Err(Error::CertificateError(
                 crate::CertificateError::NoClientCertificateReceived,
             )
