@@ -5,7 +5,7 @@
 //    - Client resends ClientHello with cookie
 // 3. Server sends ServerHello, Certificate, ServerKeyExchange,
 //    CertificateRequest (required), ServerHelloDone
-// 4. Client sends Certificate (optional), ClientKeyExchange,
+// 4. Client sends Certificate (required when requested), ClientKeyExchange,
 //    CertificateVerify (if client cert), ChangeCipherSpec, Finished
 // 5. Server verifies Finished, then sends ChangeCipherSpec, Finished
 // 6. Handshake complete, application data can flow
@@ -724,7 +724,10 @@ impl State {
         drop(maybe);
 
         if cert_ranges.is_empty() {
-            // Client didn't provide a certificate (allowed), skip
+            return Err(Error::CertificateError(
+                crate::CertificateError::NoClientCertificateReceived,
+            )
+            .into());
         } else {
             // Store and verify via callback
             debug!(

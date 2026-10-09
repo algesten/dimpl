@@ -972,13 +972,10 @@ impl State {
         };
 
         if certificate.certificate_list.is_empty() {
-            debug!("Client sent empty certificate list");
-            drop(maybe);
-            server.engine.advance_peer_handshake_seq();
-            // Client's Certificate means our flight was received; stop retransmitting
-            server.engine.flight_stop_resend_timers();
-            // Empty cert list is acceptable - proceed without client auth verification
-            return Ok(Self::AwaitFinished);
+            return Err(Error::CertificateError(
+                crate::CertificateError::NoClientCertificateReceived,
+            )
+            .into());
         }
 
         debug!(
