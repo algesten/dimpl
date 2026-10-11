@@ -972,13 +972,20 @@ impl State {
         };
 
         if certificate.certificate_list.is_empty() {
-            debug!("Client sent empty certificate list");
-            drop(maybe);
-            server.engine.advance_peer_handshake_seq();
-            // Client's Certificate means our flight was received; stop retransmitting
-            server.engine.flight_stop_resend_timers();
-            // Empty cert list is acceptable - proceed without client auth verification
-            return Ok(Self::AwaitFinished);
+            server.engine.abort();
+            // Server Finished was already sent, so the client now reads epoch 3.
+            let epoch = server.engine.app_send_epoch();
+            server
+                .engine
+                .create_ciphertext_record(ContentType::Alert, epoch, false, |body| {
+                    body.push(2); // legacy level (ignored in DTLS 1.3)
+                    body.push(116); // certificate_required
+                })?;
+            server.state = State::Closed;
+            return Err(Error::CertificateError(
+                crate::CertificateError::NoClientCertificateReceived,
+            )
+            .into());
         }
 
         debug!(

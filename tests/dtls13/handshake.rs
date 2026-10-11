@@ -3,9 +3,83 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Dtls, SrtpProfile};
+use dimpl::{CertificateError, Config, Dtls, DtlsCertificate, Error, SrtpProfile};
 
 use crate::common::*;
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_empty_client_certificate_is_rejected_when_required() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let now = Instant::now();
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let config = Arc::new(Config::builder().build().expect("build config"));
+    let mut client = Dtls::new_13(
+        Arc::clone(&config),
+        DtlsCertificate {
+            certificate: Vec::new(),
+            private_key: client_cert.private_key,
+        },
+        now,
+    );
+    client.set_active(true);
+    let mut server = Dtls::new_13(config, server_cert, now);
+
+    let mut now = now;
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+        for packet in &client_out.packets {
+            match server.handle_packet(packet) {
+                Err(Error::CertificateError(CertificateError::NoClientCertificateReceived)) => {
+                    let output = drain_outputs(&mut server);
+                    assert_eq!(output.packets.len(), 1, "one fatal alert packet");
+                    let alert_result = client.handle_packet(&output.packets[0]);
+                    assert!(
+                        matches!(
+                            alert_result,
+                            Err(Error::SecurityError(dimpl::SecurityError::FatalAlert {
+                                description: 116
+                            }))
+                        ),
+                        "client result: {alert_result:?}"
+                    );
+                    assert!(server.is_closed());
+                    return;
+                }
+                Err(error) => panic!("unexpected server error: {error}"),
+                Ok(()) => {}
+            }
+        }
+        deliver_packets(&server_out.packets, &mut client);
+        now += Duration::from_millis(10);
+    }
+    panic!("server accepted an empty client Certificate");
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_client_certificate_not_required() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let now = Instant::now();
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let config = Arc::new(
+        Config::builder()
+            .require_client_certificate(false)
+            .build()
+            .expect("build config"),
+    );
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_13(config, server_cert, now);
+    complete_dtls13_handshake(&mut client, &mut server, now);
+}
 
 #[test]
 #[cfg(feature = "rcgen")]

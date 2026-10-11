@@ -9,6 +9,81 @@ use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]
+fn dtls12_client_certificate_not_required() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let now = Instant::now();
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let config = Arc::new(
+        Config::builder()
+            .require_client_certificate(false)
+            .build()
+            .expect("build config"),
+    );
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_12(config, server_cert, now);
+    complete_dtls12_handshake(&mut client, &mut server, now);
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_empty_client_certificate_is_rejected_when_required() {
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::{CertificateError, Error};
+
+    let mut now = Instant::now();
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let config = Arc::new(Config::builder().build().expect("build config"));
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_12(config, server_cert, now);
+
+    for step in 0..60 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+        let client_out = drain_outputs(&mut client);
+        let server_out = drain_outputs(&mut server);
+        for packet in &client_out.packets {
+            if packet.len() >= 25 && packet[0] == 22 && packet[13] == CERTIFICATE {
+                // Replace the client's plaintext Certificate record with an
+                // empty certificate list, preserving record and handshake sequence numbers.
+                let mut empty = packet[..25].to_vec();
+                empty[11..13].copy_from_slice(&15u16.to_be_bytes());
+                empty[14..17].copy_from_slice(&[0, 0, 3]);
+                empty[22..25].copy_from_slice(&[0, 0, 3]);
+                empty.extend_from_slice(&[0, 0, 0]);
+                assert!(matches!(
+                    server.handle_packet(&empty),
+                    Err(Error::CertificateError(
+                        CertificateError::NoClientCertificateReceived
+                    ))
+                ));
+                let output = drain_outputs(&mut server);
+                assert_eq!(output.packets.len(), 1, "one fatal alert packet");
+                let alert = &output.packets[0];
+                assert_eq!(alert[0], 21, "DTLS Alert record");
+                assert_eq!(&alert[3..5], &[0, 0], "pre-key-exchange epoch");
+                assert_eq!(&alert[13..], &[2, 40], "fatal handshake_failure");
+                assert!(server.is_closed());
+                return;
+            }
+            server.handle_packet(packet).expect("server packet");
+        }
+        deliver_packets(&server_out.packets, &mut client);
+        if step % 5 == 4 {
+            now += Duration::from_secs(2);
+        } else {
+            now += Duration::from_millis(50);
+        }
+    }
+    panic!("client did not send Certificate");
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
 fn dtls12_cookie_retry_proceeds_to_server_hello() {
     //! Verify that after HelloVerifyRequest, the ClientHello with cookie
     //! is properly processed and the server sends ServerHello (not another HVR).

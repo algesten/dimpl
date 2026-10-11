@@ -390,6 +390,8 @@ pub enum CryptoOperation {
 pub enum CertificateError {
     /// The peer did not send a server certificate.
     NoServerCertificateReceived,
+    /// The client sent an empty certificate list when a certificate was required.
+    NoClientCertificateReceived,
     /// Client certificate verification was requested with no client certificate.
     NoClientCertificateForVerification,
     /// Server certificate verification was requested with no server certificate.
@@ -1050,6 +1052,7 @@ impl fmt::Display for CertificateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoServerCertificateReceived => write!(f, "no server certificate received"),
+            Self::NoClientCertificateReceived => write!(f, "no client certificate received"),
             Self::NoClientCertificateForVerification => {
                 write!(f, "no client certificate for verification")
             }

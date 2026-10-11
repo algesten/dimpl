@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Reject empty required client certificates in DTLS 1.2 and 1.3 #170
+
 # 0.7.5
 
   * Reject internally reordered DTLS 1.2 datagrams #169
