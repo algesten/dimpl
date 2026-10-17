@@ -25,7 +25,7 @@ use crate::dtls13::message::Header;
 use crate::dtls13::message::KeyUpdateRequest;
 use crate::dtls13::message::MessageType;
 use crate::dtls13::message::Sequence;
-use crate::timer::ExponentialBackoff;
+use crate::timer::{HandshakeTimers, Timeout, deadline};
 use crate::types::{HashAlgorithm, Random};
 use crate::window::ReplayWindow;
 use crate::{Config, DtlsCertificate, Error, InternalError, Output, SeededRng};
@@ -134,14 +134,7 @@ pub struct Engine {
     /// The records that have been sent in the current flight.
     flight_saved_records: ArrayVec<Entry, 12>,
 
-    /// Flight backoff
-    flight_backoff: ExponentialBackoff,
-
-    /// Timeout for the current flight
-    flight_timeout: Timeout,
-
-    /// Global timeout for the entire connect operation.
-    connect_timeout: Timeout,
+    timers: HandshakeTimers,
 
     /// Whether we are ready to release application data from poll_output.
     release_app_data: bool,
@@ -188,13 +181,6 @@ struct RecvEpochEntry {
     replay: ReplayWindow,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Timeout {
-    Disabled,
-    Unarmed,
-    Armed(Instant),
-}
-
 #[derive(Debug)]
 struct Entry {
     content_type: ContentType,
@@ -216,8 +202,7 @@ impl Engine {
     pub fn new(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
         let mut rng = SeededRng::new(config.rng_seed());
 
-        let flight_backoff =
-            ExponentialBackoff::new(config.flight_start_rto(), config.flight_retries(), &mut rng);
+        let timers = HandshakeTimers::new(&config, &mut rng);
 
         let signing_key = config
             .crypto_provider()
@@ -261,9 +246,7 @@ impl Engine {
             handshake_ack_deadline: None,
             datagram_sealed: false,
             flight_saved_records: ArrayVec::new(),
-            flight_backoff,
-            flight_timeout: Timeout::Unarmed,
-            connect_timeout: Timeout::Unarmed,
+            timers,
             release_app_data: false,
             exporter_master_secret: None,
             app_send_record_count: 0,
@@ -275,12 +258,20 @@ impl Engine {
         }
     }
 
-    pub fn into_fallback(self) -> (Arc<Config>, DtlsCertificate) {
-        (self.config, self.certificate)
+    pub fn into_fallback(self) -> (Arc<Config>, DtlsCertificate, Timeout) {
+        (
+            self.config,
+            self.certificate,
+            self.timers.handshake_deadline(),
+        )
     }
 
     pub fn set_client(&mut self, is_client: bool) {
         self.is_client = is_client;
+    }
+
+    pub fn start_handshake(&mut self, now: Instant) {
+        self.timers.start_handshake(now);
     }
 
     /// Inject a pre-built hybrid ClientHello into this engine.
@@ -291,9 +282,25 @@ impl Engine {
     /// Sets the transcript, advances the handshake sequence number to 1,
     /// and bumps the epoch-0 record sequence so subsequent records don't
     /// collide.  Does **not** enqueue the record for output — the hybrid
-    /// CH was already transmitted.
-    pub fn inject_hybrid_client_hello(&mut self, transcript_bytes: &[u8]) {
+    /// CH was already transmitted. Retains its outstanding retry state.
+    pub fn inject_hybrid_client_hello(
+        &mut self,
+        transcript_bytes: &[u8],
+        fragment: &[u8],
+        timers: HandshakeTimers,
+    ) {
+        self.timers = timers;
         self.transcript.extend_from_slice(transcript_bytes);
+        let mut saved_fragment = self.pop_buffer();
+        saved_fragment.extend_from_slice(fragment);
+        self.flight_saved_records.push(Entry {
+            content_type: ContentType::Handshake,
+            epoch: 0,
+            send_seq: 0,
+            fragment_len: fragment.len(),
+            fragment: saved_fragment,
+            acked: false,
+        });
         self.next_handshake_seq_no = 1;
         // Advance past the record sequence used by the hybrid CH.
         // Defense-in-depth: guard against epoch-0 sequence overflow.
@@ -347,17 +354,19 @@ impl Engine {
         &mut *self.signing_key
     }
 
-    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), InternalError> {
+    /// Queue a datagram and report whether it contains the first ClientHello fragment.
+    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<bool, InternalError> {
         let cs = self.cipher_suite;
         let incoming = Incoming::parse_packet(packet, self, cs)?;
         if let Some(incoming) = incoming {
-            self.insert_incoming(incoming)?;
+            let is_client_hello = self.insert_incoming(incoming)?;
+            return Ok(is_client_hello);
         }
 
-        Ok(())
+        Ok(false)
     }
 
-    fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
+    fn insert_incoming(&mut self, incoming: Incoming) -> Result<bool, Error> {
         if self.queue_rx.len() >= self.config.max_queue_rx() {
             warn!(
                 "Receive queue full (max {}): {:?}",
@@ -371,11 +380,11 @@ impl Engine {
         if incoming.first().first_handshake().is_some() {
             self.insert_incoming_handshake(incoming)
         } else {
-            self.insert_incoming_non_handshake(incoming)
+            self.insert_incoming_non_handshake(incoming).map(|_| false)
         }
     }
 
-    fn insert_incoming_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
+    fn insert_incoming_handshake(&mut self, incoming: Incoming) -> Result<bool, Error> {
         let first_record = incoming.first();
         let handshake = first_record
             .first_handshake()
@@ -394,10 +403,16 @@ impl Engine {
             .next();
 
         if let Some(dupe_seq) = maybe_dupe_seq {
-            if dupe_seq < self.peer_handshake_seq_no {
-                if let Err(error) = self.flight_resend("dupe triggers resend") {
-                    self.recycle_incoming(incoming);
-                    return Err(error);
+            // Only answer an already processed flight when we have a saved response.
+            if dupe_seq < self.peer_handshake_seq_no && !self.flight_saved_records.is_empty() {
+                // Reserve a resend and advance backoff using the same budget as
+                // timed retries, so duplicates cannot bypass flight_retries.
+                let resend_requested = self.timers.request_resend(&mut self.rng);
+                if resend_requested {
+                    if let Err(error) = self.flight_resend("dupe triggers resend") {
+                        self.recycle_incoming(incoming);
+                        return Err(error);
+                    }
                 }
             }
         }
@@ -405,7 +420,7 @@ impl Engine {
         // Drop old duplicates we've already processed
         if handshake.header.message_seq < self.peer_handshake_seq_no {
             self.recycle_incoming(incoming);
-            return Ok(());
+            return Ok(false);
         }
 
         // Reject new handshakes after initial handshake is complete,
@@ -417,6 +432,10 @@ impl Engine {
             self.recycle_incoming(incoming);
             return Err(Error::RenegotiationAttempt);
         }
+
+        let is_client_hello = first_record.record().sequence.epoch == 0
+            && handshake.header.msg_type == MessageType::ClientHello
+            && handshake.header.message_seq == self.peer_handshake_seq_no;
 
         let search_result = self.queue_rx.binary_search_by(|item| {
             let key_other = item
@@ -480,7 +499,7 @@ impl Engine {
             }
         }
 
-        Ok(())
+        Ok(is_client_hello)
     }
 
     fn insert_incoming_non_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
@@ -511,46 +530,12 @@ impl Engine {
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
-        if self.connect_timeout == Timeout::Unarmed {
-            debug!(
-                "Connect timeout in: {:.03}s",
-                self.config.handshake_timeout().as_secs_f32()
-            );
-            let timeout = now + self.config.handshake_timeout();
-            self.connect_timeout = Timeout::Armed(timeout);
-        }
-        if self.flight_timeout == Timeout::Unarmed {
-            debug!(
-                "Flight timeout in: {:.03}s",
-                self.flight_backoff.rto().as_secs_f32()
-            );
-            let timeout = now + self.flight_backoff.rto();
-            self.flight_timeout = Timeout::Armed(timeout);
-        }
-
-        if let Timeout::Armed(connect_timeout) = self.connect_timeout {
-            if now >= connect_timeout {
-                return Err(Error::Timeout(crate::TimeoutError::Connect));
-            }
-        }
-
-        let Timeout::Armed(flight_timeout) = self.flight_timeout else {
-            return Ok(());
-        };
-
-        if now >= flight_timeout {
-            if self.flight_backoff.can_retry() {
-                self.flight_backoff.attempt(&mut self.rng);
-                debug!(
-                    "Re-arm flight timeout due to resend in {}",
-                    self.flight_backoff.rto().as_secs_f32()
-                );
-                let timeout = now + self.flight_backoff.rto();
-                self.flight_timeout = Timeout::Armed(timeout);
-                self.flight_resend("flight timeout")?;
-            } else {
-                return Err(Error::Timeout(crate::TimeoutError::Handshake));
-            }
+        if self
+            .timers
+            .handle_timeout(now, &mut self.rng)
+            .map_err(Error::Timeout)?
+        {
+            self.flight_resend("flight timeout")?;
         }
 
         // During handshake, schedule/flush ACKs to help peer with selective retransmission
@@ -572,7 +557,13 @@ impl Engine {
         self.maybe_schedule_handshake_ack(now);
 
         match self.poll_packet_tx(buf) {
-            PollOutput::Data(p) => return Output::Packet(p),
+            PollOutput::Data(p) => {
+                if self.is_client {
+                    self.timers.start_handshake(now);
+                }
+                self.timers.flight_sent(now);
+                return Output::Packet(p);
+            }
             PollOutput::BufferTooSmall { needed } => return Output::BufferTooSmall { needed },
             PollOutput::None(_) => {}
         }
@@ -658,26 +649,7 @@ impl Engine {
     }
 
     fn poll_timeout(&self, now: Instant) -> Instant {
-        if self.connect_timeout == Timeout::Disabled
-            && self.flight_timeout == Timeout::Disabled
-            && self.handshake_ack_deadline.is_none()
-        {
-            const DISTANT_FUTURE: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
-            return now + DISTANT_FUTURE;
-        }
-
-        let mut timeout = match (self.connect_timeout, self.flight_timeout) {
-            (Timeout::Armed(c), Timeout::Armed(f)) => {
-                if c < f {
-                    c
-                } else {
-                    f
-                }
-            }
-            (Timeout::Armed(c), _) => c,
-            (_, Timeout::Armed(f)) => f,
-            _ => now + Duration::from_secs(10 * 365 * 24 * 60 * 60),
-        };
+        let mut timeout = self.timers.poll_timeout(now);
 
         if let Some(deadline) = self.handshake_ack_deadline {
             if deadline < timeout {
@@ -690,15 +662,13 @@ impl Engine {
 
     pub fn flight_begin(&mut self, flight_no: u8) {
         debug!("Begin flight {}", flight_no);
-        self.flight_backoff.reset(&mut self.rng);
+        self.timers.begin_flight(&mut self.rng);
         self.flight_clear_resends();
-        self.flight_timeout = Timeout::Unarmed;
     }
 
     pub fn flight_stop_resend_timers(&mut self) {
-        debug!("Stop connect and flight timeouts");
-        self.flight_timeout = Timeout::Disabled;
-        self.connect_timeout = Timeout::Disabled;
+        debug!("Stop flight timeout");
+        self.timers.stop_flight();
     }
 
     fn flight_clear_resends(&mut self) {
@@ -1302,10 +1272,12 @@ impl Engine {
     pub fn release_application_data(&mut self) {
         self.release_app_data = true;
         self.hs_recv_keys = None;
+        self.timers.finish_handshake();
     }
 
     pub fn release_application_data_retaining_handshake_keys(&mut self) {
         self.release_app_data = true;
+        self.timers.finish_handshake();
     }
 
     /// Whether a close_notify alert has been received from the peer.
@@ -1328,8 +1300,7 @@ impl Engine {
     /// allowing the queued close_notify alert to be sent.
     pub fn cancel_flights(&mut self) {
         self.flight_saved_records.clear();
-        self.flight_timeout = Timeout::Disabled;
-        self.connect_timeout = Timeout::Disabled;
+        self.timers.stop();
         self.handshake_ack_deadline = None;
     }
 
@@ -1338,8 +1309,7 @@ impl Engine {
     pub fn abort(&mut self) {
         self.queue_tx.clear();
         self.flight_saved_records.clear();
-        self.flight_timeout = Timeout::Disabled;
-        self.connect_timeout = Timeout::Disabled;
+        self.timers.stop();
         self.handshake_ack_deadline = None;
     }
 
@@ -1428,7 +1398,7 @@ impl Engine {
             .all(|e| e.acked);
         if has_epoch2 && all_epoch2_acked {
             debug!("Handshake flight ACKed; stopping retransmission");
-            self.flight_timeout = Timeout::Disabled;
+            self.timers.stop_flight();
             self.flight_clear_resends();
         }
 
@@ -1443,7 +1413,7 @@ impl Engine {
             self.prev_app_send_keys = None;
             self.key_update_in_flight = false;
             self.flight_clear_resends();
-            self.flight_timeout = Timeout::Disabled;
+            self.timers.stop_flight();
         }
 
         Ok(())
@@ -1574,15 +1544,10 @@ impl Engine {
         let delay = if self.has_gap_in_incoming_handshake() {
             Duration::from_millis(0)
         } else {
-            let rto = self.flight_backoff.rto();
-            if rto > Duration::from_millis(0) {
-                rto / 4
-            } else {
-                Duration::from_millis(0)
-            }
+            self.timers.rto() / 4
         };
 
-        self.handshake_ack_deadline = Some(now + delay);
+        self.handshake_ack_deadline = Some(deadline(now, delay));
     }
 
     /// Flush a scheduled handshake ACK if the deadline has passed.
@@ -1965,9 +1930,8 @@ impl Engine {
     /// the current app epoch. Send keys rotate only after its ACK arrives.
     pub fn create_key_update(&mut self, request: KeyUpdateRequest) -> Result<(), Error> {
         // Set up retransmission
-        self.flight_backoff.reset(&mut self.rng);
+        self.timers.begin_flight(&mut self.rng);
         self.flight_clear_resends();
-        self.flight_timeout = Timeout::Unarmed;
 
         let msg_seq = self.next_handshake_seq_no;
         self.next_handshake_seq_no += 1;
@@ -2618,6 +2582,42 @@ mod tests {
         Engine::new(config, cert)
     }
 
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn timing_resend_queue_failure_is_fatal() {
+        let now = Instant::now();
+        let certificate = generate_self_signed_certificate().expect("certificate");
+        let config = Arc::new(
+            Config::builder()
+                .dangerously_set_rng_seed(42)
+                .build()
+                .expect("valid config"),
+        );
+        let mut engine = Engine::new(config, certificate);
+        engine.flight_begin(1);
+        engine
+            .create_plaintext_record(ContentType::Handshake, true, |fragment| fragment.push(1))
+            .expect("queue original flight");
+        let mut buffer = [0; 64];
+        assert!(matches!(
+            engine.poll_output(&mut buffer, now),
+            Output::Packet(_)
+        ));
+        let Output::Timeout(retry_at) = engine.poll_output(&mut buffer, now) else {
+            panic!("expected flight timer");
+        };
+        engine.config = Arc::new(
+            Config::builder()
+                .max_queue_tx(0)
+                .build()
+                .expect("inject exhausted transmit capacity"),
+        );
+        assert_eq!(
+            engine.handle_timeout(retry_at),
+            Err(Error::TransmitQueueFull)
+        );
+    }
+
     #[derive(Default)]
     struct PassthroughRecordHandler {
         buffers: BufferPool,
@@ -3047,7 +3047,7 @@ mod tests {
             .map(|entry| entry.acked)
             .collect();
         assert_eq!(acked, [true, true, false]);
-        assert_ne!(engine.flight_timeout, Timeout::Disabled);
+        assert!(engine.timers.poll_timeout(now) < now + Duration::from_secs(60));
 
         let next_seq = engine.hs_send_seq;
         engine
@@ -3064,7 +3064,7 @@ mod tests {
             .process_ack(&ack_for(&[(2, 5)]))
             .expect("intermediate ACK");
         assert!(engine.flight_saved_records.is_empty());
-        assert_eq!(engine.flight_timeout, Timeout::Disabled);
+        assert!(engine.timers.poll_timeout(now) > now + Duration::from_secs(60));
     }
 
     #[cfg(feature = "rcgen")]
@@ -3132,7 +3132,6 @@ mod tests {
             4,
             "ACK must rotate send keys exactly once"
         );
-        assert_eq!(sender.flight_timeout, Timeout::Disabled);
         assert!(sender.flight_saved_records.is_empty());
         let future = now + Duration::from_secs(120);
         sender.handle_timeout(future).expect("stay connected");
@@ -3210,7 +3209,7 @@ mod tests {
             .process_ack(&ack_for(&[(2, next_seq)]))
             .expect("ACK remaining record");
         assert!(engine.flight_saved_records.is_empty());
-        assert_eq!(engine.flight_timeout, Timeout::Disabled);
+        assert!(engine.timers.poll_timeout(now) > now + Duration::from_secs(60));
     }
 
     #[test]

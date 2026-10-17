@@ -34,6 +34,7 @@ use crate::dtls12::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgor
 use crate::dtls12::message::{MessageType, NamedGroup, NamedGroupVec, ProtocolVersion, Random};
 use crate::dtls12::message::{ServerHello, SessionId, SignatureAlgorithm};
 use crate::dtls12::message::{SignatureAndHashAlgorithmVec, SrtpProfileId};
+use crate::timer::Timeout;
 use crate::{Config, Error, InternalError, Output};
 
 /// Length of the random dummy PSK used when identity resolution fails.
@@ -184,6 +185,10 @@ impl Server {
         Client::new_with_engine(self.engine, self.last_now)
     }
 
+    pub fn set_handshake_deadline(&mut self, deadline: Timeout) {
+        self.engine.set_handshake_deadline(deadline);
+    }
+
     pub(crate) fn state_name(&self) -> &'static str {
         self.state.name()
     }
@@ -202,8 +207,12 @@ impl Server {
         match self
             .engine
             .parse_packet(packet)
-            .and_then(|_| self.make_progress())
-        {
+            .and_then(|is_client_hello| {
+                if is_client_hello {
+                    self.engine.start_handshake(self.last_now);
+                }
+                self.make_progress()
+            }) {
             Ok(()) => Ok(()),
             Err(e) => e.into_public_error().map_or(Ok(()), Err),
         }

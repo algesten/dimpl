@@ -96,6 +96,15 @@ impl Handshake {
         let original_input = input;
         let (input, header) = Self::parse_header(input)?;
 
+        let fragment_end = header.fragment_offset + header.fragment_length;
+        let fragment_out_of_bounds = fragment_end > header.length;
+        let empty_client_hello_fragment =
+            header.msg_type == MessageType::ClientHello && header.fragment_length == 0;
+
+        if fragment_out_of_bounds || empty_client_hello_fragment {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
+
         let is_fragment = header.fragment_offset > 0 || header.fragment_length < header.length;
 
         if !as_fragment && is_fragment {
@@ -538,6 +547,7 @@ mod tests {
     use arrayvec::ArrayVec;
 
     use super::*;
+
     use crate::buffer::Buf;
     use crate::dtls13::message::{CompressionMethod, Cookie, Dtls13CipherSuite};
     use crate::dtls13::message::{ProtocolVersion, Random, SessionId};
@@ -1019,5 +1029,28 @@ mod tests {
         assert!(result.is_err());
         assert!(handshake.is_handled());
         assert!(transcript.is_empty());
+    }
+
+    #[test]
+    fn parse_rejects_invalid_client_hello_fragments() {
+        for (length, offset, fragment_length, valid) in [
+            (4u32, 3u32, 2u32, false), // extends past the message
+            (4, 0, 0, false),          // empty fragment
+            (0, 0, 0, false),          // empty ClientHello
+            (4, 2, 2, true),           // later fragment can arrive first
+            (1, 0, 1, true),           // body validity is decided after reassembly
+        ] {
+            let mut packet = vec![MessageType::ClientHello.as_u8()];
+            packet.extend_from_slice(&length.to_be_bytes()[1..]);
+            packet.extend_from_slice(&0u16.to_be_bytes());
+            packet.extend_from_slice(&offset.to_be_bytes()[1..]);
+            packet.extend_from_slice(&fragment_length.to_be_bytes()[1..]);
+            packet.resize(packet.len() + fragment_length as usize, 0);
+            assert_eq!(
+                Handshake::parse(&packet, 0, None, true).is_ok(),
+                valid,
+                "length={length}, offset={offset}, fragment_length={fragment_length}"
+            );
+        }
     }
 }

@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Start handshake clocks at ClientHello and honor timing settings consistently #162
   * Update OpenSSL test dependency to resolve security advisories #176
   * Remove `HandshakePending`. All errors are fatal. #175
   * Return accepted byte counts from `send_application_data` #175

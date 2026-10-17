@@ -63,6 +63,7 @@ use crate::dtls13::message::SignatureScheme;
 use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
 use crate::dtls13::message::parse_cookie_extension;
+use crate::timer::Timeout;
 use crate::{Config, DtlsCertificate, Error, InternalError, Output};
 
 /// Magic random value indicating HelloRetryRequest (RFC 8446 Section 4.1.3).
@@ -226,9 +227,17 @@ impl Server {
     ///
     /// 1. Switching a server pending (auto-mode) to dtls12 server
     /// 2. set_active(true), turning a server pending (auto-mode) to a ClientPending
-    pub fn into_parts(self) -> (Arc<Config>, DtlsCertificate, Instant, VecDeque<Buf>) {
-        let (config, cert) = self.engine.into_fallback();
-        (config, cert, self.last_now, self.retained_hello)
+    pub fn into_parts(
+        self,
+    ) -> (
+        Arc<Config>,
+        DtlsCertificate,
+        Instant,
+        VecDeque<Buf>,
+        Timeout,
+    ) {
+        let (config, cert, deadline) = self.engine.into_fallback();
+        (config, cert, self.last_now, self.retained_hello, deadline)
     }
 
     pub(crate) fn state_name(&self) -> &'static str {
@@ -264,8 +273,12 @@ impl Server {
         match self
             .engine
             .parse_packet(packet)
-            .and_then(|_| self.make_progress())
-        {
+            .and_then(|is_client_hello| {
+                if is_client_hello {
+                    self.engine.start_handshake(self.last_now);
+                }
+                self.make_progress()
+            }) {
             Ok(()) => {}
             Err(e) => {
                 if let Some(err) = e.into_public_error() {
@@ -1537,7 +1550,7 @@ mod tests {
             ));
         }
 
-        let (_, _, _, retained) = server.into_parts();
+        let (_, _, _, retained, _) = server.into_parts();
         assert_eq!(
             retained.len(),
             1,
