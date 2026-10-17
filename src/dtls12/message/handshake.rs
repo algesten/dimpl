@@ -104,10 +104,12 @@ impl Handshake {
         let original_input = input;
         let (input, header) = Self::parse_header(input)?;
 
-        // Fragment bounds belong to framing; body validation follows reassembly.
-        if header.fragment_offset + header.fragment_length > header.length
-            || (header.msg_type == MessageType::ClientHello && header.fragment_length == 0)
-        {
+        let fragment_end = header.fragment_offset + header.fragment_length;
+        let fragment_out_of_bounds = fragment_end > header.length;
+        let empty_client_hello_fragment =
+            header.msg_type == MessageType::ClientHello && header.fragment_length == 0;
+
+        if fragment_out_of_bounds || empty_client_hello_fragment {
             return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
         }
 
