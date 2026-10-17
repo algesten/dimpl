@@ -12,7 +12,6 @@ use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolV
 use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
 use crate::error::bounded_error_len;
 use crate::timer::{HandshakeTimers, Timeout, deadline};
-use crate::util::accepts_client_hello_fragment;
 use crate::window::ReplayWindow;
 use crate::{Config, Error, InternalError, Output, SeededRng};
 
@@ -172,14 +171,8 @@ impl Engine {
         self.timers.set_handshake_deadline(deadline);
     }
 
-    pub fn awaiting_initial_client_hello(&self) -> bool {
-        self.peer_handshake_seq_no == 0
-    }
-
-    /// Allow a corrected initial hello without resetting this peer's deadline.
-    pub fn discard_initial_client_hello(&mut self) {
-        self.peer_handshake_seq_no = 0;
-        self.transcript.clear();
+    pub fn start_handshake(&mut self, now: Instant) {
+        self.timers.start_handshake(now);
     }
 
     /// Restore an already emitted hybrid ClientHello and its outstanding timers.
@@ -230,47 +223,27 @@ impl Engine {
         &mut self.crypto_context
     }
 
-    pub fn handle_packet(&mut self, packet: &[u8], now: Instant) -> Result<(), InternalError> {
-        self.parse_packet(packet)?;
-        if !self.is_client
-            && self.timers.handshake_deadline() == Timeout::Unarmed
-            && self
-                .queue_rx
-                .iter()
-                .flat_map(|incoming| incoming.records().iter())
-                .any(|record| {
-                    record.record().sequence.epoch == 0
-                        && record.handshakes().iter().any(|handshake| {
-                            let header = &handshake.header;
-                            match &handshake.body {
-                                Body::Fragment(_)
-                                    if header.msg_type == MessageType::ClientHello
-                                        && header.message_seq == self.peer_handshake_seq_no =>
-                                {
-                                    accepts_client_hello_fragment(
-                                        header.length,
-                                        header.fragment_offset,
-                                        header.fragment_length,
-                                    )
-                                }
-                                _ => false,
-                            }
-                        })
-                })
-        {
-            self.timers.start_handshake(now);
-        }
-        Ok(())
-    }
-
-    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), InternalError> {
+    /// Queue a datagram and report whether it contains the first ClientHello fragment.
+    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<bool, InternalError> {
         let cs = self.cipher_suite;
-        let incoming = Incoming::parse_packet(packet, self, cs)?;
-        if let Some(incoming) = incoming {
-            self.insert_incoming(incoming)?;
-        }
-
-        Ok(())
+        let Some(incoming) = Incoming::parse_packet(packet, self, cs)? else {
+            return Ok(false);
+        };
+        let client_hello = !self.is_client
+            && self.timers.handshake_deadline() == Timeout::Unarmed
+            && incoming.records().iter().any(|record| {
+                record.record().sequence.epoch == 0
+                    && record.handshakes().iter().any(|handshake| {
+                        let h = &handshake.header;
+                        h.msg_type == MessageType::ClientHello
+                            && h.message_seq == 0
+                            && h.length >= 42
+                            && h.fragment_length > 0
+                            && h.fragment_offset + h.fragment_length <= h.length
+                    })
+            });
+        self.insert_incoming(incoming)?;
+        Ok(client_hello)
     }
 
     /// Insert a parsed datagram into the receive queue.

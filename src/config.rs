@@ -150,23 +150,20 @@ impl Config {
 
     /// Time of first retry.
     ///
-    /// See [`ConfigBuilder::flight_start_rto`] for the backoff policy.
+    /// Every flight restarts with this value.
+    /// Doubled for every retry with a ±25% jitter.
     #[inline(always)]
     pub fn flight_start_rto(&self) -> Duration {
         self.flight_start_rto
     }
 
     /// Max number of retries per flight.
-    ///
-    /// Excludes the initial transmission. Also applies to DTLS 1.3 KeyUpdate.
     #[inline(always)]
     pub fn flight_retries(&self) -> usize {
         self.flight_retries
     }
 
     /// Timeout for the entire handshake, regardless of flights.
-    ///
-    /// See [`ConfigBuilder::handshake_timeout`] for the clock-start events.
     #[inline(always)]
     pub fn handshake_timeout(&self) -> Duration {
         self.handshake_timeout
@@ -398,8 +395,8 @@ impl ConfigBuilder {
     /// [`crate::Output::Packet`], or when the server accepts its first
     /// structurally valid ClientHello fragment, even if its body is later rejected.
     /// A corrected ClientHello shares the same deadline for this peer.
-    /// Construction and idle time do not consume this
-    /// budget. Uses the logical time supplied to [`crate::Dtls::handle_timeout`].
+    /// Construction and idle time consume no budget. Uses the logical time
+    /// supplied to [`crate::Dtls::handle_timeout`].
     ///
     /// The absolute deadline survives Auto version selection, cookie exchanges,
     /// later flights, and retransmissions. It is disabled after completion and

@@ -827,12 +827,6 @@ fn zero_retry_servers_answer_every_retransmitted_final_flight() {
                 "{client_version:?} -> {server_version:?}, round {round}"
             );
         }
-        if server.protocol_version() == Some(ProtocolVersion::DTLS1_3) {
-            // DTLS 1.3 resends its original ACK, whose record numbers no longer
-            // match the client's retransmitted records, so only the server's
-            // answer is checked here.
-            continue;
-        }
         for packet in &answer {
             client.handle_packet(packet).expect("final flight answer");
             client_connected |= drain_outputs(&mut client).connected;
@@ -1020,68 +1014,6 @@ fn auto_handoff_preserves_outstanding_flight_retries() {
             );
         }
     }
-}
-
-#[test]
-fn auto_handoffs_after_a_timeout_error_keep_the_endpoint_usable() {
-    let base = Instant::now();
-    let certificate = generate_self_signed_certificate().expect("certificate");
-    let connect_timeout = Err(Error::Timeout(TimeoutError::Connect));
-    for (peer_version, expected_version) in [
-        (Version::Dtls12, ProtocolVersion::DTLS1_2),
-        (Version::Dtls13, ProtocolVersion::DTLS1_3),
-    ] {
-        let mut client = Version::Auto.endpoint(config(), certificate.clone(), base);
-        client.set_active(true);
-        client.handle_timeout(base).expect("client clock");
-        let (hello, deadline) = drain(&mut client);
-        let mut server = peer_version.endpoint(config(), certificate.clone(), base);
-        server.handle_timeout(base).expect("server clock");
-        drain(&mut server);
-        let mut responses = Vec::new();
-        for packet in &hello {
-            server.handle_packet(packet).expect("hybrid ClientHello");
-            responses.extend(drain(&mut server).0);
-        }
-        assert_eq!(client.handle_timeout(deadline), connect_timeout);
-        // Contract violation: keep driving the failed pending client.
-        assert_eq!(client.handle_packet(&responses[0]), connect_timeout);
-        assert_eq!(client.protocol_version(), Some(expected_version));
-        assert_eq!(drain(&mut client), (Vec::new(), deadline));
-        assert_eq!(client.handle_timeout(deadline), connect_timeout);
-    }
-
-    let fragmented = Arc::new(
-        Config::builder()
-            .dangerously_set_rng_seed(42)
-            .mtu(64)
-            .handshake_timeout(BUDGET)
-            .flight_start_rto(LONG_RTO)
-            .build()
-            .expect("fragmented configuration"),
-    );
-    let mut client = Version::Dtls12.endpoint(fragmented.clone(), certificate.clone(), base);
-    client.set_active(true);
-    client.handle_timeout(base).expect("client clock");
-    let (fragments, _) = drain(&mut client);
-    let (last, first) = fragments.split_last().expect("fragmented ClientHello");
-    assert!(!first.is_empty());
-    let mut server = Version::Auto.endpoint(fragmented, certificate.clone(), base);
-    server.handle_timeout(base).expect("server clock");
-    drain(&mut server);
-    server.handle_packet(&first[0]).expect("first fragment");
-    let deadline = drain(&mut server).1;
-    assert_eq!(server.handle_timeout(deadline), connect_timeout);
-    // Contract violation: complete the ClientHello on the failed server.
-    for fragment in &first[1..] {
-        server
-            .handle_packet(fragment)
-            .expect("incomplete ClientHello");
-    }
-    assert_eq!(server.handle_packet(last), connect_timeout);
-    assert_eq!(server.protocol_version(), Some(ProtocolVersion::DTLS1_2));
-    assert_eq!(drain(&mut server), (Vec::new(), deadline));
-    assert_eq!(server.handle_timeout(deadline), connect_timeout);
 }
 
 #[test]

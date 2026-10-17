@@ -2,16 +2,6 @@ use arrayvec::ArrayVec;
 use nom::error::{ErrorKind, ParseError, make_error};
 use nom::{Err, IResult, Input, Parser};
 
-/// Check the structural bounds of a ClientHello fragment's 24-bit fields.
-/// Body validation does not affect when this peer's handshake attempt starts.
-pub fn accepts_client_hello_fragment(
-    length: u32,
-    fragment_offset: u32,
-    fragment_length: u32,
-) -> bool {
-    length >= 42 && fragment_length > 0 && fragment_offset + fragment_length <= length
-}
-
 /// A combinator that parses items using the provided parser but only collects
 /// items that pass a filter predicate. Allows zero matches.
 #[inline(always)]
@@ -125,41 +115,5 @@ where
         }
 
         Ok((input.take_from(bound), res))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn client_hello_fragment_bounds() {
-        for (length, offset, fragment_length) in [
-            (0, 0, 0),
-            (41, 0, 41),
-            (42, 0, 0),
-            (42, 42, 1),
-            (42, 1, 42),
-            (0x00ff_ffff, 0x00ff_ffff, 0x00ff_ffff),
-        ] {
-            assert!(!accepts_client_hello_fragment(
-                length,
-                offset,
-                fragment_length
-            ));
-        }
-        for (length, offset, fragment_length) in [
-            (42, 0, 42),
-            (42, 0, 1),
-            (42, 41, 1),
-            (84, 21, 42),
-            (0x00ff_ffff, 0x00ff_fffe, 1),
-        ] {
-            assert!(accepts_client_hello_fragment(
-                length,
-                offset,
-                fragment_length
-            ));
-        }
     }
 }

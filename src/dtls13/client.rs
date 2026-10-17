@@ -168,9 +168,6 @@ impl Client {
     /// number is advanced to 1 (one CH has been sent). The hybrid CH was
     /// already sent on the wire by `ClientPending`, so no record is
     /// enqueued for output.
-    ///
-    /// The inherited timers may already have expired, so the caller drives
-    /// the first `handle_timeout` once it owns the client.
     pub(crate) fn new_from_hybrid(
         hybrid: crate::auto::HybridClientHello,
         config: std::sync::Arc<crate::Config>,
@@ -238,7 +235,7 @@ impl Client {
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         match self
             .engine
-            .handle_packet(packet, self.last_now)
+            .parse_packet(packet)
             .and_then(|_| self.make_progress())
         {
             Ok(()) => Ok(()),

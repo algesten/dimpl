@@ -747,10 +747,7 @@ impl Dtls {
                 );
                 // Feed the HVR to Client12 — it enters
                 // AwaitHelloVerifyRequest and processes the cookie.
-                if let Err(e) = client12
-                    .handle_timeout(now)
-                    .and_then(|_| client12.handle_packet(packet))
-                {
+                if let Err(e) = client12.handle_packet(packet) {
                     self.inner = Some(Inner::Client12(client12));
                     return Err(e);
                 }
@@ -760,10 +757,7 @@ impl Dtls {
             auto::DetectedVersion::Dtls13 => {
                 let mut client13 =
                     Client13::new_from_hybrid(hybrid, config, certificate, now, timers);
-                if let Err(e) = client13
-                    .handle_timeout(now)
-                    .and_then(|_| client13.handle_packet(packet))
-                {
+                if let Err(e) = client13.handle_packet(packet) {
                     self.inner = Some(Inner::Client13(client13));
                     return Err(e);
                 }
@@ -800,8 +794,9 @@ impl Dtls {
             Server12::new(config, cert, now)
         };
         server12.set_handshake_deadline(deadline);
+        server12.handle_timeout(now)?;
+
         self.inner = Some(Inner::Server12(server12));
-        self.handle_timeout(now)?;
 
         for p in &buffered {
             self.handle_packet(p)?;
@@ -811,14 +806,10 @@ impl Dtls {
 
     /// Poll for pending output from the DTLS engine.
     ///
-    /// A client's overall handshake deadline starts when the first ClientHello
-    /// packet (or fragment) is returned as [`Output::Packet`], using the latest
-    /// logical time supplied to [`Self::handle_timeout`]. Refresh that time
-    /// before polling if time has advanced. Queuing a packet internally or
-    /// returning [`Output::BufferTooSmall`] does not start the deadline.
-    ///
-    /// Emission is the Sans-IO send boundary, not a socket-write timestamp.
-    /// Any subsequent caller-side queuing or transport delay is outside dimpl.
+    /// Emitting the first ClientHello fragment starts the client's handshake
+    /// deadline; queuing output or returning [`Output::BufferTooSmall`] does not.
+    /// Uses the logical time from [`Self::handle_timeout`]; refresh it first if
+    /// time has advanced. Caller-side transport delays are outside dimpl.
     /// Continue polling until [`Output::Timeout`].
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
         match self.inner.as_mut().unwrap() {
@@ -832,15 +823,11 @@ impl Dtls {
 
     /// Handle time-based events such as retransmission timers.
     ///
-    /// Also advances the logical clock used by subsequent send/receive calls;
-    /// it may be called before an advertised timeout. Advancing time alone does
-    /// not activate the overall handshake timer or an unsent flight's retry
-    /// timer. Supply monotonically increasing instants and poll until
-    /// [`Output::Timeout`] after driving the endpoint.
-    ///
-    /// The overall deadline is absolute across flights and Auto version
-    /// transitions. Retry exhaustion can fail earlier. Timeout errors are
-    /// terminal: stop driving the failed instance.
+    /// Advances the logical clock for subsequent operations, even when no timer
+    /// is due. Time alone does not start handshake or unsent-flight timers.
+    /// Supply monotonically increasing instants and poll until [`Output::Timeout`]
+    /// after each mutation. See [`ConfigBuilder::handshake_timeout`] for the
+    /// overall deadline and retry policy.
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         match self.inner.as_mut().unwrap() {
             Inner::Client12(client) => client.handle_timeout(now),

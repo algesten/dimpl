@@ -260,7 +260,6 @@ impl Server {
             return Ok(());
         }
 
-        let initial_client_hello = self.engine.awaiting_initial_client_hello();
         // In auto-sense mode, buffer raw packets while still waiting for
         // the ClientHello so they can be replayed to Server12 on fallback.
         if self.auto_mode && self.state == State::AwaitClientHello {
@@ -271,19 +270,16 @@ impl Server {
             self.retained_hello.push_back(packet.to_buf());
         }
 
-        match self
-            .engine
-            .handle_packet(packet, self.last_now)
-            .and_then(|_| self.make_progress())
-        {
+        match self.engine.parse_packet(packet).and_then(|client_hello| {
+            if client_hello {
+                self.engine.start_handshake(self.last_now);
+            }
+            self.make_progress()
+        }) {
             Ok(()) => {}
             Err(e) => {
                 if let Some(err) = e.into_public_error() {
                     return Err(err);
-                }
-                if initial_client_hello && self.state == State::AwaitClientHello {
-                    self.engine.discard_initial_client_hello();
-                    self.retained_hello.clear();
                 }
                 return Ok(());
             }
@@ -1551,7 +1547,7 @@ mod tests {
             ));
         }
 
-        let (_, _, _, retained) = server.into_parts();
+        let (_, _, _, retained, _) = server.into_parts();
         assert_eq!(
             retained.len(),
             1,

@@ -124,9 +124,6 @@ impl Client {
     ///
     /// If the server does send HVR, `reset_client_for_hello_verify_request`
     /// clears the transcript anyway, so the injected bytes are harmless.
-    ///
-    /// The inherited timers may already have expired, so the caller drives
-    /// the first `handle_timeout` once it owns the client.
     pub(crate) fn new_from_hybrid(
         random: Random,
         handshake_fragment: &[u8],
@@ -198,7 +195,7 @@ impl Client {
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         match self
             .engine
-            .handle_packet(packet, self.last_now)
+            .parse_packet(packet)
             .and_then(|_| self.make_progress())
         {
             Ok(()) => Ok(()),

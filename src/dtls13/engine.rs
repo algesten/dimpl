@@ -27,7 +27,6 @@ use crate::dtls13::message::MessageType;
 use crate::dtls13::message::Sequence;
 use crate::timer::{HandshakeTimers, Timeout, deadline};
 use crate::types::{HashAlgorithm, Random};
-use crate::util::accepts_client_hello_fragment;
 use crate::window::ReplayWindow;
 use crate::{Config, DtlsCertificate, Error, InternalError, Output, SeededRng};
 
@@ -271,14 +270,8 @@ impl Engine {
         self.is_client = is_client;
     }
 
-    pub fn awaiting_initial_client_hello(&self) -> bool {
-        self.peer_handshake_seq_no == 0
-    }
-
-    /// Allow a corrected initial hello without resetting this peer's deadline.
-    pub fn discard_initial_client_hello(&mut self) {
-        self.peer_handshake_seq_no = 0;
-        self.transcript.clear();
+    pub fn start_handshake(&mut self, now: Instant) {
+        self.timers.start_handshake(now);
     }
 
     /// Inject a pre-built hybrid ClientHello into this engine.
@@ -304,6 +297,7 @@ impl Engine {
             content_type: ContentType::Handshake,
             epoch: 0,
             send_seq: 0,
+            fragment_len: fragment.len(),
             fragment: saved_fragment,
             acked: false,
         });
@@ -360,47 +354,27 @@ impl Engine {
         &mut *self.signing_key
     }
 
-    pub fn handle_packet(&mut self, packet: &[u8], now: Instant) -> Result<(), InternalError> {
-        self.parse_packet(packet)?;
-        if !self.is_client
-            && self.timers.handshake_deadline() == Timeout::Unarmed
-            && self
-                .queue_rx
-                .iter()
-                .flat_map(|incoming| incoming.records().iter())
-                .any(|record| {
-                    record.record().sequence.epoch == 0
-                        && record.handshakes().iter().any(|handshake| {
-                            let header = &handshake.header;
-                            match &handshake.body {
-                                Body::Fragment(_)
-                                    if header.msg_type == MessageType::ClientHello
-                                        && header.message_seq == self.peer_handshake_seq_no =>
-                                {
-                                    accepts_client_hello_fragment(
-                                        header.length,
-                                        header.fragment_offset,
-                                        header.fragment_length,
-                                    )
-                                }
-                                _ => false,
-                            }
-                        })
-                })
-        {
-            self.timers.start_handshake(now);
-        }
-        Ok(())
-    }
-
-    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<(), InternalError> {
+    /// Queue a datagram and report whether it contains the first ClientHello fragment.
+    pub fn parse_packet(&mut self, packet: &[u8]) -> Result<bool, InternalError> {
         let cs = self.cipher_suite;
-        let incoming = Incoming::parse_packet(packet, self, cs)?;
-        if let Some(incoming) = incoming {
-            self.insert_incoming(incoming)?;
-        }
-
-        Ok(())
+        let Some(incoming) = Incoming::parse_packet(packet, self, cs)? else {
+            return Ok(false);
+        };
+        let client_hello = !self.is_client
+            && self.timers.handshake_deadline() == Timeout::Unarmed
+            && incoming.records().iter().any(|record| {
+                record.record().sequence.epoch == 0
+                    && record.handshakes().iter().any(|handshake| {
+                        let h = &handshake.header;
+                        h.msg_type == MessageType::ClientHello
+                            && h.message_seq == 0
+                            && h.length >= 42
+                            && h.fragment_length > 0
+                            && h.fragment_offset + h.fragment_length <= h.length
+                    })
+            });
+        self.insert_incoming(incoming)?;
+        Ok(client_hello)
     }
 
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
@@ -3077,7 +3051,7 @@ mod tests {
             .map(|entry| entry.acked)
             .collect();
         assert_eq!(acked, [true, true, false]);
-        assert_ne!(engine.flight_timeout, Timeout::Disabled);
+        assert!(engine.timers.poll_timeout(now) < now + Duration::from_secs(60));
 
         let next_seq = engine.hs_send_seq;
         engine
@@ -3094,7 +3068,7 @@ mod tests {
             .process_ack(&ack_for(&[(2, 5)]))
             .expect("intermediate ACK");
         assert!(engine.flight_saved_records.is_empty());
-        assert_eq!(engine.flight_timeout, Timeout::Disabled);
+        assert!(engine.timers.poll_timeout(now) > now + Duration::from_secs(60));
     }
 
     #[cfg(feature = "rcgen")]
@@ -3162,7 +3136,6 @@ mod tests {
             4,
             "ACK must rotate send keys exactly once"
         );
-        assert_eq!(sender.flight_timeout, Timeout::Disabled);
         assert!(sender.flight_saved_records.is_empty());
         let future = now + Duration::from_secs(120);
         sender.handle_timeout(future).expect("stay connected");
@@ -3240,7 +3213,7 @@ mod tests {
             .process_ack(&ack_for(&[(2, next_seq)]))
             .expect("ACK remaining record");
         assert!(engine.flight_saved_records.is_empty());
-        assert_eq!(engine.flight_timeout, Timeout::Disabled);
+        assert!(engine.timers.poll_timeout(now) > now + Duration::from_secs(60));
     }
 
     #[test]

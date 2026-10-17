@@ -204,22 +204,14 @@ impl Server {
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        let initial_client_hello = self.engine.awaiting_initial_client_hello();
-        match self
-            .engine
-            .handle_packet(packet, self.last_now)
-            .and_then(|_| self.make_progress())
-        {
+        match self.engine.parse_packet(packet).and_then(|client_hello| {
+            if client_hello {
+                self.engine.start_handshake(self.last_now);
+            }
+            self.make_progress()
+        }) {
             Ok(()) => Ok(()),
-            Err(error) => match error.into_public_error() {
-                Some(error) => Err(error),
-                None => {
-                    if initial_client_hello && self.state == State::AwaitClientHello {
-                        self.engine.discard_initial_client_hello();
-                    }
-                    Ok(())
-                }
-            },
+            Err(e) => e.into_public_error().map_or(Ok(()), Err),
         }
     }
 

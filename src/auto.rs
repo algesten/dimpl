@@ -320,9 +320,6 @@ impl ClientPending {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
-        if self.closed {
-            return Output::Timeout(self.last_now + Duration::from_secs(10 * 365 * 24 * 60 * 60));
-        }
         if self.needs_send {
             let len = self.wire_packet.len();
             if buf.len() < len {
