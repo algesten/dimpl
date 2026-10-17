@@ -248,8 +248,12 @@ impl Handshake {
             return Err(crate::InternalError::parse_incomplete());
         }
 
-        // ClientHello parsing includes known extension payloads, so malformed
-        // payloads are discarded before committing handshake state.
+        // Parsing boundary: Body::parse and its callees must perform all
+        // structural validation, including extension payloads, before returning
+        // success. Below we consume the message and append it to the transcript;
+        // deferring parsing-level checks to state handlers would commit malformed
+        // input and poison the transcript for a corrected retransmission.
+        // Negotiation and cryptographic verification belong in the state handlers.
         mark_handled(handled);
 
         // If transcript is provided, write the TLS 1.3-style header + body after parsing succeeds.
