@@ -557,7 +557,10 @@ impl State {
             .into());
         }
 
-        debug!("Received ServerHello");
+        debug!(
+            "Received ServerHello with cipher suite: {:?}",
+            server_hello.cipher_suite
+        );
 
         // Validate cipher suite
         let cs = server_hello.cipher_suite;
@@ -824,7 +827,7 @@ impl State {
             sig_alg,
         )?;
 
-        trace!("Server CertificateVerify verified");
+        trace!("Server CertificateVerify verified: {:?}", scheme);
 
         client.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitFinished)
