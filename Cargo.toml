@@ -77,7 +77,7 @@ x25519-dalek = { version = "2", optional = true, features = ["static_secrets"] }
 rcgen = { version = "0.14.7", default-features = false, features = ["aws_lc_rs"], optional = true }
 
 [dev-dependencies]
-openssl = { version = "0.10.75", features = ["vendored"] }
+openssl = { version = "0.10.80", features = ["vendored"] }
 libc = "0.2"
 env_logger = "0.11.9"
 x509-parser = "0.18"
