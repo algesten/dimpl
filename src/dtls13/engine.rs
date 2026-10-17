@@ -360,18 +360,22 @@ impl Engine {
         let Some(incoming) = Incoming::parse_packet(packet, self, cs)? else {
             return Ok(false);
         };
-        let client_hello = !self.is_client
-            && self.timers.handshake_deadline() == Timeout::Unarmed
-            && incoming.records().iter().any(|record| {
-                record.record().sequence.epoch == 0
-                    && record.handshakes().iter().any(|handshake| {
-                        let h = &handshake.header;
-                        h.msg_type == MessageType::ClientHello
-                            && h.message_seq == 0
-                            && h.length >= 42
-                            && h.fragment_length > 0
-                            && h.fragment_offset + h.fragment_length <= h.length
-                    })
+        if self.is_client || self.timers.handshake_deadline() != Timeout::Unarmed {
+            self.insert_incoming(incoming)?;
+            return Ok(false);
+        }
+        let client_hello = incoming
+            .records()
+            .iter()
+            .filter(|record| record.record().sequence.epoch == 0)
+            .flat_map(|record| record.handshakes())
+            .any(|handshake| {
+                let h = &handshake.header;
+                h.msg_type == MessageType::ClientHello
+                    && h.message_seq == 0
+                    && h.length >= 42
+                    && h.fragment_length > 0
+                    && h.fragment_offset + h.fragment_length <= h.length
             });
         self.insert_incoming(incoming)?;
         Ok(client_hello)
