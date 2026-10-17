@@ -359,13 +359,17 @@ impl ClientPending {
         Instant,
         HandshakeTimers,
     ) {
-        (
-            self.hybrid,
-            self.config,
-            self.certificate,
-            self.last_now,
-            self.timers,
-        )
+        // Bind the fields first: CodeQL treats a tuple holding `self.certificate`
+        // directly as sensitive data and taints every element, including `config`.
+        let Self {
+            hybrid,
+            config,
+            certificate,
+            last_now,
+            timers,
+            ..
+        } = self;
+        (hybrid, config, certificate, last_now, timers)
     }
 }
 
