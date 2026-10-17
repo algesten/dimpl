@@ -1,5 +1,8 @@
+use super::parse_cookie_extension;
 use super::{CompressionMethod, Dtls13CipherSuite, ProtocolVersion};
 use super::{Cookie, Extension, Random, SessionId};
+use super::{ExtensionType, KeyShareClientHello, SignatureAlgorithmsExtension};
+use super::{SupportedGroupsExtension, SupportedVersionsClientHello, UseSrtpExtension};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
@@ -139,6 +142,31 @@ impl ClientHello {
                         extensions_rest,
                         ErrorKind::LengthValue,
                     )));
+                }
+                // Validate payloads before defragmentation commits the transcript.
+                // Ranges are absolute, while this input starts at base_offset.
+                let range = &extension.extension_data_range;
+                let data = &original_input[range.start - base_offset..range.end - base_offset];
+                match extension.extension_type {
+                    ExtensionType::SupportedGroups => {
+                        SupportedGroupsExtension::parse(data)?;
+                    }
+                    ExtensionType::SignatureAlgorithms => {
+                        SignatureAlgorithmsExtension::parse(data)?;
+                    }
+                    ExtensionType::UseSrtp => {
+                        UseSrtpExtension::parse(data)?;
+                    }
+                    ExtensionType::SupportedVersions => {
+                        SupportedVersionsClientHello::parse(data)?;
+                    }
+                    ExtensionType::KeyShare => {
+                        KeyShareClientHello::parse(data, extension.extension_data_range.start)?;
+                    }
+                    ExtensionType::Cookie => {
+                        parse_cookie_extension(data)?;
+                    }
+                    _ => {}
                 }
                 extensions.try_push(extension).map_err(|_| {
                     Err::Failure(Error::new(extensions_rest, ErrorKind::LengthValue))

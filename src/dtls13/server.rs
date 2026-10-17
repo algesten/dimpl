@@ -414,7 +414,11 @@ impl State {
         let maybe = if server.auto_mode {
             server
                 .engine
-                .next_client_hello_for_auto_sense(&mut server.defragment_buffer)?
+                .next_client_hello_for_auto_sense(&mut server.defragment_buffer)
+                .inspect_err(|_| {
+                    // A rejected assembled hello must not be replayed on fallback.
+                    server.retained_hello.clear();
+                })?
         } else {
             server
                 .engine

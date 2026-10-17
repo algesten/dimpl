@@ -208,6 +208,25 @@ impl ClientHello {
                         ErrorKind::LengthValue,
                     )));
                 }
+                // Validate payloads before defragmentation commits the transcript.
+                // Ranges are absolute, while this input starts at base_offset.
+                let range = &extension.extension_data_range;
+                let data = &original_input[range.start - base_offset..range.end - base_offset];
+                match extension.extension_type {
+                    ExtensionType::SupportedGroups => {
+                        SupportedGroupsExtension::parse(data)?;
+                    }
+                    ExtensionType::SignatureAlgorithms => {
+                        SignatureAlgorithmsExtension::parse(data)?;
+                    }
+                    ExtensionType::UseSrtp => {
+                        UseSrtpExtension::parse(data)?;
+                    }
+                    ExtensionType::EcPointFormats => {
+                        ECPointFormatsExtension::parse(data)?;
+                    }
+                    _ => {}
+                }
                 extensions.try_push(extension).map_err(|_| {
                     Err::Failure(Error::new(extensions_rest, ErrorKind::LengthValue))
                 })?;
