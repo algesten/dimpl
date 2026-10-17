@@ -1044,7 +1044,7 @@ impl State {
             sig_alg,
         )?;
 
-        trace!("Client CertificateVerify verified: {:?}", scheme);
+        trace!("Client CertificateVerify verified");
 
         server.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitFinished)
