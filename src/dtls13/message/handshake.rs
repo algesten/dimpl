@@ -2,7 +2,7 @@ use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{Certificate, CertificateVerify, ClientHello, Dtls13CipherSuite};
+use super::{Certificate, CertificateRequest, CertificateVerify, ClientHello, Dtls13CipherSuite};
 use super::{EncryptedExtensions, Finished, ServerHello};
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
@@ -380,7 +380,7 @@ pub enum Body {
     ServerHello(ServerHello),
     EncryptedExtensions(EncryptedExtensions),
     Certificate(Certificate),
-    CertificateRequest(Range<usize>),
+    CertificateRequest(CertificateRequest),
     CertificateVerify(CertificateVerify),
     Finished(Finished),
     KeyUpdate(KeyUpdateRequest),
@@ -467,8 +467,8 @@ impl Body {
                 Ok((input, Body::Certificate(certificate)))
             }
             MessageType::CertificateRequest => {
-                let range = base_offset..(base_offset + input.len());
-                Ok((&[], Body::CertificateRequest(range)))
+                let (input, request) = CertificateRequest::parse(input, base_offset)?;
+                Ok((input, Body::CertificateRequest(request)))
             }
             MessageType::CertificateVerify => {
                 let (input, cv) = CertificateVerify::parse(input, base_offset)?;
@@ -507,9 +507,7 @@ impl Body {
             Body::Certificate(certificate) => {
                 certificate.serialize(source_buf, output);
             }
-            Body::CertificateRequest(range) => {
-                output.extend_from_slice(&source_buf[range.clone()]);
-            }
+            Body::CertificateRequest(request) => request.serialize(source_buf, output),
             Body::CertificateVerify(cv) => {
                 cv.serialize(source_buf, output);
             }
@@ -561,6 +559,145 @@ mod tests {
         0x00, // Null
     ];
 
+    fn check_body_before_commit(kind: MessageType, body: &[u8], accepted: bool) {
+        let mut source = vec![0; 7];
+        source.extend_from_slice(body);
+        let parsed = Body::parse(&source[7..], 7, kind, None);
+        assert_eq!(parsed.is_ok(), accepted, "{kind:?}: {body:02x?}");
+        if let Ok((rest, parsed)) = parsed {
+            assert!(rest.is_empty());
+            let mut serialized = Buf::new();
+            parsed.serialize(&source, &mut serialized);
+            assert_eq!(&*serialized, body);
+        }
+        if accepted {
+            match Body::parse(&source[7..], 7, kind, None)
+                .expect("valid body")
+                .1
+            {
+                Body::CertificateRequest(request) => {
+                    assert_eq!(request.context(&source), &body[1..1 + body[0] as usize]);
+                }
+                Body::ServerHello(hello) => {
+                    if let Some(share) = hello.key_share() {
+                        assert_eq!(share.entry.key_exchange(&source), &[7]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for fragmented in [false, true] {
+            let split = if fragmented {
+                body.len() / 2
+            } else {
+                body.len()
+            };
+            let mut fragments = vec![Handshake::new(
+                kind,
+                body.len() as u32,
+                0,
+                0,
+                split as u32,
+                Body::Fragment(0..split),
+            )];
+            if fragmented {
+                fragments.push(Handshake::new(
+                    kind,
+                    body.len() as u32,
+                    0,
+                    split as u32,
+                    (body.len() - split) as u32,
+                    Body::Fragment(split..body.len()),
+                ));
+            }
+            let mut buffer = Buf::new();
+            let mut transcript = Buf::new();
+            transcript.extend_from_slice(b"prior transcript");
+            let result = Handshake::defragment(
+                fragments.iter().map(|h| (h, body)),
+                &mut buffer,
+                None,
+                Some(&mut transcript),
+            );
+            assert_eq!(result.is_ok(), accepted, "{kind:?}: {body:02x?}");
+            if !accepted {
+                assert_eq!(&*transcript, b"prior transcript");
+            }
+        }
+    }
+
+    fn append_extension(body: &mut Vec<u8>, kind: u16, payload: &[u8]) {
+        body.extend_from_slice(&((4 + payload.len()) as u16).to_be_bytes());
+        body.extend_from_slice(&kind.to_be_bytes());
+        body.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        body.extend_from_slice(payload);
+    }
+
+    #[test]
+    fn server_extensions_parse_before_commit() {
+        let hrr_random = [
+            0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65,
+            0xB8, 0x91, 0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2,
+            0xC8, 0xA8, 0x33, 0x9C,
+        ];
+        let cases: &[(bool, u16, &[u8])] = &[
+            (false, 43, &[0xfe, 0xfc]),
+            (false, 51, &[0, 23, 0, 1, 7]),
+            (true, 43, &[0xfe, 0xfc]),
+            (true, 51, &[0, 23]),
+            (true, 44, &[0, 1, 7]),
+        ];
+        for &(retry, extension, payload) in cases {
+            for len in 0..=payload.len() {
+                let mut hello = vec![0xfe, 0xfd];
+                hello.extend_from_slice(if retry { &hrr_random } else { &[0; 32] });
+                hello.extend_from_slice(&[0, 0x13, 1, 0]);
+                append_extension(&mut hello, extension, &payload[..len]);
+                check_body_before_commit(MessageType::ServerHello, &hello, len == payload.len());
+            }
+        }
+        let srtp = [0, 2, 0, 1, 0];
+        for len in 0..=srtp.len() {
+            let mut body = Vec::new();
+            append_extension(&mut body, 14, &srtp[..len]);
+            check_body_before_commit(MessageType::EncryptedExtensions, &body, len == srtp.len());
+        }
+    }
+
+    #[test]
+    fn certificate_request_parse_before_commit() {
+        for body in [&[0, 0, 0][..], &[0, 0, 1, 0], &[0, 0, 4, 0, 13, 0, 1]] {
+            check_body_before_commit(MessageType::CertificateRequest, body, false);
+        }
+        for (extension, payload) in [
+            (13, &[0, 1, 4][..]),
+            (47, &[0, 2, 0, 0]),
+            (47, &[0, 3, 0, 2, 7]),
+        ] {
+            let mut body = vec![0];
+            append_extension(&mut body, extension, payload);
+            check_body_before_commit(MessageType::CertificateRequest, &body, false);
+        }
+        let cases: &[(u16, &[u8])] = &[(13, &[0, 2, 4, 3]), (47, &[0, 3, 0, 1, 7]), (0xffff, &[7])];
+        for &(extension, payload) in cases {
+            let mut body = vec![2, 0xaa, 0xbb];
+            append_extension(&mut body, extension, payload);
+            check_body_before_commit(MessageType::CertificateRequest, &body, true);
+            for len in 0..body.len() {
+                check_body_before_commit(MessageType::CertificateRequest, &body[..len], false);
+            }
+            body.push(0);
+            check_body_before_commit(MessageType::CertificateRequest, &body, false);
+            if extension != 0xffff {
+                let mut malformed = vec![0];
+                let mut payload = payload.to_vec();
+                payload[0] = 0xff;
+                append_extension(&mut malformed, extension, &payload);
+                check_body_before_commit(MessageType::CertificateRequest, &malformed, false);
+            }
+        }
+    }
+
     #[test]
     fn message_type_newtype_shape() {
         assert_eq!(std::mem::size_of::<MessageType>(), 1);
@@ -603,9 +740,7 @@ mod tests {
             0,
             0,
             2,
-            Body::EncryptedExtensions(EncryptedExtensions {
-                extensions: ArrayVec::new(),
-            }),
+            Body::EncryptedExtensions(EncryptedExtensions::new(ArrayVec::new())),
         );
 
         let mut v = Buf::new();

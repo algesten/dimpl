@@ -1,4 +1,4 @@
-use super::Extension;
+use super::{Extension, ExtensionType, SrtpProfileId, UseSrtpExtension};
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
 use nom::Err;
@@ -11,11 +11,14 @@ use nom::number::complete::be_u16;
 #[derive(Debug, PartialEq, Eq)]
 pub struct EncryptedExtensions {
     pub extensions: ArrayVec<Extension, 5>,
+    // Receive-side values; outbound serialization uses the raw extensions above.
+    srtp_profiles: Option<ArrayVec<SrtpProfileId, 3>>,
 }
 
 impl EncryptedExtensions {
     pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], EncryptedExtensions> {
         let original_input = input;
+        let mut srtp_profiles = None;
         let (input, extensions_len) = be_u16(input)?;
         let (input, extensions_data) = take(extensions_len)(input)?;
 
@@ -38,6 +41,11 @@ impl EncryptedExtensions {
                 {
                     return Err(Err::Failure(Error::new(rest, ErrorKind::LengthValue)));
                 }
+                if ext.extension_type == ExtensionType::UseSrtp {
+                    let range = &ext.extension_data_range;
+                    let data = &original_input[range.start - base_offset..range.end - base_offset];
+                    srtp_profiles = Some(UseSrtpExtension::parse(data)?.1.profiles);
+                }
                 extensions
                     .try_push(ext)
                     .map_err(|_| Err::Failure(Error::new(rest, ErrorKind::LengthValue)))?;
@@ -45,7 +53,25 @@ impl EncryptedExtensions {
             rest = new_rest;
         }
 
-        Ok((input, EncryptedExtensions { extensions }))
+        Ok((
+            input,
+            EncryptedExtensions {
+                extensions,
+                srtp_profiles,
+            },
+        ))
+    }
+
+    #[cfg(test)]
+    pub fn new(extensions: ArrayVec<Extension, 5>) -> Self {
+        Self {
+            extensions,
+            srtp_profiles: None,
+        }
+    }
+
+    pub fn srtp_profiles(&self) -> Option<&ArrayVec<SrtpProfileId, 3>> {
+        self.srtp_profiles.as_ref()
     }
 
     pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
@@ -109,12 +135,24 @@ mod tests {
 
     #[test]
     fn too_many_distinct_supported_extensions_are_rejected() {
-        let mut message = Vec::new();
-        message.extend_from_slice(&(ExtensionType::supported().len() as u16 * 4).to_be_bytes());
+        let mut extensions = Vec::new();
         for extension_type in ExtensionType::supported() {
-            message.extend_from_slice(&extension_type.as_u16().to_be_bytes());
-            message.extend_from_slice(&0u16.to_be_bytes());
+            let data: &[u8] = match *extension_type {
+                ExtensionType::SupportedVersions => &[0xfe, 0xfc],
+                ExtensionType::KeyShare => &[0, 23, 0, 1, 7],
+                ExtensionType::SupportedGroups => &[0, 2, 0, 23],
+                ExtensionType::SignatureAlgorithms => &[0, 2, 4, 3],
+                ExtensionType::UseSrtp => &[0, 2, 0, 1, 0],
+                ExtensionType::Cookie => &[0, 1, 7],
+                _ => unreachable!(),
+            };
+            extensions.extend_from_slice(&extension_type.as_u16().to_be_bytes());
+            extensions.extend_from_slice(&(data.len() as u16).to_be_bytes());
+            extensions.extend_from_slice(data);
         }
+        let mut message = Vec::new();
+        message.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
+        message.extend_from_slice(&extensions);
 
         let result = EncryptedExtensions::parse(&message, 0);
         assert!(

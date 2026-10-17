@@ -4,6 +4,7 @@
 //! messages over DTLS 1.3 (RFC 9147).
 
 mod certificate;
+mod certificate_request;
 mod certificate_verify;
 mod client_hello;
 mod digitally_signed;
@@ -18,6 +19,7 @@ mod server_hello;
 mod wrapped;
 
 pub use certificate::{Certificate, CertificateEntry};
+pub use certificate_request::CertificateRequest;
 pub use certificate_verify::CertificateVerify;
 pub use client_hello::ClientHello;
 pub use digitally_signed::DigitallySigned;
