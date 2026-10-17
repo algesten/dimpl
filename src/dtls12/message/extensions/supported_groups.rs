@@ -14,7 +14,7 @@ pub struct SupportedGroupsExtension {
 impl SupportedGroupsExtension {
     pub fn parse(input: &[u8]) -> IResult<&[u8], SupportedGroupsExtension> {
         let (input, list_len) = nom::number::complete::be_u16(input)?;
-        if list_len % 2 != 0 {
+        if list_len == 0 || list_len % 2 != 0 {
             return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
         }
 

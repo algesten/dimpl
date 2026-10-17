@@ -25,17 +25,15 @@ use crate::dtls12::Client;
 use crate::dtls12::client::LocalEvent;
 use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
-use crate::dtls12::message::ECPointFormatsExtension;
 use crate::dtls12::message::PskParams;
+use crate::dtls12::message::SignatureAndHashAlgorithm;
 use crate::dtls12::message::{Body, CertificateRequest, CertificateTypeVec, Dtls12CipherSuite};
 use crate::dtls12::message::{ClientCertificateType, CompressionMethod, ContentType};
 use crate::dtls12::message::{Cookie, CurveType, DistinguishedName, ExchangeKeys, ExtensionType};
 use crate::dtls12::message::{HashAlgorithm, HelloVerifyRequest, KeyExchangeAlgorithm};
 use crate::dtls12::message::{MessageType, NamedGroup, NamedGroupVec, ProtocolVersion, Random};
 use crate::dtls12::message::{ServerHello, SessionId, SignatureAlgorithm};
-use crate::dtls12::message::{SignatureAlgorithmsExtension, SignatureAndHashAlgorithm};
 use crate::dtls12::message::{SignatureAndHashAlgorithmVec, SrtpProfileId};
-use crate::dtls12::message::{SrtpProfileVec, SupportedGroupsExtension, UseSrtpExtension};
 use crate::{Config, Error, InternalError, Output};
 
 /// Length of the random dummy PSK used when identity resolution fails.
@@ -426,44 +424,13 @@ impl State {
 
         debug!("Selected cipher suite: {:?}", cs);
 
-        // Process client extensions: SRTP, EMS, SupportedGroups and SignatureAlgorithms
-        let mut client_offers_ems = false;
-        let mut client_srtp_profiles: Option<SrtpProfileVec> = None;
-        let mut client_supported_groups: Option<NamedGroupVec> = None;
-        let mut client_signature_algorithms: Option<SignatureAndHashAlgorithmVec> = None;
-        for ext in ch.extensions {
-            match ext.extension_type {
-                ExtensionType::UseSrtp => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let (_, use_srtp) =
-                        UseSrtpExtension::parse(ext_data).map_err(InternalError::from)?;
-                    client_srtp_profiles = Some(use_srtp.profiles);
-                }
-                ExtensionType::ExtendedMasterSecret => {
-                    client_offers_ems = true;
-                }
-                ExtensionType::SupportedGroups => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let (_, groups) =
-                        SupportedGroupsExtension::parse(ext_data).map_err(InternalError::from)?;
-                    client_supported_groups = Some(groups.groups);
-                }
-                ExtensionType::EcPointFormats => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let _ =
-                        ECPointFormatsExtension::parse(ext_data).map_err(InternalError::from)?;
-                }
-                ExtensionType::SignatureAlgorithms => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    if let Ok((_, sigs)) = SignatureAlgorithmsExtension::parse(ext_data) {
-                        client_signature_algorithms = Some(sigs.supported_signature_algorithms);
-                    } else {
-                        warn!("Failed to parse SignatureAlgorithms extension");
-                    }
-                }
-                _ => {}
-            }
-        }
+        let client_offers_ems = ch
+            .extensions
+            .iter()
+            .any(|ext| ext.extension_type == ExtensionType::ExtendedMasterSecret);
+        let client_srtp_profiles = ch.srtp_profiles();
+        let client_supported_groups = ch.supported_groups().cloned();
+        let client_signature_algorithms = ch.signature_algorithms().cloned();
 
         // EMS is mandatory
         if !client_offers_ems {

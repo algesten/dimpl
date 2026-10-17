@@ -19,7 +19,7 @@ use nom::IResult;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
 use nom::number::complete::be_u8;
-use nom::number::complete::{be_u16, be_u24};
+use nom::number::complete::{be_u16, be_u24, be_u32};
 
 // Defensive stack cap over flattened handshake fragments selected for one
 // defragmentation attempt. This intentionally does not mirror the receive
@@ -210,12 +210,12 @@ impl Handshake {
             return Err(crate::InternalError::parse_incomplete());
         }
 
-        // Intentional boundary: Body::parse validates the handshake body shape and
-        // extension envelopes, but known extension payloads remain validated by the
-        // client/server state handlers. A transiently corrupted UDP datagram whose
-        // extension payload fails later may therefore have been consumed here; that
-        // recovery edge is accepted to keep this path parser-only and avoid the
-        // broader transaction/rollback machinery.
+        // Parsing boundary: Body::parse and its callees must perform all
+        // structural validation, including extension payloads, before returning
+        // success. Below we consume the message and append it to the transcript;
+        // deferring parsing-level checks to state handlers would commit malformed
+        // input and poison the transcript for a corrected retransmission.
+        // Negotiation and cryptographic verification belong in the state handlers.
         mark_handled(handled);
 
         // If transcript is provided, write the handshake header + body after parsing succeeds.
@@ -479,9 +479,14 @@ impl Body {
                 Ok((input, Body::ClientKeyExchange(client_key_exchange)))
             }
             MessageType::NewSessionTicket => {
-                // Treat ticket as opaque per RFC 5077: lifetime_hint(4) + ticket (opaque vector)
                 let range = base_offset..(base_offset + input.len());
-                Ok((&[], Body::NewSessionTicket(range)))
+                let (input, _lifetime_hint) = be_u32(input)?;
+                let (input, ticket_len) = be_u16(input)?;
+                let (input, _ticket) = take(ticket_len)(input)?;
+                if !input.is_empty() {
+                    return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+                }
+                Ok((input, Body::NewSessionTicket(range)))
             }
             MessageType::Finished => {
                 let cipher_suite =
@@ -577,6 +582,118 @@ mod tests {
         0x01, // CompressionMethods length
         0x00, // CompressionMethod::Null
     ];
+
+    fn check_body_before_commit(kind: MessageType, body: &[u8], accepted: bool) {
+        let mut source = vec![0; 7];
+        source.extend_from_slice(body);
+        let parsed = Body::parse(&source[7..], 7, kind, None);
+        assert_eq!(parsed.is_ok(), accepted, "{kind:?}: {body:02x?}");
+        if let Ok((rest, parsed)) = parsed {
+            assert!(rest.is_empty());
+            let mut serialized = Buf::new();
+            parsed.serialize(&source, &mut serialized);
+            assert_eq!(&*serialized, body);
+        }
+        for fragmented in [false, true] {
+            let split = if fragmented {
+                body.len() / 2
+            } else {
+                body.len()
+            };
+            let mut fragments = vec![Handshake::new(
+                kind,
+                body.len() as u32,
+                0,
+                0,
+                split as u32,
+                Body::Fragment(0..split),
+            )];
+            if fragmented {
+                fragments.push(Handshake::new(
+                    kind,
+                    body.len() as u32,
+                    0,
+                    split as u32,
+                    (body.len() - split) as u32,
+                    Body::Fragment(split..body.len()),
+                ));
+            }
+            let mut buffer = Buf::new();
+            let mut transcript = Buf::new();
+            transcript.extend_from_slice(b"prior transcript");
+            let result = Handshake::defragment(
+                fragments.iter().map(|h| (h, body)),
+                &mut buffer,
+                None,
+                Some(&mut transcript),
+            );
+            assert_eq!(result.is_ok(), accepted, "{kind:?}: {body:02x?}");
+            if !accepted {
+                assert_eq!(&*transcript, b"prior transcript");
+            }
+        }
+    }
+
+    #[test]
+    fn empty_groups_rejected_before_commit() {
+        let mut body = MESSAGE[12..].to_vec();
+        append_extension(&mut body, 10, &[0, 0]);
+        check_body_before_commit(MessageType::ClientHello, &body, false);
+    }
+
+    #[test]
+    fn empty_srtp_rejected_before_commit() {
+        let mut body = MESSAGE[12..].to_vec();
+        append_extension(&mut body, 14, &[0, 0, 0]);
+        check_body_before_commit(MessageType::ClientHello, &body, false);
+    }
+
+    #[test]
+    fn empty_point_formats_rejected_before_commit() {
+        let mut body = MESSAGE[12..].to_vec();
+        append_extension(&mut body, 11, &[0]);
+        check_body_before_commit(MessageType::ClientHello, &body, false);
+    }
+
+    #[test]
+    fn nonempty_unknown_extension_vectors_remain_structurally_valid() {
+        for (kind, payload) in [(10, &[0, 2, 0xff, 0xff][..]), (14, &[0, 2, 0xff, 0xff, 0])] {
+            let mut body = MESSAGE[12..].to_vec();
+            append_extension(&mut body, kind, payload);
+            check_body_before_commit(MessageType::ClientHello, &body, true);
+        }
+    }
+
+    fn append_extension(body: &mut Vec<u8>, kind: u16, payload: &[u8]) {
+        body.extend_from_slice(&((4 + payload.len()) as u16).to_be_bytes());
+        body.extend_from_slice(&kind.to_be_bytes());
+        body.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        body.extend_from_slice(payload);
+    }
+
+    #[test]
+    fn server_hello_and_ticket_parse_before_commit() {
+        let valid_srtp = [0, 2, 0, 1, 0];
+        for len in 0..=valid_srtp.len() {
+            let mut hello = vec![0xfe, 0xfd];
+            hello.extend_from_slice(&[0; 32]);
+            hello.extend_from_slice(&[0, 0xc0, 0x2b, 0]);
+            append_extension(&mut hello, 14, &valid_srtp[..len]);
+            check_body_before_commit(MessageType::ServerHello, &hello, len == valid_srtp.len());
+        }
+        let ticket = [0, 0, 0, 1, 0, 1, 7];
+        for len in 0..=ticket.len() {
+            check_body_before_commit(
+                MessageType::NewSessionTicket,
+                &ticket[..len],
+                len == ticket.len(),
+            );
+        }
+        let mut trailing = ticket.to_vec();
+        trailing.push(0);
+        check_body_before_commit(MessageType::NewSessionTicket, &trailing, false);
+        check_body_before_commit(MessageType::NewSessionTicket, &[0; 6], true);
+    }
 
     #[test]
     fn message_type_newtype_shape() {
@@ -768,6 +885,78 @@ mod tests {
         assert!(result.is_err());
         assert!(handshake.is_handled());
         assert!(transcript.is_empty());
+    }
+
+    #[test]
+    fn client_hello_payload_validation_precedes_transcript_commit() {
+        let cases: &[(u16, &[u8])] = &[
+            (10, &[0, 2, 0, 23]),   // supported_groups
+            (13, &[0, 2, 4, 3]),    // signature_algorithms
+            (14, &[0, 2, 0, 1, 0]), // use_srtp
+            (11, &[1, 0]),          // ec_point_formats
+            (0xffff, &[0xff]),      // unknown extensions remain opaque
+        ];
+        for &(kind, valid) in cases {
+            for malformed in [false, true] {
+                let mut payload = valid.to_vec();
+                if malformed {
+                    payload[0] = 0xff; // Internal length exceeds the extension envelope.
+                }
+                let mut body = MESSAGE[12..].to_vec();
+                body.extend_from_slice(&((4 + payload.len()) as u16).to_be_bytes());
+                body.extend_from_slice(&kind.to_be_bytes());
+                body.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+                body.extend_from_slice(&payload);
+                // The parse path must also work with a nonzero root-buffer offset.
+                let mut source = vec![0; 7];
+                source.extend_from_slice(&body);
+                let accepted = !malformed || kind == 0xffff;
+                assert_eq!(
+                    Body::parse(&source[7..], 7, MessageType::ClientHello, None).is_ok(),
+                    accepted,
+                    "extension {kind}, malformed={malformed}"
+                );
+                for fragmented in [false, true] {
+                    let split = if fragmented {
+                        body.len() - 1
+                    } else {
+                        body.len()
+                    };
+                    let mut fragments = vec![Handshake::new(
+                        MessageType::ClientHello,
+                        body.len() as u32,
+                        0,
+                        0,
+                        split as u32,
+                        Body::Fragment(0..split),
+                    )];
+                    if fragmented {
+                        fragments.push(Handshake::new(
+                            MessageType::ClientHello,
+                            body.len() as u32,
+                            0,
+                            split as u32,
+                            (body.len() - split) as u32,
+                            Body::Fragment(split..body.len()),
+                        ));
+                    }
+                    let mut buffer = Buf::new();
+                    let mut transcript = Buf::new();
+                    transcript.extend_from_slice(b"prior transcript");
+                    let result = Handshake::defragment(
+                        fragments.iter().map(|h| (h, body.as_slice())),
+                        &mut buffer,
+                        None,
+                        Some(&mut transcript),
+                    );
+                    assert_eq!(result.is_ok(), accepted, "extension {kind}");
+                    assert!(fragments.iter().all(Handshake::is_handled));
+                    if !accepted {
+                        assert_eq!(&*transcript, b"prior transcript");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

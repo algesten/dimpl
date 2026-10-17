@@ -38,14 +38,11 @@ use crate::dtls13::message::ClientHello;
 use crate::dtls13::message::CompressionMethod;
 use crate::dtls13::message::ContentType;
 use crate::dtls13::message::Cookie;
-use crate::dtls13::message::DistinguishedName;
 use crate::dtls13::message::Dtls13CipherSuite;
 use crate::dtls13::message::Extension;
 use crate::dtls13::message::ExtensionType;
 use crate::dtls13::message::KeyShareClientHello;
 use crate::dtls13::message::KeyShareEntry;
-use crate::dtls13::message::KeyShareHelloRetryRequest;
-use crate::dtls13::message::KeyShareServerHello;
 use crate::dtls13::message::KeyUpdateRequest;
 use crate::dtls13::message::MessageType;
 use crate::dtls13::message::NamedGroup;
@@ -56,9 +53,7 @@ use crate::dtls13::message::SignatureAlgorithmsExtension;
 use crate::dtls13::message::SignatureScheme;
 use crate::dtls13::message::SupportedGroupsExtension;
 use crate::dtls13::message::SupportedVersionsClientHello;
-use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
-use crate::dtls13::message::parse_cookie_extension;
 use crate::{Error, InternalError, KeyingMaterial, Output};
 
 /// DTLS 1.3 client
@@ -491,24 +486,16 @@ impl State {
 
             debug!("Received HelloRetryRequest");
 
-            // Extract selected group and cookie from HRR extensions
+            client.hrr_selected_group = server_hello.retry_group();
+
+            // Extract the cookie from HRR extensions
             if let Some(ref extensions) = server_hello.extensions {
                 for ext in extensions {
-                    match ext.extension_type {
-                        ExtensionType::KeyShare => {
-                            let ext_data = ext.extension_data(&client.defragment_buffer);
-                            if let Ok((_, hrr_ks)) = KeyShareHelloRetryRequest::parse(ext_data) {
-                                client.hrr_selected_group = Some(hrr_ks.selected_group);
-                            }
-                        }
-                        ExtensionType::Cookie => {
-                            let ext_data = ext.extension_data(&client.defragment_buffer);
-                            parse_cookie_extension(ext_data).map_err(InternalError::from)?;
-                            let mut cookie = client.engine.pop_buffer();
-                            cookie.extend_from_slice(ext_data);
-                            client.saved_cookie = Some(cookie);
-                        }
-                        _ => {}
+                    if ext.extension_type == ExtensionType::Cookie {
+                        let ext_data = ext.extension_data(&client.defragment_buffer);
+                        let mut cookie = client.engine.pop_buffer();
+                        cookie.extend_from_slice(ext_data);
+                        client.saved_cookie = Some(cookie);
                     }
                 }
             }
@@ -526,17 +513,7 @@ impl State {
             client.engine.set_cipher_suite(server_hello.cipher_suite);
 
             // Validate HRR supported_versions
-            let mut hrr_version_ok = false;
-            if let Some(ref extensions) = server_hello.extensions {
-                for ext in extensions {
-                    if ext.extension_type == ExtensionType::SupportedVersions {
-                        let ext_data = ext.extension_data(&client.defragment_buffer);
-                        if let Ok((_, sv)) = SupportedVersionsServerHello::parse(ext_data) {
-                            hrr_version_ok = sv.selected_version == ProtocolVersion::DTLS1_3;
-                        }
-                    }
-                }
-            }
+            let hrr_version_ok = server_hello.selected_version() == Some(ProtocolVersion::DTLS1_3);
             if !hrr_version_ok {
                 return Err(
                     (Error::SecurityError(crate::SecurityError::HrrDidNotSelectDtls13)).into(),
@@ -604,50 +581,18 @@ impl State {
         client.engine.set_cipher_suite(cs);
         client.session_id = Some(server_hello.legacy_session_id);
 
-        // Validate supported_versions extension
-        let mut supported_version_ok = false;
-        let mut server_key_share: Option<(NamedGroup, std::ops::Range<usize>)> = None;
-
-        let Some(ref extensions) = server_hello.extensions else {
-            return Err((Error::IncompleteServerHello).into());
-        };
-
-        for ext in extensions {
-            match ext.extension_type {
-                ExtensionType::SupportedVersions => {
-                    let ext_data = ext.extension_data(&client.defragment_buffer);
-                    if let Ok((_, sv)) = SupportedVersionsServerHello::parse(ext_data) {
-                        if sv.selected_version == ProtocolVersion::DTLS1_3 {
-                            supported_version_ok = true;
-                        }
-                    }
-                }
-                ExtensionType::KeyShare => {
-                    let ext_data = ext.extension_data(&client.defragment_buffer);
-                    if let Ok((_, ks)) = KeyShareServerHello::parse(ext_data, 0) {
-                        // The key_exchange data is at offset 0 within ext_data, but
-                        // we stored it into defragment_buffer. We need the actual bytes.
-                        let ke_bytes = ks.entry.key_exchange(ext_data);
-                        // Store the group and a copy of the key exchange bytes
-                        let ke_start = client.extension_data.len();
-                        client.extension_data.extend_from_slice(ke_bytes);
-                        let ke_end = client.extension_data.len();
-                        server_key_share = Some((ks.entry.group, ke_start..ke_end));
-                    }
-                }
-                _ => {}
-            }
+        if server_hello.extensions.is_none() {
+            return Err(Error::IncompleteServerHello.into());
         }
-
-        if !supported_version_ok {
+        if server_hello.selected_version() != Some(ProtocolVersion::DTLS1_3) {
             return Err(
                 Error::SecurityError(crate::SecurityError::ServerDidNotNegotiateDtls13).into(),
             );
         }
-
-        let Some((server_group, ke_range)) = server_key_share else {
-            return Err(Error::SecurityError(crate::SecurityError::ServerMissingKeyShare).into());
-        };
+        let key_share = server_hello.key_share().ok_or(Error::SecurityError(
+            crate::SecurityError::ServerMissingKeyShare,
+        ))?;
+        let server_group = key_share.entry.group;
 
         // Complete ECDHE key exchange
         let key_exchange = client
@@ -667,7 +612,7 @@ impl State {
             );
         }
 
-        let peer_pub_key = &client.extension_data[ke_range];
+        let peer_pub_key = key_share.entry.key_exchange(&client.defragment_buffer);
         let mut shared_secret = client.engine.pop_buffer();
         key_exchange
             .complete(peer_pub_key, &mut shared_secret)
@@ -711,20 +656,8 @@ impl State {
             unreachable!()
         };
 
-        // Process extensions
-        for ext in &ee.extensions {
-            if ext.extension_type == ExtensionType::UseSrtp {
-                let ext_data = ext.extension_data(&client.defragment_buffer);
-                let (_, use_srtp) =
-                    UseSrtpExtension::parse(ext_data).map_err(InternalError::from)?;
-                if !use_srtp.profiles.is_empty() {
-                    client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
-                    trace!(
-                        "EncryptedExtensions UseSRTP; selected profile: {:?}",
-                        client.negotiated_srtp_profile
-                    );
-                }
-            }
+        if let Some(profile) = ee.srtp_profiles().and_then(|profiles| profiles.first()) {
+            client.negotiated_srtp_profile = Some((*profile).into());
         }
 
         client.engine.advance_peer_handshake_seq();
@@ -750,15 +683,13 @@ impl State {
             return Ok(self);
         };
 
-        // Parse CertificateRequest body
-        let Body::CertificateRequest(ref range) = handshake.body else {
+        let Body::CertificateRequest(ref request) = handshake.body else {
             unreachable!()
         };
-        let cr_range = range.clone();
-        drop(maybe);
-        let cr_data = &client.defragment_buffer[cr_range.clone()];
-        let context = parse_certificate_request(cr_data, cr_range.start, &mut client.engine)?;
-        if let Some(ctx) = context {
+        let context = request.context(&client.defragment_buffer);
+        if !context.is_empty() {
+            let mut ctx = client.engine.pop_buffer();
+            ctx.extend_from_slice(context);
             client.cert_request_context = Some(ctx);
         }
 
@@ -1484,86 +1415,6 @@ pub(crate) fn verify_scheme_curve(scheme: SignatureScheme, cert_der: &[u8]) -> R
         }
     }
     Ok(())
-}
-
-/// Parse a TLS 1.3 CertificateRequest message (RFC 8446 Section 4.3.2).
-///
-/// Extracts the certificate_request_context and parses extensions including
-/// certificate_authorities. Returns the context if non-empty.
-fn parse_certificate_request(
-    cr_data: &[u8],
-    base_offset: usize,
-    engine: &mut Engine,
-) -> Result<Option<Buf>, Error> {
-    if cr_data.is_empty() {
-        return Ok(None);
-    }
-
-    // certificate_request_context<0..255>
-    let context_len = cr_data[0] as usize;
-    let mut pos = 1;
-    let mut context = None;
-    if context_len > 0 {
-        if cr_data.len() < 1 + context_len {
-            return Err(Error::UnexpectedMessage(
-                crate::UnexpectedMessageError::CertificateRequestContextTruncated,
-            ));
-        }
-        let mut ctx = engine.pop_buffer();
-        ctx.extend_from_slice(&cr_data[pos..pos + context_len]);
-        context = Some(ctx);
-        pos += context_len;
-    }
-
-    // extensions<2..2^16-1>
-    if cr_data.len() < pos + 2 {
-        return Ok(context);
-    }
-    let ext_len = u16::from_be_bytes([cr_data[pos], cr_data[pos + 1]]) as usize;
-    pos += 2;
-
-    let ext_end = pos + ext_len;
-    if cr_data.len() < ext_end {
-        return Err(Error::UnexpectedMessage(
-            crate::UnexpectedMessageError::CertificateRequestExtensionsTruncated,
-        ));
-    }
-
-    // Parse individual extensions
-    while pos + 4 <= ext_end {
-        let ext_type = u16::from_be_bytes([cr_data[pos], cr_data[pos + 1]]);
-        let ext_data_len = u16::from_be_bytes([cr_data[pos + 2], cr_data[pos + 3]]) as usize;
-        pos += 4;
-
-        if pos + ext_data_len > ext_end {
-            break;
-        }
-
-        if ext_type == ExtensionType::CertificateAuthorities.as_u16() {
-            // Parse certificate_authorities: DistinguishedName<3..2^16-1>
-            let ca_data = &cr_data[pos..pos + ext_data_len];
-            if ca_data.len() >= 2 {
-                let list_len = u16::from_be_bytes([ca_data[0], ca_data[1]]) as usize;
-                let list_data = &ca_data[2..];
-                if list_data.len() >= list_len {
-                    let ca_base = base_offset + pos + 2;
-                    let mut rest = &list_data[..list_len];
-                    while !rest.is_empty() {
-                        let offset =
-                            ca_base + (rest.as_ptr() as usize - list_data.as_ptr() as usize);
-                        match DistinguishedName::parse(rest, offset) {
-                            Ok((r, _dn)) => rest = r,
-                            Err(_) => break,
-                        }
-                    }
-                }
-            }
-        }
-
-        pos += ext_data_len;
-    }
-
-    Ok(context)
 }
 
 // =========================================================================

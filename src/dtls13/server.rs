@@ -48,7 +48,6 @@ use crate::dtls13::message::ContentType;
 use crate::dtls13::message::Dtls13CipherSuite;
 use crate::dtls13::message::Extension;
 use crate::dtls13::message::ExtensionType;
-use crate::dtls13::message::KeyShareClientHello;
 use crate::dtls13::message::KeyShareEntry;
 use crate::dtls13::message::KeyShareHelloRetryRequest;
 use crate::dtls13::message::KeyShareServerHello;
@@ -61,8 +60,6 @@ use crate::dtls13::message::ServerHello;
 use crate::dtls13::message::SessionId;
 use crate::dtls13::message::SignatureAlgorithmsExtension;
 use crate::dtls13::message::SignatureScheme;
-use crate::dtls13::message::SupportedGroupsExtension;
-use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
 use crate::dtls13::message::parse_cookie_extension;
@@ -414,7 +411,17 @@ impl State {
         let maybe = if server.auto_mode {
             server
                 .engine
-                .next_client_hello_for_auto_sense(&mut server.defragment_buffer)?
+                .next_client_hello_for_auto_sense(&mut server.defragment_buffer)
+                .inspect_err(|_| {
+                    // Body rejection consumes the fragments; assembly errors
+                    // leave the same candidate queued and still needing replay.
+                    if !server
+                        .engine
+                        .has_complete_handshake(MessageType::ClientHello)
+                    {
+                        server.retained_hello.clear();
+                    }
+                })?
         } else {
             server
                 .engine
@@ -455,69 +462,28 @@ impl State {
             .into());
         }
 
-        // Parse extensions
-        let mut supported_versions_ok = false;
-        let mut client_key_shares: Option<
-            ArrayVec<(NamedGroup, std::ops::Range<usize>), { NamedGroup::supported().len() }>,
-        > = None;
-        let mut client_supported_groups: Option<ArrayVec<NamedGroup, 4>> = None;
-        let mut client_srtp_profiles: Option<ArrayVec<crate::dtls13::message::SrtpProfileId, 3>> =
-            None;
+        let supported_versions_ok = client_hello
+            .supported_versions()
+            .is_some_and(|sv| sv.versions.contains(&ProtocolVersion::DTLS1_3));
+        let key_shares = client_hello
+            .key_share()
+            .map(|ks| ks.entries.as_slice())
+            .unwrap_or(&[]);
+        let client_groups = client_hello
+            .supported_groups()
+            .map(|groups| groups.as_slice())
+            .unwrap_or(&[]);
+        let client_srtp_profiles = client_hello.srtp_profiles();
         let mut client_cookie_data: Option<ArrayVec<u8, 32>> = None;
-
         for ext in &client_hello.extensions {
-            match ext.extension_type {
-                ExtensionType::SupportedVersions => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let (_, sv) = SupportedVersionsClientHello::parse(ext_data)
+            if ext.extension_type == ExtensionType::Cookie {
+                // This parser only checks a u16 length and returns a borrowed slice.
+                let (_, cookie) =
+                    parse_cookie_extension(ext.extension_data(&server.defragment_buffer))
                         .map_err(InternalError::from)?;
-                    for v in &sv.versions {
-                        if *v == ProtocolVersion::DTLS1_3 {
-                            supported_versions_ok = true;
-                        }
-                    }
-                }
-                ExtensionType::KeyShare => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let ext_data_start = ext.extension_data_range.start;
-                    let (_, ks) = KeyShareClientHello::parse(ext_data, ext_data_start)
-                        .map_err(InternalError::from)?;
-                    let mut entries = ArrayVec::new();
-                    for entry in &ks.entries {
-                        entries
-                            .try_push((entry.group, entry.key_exchange_range.clone()))
-                            .map_err(|_| {
-                                InternalError::parse(nom::error::ErrorKind::LengthValue)
-                            })?;
-                    }
-                    client_key_shares = Some(entries);
-                }
-                ExtensionType::SupportedGroups => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let (_, sg) =
-                        SupportedGroupsExtension::parse(ext_data).map_err(InternalError::from)?;
-                    client_supported_groups = Some(sg.groups);
-                }
-                ExtensionType::SignatureAlgorithms => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    // Parse but we don't currently filter by signature algorithms
-                    let _ = SignatureAlgorithmsExtension::parse(ext_data);
-                }
-                ExtensionType::UseSrtp => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let (_, use_srtp) =
-                        UseSrtpExtension::parse(ext_data).map_err(InternalError::from)?;
-                    client_srtp_profiles = Some(use_srtp.profiles);
-                }
-                ExtensionType::Cookie => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let (_, cookie) =
-                        parse_cookie_extension(ext_data).map_err(InternalError::from)?;
-                    client_cookie_data = Some(ArrayVec::try_from(cookie).map_err(|_| {
-                        Error::SecurityError(crate::SecurityError::InvalidCookieInClientHello)
-                    })?);
-                }
-                _ => {}
+                client_cookie_data = Some(ArrayVec::try_from(cookie).map_err(|_| {
+                    Error::SecurityError(crate::SecurityError::InvalidCookieInClientHello)
+                })?);
             }
         }
 
@@ -556,20 +522,12 @@ impl State {
             .kx_groups()
             .map(|g| g.name())
             .collect();
-        let key_shares = client_key_shares
-            .as_ref()
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
         let has_matching_key_share = key_shares
             .iter()
-            .any(|(group, _)| our_groups.contains(group));
+            .any(|entry| our_groups.contains(&entry.group));
 
         // Determine which group to request if key_share is missing
         let hrr_group = if !has_matching_key_share {
-            let client_groups = client_supported_groups
-                .as_ref()
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
             our_groups
                 .iter()
                 .find(|g| client_groups.contains(g))
@@ -647,16 +605,14 @@ impl State {
         }
 
         // Select key exchange: find first client key_share with a group we support
-        let key_shares = client_key_shares.unwrap_or_default();
         let matching_entry = key_shares
             .iter()
-            .find(|(group, _)| our_groups.contains(group));
+            .find(|entry| our_groups.contains(&entry.group));
 
-        let (selected_group, peer_key_range) = if let Some((group, range)) = matching_entry {
-            (*group, range.clone())
+        let (selected_group, peer_key_range) = if let Some(entry) = matching_entry {
+            (entry.group, entry.key_exchange_range.clone())
         } else {
             // No matching key_share, but check supported_groups for a common group
-            let client_groups = client_supported_groups.unwrap_or_default();
             let common_group = our_groups
                 .iter()
                 .find(|g| client_groups.contains(g))
@@ -737,7 +693,7 @@ impl State {
         // Select SRTP profile: first from client list that the server supports.
         // Per RFC 5764 Section 4.1.1, the server MUST select a profile that
         // both sides support.
-        if let Some(ref profiles) = client_srtp_profiles {
+        if let Some(profiles) = client_srtp_profiles {
             for profile_id in profiles {
                 let profile: SrtpProfile = (*profile_id).into();
                 if SrtpProfile::ALL.contains(&profile) {
@@ -1494,6 +1450,97 @@ fn handshake_create_certificate_request(body: &mut Buf) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn auto_retains_hello_when_assembly_is_incomplete() {
+        // The coverage check sees both bytes, but defragmentation stops at the
+        // different message type, leaving both fragments queued for later.
+        let fragments = [
+            (MessageType::ClientHello, 0, 1),
+            (MessageType::ServerHello, 1, 1),
+        ];
+        let packet = client_hello_fragments(2, &fragments);
+        assert_auto_retains_unconsumed_hello(packet, false);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn auto_retains_hello_when_fragment_capacity_is_exceeded() {
+        let fragments: Vec<_> = (0..51)
+            .map(|offset| (MessageType::ClientHello, offset, 1))
+            .collect();
+        let packet = client_hello_fragments(51, &fragments);
+        assert_auto_retains_unconsumed_hello(packet, true);
+    }
+
+    #[cfg(feature = "rcgen")]
+    fn client_hello_fragments(length: u32, fragments: &[(MessageType, u32, u32)]) -> Vec<u8> {
+        let mut packet = Vec::new();
+        // Each record holds at most eight parsed handshake fragments.
+        for (seq, record_fragments) in fragments.chunks(8).enumerate() {
+            let mut record = Vec::new();
+            for &(kind, offset, fragment_len) in record_fragments {
+                record.push(kind.as_u8());
+                record.extend_from_slice(&length.to_be_bytes()[1..]);
+                record.extend_from_slice(&0u16.to_be_bytes());
+                record.extend_from_slice(&offset.to_be_bytes()[1..]);
+                record.extend_from_slice(&fragment_len.to_be_bytes()[1..]);
+                record.resize(record.len() + fragment_len as usize, 0);
+            }
+            packet.push(ContentType::Handshake.as_u8());
+            packet.extend_from_slice(&[0xfe, 0xfd]);
+            packet.extend_from_slice(&0u16.to_be_bytes());
+            packet.extend_from_slice(&(seq as u64).to_be_bytes()[2..]);
+            packet.extend_from_slice(&(record.len() as u16).to_be_bytes());
+            packet.extend_from_slice(&record);
+        }
+        packet
+    }
+
+    #[cfg(feature = "rcgen")]
+    fn assert_auto_retains_unconsumed_hello(packet: Vec<u8>, capacity_error: bool) {
+        use crate::certificate::generate_self_signed_certificate;
+        use crate::error::TransientError;
+
+        let now = Instant::now();
+        let certificate = generate_self_signed_certificate().expect("certificate");
+        let mut server = Server::new_auto(Arc::new(Config::default()), certificate, now);
+        server.handle_timeout(now).expect("server clock");
+        let mut output = [0; 2048];
+        while !matches!(server.poll_output(&mut output), Output::Timeout(_)) {}
+
+        server
+            .handle_packet(&packet)
+            .expect("discard transient error");
+        while !matches!(server.poll_output(&mut output), Output::Timeout(_)) {}
+        assert!(server.engine.transcript.is_empty());
+
+        // Reattempting assembly proves that the candidate was not consumed.
+        let error = server
+            .engine
+            .next_client_hello_for_auto_sense(&mut server.defragment_buffer)
+            .expect_err("unconsumed fragments still fail assembly");
+        if capacity_error {
+            assert!(matches!(
+                error,
+                InternalError::Transient(TransientError::TooManyRecords)
+            ));
+        } else {
+            assert!(matches!(
+                error,
+                InternalError::Transient(TransientError::ParseIncomplete)
+            ));
+        }
+
+        let (_, _, _, retained) = server.into_parts();
+        assert_eq!(
+            retained.len(),
+            1,
+            "preserve raw packets for DTLS 1.2 fallback"
+        );
+        assert_eq!(&retained[0][..], packet.as_slice());
+    }
 
     #[test]
     fn certificate_request_omits_empty_certificate_authorities() {

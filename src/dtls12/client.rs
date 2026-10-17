@@ -28,7 +28,7 @@ use crate::dtls12::message::{ClientPskKeys, ServerKeyExchangeParams};
 use crate::dtls12::message::{CompressionMethod, ContentType, Cookie};
 use crate::dtls12::message::{DigitallySigned, Dtls12CipherSuite};
 use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
-use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm, UseSrtpExtension};
+use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm};
 use crate::{Config, DtlsCertificate, Error, InternalError, KeyingMaterial, Output};
 
 /// DTLS client
@@ -513,34 +513,17 @@ impl State {
         client.session_id = Some(server_hello.session_id);
         client.server_random = Some(server_hello.random);
 
-        let mut extended_master_secret = false;
-
-        // Check for use_srtp and extended_master_secret extensions
         let Some(extensions) = &server_hello.extensions else {
             return Err((Error::IncompleteServerHello).into());
         };
-
-        for extension in extensions {
-            if extension.extension_type == ExtensionType::UseSrtp {
-                // Parse the use_srtp extension to get the selected profile
-                let extension_data = extension.extension_data(&client.defragment_buffer);
-                let (_, use_srtp) =
-                    UseSrtpExtension::parse(extension_data).map_err(InternalError::from)?;
-                // Store the first profile as our negotiated profile
-                if !use_srtp.profiles.is_empty() {
-                    client.negotiated_srtp_profile = Some(use_srtp.profiles[0].into());
-                    trace!(
-                        "ServerHello UseSRTP extension processed; selected profile: {:?}",
-                        client.negotiated_srtp_profile
-                    );
-                }
-            }
-
-            // We are to use extended master secret
-            if extension.extension_type == ExtensionType::ExtendedMasterSecret {
-                extended_master_secret = true;
-                trace!("Server negotiated Extended Master Secret");
-            }
+        let extended_master_secret = extensions
+            .iter()
+            .any(|ext| ext.extension_type == ExtensionType::ExtendedMasterSecret);
+        if let Some(profile) = server_hello
+            .srtp_profiles()
+            .and_then(|profiles| profiles.first())
+        {
+            client.negotiated_srtp_profile = Some((*profile).into());
         }
 
         // Without extended master secret, in DTLS1.2 a security attack

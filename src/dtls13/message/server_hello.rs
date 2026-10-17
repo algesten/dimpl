@@ -1,5 +1,7 @@
 use super::{CompressionMethod, Dtls13CipherSuite, Extension};
+use super::{ExtensionType, KeyShareHelloRetryRequest, KeyShareServerHello, NamedGroup};
 use super::{ProtocolVersion, Random, SessionId};
+use super::{SupportedVersionsServerHello, parse_cookie_extension};
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
 use nom::Err;
@@ -20,6 +22,15 @@ pub struct ServerHello {
     pub cipher_suite: Dtls13CipherSuite,
     pub legacy_compression_method: CompressionMethod,
     pub extensions: Option<ArrayVec<Extension, 5>>,
+    // Receive-side values; outbound serialization uses the raw extensions above.
+    parsed_extensions: ParsedExtensions,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ParsedExtensions {
+    selected_version: Option<ProtocolVersion>,
+    key_share: Option<KeyShareServerHello>,
+    retry_group: Option<NamedGroup>,
 }
 
 impl ServerHello {
@@ -38,6 +49,7 @@ impl ServerHello {
             cipher_suite,
             legacy_compression_method,
             extensions,
+            parsed_extensions: ParsedExtensions::default(),
         }
     }
 
@@ -48,6 +60,7 @@ impl ServerHello {
 
     pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], ServerHello> {
         let original_input = input;
+        let mut parsed_extensions = ParsedExtensions::default();
         let (input, legacy_version) = ProtocolVersion::parse(input)?;
         let (input, random) = Random::parse(input)?;
         let (input, legacy_session_id) = SessionId::parse(input)?;
@@ -91,6 +104,30 @@ impl ServerHello {
                                 ErrorKind::LengthValue,
                             )));
                         }
+                        let range = &ext.extension_data_range;
+                        let data =
+                            &original_input[range.start - base_offset..range.end - base_offset];
+                        match ext.extension_type {
+                            ExtensionType::SupportedVersions => {
+                                parsed_extensions.selected_version = Some(
+                                    SupportedVersionsServerHello::parse(data)?
+                                        .1
+                                        .selected_version,
+                                );
+                            }
+                            ExtensionType::KeyShare if random.bytes == HRR_RANDOM => {
+                                parsed_extensions.retry_group =
+                                    Some(KeyShareHelloRetryRequest::parse(data)?.1.selected_group);
+                            }
+                            ExtensionType::KeyShare => {
+                                parsed_extensions.key_share =
+                                    Some(KeyShareServerHello::parse(data, range.start)?.1);
+                            }
+                            ExtensionType::Cookie if random.bytes == HRR_RANDOM => {
+                                parse_cookie_extension(data)?;
+                            }
+                            _ => {}
+                        }
                         extensions_vec.try_push(ext).map_err(|_| {
                             Err::Failure(Error::new(current_input, ErrorKind::LengthValue))
                         })?;
@@ -114,8 +151,19 @@ impl ServerHello {
                 cipher_suite,
                 legacy_compression_method,
                 extensions,
+                parsed_extensions,
             },
         ))
+    }
+
+    pub fn selected_version(&self) -> Option<ProtocolVersion> {
+        self.parsed_extensions.selected_version
+    }
+    pub fn key_share(&self) -> Option<&KeyShareServerHello> {
+        self.parsed_extensions.key_share.as_ref()
+    }
+    pub fn retry_group(&self) -> Option<NamedGroup> {
+        self.parsed_extensions.retry_group
     }
 
     pub fn serialize(&self, source_buf: &[u8], output: &mut Buf) {
@@ -230,12 +278,24 @@ mod test {
 
     #[test]
     fn too_many_distinct_supported_extensions_are_rejected() {
-        let mut message = MESSAGE[..39].to_vec();
-        message.extend_from_slice(&(ExtensionType::supported().len() as u16 * 4).to_be_bytes());
+        let mut extensions = Vec::new();
         for extension_type in ExtensionType::supported() {
-            message.extend_from_slice(&extension_type.as_u16().to_be_bytes());
-            message.extend_from_slice(&0u16.to_be_bytes());
+            let data: &[u8] = match *extension_type {
+                ExtensionType::SupportedVersions => &[0xfe, 0xfc],
+                ExtensionType::KeyShare => &[0, 23, 0, 1, 7],
+                ExtensionType::SupportedGroups => &[0, 2, 0, 23],
+                ExtensionType::SignatureAlgorithms => &[0, 2, 4, 3],
+                ExtensionType::UseSrtp => &[0, 2, 0, 1, 0],
+                ExtensionType::Cookie => &[0, 1, 7],
+                _ => unreachable!(),
+            };
+            extensions.extend_from_slice(&extension_type.as_u16().to_be_bytes());
+            extensions.extend_from_slice(&(data.len() as u16).to_be_bytes());
+            extensions.extend_from_slice(data);
         }
+        let mut message = MESSAGE[..39].to_vec();
+        message.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
+        message.extend_from_slice(&extensions);
 
         let result = ServerHello::parse(&message, 0);
         assert!(

@@ -2,7 +2,7 @@ use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{Certificate, CertificateVerify, ClientHello, Dtls13CipherSuite};
+use super::{Certificate, CertificateRequest, CertificateVerify, ClientHello, Dtls13CipherSuite};
 use super::{EncryptedExtensions, Finished, ServerHello};
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
@@ -214,6 +214,12 @@ impl Handshake {
             return Err(crate::InternalError::parse_incomplete());
         }
 
+        // Keep structural parse failures transient, even for messages normally
+        // sent encrypted, such as CertificateRequest. The message type alone
+        // does not prove that its records were protected:
+        // the receive path also accepts epoch-zero handshake records. Any policy
+        // to terminate on authenticated malformed messages must account for the
+        // actual protection of their records and apply consistently across bodies.
         let (rest, body) = if allow_unknown_client_hello_suites {
             match Body::parse_allow_unknown_client_hello_suites(
                 buffer,
@@ -248,12 +254,12 @@ impl Handshake {
             return Err(crate::InternalError::parse_incomplete());
         }
 
-        // Intentional boundary: Body::parse validates the handshake body shape and
-        // extension envelopes, but known extension payloads remain validated by the
-        // client/server state handlers. A transiently corrupted UDP datagram whose
-        // extension payload fails later may therefore have been consumed here; that
-        // recovery edge is accepted to keep this path parser-only and avoid the
-        // broader transaction/rollback machinery.
+        // Parsing boundary: Body::parse and its callees must perform all
+        // structural validation, including extension payloads, before returning
+        // success. Below we consume the message and append it to the transcript;
+        // deferring parsing-level checks to state handlers would commit malformed
+        // input and poison the transcript for a corrected retransmission.
+        // Negotiation and cryptographic verification belong in the state handlers.
         mark_handled(handled);
 
         // If transcript is provided, write the TLS 1.3-style header + body after parsing succeeds.
@@ -380,7 +386,7 @@ pub enum Body {
     ServerHello(ServerHello),
     EncryptedExtensions(EncryptedExtensions),
     Certificate(Certificate),
-    CertificateRequest(Range<usize>),
+    CertificateRequest(CertificateRequest),
     CertificateVerify(CertificateVerify),
     Finished(Finished),
     KeyUpdate(KeyUpdateRequest),
@@ -467,8 +473,8 @@ impl Body {
                 Ok((input, Body::Certificate(certificate)))
             }
             MessageType::CertificateRequest => {
-                let range = base_offset..(base_offset + input.len());
-                Ok((&[], Body::CertificateRequest(range)))
+                let (input, request) = CertificateRequest::parse(input, base_offset)?;
+                Ok((input, Body::CertificateRequest(request)))
             }
             MessageType::CertificateVerify => {
                 let (input, cv) = CertificateVerify::parse(input, base_offset)?;
@@ -507,9 +513,7 @@ impl Body {
             Body::Certificate(certificate) => {
                 certificate.serialize(source_buf, output);
             }
-            Body::CertificateRequest(range) => {
-                output.extend_from_slice(&source_buf[range.clone()]);
-            }
+            Body::CertificateRequest(request) => request.serialize(source_buf, output),
             Body::CertificateVerify(cv) => {
                 cv.serialize(source_buf, output);
             }
@@ -561,6 +565,191 @@ mod tests {
         0x00, // Null
     ];
 
+    fn check_body_before_commit(kind: MessageType, body: &[u8], accepted: bool) {
+        let mut source = vec![0; 7];
+        source.extend_from_slice(body);
+        let parsed = Body::parse(&source[7..], 7, kind, None);
+        assert_eq!(parsed.is_ok(), accepted, "{kind:?}: {body:02x?}");
+        if let Ok((rest, parsed)) = parsed {
+            assert!(rest.is_empty());
+            let mut serialized = Buf::new();
+            parsed.serialize(&source, &mut serialized);
+            assert_eq!(&*serialized, body);
+        }
+        if accepted {
+            match Body::parse(&source[7..], 7, kind, None)
+                .expect("valid body")
+                .1
+            {
+                Body::CertificateRequest(request) => {
+                    assert_eq!(request.context(&source), &body[1..1 + body[0] as usize]);
+                }
+                Body::ServerHello(hello) => {
+                    if let Some(share) = hello.key_share() {
+                        assert_eq!(share.entry.key_exchange(&source), &[7]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for fragmented in [false, true] {
+            let split = if fragmented {
+                body.len() / 2
+            } else {
+                body.len()
+            };
+            let mut fragments = vec![Handshake::new(
+                kind,
+                body.len() as u32,
+                0,
+                0,
+                split as u32,
+                Body::Fragment(0..split),
+            )];
+            if fragmented {
+                fragments.push(Handshake::new(
+                    kind,
+                    body.len() as u32,
+                    0,
+                    split as u32,
+                    (body.len() - split) as u32,
+                    Body::Fragment(split..body.len()),
+                ));
+            }
+            let mut buffer = Buf::new();
+            let mut transcript = Buf::new();
+            transcript.extend_from_slice(b"prior transcript");
+            let result = Handshake::defragment(
+                fragments.iter().map(|h| (h, body)),
+                &mut buffer,
+                None,
+                Some(&mut transcript),
+            );
+            assert_eq!(result.is_ok(), accepted, "{kind:?}: {body:02x?}");
+            if !accepted {
+                assert_eq!(&*transcript, b"prior transcript");
+            }
+        }
+    }
+
+    #[test]
+    fn empty_groups_rejected_before_commit() {
+        let mut body = MESSAGE[12..].to_vec();
+        append_extension(&mut body, 10, &[0, 0]);
+        check_body_before_commit(MessageType::ClientHello, &body, false);
+    }
+
+    #[test]
+    fn empty_srtp_rejected_before_commit() {
+        let mut body = MESSAGE[12..].to_vec();
+        append_extension(&mut body, 14, &[0, 0, 0]);
+        check_body_before_commit(MessageType::ClientHello, &body, false);
+    }
+
+    #[test]
+    fn empty_key_exchange_rejected_before_commit() {
+        let mut body = MESSAGE[12..].to_vec();
+        append_extension(&mut body, 51, &[0, 4, 0, 29, 0, 0]);
+        check_body_before_commit(MessageType::ClientHello, &body, false);
+    }
+
+    #[test]
+    fn empty_server_key_exchange_rejected_before_commit() {
+        let mut body = vec![0xfe, 0xfd];
+        body.extend_from_slice(&[0; 32]);
+        body.extend_from_slice(&[0, 0x13, 1, 0]);
+        append_extension(&mut body, 51, &[0, 29, 0, 0]);
+        check_body_before_commit(MessageType::ServerHello, &body, false);
+    }
+
+    #[test]
+    fn nonempty_unknown_extension_vectors_remain_structurally_valid() {
+        for (kind, payload) in [(10, &[0, 2, 0xff, 0xff][..]), (14, &[0, 2, 0xff, 0xff, 0])] {
+            let mut body = MESSAGE[12..].to_vec();
+            append_extension(&mut body, kind, payload);
+            check_body_before_commit(MessageType::ClientHello, &body, true);
+        }
+    }
+
+    #[test]
+    fn empty_client_shares_remains_structurally_valid() {
+        let mut body = MESSAGE[12..].to_vec();
+        append_extension(&mut body, 51, &[0, 0]);
+        check_body_before_commit(MessageType::ClientHello, &body, true);
+    }
+
+    fn append_extension(body: &mut Vec<u8>, kind: u16, payload: &[u8]) {
+        body.extend_from_slice(&((4 + payload.len()) as u16).to_be_bytes());
+        body.extend_from_slice(&kind.to_be_bytes());
+        body.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        body.extend_from_slice(payload);
+    }
+
+    #[test]
+    fn server_extensions_parse_before_commit() {
+        let hrr_random = [
+            0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65,
+            0xB8, 0x91, 0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2,
+            0xC8, 0xA8, 0x33, 0x9C,
+        ];
+        let cases: &[(bool, u16, &[u8])] = &[
+            (false, 43, &[0xfe, 0xfc]),
+            (false, 51, &[0, 23, 0, 1, 7]),
+            (true, 43, &[0xfe, 0xfc]),
+            (true, 51, &[0, 23]),
+            (true, 44, &[0, 1, 7]),
+        ];
+        for &(retry, extension, payload) in cases {
+            for len in 0..=payload.len() {
+                let mut hello = vec![0xfe, 0xfd];
+                hello.extend_from_slice(if retry { &hrr_random } else { &[0; 32] });
+                hello.extend_from_slice(&[0, 0x13, 1, 0]);
+                append_extension(&mut hello, extension, &payload[..len]);
+                check_body_before_commit(MessageType::ServerHello, &hello, len == payload.len());
+            }
+        }
+        let srtp = [0, 2, 0, 1, 0];
+        for len in 0..=srtp.len() {
+            let mut body = Vec::new();
+            append_extension(&mut body, 14, &srtp[..len]);
+            check_body_before_commit(MessageType::EncryptedExtensions, &body, len == srtp.len());
+        }
+    }
+
+    #[test]
+    fn certificate_request_parse_before_commit() {
+        for body in [&[0, 0, 0][..], &[0, 0, 1, 0], &[0, 0, 4, 0, 13, 0, 1]] {
+            check_body_before_commit(MessageType::CertificateRequest, body, false);
+        }
+        for (extension, payload) in [
+            (13, &[0, 1, 4][..]),
+            (47, &[0, 2, 0, 0]),
+            (47, &[0, 3, 0, 2, 7]),
+        ] {
+            let mut body = vec![0];
+            append_extension(&mut body, extension, payload);
+            check_body_before_commit(MessageType::CertificateRequest, &body, false);
+        }
+        let cases: &[(u16, &[u8])] = &[(13, &[0, 2, 4, 3]), (47, &[0, 3, 0, 1, 7]), (0xffff, &[7])];
+        for &(extension, payload) in cases {
+            let mut body = vec![2, 0xaa, 0xbb];
+            append_extension(&mut body, extension, payload);
+            check_body_before_commit(MessageType::CertificateRequest, &body, true);
+            for len in 0..body.len() {
+                check_body_before_commit(MessageType::CertificateRequest, &body[..len], false);
+            }
+            body.push(0);
+            check_body_before_commit(MessageType::CertificateRequest, &body, false);
+            if extension != 0xffff {
+                let mut malformed = vec![0];
+                let mut payload = payload.to_vec();
+                payload[0] = 0xff;
+                append_extension(&mut malformed, extension, &payload);
+                check_body_before_commit(MessageType::CertificateRequest, &malformed, false);
+            }
+        }
+    }
+
     #[test]
     fn message_type_newtype_shape() {
         assert_eq!(std::mem::size_of::<MessageType>(), 1);
@@ -603,9 +792,7 @@ mod tests {
             0,
             0,
             2,
-            Body::EncryptedExtensions(EncryptedExtensions {
-                extensions: ArrayVec::new(),
-            }),
+            Body::EncryptedExtensions(EncryptedExtensions::new(ArrayVec::new())),
         );
 
         let mut v = Buf::new();
@@ -684,6 +871,90 @@ mod tests {
         );
         assert!(handshake.is_handled());
         assert!(transcript.is_empty());
+    }
+
+    #[test]
+    fn client_hello_payload_validation_precedes_transcript_commit() {
+        let cases: &[(u16, &[u8])] = &[
+            (10, &[0, 2, 0, 23]),          // supported_groups
+            (13, &[0, 2, 4, 3]),           // signature_algorithms
+            (14, &[0, 2, 0, 1, 0]),        // use_srtp
+            (43, &[2, 0xfe, 0xfc]),        // supported_versions
+            (51, &[0, 5, 0, 23, 0, 1, 7]), // key_share
+            (44, &[0, 1, 7]),              // cookie
+            (0xffff, &[0xff]),             // unknown extensions remain opaque
+        ];
+        for &(kind, valid) in cases {
+            for malformed in [false, true] {
+                let mut payload = valid.to_vec();
+                if malformed {
+                    payload[0] = 0xff; // Internal length exceeds the extension envelope.
+                }
+                let mut body = MESSAGE[12..].to_vec();
+                body.extend_from_slice(&((4 + payload.len()) as u16).to_be_bytes());
+                body.extend_from_slice(&kind.to_be_bytes());
+                body.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+                body.extend_from_slice(&payload);
+                // The parse path must also work with a nonzero root-buffer offset.
+                let mut source = vec![0; 7];
+                source.extend_from_slice(&body);
+                let accepted = !malformed || kind == 0xffff;
+                assert_eq!(
+                    Body::parse(&source[7..], 7, MessageType::ClientHello, None).is_ok(),
+                    accepted,
+                    "extension {kind}, malformed={malformed}"
+                );
+                if accepted && kind == 51 {
+                    let (_, Body::ClientHello(hello)) =
+                        Body::parse(&source[7..], 7, MessageType::ClientHello, None)
+                            .expect("valid key share")
+                    else {
+                        panic!("expected ClientHello");
+                    };
+                    let share = &hello.key_share().expect("retained key share").entries[0];
+                    assert_eq!(share.key_exchange(&source), &[7]);
+                }
+                for fragmented in [false, true] {
+                    let split = if fragmented {
+                        body.len() - 1
+                    } else {
+                        body.len()
+                    };
+                    let mut fragments = vec![Handshake::new(
+                        MessageType::ClientHello,
+                        body.len() as u32,
+                        0,
+                        0,
+                        split as u32,
+                        Body::Fragment(0..split),
+                    )];
+                    if fragmented {
+                        fragments.push(Handshake::new(
+                            MessageType::ClientHello,
+                            body.len() as u32,
+                            0,
+                            split as u32,
+                            (body.len() - split) as u32,
+                            Body::Fragment(split..body.len()),
+                        ));
+                    }
+                    let mut buffer = Buf::new();
+                    let mut transcript = Buf::new();
+                    transcript.extend_from_slice(b"prior transcript");
+                    let result = Handshake::defragment(
+                        fragments.iter().map(|h| (h, body.as_slice())),
+                        &mut buffer,
+                        None,
+                        Some(&mut transcript),
+                    );
+                    assert_eq!(result.is_ok(), accepted, "extension {kind}");
+                    assert!(fragments.iter().all(Handshake::is_handled));
+                    if !accepted {
+                        assert_eq!(&*transcript, b"prior transcript");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

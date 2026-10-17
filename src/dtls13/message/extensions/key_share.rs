@@ -24,6 +24,9 @@ impl KeyShareEntry {
         let original_input = input;
         let (input, group) = NamedGroup::parse(input)?;
         let (input, ke_len) = be_u16(input)?;
+        if ke_len == 0 {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
         let (input, ke_slice) = take(ke_len)(input)?;
 
         let relative_offset = ke_slice.as_ptr() as usize - original_input.as_ptr() as usize;

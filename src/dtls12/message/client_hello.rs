@@ -1,7 +1,8 @@
-use super::extensions::{ECPointFormatsExtension, SignatureAlgorithmsExtension};
-use super::extensions::{SupportedGroupsExtension, UseSrtpExtension};
 use super::{CipherSuiteVec, CompressionMethod, CompressionMethodVec, Dtls12CipherSuite};
 use super::{Cookie, Extension, ExtensionType, ProtocolVersion, Random, SessionId};
+use super::{ECPointFormatsExtension, SignatureAlgorithmsExtension};
+use super::{NamedGroupVec, SignatureAndHashAlgorithmVec, SrtpProfileVec};
+use super::{SupportedGroupsExtension, UseSrtpExtension};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
@@ -22,6 +23,15 @@ pub struct ClientHello {
     pub cipher_suites: CipherSuiteVec,
     pub compression_methods: CompressionMethodVec,
     pub extensions: ExtensionVec,
+    // Receive-side values; outbound serialization uses the raw extensions above.
+    parsed_extensions: ParsedExtensions,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ParsedExtensions {
+    supported_groups: Option<NamedGroupVec>,
+    signature_algorithms: Option<SignatureAndHashAlgorithmVec>,
+    srtp_profiles: Option<SrtpProfileVec>,
 }
 
 impl ClientHello {
@@ -41,6 +51,7 @@ impl ClientHello {
             cipher_suites,
             compression_methods,
             extensions: ArrayVec::new(),
+            parsed_extensions: ParsedExtensions::default(),
         }
     }
 
@@ -146,7 +157,9 @@ impl ClientHello {
         let extensions_base_offset = base_offset + consumed;
 
         // Parse extensions if there are any left
-        let (remaining_input, extensions) = Self::parse_extensions(input, extensions_base_offset)?;
+        let mut parsed_extensions = ParsedExtensions::default();
+        let (remaining_input, extensions) =
+            Self::parse_extensions(input, extensions_base_offset, &mut parsed_extensions)?;
 
         Ok((
             remaining_input,
@@ -158,12 +171,17 @@ impl ClientHello {
                 cipher_suites,
                 compression_methods,
                 extensions,
+                parsed_extensions,
             },
         ))
     }
 
     /// Parse extensions from the input, filtering to only known extension types
-    fn parse_extensions(input: &[u8], base_offset: usize) -> IResult<&[u8], ExtensionVec> {
+    fn parse_extensions<'a>(
+        input: &'a [u8],
+        base_offset: usize,
+        parsed: &mut ParsedExtensions,
+    ) -> IResult<&'a [u8], ExtensionVec> {
         let mut extensions = ArrayVec::new();
 
         // Early return if input is empty
@@ -208,6 +226,30 @@ impl ClientHello {
                         ErrorKind::LengthValue,
                     )));
                 }
+                // Parse payloads once, retaining the values used by the server.
+                // Ranges are absolute, while this input starts at base_offset.
+                let range = &extension.extension_data_range;
+                let data = &original_input[range.start - base_offset..range.end - base_offset];
+                match extension.extension_type {
+                    ExtensionType::SupportedGroups => {
+                        parsed.supported_groups =
+                            Some(SupportedGroupsExtension::parse(data)?.1.groups);
+                    }
+                    ExtensionType::SignatureAlgorithms => {
+                        parsed.signature_algorithms = Some(
+                            SignatureAlgorithmsExtension::parse(data)?
+                                .1
+                                .supported_signature_algorithms,
+                        );
+                    }
+                    ExtensionType::UseSrtp => {
+                        parsed.srtp_profiles = Some(UseSrtpExtension::parse(data)?.1.profiles);
+                    }
+                    ExtensionType::EcPointFormats => {
+                        ECPointFormatsExtension::parse(data)?;
+                    }
+                    _ => {}
+                }
                 extensions.try_push(extension).map_err(|_| {
                     Err::Failure(Error::new(extensions_rest, ErrorKind::LengthValue))
                 })?;
@@ -216,6 +258,18 @@ impl ClientHello {
         }
 
         Ok((remaining, extensions))
+    }
+
+    pub fn supported_groups(&self) -> Option<&NamedGroupVec> {
+        self.parsed_extensions.supported_groups.as_ref()
+    }
+
+    pub fn signature_algorithms(&self) -> Option<&SignatureAndHashAlgorithmVec> {
+        self.parsed_extensions.signature_algorithms.as_ref()
+    }
+
+    pub fn srtp_profiles(&self) -> Option<&SrtpProfileVec> {
+        self.parsed_extensions.srtp_profiles.as_ref()
     }
 
     pub fn serialize(&self, source_buf: &[u8], output: &mut Buf) {

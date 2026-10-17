@@ -1,3 +1,4 @@
+use super::SrtpProfileVec;
 use super::extension::ExtensionVec;
 use super::extensions::use_srtp::{SrtpProfileId, UseSrtpExtension};
 use super::{CompressionMethod, Dtls12CipherSuite, Extension, ExtensionType};
@@ -16,6 +17,8 @@ pub struct ServerHello {
     pub cipher_suite: Dtls12CipherSuite,
     pub compression_method: CompressionMethod,
     pub extensions: Option<ExtensionVec>,
+    // Receive-side values; outbound serialization uses the raw extensions above.
+    srtp_profiles: Option<SrtpProfileVec>,
 }
 
 impl ServerHello {
@@ -34,6 +37,7 @@ impl ServerHello {
             cipher_suite,
             compression_method,
             extensions,
+            srtp_profiles: None,
         }
     }
 
@@ -84,6 +88,7 @@ impl ServerHello {
 
     pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], ServerHello> {
         let original_input = input;
+        let mut srtp_profiles = None;
         let (input, server_version) = ProtocolVersion::parse(input)?;
         let (input, random) = Random::parse(input)?;
         let (input, session_id) = SessionId::parse(input)?;
@@ -132,6 +137,12 @@ impl ServerHello {
                                 ErrorKind::LengthValue,
                             )));
                         }
+                        if ext.extension_type == ExtensionType::UseSrtp {
+                            let range = &ext.extension_data_range;
+                            let data =
+                                &original_input[range.start - base_offset..range.end - base_offset];
+                            srtp_profiles = Some(UseSrtpExtension::parse(data)?.1.profiles);
+                        }
                         extensions_vec.try_push(ext).map_err(|_| {
                             Err::Failure(Error::new(current_input, ErrorKind::LengthValue))
                         })?;
@@ -155,8 +166,13 @@ impl ServerHello {
                 cipher_suite,
                 compression_method,
                 extensions,
+                srtp_profiles,
             },
         ))
+    }
+
+    pub fn srtp_profiles(&self) -> Option<&SrtpProfileVec> {
+        self.srtp_profiles.as_ref()
     }
 
     pub fn serialize(&self, source_buf: &[u8], output: &mut Buf) {

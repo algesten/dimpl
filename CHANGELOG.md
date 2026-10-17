@@ -2,6 +2,7 @@
 
   * Update OpenSSL test dependency to resolve security advisories #176
   * Accept DTLS 1.3 ACKs for earlier handshake and KeyUpdate transmissions #173
+  * Parse DTLS 1.2/1.3 handshake payloads before committing transcript state #174
 
 # 0.7.6
 
