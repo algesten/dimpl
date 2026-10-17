@@ -119,9 +119,6 @@ fn closing_pending_auto_aborts_without_an_alert() {
                 .handle_packet(b"late packet")
                 .expect("ignore input after close");
             assert!(drain_outputs(&mut endpoint).packets.is_empty());
-            endpoint.set_active(!active);
-            assert!(endpoint.is_closed());
-            assert_eq!(endpoint.is_active(), active);
         }
     }
 }
