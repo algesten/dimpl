@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Accept DTLS 1.3 ACKs for earlier handshake and KeyUpdate transmissions #173
+
 # 0.7.6
 
   * Reject empty required client certificates in DTLS 1.2 and 1.3 #170

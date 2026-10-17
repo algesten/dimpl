@@ -2,6 +2,7 @@
 #[path = "../wolfssl/mod.rs"]
 mod wolfssl_helper;
 
+mod ack;
 mod common;
 mod conformance;
 mod data;
