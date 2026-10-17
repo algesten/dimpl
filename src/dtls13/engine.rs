@@ -403,13 +403,16 @@ impl Engine {
             .next();
 
         if let Some(dupe_seq) = maybe_dupe_seq {
-            if dupe_seq < self.peer_handshake_seq_no
-                && !self.flight_saved_records.is_empty()
-                && self.timers.request_resend(&mut self.rng)
-            {
-                if let Err(error) = self.flight_resend("dupe triggers resend") {
-                    self.recycle_incoming(incoming);
-                    return Err(error);
+            // Only answer an already processed flight when we have a saved response.
+            if dupe_seq < self.peer_handshake_seq_no && !self.flight_saved_records.is_empty() {
+                // Reserve a resend and advance backoff using the same budget as
+                // timed retries, so duplicates cannot bypass flight_retries.
+                let resend_requested = self.timers.request_resend(&mut self.rng);
+                if resend_requested {
+                    if let Err(error) = self.flight_resend("dupe triggers resend") {
+                        self.recycle_incoming(incoming);
+                        return Err(error);
+                    }
                 }
             }
         }
