@@ -48,7 +48,6 @@ use crate::dtls13::message::ContentType;
 use crate::dtls13::message::Dtls13CipherSuite;
 use crate::dtls13::message::Extension;
 use crate::dtls13::message::ExtensionType;
-use crate::dtls13::message::KeyShareClientHello;
 use crate::dtls13::message::KeyShareEntry;
 use crate::dtls13::message::KeyShareHelloRetryRequest;
 use crate::dtls13::message::KeyShareServerHello;
@@ -61,8 +60,6 @@ use crate::dtls13::message::ServerHello;
 use crate::dtls13::message::SessionId;
 use crate::dtls13::message::SignatureAlgorithmsExtension;
 use crate::dtls13::message::SignatureScheme;
-use crate::dtls13::message::SupportedGroupsExtension;
-use crate::dtls13::message::SupportedVersionsClientHello;
 use crate::dtls13::message::SupportedVersionsServerHello;
 use crate::dtls13::message::UseSrtpExtension;
 use crate::dtls13::message::parse_cookie_extension;
@@ -459,69 +456,28 @@ impl State {
             .into());
         }
 
-        // Parse extensions
-        let mut supported_versions_ok = false;
-        let mut client_key_shares: Option<
-            ArrayVec<(NamedGroup, std::ops::Range<usize>), { NamedGroup::supported().len() }>,
-        > = None;
-        let mut client_supported_groups: Option<ArrayVec<NamedGroup, 4>> = None;
-        let mut client_srtp_profiles: Option<ArrayVec<crate::dtls13::message::SrtpProfileId, 3>> =
-            None;
+        let supported_versions_ok = client_hello
+            .supported_versions()
+            .is_some_and(|sv| sv.versions.contains(&ProtocolVersion::DTLS1_3));
+        let key_shares = client_hello
+            .key_share()
+            .map(|ks| ks.entries.as_slice())
+            .unwrap_or(&[]);
+        let client_groups = client_hello
+            .supported_groups()
+            .map(|groups| groups.as_slice())
+            .unwrap_or(&[]);
+        let client_srtp_profiles = client_hello.srtp_profiles();
         let mut client_cookie_data: Option<ArrayVec<u8, 32>> = None;
-
         for ext in &client_hello.extensions {
-            match ext.extension_type {
-                ExtensionType::SupportedVersions => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let (_, sv) = SupportedVersionsClientHello::parse(ext_data)
+            if ext.extension_type == ExtensionType::Cookie {
+                // This parser only checks a u16 length and returns a borrowed slice.
+                let (_, cookie) =
+                    parse_cookie_extension(ext.extension_data(&server.defragment_buffer))
                         .map_err(InternalError::from)?;
-                    for v in &sv.versions {
-                        if *v == ProtocolVersion::DTLS1_3 {
-                            supported_versions_ok = true;
-                        }
-                    }
-                }
-                ExtensionType::KeyShare => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let ext_data_start = ext.extension_data_range.start;
-                    let (_, ks) = KeyShareClientHello::parse(ext_data, ext_data_start)
-                        .map_err(InternalError::from)?;
-                    let mut entries = ArrayVec::new();
-                    for entry in &ks.entries {
-                        entries
-                            .try_push((entry.group, entry.key_exchange_range.clone()))
-                            .map_err(|_| {
-                                InternalError::parse(nom::error::ErrorKind::LengthValue)
-                            })?;
-                    }
-                    client_key_shares = Some(entries);
-                }
-                ExtensionType::SupportedGroups => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let (_, sg) =
-                        SupportedGroupsExtension::parse(ext_data).map_err(InternalError::from)?;
-                    client_supported_groups = Some(sg.groups);
-                }
-                ExtensionType::SignatureAlgorithms => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    // Parse but we don't currently filter by signature algorithms
-                    let _ = SignatureAlgorithmsExtension::parse(ext_data);
-                }
-                ExtensionType::UseSrtp => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let (_, use_srtp) =
-                        UseSrtpExtension::parse(ext_data).map_err(InternalError::from)?;
-                    client_srtp_profiles = Some(use_srtp.profiles);
-                }
-                ExtensionType::Cookie => {
-                    let ext_data = ext.extension_data(&server.defragment_buffer);
-                    let (_, cookie) =
-                        parse_cookie_extension(ext_data).map_err(InternalError::from)?;
-                    client_cookie_data = Some(ArrayVec::try_from(cookie).map_err(|_| {
-                        Error::SecurityError(crate::SecurityError::InvalidCookieInClientHello)
-                    })?);
-                }
-                _ => {}
+                client_cookie_data = Some(ArrayVec::try_from(cookie).map_err(|_| {
+                    Error::SecurityError(crate::SecurityError::InvalidCookieInClientHello)
+                })?);
             }
         }
 
@@ -560,20 +516,12 @@ impl State {
             .kx_groups()
             .map(|g| g.name())
             .collect();
-        let key_shares = client_key_shares
-            .as_ref()
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
         let has_matching_key_share = key_shares
             .iter()
-            .any(|(group, _)| our_groups.contains(group));
+            .any(|entry| our_groups.contains(&entry.group));
 
         // Determine which group to request if key_share is missing
         let hrr_group = if !has_matching_key_share {
-            let client_groups = client_supported_groups
-                .as_ref()
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
             our_groups
                 .iter()
                 .find(|g| client_groups.contains(g))
@@ -651,16 +599,14 @@ impl State {
         }
 
         // Select key exchange: find first client key_share with a group we support
-        let key_shares = client_key_shares.unwrap_or_default();
         let matching_entry = key_shares
             .iter()
-            .find(|(group, _)| our_groups.contains(group));
+            .find(|entry| our_groups.contains(&entry.group));
 
-        let (selected_group, peer_key_range) = if let Some((group, range)) = matching_entry {
-            (*group, range.clone())
+        let (selected_group, peer_key_range) = if let Some(entry) = matching_entry {
+            (entry.group, entry.key_exchange_range.clone())
         } else {
             // No matching key_share, but check supported_groups for a common group
-            let client_groups = client_supported_groups.unwrap_or_default();
             let common_group = our_groups
                 .iter()
                 .find(|g| client_groups.contains(g))
@@ -741,7 +687,7 @@ impl State {
         // Select SRTP profile: first from client list that the server supports.
         // Per RFC 5764 Section 4.1.1, the server MUST select a profile that
         // both sides support.
-        if let Some(ref profiles) = client_srtp_profiles {
+        if let Some(profiles) = client_srtp_profiles {
             for profile_id in profiles {
                 let profile: SrtpProfile = (*profile_id).into();
                 if SrtpProfile::ALL.contains(&profile) {

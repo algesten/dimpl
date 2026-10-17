@@ -2,6 +2,7 @@ use super::parse_cookie_extension;
 use super::{CompressionMethod, Dtls13CipherSuite, ProtocolVersion};
 use super::{Cookie, Extension, Random, SessionId};
 use super::{ExtensionType, KeyShareClientHello, SignatureAlgorithmsExtension};
+use super::{NamedGroup, SrtpProfileId};
 use super::{SupportedGroupsExtension, SupportedVersionsClientHello, UseSrtpExtension};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
@@ -21,6 +22,16 @@ pub struct ClientHello {
     pub cipher_suites: ArrayVec<Dtls13CipherSuite, 3>,
     pub legacy_compression_methods: ArrayVec<CompressionMethod, 1>,
     pub extensions: ArrayVec<Extension, 8>,
+    // Receive-side values; outbound serialization uses the raw extensions above.
+    parsed_extensions: ParsedExtensions,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ParsedExtensions {
+    supported_versions: Option<SupportedVersionsClientHello>,
+    key_share: Option<KeyShareClientHello>,
+    supported_groups: Option<ArrayVec<NamedGroup, 4>>,
+    srtp_profiles: Option<ArrayVec<SrtpProfileId, 3>>,
 }
 
 impl ClientHello {
@@ -40,6 +51,7 @@ impl ClientHello {
             cipher_suites,
             legacy_compression_methods,
             extensions: ArrayVec::new(),
+            parsed_extensions: ParsedExtensions::default(),
         }
     }
 
@@ -88,7 +100,9 @@ impl ClientHello {
         let consumed = input.as_ptr() as usize - original_input.as_ptr() as usize;
         let extensions_base_offset = base_offset + consumed;
 
-        let (remaining_input, extensions) = Self::parse_extensions(input, extensions_base_offset)?;
+        let mut parsed_extensions = ParsedExtensions::default();
+        let (remaining_input, extensions) =
+            Self::parse_extensions(input, extensions_base_offset, &mut parsed_extensions)?;
 
         Ok((
             remaining_input,
@@ -100,14 +114,16 @@ impl ClientHello {
                 cipher_suites,
                 legacy_compression_methods,
                 extensions,
+                parsed_extensions,
             },
         ))
     }
 
-    fn parse_extensions(
-        input: &[u8],
+    fn parse_extensions<'a>(
+        input: &'a [u8],
         base_offset: usize,
-    ) -> IResult<&[u8], ArrayVec<Extension, 8>> {
+        parsed: &mut ParsedExtensions,
+    ) -> IResult<&'a [u8], ArrayVec<Extension, 8>> {
         let mut extensions = ArrayVec::new();
 
         if input.is_empty() {
@@ -143,25 +159,30 @@ impl ClientHello {
                         ErrorKind::LengthValue,
                     )));
                 }
-                // Validate payloads before defragmentation commits the transcript.
+                // Parse payloads once, retaining the values used by the server.
                 // Ranges are absolute, while this input starts at base_offset.
                 let range = &extension.extension_data_range;
                 let data = &original_input[range.start - base_offset..range.end - base_offset];
                 match extension.extension_type {
                     ExtensionType::SupportedGroups => {
-                        SupportedGroupsExtension::parse(data)?;
+                        parsed.supported_groups =
+                            Some(SupportedGroupsExtension::parse(data)?.1.groups);
                     }
                     ExtensionType::SignatureAlgorithms => {
                         SignatureAlgorithmsExtension::parse(data)?;
                     }
                     ExtensionType::UseSrtp => {
-                        UseSrtpExtension::parse(data)?;
+                        parsed.srtp_profiles = Some(UseSrtpExtension::parse(data)?.1.profiles);
                     }
                     ExtensionType::SupportedVersions => {
-                        SupportedVersionsClientHello::parse(data)?;
+                        parsed.supported_versions =
+                            Some(SupportedVersionsClientHello::parse(data)?.1);
                     }
                     ExtensionType::KeyShare => {
-                        KeyShareClientHello::parse(data, extension.extension_data_range.start)?;
+                        parsed.key_share = Some(
+                            KeyShareClientHello::parse(data, extension.extension_data_range.start)?
+                                .1,
+                        );
                     }
                     ExtensionType::Cookie => {
                         parse_cookie_extension(data)?;
@@ -176,6 +197,22 @@ impl ClientHello {
         }
 
         Ok((remaining, extensions))
+    }
+
+    pub fn supported_versions(&self) -> Option<&SupportedVersionsClientHello> {
+        self.parsed_extensions.supported_versions.as_ref()
+    }
+
+    pub fn key_share(&self) -> Option<&KeyShareClientHello> {
+        self.parsed_extensions.key_share.as_ref()
+    }
+
+    pub fn supported_groups(&self) -> Option<&ArrayVec<NamedGroup, 4>> {
+        self.parsed_extensions.supported_groups.as_ref()
+    }
+
+    pub fn srtp_profiles(&self) -> Option<&ArrayVec<SrtpProfileId, 3>> {
+        self.parsed_extensions.srtp_profiles.as_ref()
     }
 
     pub fn serialize(&self, source_buf: &[u8], output: &mut Buf) {
@@ -335,6 +372,7 @@ mod tests {
             cipher_suites: ArrayVec::new(),
             legacy_compression_methods: ArrayVec::new(),
             extensions: ArrayVec::new(),
+            parsed_extensions: ParsedExtensions::default(),
         };
 
         assert_eq!(
@@ -354,6 +392,7 @@ mod tests {
             cipher_suites: ArrayVec::new(),
             legacy_compression_methods: ArrayVec::new(),
             extensions: ArrayVec::new(),
+            parsed_extensions: ParsedExtensions::default(),
         };
 
         assert!(

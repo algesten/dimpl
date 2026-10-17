@@ -713,6 +713,16 @@ mod tests {
                     accepted,
                     "extension {kind}, malformed={malformed}"
                 );
+                if accepted && kind == 51 {
+                    let (_, Body::ClientHello(hello)) =
+                        Body::parse(&source[7..], 7, MessageType::ClientHello, None)
+                            .expect("valid key share")
+                    else {
+                        panic!("expected ClientHello");
+                    };
+                    let share = &hello.key_share().expect("retained key share").entries[0];
+                    assert_eq!(share.key_exchange(&source), &[7]);
+                }
                 for fragmented in [false, true] {
                     let split = if fragmented {
                         body.len() - 1
