@@ -8,10 +8,8 @@ use crate::buffer::{Buf, BufferPool, TmpBuf};
 use crate::crypto::{Aad, Iv, Nonce};
 use crate::dtls12::context::{AuthMode, CryptoContext};
 use crate::dtls12::incoming::{Incoming, Record, RecordHandler};
-use crate::dtls12::message::{
-    Body, ClientHello, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence,
-};
-use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
+use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
+use crate::dtls12::message::{ClientHello, ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
 use crate::error::bounded_error_len;
 use crate::timer::{HandshakeTimers, Timeout, deadline};
 use crate::util::accepts_client_hello_fragment;
