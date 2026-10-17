@@ -543,6 +543,11 @@ impl Engine {
     }
 
     fn flight_resend_on_dupe(&mut self) -> Result<(), Error> {
+        // Rate-limit duplicate responses and avoid spending a retry when there
+        // is no saved flight. Only then reserve a resend from the same budget
+        // used by timed retries, so duplicates cannot bypass flight_retries.
+        // request_resend also advances backoff; it allows final-flight responses
+        // after local completion regardless of budget (RFC 6347 section 4.2.4).
         if self.flight_dupe_timeout != Timeout::Disabled
             || self.flight_saved_records.is_empty()
             || !self.timers.request_resend(&mut self.rng)
