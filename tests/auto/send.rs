@@ -122,3 +122,30 @@ fn closing_pending_auto_aborts_without_an_alert() {
         }
     }
 }
+
+#[test]
+fn closed_auto_server_ignores_valid_late_client_hellos() {
+    for new_client in [Dtls::new_12, Dtls::new_13, Dtls::new_auto] {
+        let now = Instant::now();
+        let certificate = generate_self_signed_certificate().expect("certificate");
+        let mut client = new_client(default_config(), certificate.clone(), now);
+        client.set_active(true);
+        client.handle_timeout(now).expect("start client");
+        let hello = drain_outputs(&mut client).packets;
+        assert!(!hello.is_empty());
+
+        let mut server = Dtls::new_auto(default_config(), certificate, now);
+        server.close().expect("close unresolved server");
+        drain_outputs(&mut server);
+        for packet in &hello {
+            server
+                .handle_packet(packet)
+                .expect("ignore late ClientHello");
+            let output = drain_outputs(&mut server);
+            assert!(output.packets.is_empty());
+            assert!(!output.connected);
+            assert!(server.is_closed());
+            assert_eq!(server.protocol_version(), None);
+        }
+    }
+}
