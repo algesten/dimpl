@@ -35,6 +35,8 @@ pub enum Error {
     ReceiveQueueFull,
     /// Outgoing queue exceeded capacity.
     TransmitQueueFull,
+    /// A saved DTLS 1.3 handshake record exhausted its bounded transmission history.
+    TransmitHistoryFull,
     /// Missing fields when parsing ServerHello.
     IncompleteServerHello,
     /// Something timed out.
@@ -779,6 +781,7 @@ impl fmt::Display for Error {
             Error::PskError(err) => write!(f, "psk error: {err}"),
             Error::ReceiveQueueFull => write!(f, "receive queue full"),
             Error::TransmitQueueFull => write!(f, "transmit queue full"),
+            Error::TransmitHistoryFull => write!(f, "transmit record-number history full"),
             Error::IncompleteServerHello => write!(f, "incomplete ServerHello"),
             Error::Timeout(err) => write!(f, "timeout: {err}"),
             Error::ConfigError(err) => write!(f, "config error: {err}"),

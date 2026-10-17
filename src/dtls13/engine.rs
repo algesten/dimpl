@@ -32,6 +32,9 @@ use crate::{Config, DtlsCertificate, Error, InternalError, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
+/// Bound record-number history retained in each saved record's pooled buffer.
+const MAX_PREVIOUS_TRANSMISSIONS: usize = 32;
+
 /// Maximum DTLS sequence number (2^48 - 1). Per RFC 9147 §4.2,
 /// implementations MUST NOT allow the sequence number to wrap.
 const MAX_SEQUENCE_NUMBER: u64 = (1u64 << 48) - 1;
@@ -197,6 +200,8 @@ struct Entry {
     content_type: ContentType,
     epoch: u16,
     send_seq: u64,
+    fragment_len: usize,
+    /// Payload followed by prior transmission sequence numbers (8 bytes each).
     fragment: Buf,
     acked: bool,
 }
@@ -704,6 +709,16 @@ impl Engine {
 
     pub fn flight_resend(&mut self, reason: &str) -> Result<(), Error> {
         debug!("Resending flight due to {}", reason);
+        // Check before moving or sending the flight so exhaustion retains every
+        // saved record and its history, including records already ACKed.
+        if self.flight_saved_records.iter().any(|entry| {
+            !entry.acked
+                && entry.epoch >= 2
+                && entry.content_type == ContentType::Handshake
+                && entry.fragment.len() - entry.fragment_len >= MAX_PREVIOUS_TRANSMISSIONS * 8
+        }) {
+            return Err(Error::TransmitHistoryFull);
+        }
         let mut records = mem::take(&mut self.flight_saved_records);
 
         // Mark the current last datagram as "sealed" so resent records
@@ -722,7 +737,7 @@ impl Engine {
                 // Capture the sequence number the retransmitted record will use
                 let new_seq = self.sequence_epoch_0.sequence_number;
                 self.create_plaintext_record(entry.content_type, false, |fragment| {
-                    fragment.extend_from_slice(&entry.fragment);
+                    fragment.extend_from_slice(entry.fragment());
                 })?;
                 entry.send_seq = new_seq;
             } else {
@@ -741,9 +756,17 @@ impl Engine {
                     entry.epoch,
                     false,
                     |fragment| {
-                        fragment.extend_from_slice(&entry.fragment);
+                        fragment.extend_from_slice(entry.fragment());
                     },
                 )?;
+                // ACKs may name any transmission of a protected handshake
+                // record (RFC 9147 section 7.2). ACK records themselves are
+                // never ACKed and can be resent without retaining history.
+                if entry.content_type == ContentType::Handshake {
+                    entry
+                        .fragment
+                        .extend_from_slice(&entry.send_seq.to_be_bytes());
+                }
                 entry.send_seq = new_seq;
             }
         }
@@ -920,6 +943,7 @@ impl Engine {
                 content_type,
                 epoch: 0,
                 send_seq: current_seq,
+                fragment_len: fragment.len(),
                 fragment: clone,
                 acked: false,
             });
@@ -1008,6 +1032,7 @@ impl Engine {
                 content_type,
                 epoch,
                 send_seq: seq,
+                fragment_len: fragment.len(),
                 fragment: clone,
                 acked: false,
             });
@@ -1387,7 +1412,7 @@ impl Engine {
 
             // Mark matching flight entries as acknowledged
             for entry in &mut self.flight_saved_records {
-                if entry.epoch as u64 == ack_epoch && entry.send_seq == ack_seq {
+                if entry.epoch as u64 == ack_epoch && entry.was_sent_as(ack_seq) {
                     entry.acked = true;
                 }
             }
@@ -2282,6 +2307,19 @@ impl Engine {
     }
 }
 
+impl Entry {
+    fn fragment(&self) -> &[u8] {
+        &self.fragment[..self.fragment_len]
+    }
+
+    fn was_sent_as(&self, seq: u64) -> bool {
+        self.send_seq == seq
+            || self.fragment[self.fragment_len..]
+                .chunks_exact(8)
+                .any(|previous| previous == seq.to_be_bytes())
+    }
+}
+
 // =========================================================================
 // Helper Functions
 // =========================================================================
@@ -2909,6 +2947,7 @@ mod tests {
             content_type: ContentType::Handshake,
             epoch: 2,
             send_seq: 7,
+            fragment_len: fragment.len(),
             fragment,
             acked: false,
         });
@@ -2924,6 +2963,281 @@ mod tests {
         assert!(
             !engine.flight_saved_records[0].acked,
             "malformed ACK vector length must not partially acknowledge records"
+        );
+    }
+
+    #[cfg(feature = "rcgen")]
+    fn protected_test_engine() -> Engine {
+        let mut engine = test_engine();
+        engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+        let mut secret = Buf::new();
+        secret.extend_from_slice(&[0x42; 32]);
+        engine
+            .install_handshake_keys(&secret, &secret)
+            .expect("handshake keys");
+        engine
+            .install_application_keys(&secret, &secret)
+            .expect("application keys");
+        engine
+            .enable_peer_encryption()
+            .expect("enable peer encryption");
+        engine.release_application_data();
+        engine.flight_stop_resend_timers();
+        engine
+    }
+
+    #[cfg(feature = "rcgen")]
+    fn engine_packets(engine: &mut Engine, now: Instant) -> Vec<Vec<u8>> {
+        let mut packets = Vec::new();
+        let mut buffer = [0; 2048];
+        loop {
+            match engine.poll_output(&mut buffer, now) {
+                Output::Packet(packet) => packets.push(packet.to_vec()),
+                Output::Timeout(_) => return packets,
+                output => panic!("unexpected output: {output:?}"),
+            }
+        }
+    }
+
+    #[cfg(feature = "rcgen")]
+    fn ack_for(records: &[(u64, u64)]) -> Vec<u8> {
+        let mut ack = Vec::new();
+        ack.extend_from_slice(&((records.len() * 16) as u16).to_be_bytes());
+        for (epoch, seq) in records {
+            ack.extend_from_slice(&epoch.to_be_bytes());
+            ack.extend_from_slice(&seq.to_be_bytes());
+        }
+        ack
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn ack_matches_mixed_transmissions_and_preserves_selective_retransmission() {
+        let now = Instant::now();
+        let mut engine = protected_test_engine();
+        engine.flight_begin(5);
+        for n in 0..3 {
+            engine
+                .create_ciphertext_record(ContentType::Handshake, 2, true, |fragment| {
+                    fragment.push(n)
+                })
+                .expect("save flight record");
+        }
+        engine_packets(&mut engine, now);
+        engine
+            .flight_resend("first retransmission")
+            .expect("resend flight");
+        engine_packets(&mut engine, now);
+        engine
+            .flight_resend("second retransmission")
+            .expect("resend flight");
+        engine_packets(&mut engine, now);
+
+        engine
+            .process_ack(&ack_for(&[(3, 0), (2, 100)]))
+            .expect("unrelated ACK");
+        assert!(engine.flight_saved_records.iter().all(|entry| !entry.acked));
+        // Acknowledge the first record's original send and the second's latest send.
+        engine
+            .process_ack(&ack_for(&[(2, 0), (2, 7)]))
+            .expect("mixed ACK");
+        let acked: Vec<_> = engine
+            .flight_saved_records
+            .iter()
+            .map(|entry| entry.acked)
+            .collect();
+        assert_eq!(acked, [true, true, false]);
+        assert_ne!(engine.flight_timeout, Timeout::Disabled);
+
+        let next_seq = engine.hs_send_seq;
+        engine
+            .flight_resend("selective retransmission")
+            .expect("resend unACKed record");
+        assert_eq!(
+            engine.hs_send_seq,
+            next_seq + 1,
+            "only the third record must be resent"
+        );
+        engine_packets(&mut engine, now);
+        // Acknowledge the third record's intermediate transmission after another resend.
+        engine
+            .process_ack(&ack_for(&[(2, 5)]))
+            .expect("intermediate ACK");
+        assert!(engine.flight_saved_records.is_empty());
+        assert_eq!(engine.flight_timeout, Timeout::Disabled);
+    }
+
+    #[cfg(feature = "rcgen")]
+    fn key_update_ack_after_retransmission(lost: bool) {
+        let now = Instant::now();
+        let mut sender = protected_test_engine();
+        let mut peer = protected_test_engine();
+        sender
+            .create_key_update(KeyUpdateRequest::UpdateNotRequested)
+            .expect("send KeyUpdate");
+        sender.handle_timeout(now).expect("arm KeyUpdate timer");
+        for packet in engine_packets(&mut sender, now) {
+            peer.parse_packet(&packet).expect("receive KeyUpdate");
+            engine_packets(&mut peer, now);
+        }
+        let mut buffer = Buf::new();
+        assert!(
+            peer.next_handshake_no_transcript(MessageType::KeyUpdate, &mut buffer)
+                .expect("parse KeyUpdate")
+                .is_some()
+        );
+        peer.advance_peer_handshake_seq();
+        peer.update_recv_keys().expect("rotate peer receive keys");
+        peer.send_ack_retransmittable()
+            .expect("ACK original KeyUpdate");
+        let original_ack = engine_packets(&mut peer, now);
+        assert!(!original_ack.is_empty());
+
+        sender
+            .handle_timeout(now + Duration::from_secs(2))
+            .expect("first KeyUpdate resend");
+        assert!(!engine_packets(&mut sender, now + Duration::from_secs(2)).is_empty());
+        let later = now + Duration::from_secs(7);
+        sender
+            .handle_timeout(later)
+            .expect("second KeyUpdate resend");
+        let retransmission = engine_packets(&mut sender, later);
+        assert!(!retransmission.is_empty());
+        let ack = if lost {
+            for packet in retransmission {
+                peer.parse_packet(&packet)
+                    .expect("receive retransmitted KeyUpdate");
+                engine_packets(&mut peer, later);
+            }
+            // Model a peer repeating the original ACK after the first copy was lost.
+            peer.flight_resend("repeat KeyUpdate ACK")
+                .expect("resend saved ACK");
+            let replies = engine_packets(&mut peer, later);
+            assert!(!replies.is_empty(), "peer must retransmit its saved ACK");
+            replies
+        } else {
+            original_ack
+        };
+        for packet in ack {
+            sender.parse_packet(&packet).expect("receive KeyUpdate ACK");
+            engine_packets(&mut sender, later);
+        }
+
+        assert!(
+            !sender.is_key_update_in_flight(),
+            "earlier transmission must be ACKed"
+        );
+        assert_eq!(
+            sender.app_send_epoch(),
+            4,
+            "ACK must rotate send keys exactly once"
+        );
+        assert_eq!(sender.flight_timeout, Timeout::Disabled);
+        assert!(sender.flight_saved_records.is_empty());
+        let future = now + Duration::from_secs(120);
+        sender.handle_timeout(future).expect("stay connected");
+        assert!(engine_packets(&mut sender, future).is_empty());
+
+        sender
+            .create_ciphertext_record(ContentType::ApplicationData, 4, false, |fragment| {
+                fragment.extend_from_slice(b"updated keys");
+            })
+            .expect("send on updated epoch");
+        for packet in engine_packets(&mut sender, future) {
+            peer.parse_packet(&packet).expect("decrypt updated epoch");
+            let mut buffer = [0; 2048];
+            assert!(matches!(
+                peer.poll_output(&mut buffer, future),
+                Output::ApplicationData(b"updated keys")
+            ));
+            assert!(engine_packets(&mut peer, future).is_empty());
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn key_update_accepts_late_ack_for_original_transmission() {
+        key_update_ack_after_retransmission(false);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn key_update_recovers_after_lost_ack() {
+        key_update_ack_after_retransmission(true);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn exhausted_transmission_history_preserves_flight_and_accepts_old_ack() {
+        let now = Instant::now();
+        let mut engine = protected_test_engine();
+        engine.flight_begin(5);
+        engine
+            .create_ciphertext_record(ContentType::Handshake, 2, true, |fragment| fragment.push(0))
+            .expect("save flight record");
+        engine_packets(&mut engine, now);
+        for _ in 0..MAX_PREVIOUS_TRANSMISSIONS {
+            engine
+                .flight_resend("fill history")
+                .expect("resend within capacity");
+            engine_packets(&mut engine, now);
+        }
+        engine
+            .create_ciphertext_record(ContentType::Handshake, 2, true, |fragment| fragment.push(1))
+            .expect("save another flight record");
+        engine_packets(&mut engine, now);
+        // Put the record with room first: no partial resend may precede the error.
+        engine.flight_saved_records.swap(0, 1);
+        let next_seq = engine.hs_send_seq;
+        assert_eq!(
+            engine.flight_resend("history full"),
+            Err(Error::TransmitHistoryFull)
+        );
+        assert_eq!(engine.hs_send_seq, next_seq);
+        assert!(engine_packets(&mut engine, now).is_empty());
+        assert_eq!(engine.flight_saved_records.len(), 2);
+
+        engine
+            .process_ack(&ack_for(&[(2, 0)]))
+            .expect("ACK oldest transmission");
+        assert!(engine.flight_saved_records[1].acked);
+        engine
+            .flight_resend("skip ACKed full history")
+            .expect("resend remaining record");
+        assert_eq!(engine.hs_send_seq, next_seq + 1);
+        engine_packets(&mut engine, now);
+        engine
+            .process_ack(&ack_for(&[(2, next_seq)]))
+            .expect("ACK remaining record");
+        assert!(engine.flight_saved_records.is_empty());
+        assert_eq!(engine.flight_timeout, Timeout::Disabled);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn plaintext_and_ack_retransmissions_do_not_exhaust_history() {
+        let now = Instant::now();
+        let mut engine = protected_test_engine();
+        engine
+            .create_plaintext_record(ContentType::Handshake, true, |fragment| fragment.push(0))
+            .expect("save plaintext record");
+        engine
+            .create_ciphertext_record(ContentType::Ack, 3, true, |fragment| {
+                fragment.extend_from_slice(&[0, 0]);
+            })
+            .expect("save ACK record");
+        engine_packets(&mut engine, now);
+        for _ in 0..MAX_PREVIOUS_TRANSMISSIONS + 2 {
+            engine
+                .flight_resend("duplicate triggers resend")
+                .expect("unbounded ACK resend");
+            engine_packets(&mut engine, now);
+        }
+        assert!(
+            engine
+                .flight_saved_records
+                .iter()
+                .all(|entry| entry.fragment.len() == entry.fragment_len)
         );
     }
 }
