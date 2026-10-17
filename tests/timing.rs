@@ -1186,6 +1186,15 @@ fn server_clock_start_depends_on_fragment_structure_not_body_validity() {
         malformed_body[cipher_suites_length..cipher_suites_length + 2].fill(0xff);
         inputs.push(("malformed complete body", malformed_body));
 
+        // A well-framed but too-short body still starts the peer's attempt.
+        // Its rejection belongs to the body parser, not the timer.
+        let mut short_body = hello[..HANDSHAKE_BODY + 1].to_vec();
+        short_body[RECORD_LENGTH]
+            .copy_from_slice(&((HANDSHAKE_HEADER_LEN + 1) as u16).to_be_bytes());
+        short_body[MESSAGE_LENGTH].copy_from_slice(&1u32.to_be_bytes()[1..]);
+        short_body[FRAGMENT_LENGTH].copy_from_slice(&1u32.to_be_bytes()[1..]);
+        inputs.push(("short complete body", short_body));
+
         let mut future_message = hello.clone();
         future_message[MESSAGE_SEQ].copy_from_slice(&1u16.to_be_bytes());
         inputs.push(("unexpected handshake sequence", future_message));
@@ -1210,7 +1219,7 @@ fn server_clock_start_depends_on_fragment_structure_not_body_validity() {
                 .expect("discard or defer unrelated input");
             let output = drain(&mut server);
             assert!(output.0.is_empty(), "{version:?}: {label}");
-            if label == "malformed complete body" {
+            if matches!(label, "malformed complete body" | "short complete body") {
                 assert_eq!(output.1, base + BUDGET, "{version:?}: {label}");
                 assert_expires_at(&mut server, base + BUDGET);
                 continue;

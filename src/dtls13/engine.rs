@@ -427,13 +427,9 @@ impl Engine {
             return Err(Error::RenegotiationAttempt);
         }
 
-        let h = &handshake.header;
         let client_hello = first_record.record().sequence.epoch == 0
-            && h.msg_type == MessageType::ClientHello
-            && h.message_seq == 0
-            && h.length >= 42
-            && h.fragment_length > 0
-            && h.fragment_offset + h.fragment_length <= h.length;
+            && handshake.header.msg_type == MessageType::ClientHello
+            && handshake.header.message_seq == self.peer_handshake_seq_no;
 
         let search_result = self.queue_rx.binary_search_by(|item| {
             let key_other = item

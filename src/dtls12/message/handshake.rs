@@ -104,6 +104,13 @@ impl Handshake {
         let original_input = input;
         let (input, header) = Self::parse_header(input)?;
 
+        // Fragment bounds belong to framing; body validation follows reassembly.
+        if header.fragment_offset + header.fragment_length > header.length
+            || (header.msg_type == MessageType::ClientHello && header.fragment_length == 0)
+        {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
+
         let is_fragment = header.fragment_offset > 0 || header.fragment_length < header.length;
 
         if !as_fragment && is_fragment {
@@ -552,6 +559,7 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::*;
+
     use crate::buffer::Buf;
     use crate::dtls12::message::CompressionMethod;
     use crate::dtls12::message::Cookie;
@@ -1021,5 +1029,36 @@ mod tests {
         assert!(result.is_err());
         assert!(handshake.is_handled());
         assert!(transcript.is_empty());
+    }
+
+    #[test]
+    fn parse_rejects_invalid_client_hello_fragments() {
+        for (length, offset, fragment_length, valid) in [
+            (4u32, 3u32, 2u32, false), // extends past the message
+            (4, 0, 0, false),          // empty fragment
+            (0, 0, 0, false),          // empty ClientHello
+            (4, 2, 2, true),           // later fragment can arrive first
+            (1, 0, 1, true),           // body validity is decided after reassembly
+        ] {
+            let mut packet = vec![MessageType::ClientHello.as_u8()];
+            packet.extend_from_slice(&length.to_be_bytes()[1..]);
+            packet.extend_from_slice(&0u16.to_be_bytes());
+            packet.extend_from_slice(&offset.to_be_bytes()[1..]);
+            packet.extend_from_slice(&fragment_length.to_be_bytes()[1..]);
+            packet.resize(packet.len() + fragment_length as usize, 0);
+            assert_eq!(
+                Handshake::parse(&packet, 0, None, true).is_ok(),
+                valid,
+                "length={length}, offset={offset}, fragment_length={fragment_length}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_accepts_empty_server_hello_done() {
+        let mut packet = vec![0; 12];
+        packet[0] = MessageType::ServerHelloDone.as_u8();
+        assert!(Handshake::parse(&packet, 0, None, true).is_ok());
+        assert!(Handshake::parse(&packet, 0, None, false).is_ok());
     }
 }
