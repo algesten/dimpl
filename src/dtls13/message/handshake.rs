@@ -626,6 +626,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn empty_groups_rejected_before_commit() {
+        let mut body = MESSAGE[12..].to_vec();
+        append_extension(&mut body, 10, &[0, 0]);
+        check_body_before_commit(MessageType::ClientHello, &body, false);
+    }
+
+    #[test]
+    fn empty_srtp_rejected_before_commit() {
+        let mut body = MESSAGE[12..].to_vec();
+        append_extension(&mut body, 14, &[0, 0, 0]);
+        check_body_before_commit(MessageType::ClientHello, &body, false);
+    }
+
+    #[test]
+    fn empty_key_exchange_rejected_before_commit() {
+        let mut body = MESSAGE[12..].to_vec();
+        append_extension(&mut body, 51, &[0, 4, 0, 29, 0, 0]);
+        check_body_before_commit(MessageType::ClientHello, &body, false);
+    }
+
+    #[test]
+    fn empty_server_key_exchange_rejected_before_commit() {
+        let mut body = vec![0xfe, 0xfd];
+        body.extend_from_slice(&[0; 32]);
+        body.extend_from_slice(&[0, 0x13, 1, 0]);
+        append_extension(&mut body, 51, &[0, 29, 0, 0]);
+        check_body_before_commit(MessageType::ServerHello, &body, false);
+    }
+
+    #[test]
+    fn nonempty_unknown_extension_vectors_remain_structurally_valid() {
+        for (kind, payload) in [(10, &[0, 2, 0xff, 0xff][..]), (14, &[0, 2, 0xff, 0xff, 0])] {
+            let mut body = MESSAGE[12..].to_vec();
+            append_extension(&mut body, kind, payload);
+            check_body_before_commit(MessageType::ClientHello, &body, true);
+        }
+    }
+
+    #[test]
+    fn empty_client_shares_remains_structurally_valid() {
+        let mut body = MESSAGE[12..].to_vec();
+        append_extension(&mut body, 51, &[0, 0]);
+        check_body_before_commit(MessageType::ClientHello, &body, true);
+    }
+
     fn append_extension(body: &mut Vec<u8>, kind: u16, payload: &[u8]) {
         body.extend_from_slice(&((4 + payload.len()) as u16).to_be_bytes());
         body.extend_from_slice(&kind.to_be_bytes());
