@@ -1,9 +1,7 @@
 use super::{CompressionMethod, Dtls13CipherSuite, Extension};
-use super::{
-    ExtensionType, KeyShareHelloRetryRequest, KeyShareServerHello, NamedGroup,
-    SupportedVersionsServerHello, parse_cookie_extension,
-};
+use super::{ExtensionType, KeyShareHelloRetryRequest, KeyShareServerHello, NamedGroup};
 use super::{ProtocolVersion, Random, SessionId};
+use super::{SupportedVersionsServerHello, parse_cookie_extension};
 use crate::buffer::Buf;
 use arrayvec::ArrayVec;
 use nom::Err;
