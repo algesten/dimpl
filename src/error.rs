@@ -45,11 +45,9 @@ pub enum Error {
     ConfigError(ConfigError),
     /// Peer attempted renegotiation (not supported).
     RenegotiationAttempt,
-    /// Application data cannot be sent because the handshake is not yet complete.
-    ///
-    /// For auto-sense instances this means the version has not yet been
-    /// resolved.  Callers should buffer the data and retry once the
-    /// handshake advances.
+    /// Graceful shutdown is unavailable while an auto-sense instance has not
+    /// resolved its DTLS version. Drop the instance to discard it, or retry
+    /// closing after version selection.
     HandshakePending,
     /// The connection has been closed (close_notify sent or received).
     ConnectionClosed,
@@ -787,7 +785,7 @@ impl fmt::Display for Error {
             Error::ConfigError(err) => write!(f, "config error: {err}"),
             Error::RenegotiationAttempt => write!(f, "peer attempted renegotiation"),
             Error::HandshakePending => {
-                write!(f, "handshake pending: cannot send application data yet")
+                write!(f, "handshake pending: DTLS version not yet resolved")
             }
             Error::TooManyClientHelloFragments => write!(f, "too many client hello fragments"),
             Error::ConnectionClosed => write!(f, "connection closed"),

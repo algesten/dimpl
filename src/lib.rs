@@ -815,15 +815,20 @@ impl Dtls {
 
     /// Send application data over the established DTLS session.
     ///
-    /// Returns [`Error::HandshakePending`] if the DTLS version has not
-    /// yet been resolved (auto-sense pending).  Callers should buffer
-    /// the data externally and retry after the handshake progresses.
-    pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
+    /// Returns the number of bytes accepted for buffering or transmission, not
+    /// delivery. Currently accepts the entire slice or none of it.
+    ///
+    /// Returns `Ok(0)` while an auto-sense instance has not resolved its DTLS
+    /// version. Retain unaccepted data and retry after the handshake progresses.
+    /// Once the version is selected, data sent before handshake completion is
+    /// buffered internally and returns `Ok(data.len())`. An empty slice also
+    /// returns `Ok(0)` on success; this does not indicate handshake readiness.
+    pub fn send_application_data(&mut self, data: &[u8]) -> Result<usize, Error> {
         // unwrap is ok, we only have an Option to deal with pending auto.
         let inner = self.inner.as_mut().unwrap();
 
         if inner.is_pending() {
-            return Err(Error::HandshakePending);
+            return Ok(0);
         }
 
         match inner {
@@ -831,8 +836,9 @@ impl Dtls {
             Inner::Server12(server) => server.send_application_data(data),
             Inner::Client13(client) => client.send_application_data(data),
             Inner::Server13(server) => server.send_application_data(data),
-            Inner::ClientPending(_) => Err(Error::HandshakePending),
+            Inner::ClientPending(_) => return Ok(0),
         }
+        .map(|()| data.len())
     }
 
     /// Initiate graceful shutdown by sending a `close_notify` alert.
@@ -1143,8 +1149,7 @@ mod test {
     #[test]
     fn test_auto_server_send_application_data_pending() {
         let mut dtls = new_instance_auto();
-        let err = dtls.send_application_data(b"early data").unwrap_err();
-        assert!(matches!(err, Error::HandshakePending));
+        assert_eq!(dtls.send_application_data(b"early data"), Ok(0));
     }
 
     #[test]
