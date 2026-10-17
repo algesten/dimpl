@@ -228,7 +228,8 @@ impl Engine {
         let cs = self.cipher_suite;
         let incoming = Incoming::parse_packet(packet, self, cs)?;
         if let Some(incoming) = incoming {
-            return Ok(self.insert_incoming(incoming)?);
+            let client_hello = self.insert_incoming(incoming)?;
+            return Ok(client_hello);
         }
 
         Ok(false)
