@@ -214,6 +214,12 @@ impl Handshake {
             return Err(crate::InternalError::parse_incomplete());
         }
 
+        // Keep structural parse failures transient, even for messages normally
+        // sent encrypted, such as CertificateRequest. The message type alone
+        // does not prove that its records were protected:
+        // the receive path also accepts epoch-zero handshake records. Any policy
+        // to terminate on authenticated malformed messages must account for the
+        // actual protection of their records and apply consistently across bodies.
         let (rest, body) = if allow_unknown_client_hello_suites {
             match Body::parse_allow_unknown_client_hello_suites(
                 buffer,

@@ -413,8 +413,14 @@ impl State {
                 .engine
                 .next_client_hello_for_auto_sense(&mut server.defragment_buffer)
                 .inspect_err(|_| {
-                    // A rejected assembled hello must not be replayed on fallback.
-                    server.retained_hello.clear();
+                    // Body rejection consumes the fragments; assembly errors
+                    // leave the same candidate queued and still needing replay.
+                    if !server
+                        .engine
+                        .has_complete_handshake(MessageType::ClientHello)
+                    {
+                        server.retained_hello.clear();
+                    }
                 })?
         } else {
             server
@@ -1444,6 +1450,97 @@ fn handshake_create_certificate_request(body: &mut Buf) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn auto_retains_hello_when_assembly_is_incomplete() {
+        // The coverage check sees both bytes, but defragmentation stops at the
+        // different message type, leaving both fragments queued for later.
+        let fragments = [
+            (MessageType::ClientHello, 0, 1),
+            (MessageType::ServerHello, 1, 1),
+        ];
+        let packet = client_hello_fragments(2, &fragments);
+        assert_auto_retains_unconsumed_hello(packet, false);
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn auto_retains_hello_when_fragment_capacity_is_exceeded() {
+        let fragments: Vec<_> = (0..51)
+            .map(|offset| (MessageType::ClientHello, offset, 1))
+            .collect();
+        let packet = client_hello_fragments(51, &fragments);
+        assert_auto_retains_unconsumed_hello(packet, true);
+    }
+
+    #[cfg(feature = "rcgen")]
+    fn client_hello_fragments(length: u32, fragments: &[(MessageType, u32, u32)]) -> Vec<u8> {
+        let mut packet = Vec::new();
+        // Each record holds at most eight parsed handshake fragments.
+        for (seq, record_fragments) in fragments.chunks(8).enumerate() {
+            let mut record = Vec::new();
+            for &(kind, offset, fragment_len) in record_fragments {
+                record.push(kind.as_u8());
+                record.extend_from_slice(&length.to_be_bytes()[1..]);
+                record.extend_from_slice(&0u16.to_be_bytes());
+                record.extend_from_slice(&offset.to_be_bytes()[1..]);
+                record.extend_from_slice(&fragment_len.to_be_bytes()[1..]);
+                record.resize(record.len() + fragment_len as usize, 0);
+            }
+            packet.push(ContentType::Handshake.as_u8());
+            packet.extend_from_slice(&[0xfe, 0xfd]);
+            packet.extend_from_slice(&0u16.to_be_bytes());
+            packet.extend_from_slice(&(seq as u64).to_be_bytes()[2..]);
+            packet.extend_from_slice(&(record.len() as u16).to_be_bytes());
+            packet.extend_from_slice(&record);
+        }
+        packet
+    }
+
+    #[cfg(feature = "rcgen")]
+    fn assert_auto_retains_unconsumed_hello(packet: Vec<u8>, capacity_error: bool) {
+        use crate::certificate::generate_self_signed_certificate;
+        use crate::error::TransientError;
+
+        let now = Instant::now();
+        let certificate = generate_self_signed_certificate().expect("certificate");
+        let mut server = Server::new_auto(Arc::new(Config::default()), certificate, now);
+        server.handle_timeout(now).expect("server clock");
+        let mut output = [0; 2048];
+        while !matches!(server.poll_output(&mut output), Output::Timeout(_)) {}
+
+        server
+            .handle_packet(&packet)
+            .expect("discard transient error");
+        while !matches!(server.poll_output(&mut output), Output::Timeout(_)) {}
+        assert!(server.engine.transcript.is_empty());
+
+        // Reattempting assembly proves that the candidate was not consumed.
+        let error = server
+            .engine
+            .next_client_hello_for_auto_sense(&mut server.defragment_buffer)
+            .expect_err("unconsumed fragments still fail assembly");
+        if capacity_error {
+            assert!(matches!(
+                error,
+                InternalError::Transient(TransientError::TooManyRecords)
+            ));
+        } else {
+            assert!(matches!(
+                error,
+                InternalError::Transient(TransientError::ParseIncomplete)
+            ));
+        }
+
+        let (_, _, _, retained) = server.into_parts();
+        assert_eq!(
+            retained.len(),
+            1,
+            "preserve raw packets for DTLS 1.2 fallback"
+        );
+        assert_eq!(&retained[0][..], packet.as_slice());
+    }
 
     #[test]
     fn certificate_request_omits_empty_certificate_authorities() {
