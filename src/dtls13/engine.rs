@@ -32,7 +32,7 @@ use crate::{Config, DtlsCertificate, Error, InternalError, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
-/// Bound record-number history without allocating on each retransmission.
+/// Bound record-number history retained in each saved record's pooled buffer.
 const MAX_PREVIOUS_TRANSMISSIONS: usize = 32;
 
 /// Maximum DTLS sequence number (2^48 - 1). Per RFC 9147 §4.2,
@@ -200,7 +200,8 @@ struct Entry {
     content_type: ContentType,
     epoch: u16,
     send_seq: u64,
-    previous_send_seqs: ArrayVec<u64, MAX_PREVIOUS_TRANSMISSIONS>,
+    fragment_len: usize,
+    /// Payload followed by prior transmission sequence numbers (8 bytes each).
     fragment: Buf,
     acked: bool,
 }
@@ -714,7 +715,7 @@ impl Engine {
             !entry.acked
                 && entry.epoch >= 2
                 && entry.content_type == ContentType::Handshake
-                && entry.previous_send_seqs.is_full()
+                && entry.fragment.len() - entry.fragment_len >= MAX_PREVIOUS_TRANSMISSIONS * 8
         }) {
             return Err(Error::TransmitHistoryFull);
         }
@@ -736,7 +737,7 @@ impl Engine {
                 // Capture the sequence number the retransmitted record will use
                 let new_seq = self.sequence_epoch_0.sequence_number;
                 self.create_plaintext_record(entry.content_type, false, |fragment| {
-                    fragment.extend_from_slice(&entry.fragment);
+                    fragment.extend_from_slice(entry.fragment());
                 })?;
                 entry.send_seq = new_seq;
             } else {
@@ -755,15 +756,16 @@ impl Engine {
                     entry.epoch,
                     false,
                     |fragment| {
-                        fragment.extend_from_slice(&entry.fragment);
+                        fragment.extend_from_slice(entry.fragment());
                     },
                 )?;
                 // ACKs may name any transmission of a protected handshake
                 // record (RFC 9147 section 7.2). ACK records themselves are
                 // never ACKed and can be resent without retaining history.
                 if entry.content_type == ContentType::Handshake {
-                    // Capacity was checked for the entire flight before sending.
-                    entry.previous_send_seqs.push(entry.send_seq);
+                    entry
+                        .fragment
+                        .extend_from_slice(&entry.send_seq.to_be_bytes());
                 }
                 entry.send_seq = new_seq;
             }
@@ -941,7 +943,7 @@ impl Engine {
                 content_type,
                 epoch: 0,
                 send_seq: current_seq,
-                previous_send_seqs: ArrayVec::new(),
+                fragment_len: fragment.len(),
                 fragment: clone,
                 acked: false,
             });
@@ -1030,7 +1032,7 @@ impl Engine {
                 content_type,
                 epoch,
                 send_seq: seq,
-                previous_send_seqs: ArrayVec::new(),
+                fragment_len: fragment.len(),
                 fragment: clone,
                 acked: false,
             });
@@ -1410,9 +1412,7 @@ impl Engine {
 
             // Mark matching flight entries as acknowledged
             for entry in &mut self.flight_saved_records {
-                if entry.epoch as u64 == ack_epoch
-                    && (entry.send_seq == ack_seq || entry.previous_send_seqs.contains(&ack_seq))
-                {
+                if entry.epoch as u64 == ack_epoch && entry.was_sent_as(ack_seq) {
                     entry.acked = true;
                 }
             }
@@ -2307,6 +2307,19 @@ impl Engine {
     }
 }
 
+impl Entry {
+    fn fragment(&self) -> &[u8] {
+        &self.fragment[..self.fragment_len]
+    }
+
+    fn was_sent_as(&self, seq: u64) -> bool {
+        self.send_seq == seq
+            || self.fragment[self.fragment_len..]
+                .chunks_exact(8)
+                .any(|previous| previous == seq.to_be_bytes())
+    }
+}
+
 // =========================================================================
 // Helper Functions
 // =========================================================================
@@ -2934,7 +2947,7 @@ mod tests {
             content_type: ContentType::Handshake,
             epoch: 2,
             send_seq: 7,
-            previous_send_seqs: ArrayVec::new(),
+            fragment_len: fragment.len(),
             fragment,
             acked: false,
         });
@@ -3080,8 +3093,14 @@ mod tests {
         let original_ack = engine_packets(&mut peer, now);
         assert!(!original_ack.is_empty());
 
-        let later = now + Duration::from_secs(2);
-        sender.handle_timeout(later).expect("retransmit KeyUpdate");
+        sender
+            .handle_timeout(now + Duration::from_secs(2))
+            .expect("first KeyUpdate resend");
+        assert!(!engine_packets(&mut sender, now + Duration::from_secs(2)).is_empty());
+        let later = now + Duration::from_secs(7);
+        sender
+            .handle_timeout(later)
+            .expect("second KeyUpdate resend");
         let retransmission = engine_packets(&mut sender, later);
         assert!(!retransmission.is_empty());
         let ack = if lost {
@@ -3218,7 +3237,7 @@ mod tests {
             engine
                 .flight_saved_records
                 .iter()
-                .all(|entry| entry.previous_send_seqs.is_empty())
+                .all(|entry| entry.fragment.len() == entry.fragment_len)
         );
     }
 }

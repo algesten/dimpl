@@ -74,7 +74,7 @@ fn accept_packets(endpoint: &mut Dtls, packets: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
 }
 
 fn assert_connection_survives(client: &mut Dtls, server: &mut Dtls, base: Instant) {
-    for second in 3..=120 {
+    for second in 8..=120 {
         let now = base + Duration::from_secs(second);
         client
             .handle_timeout(now)
@@ -91,6 +91,21 @@ fn assert_connection_survives(client: &mut Dtls, server: &mut Dtls, base: Instan
 
     assert_application_data(client, server);
     assert_application_data(server, client);
+}
+
+fn retransmit_final_flight(client: &mut Dtls, now: Instant) -> Vec<Vec<u8>> {
+    let mut retransmission = Vec::new();
+    for second in [2, 7] {
+        client
+            .handle_timeout(now + Duration::from_secs(second))
+            .expect("retransmit final flight");
+        retransmission = drain_outputs(client).packets;
+        assert!(
+            !retransmission.is_empty(),
+            "final flight must be retransmitted"
+        );
+    }
+    retransmission
 }
 
 fn assert_application_data(sender: &mut Dtls, receiver: &mut Dtls) {
@@ -110,14 +125,7 @@ fn assert_application_data(sender: &mut Dtls, receiver: &mut Dtls) {
 fn final_flight_accepts_late_ack_for_original_transmission() {
     for auto in [false, true] {
         let (mut client, mut server, now, ack) = handshake_with_held_final_ack(auto);
-        client
-            .handle_timeout(now + Duration::from_secs(2))
-            .expect("retransmit final flight");
-        let retransmission = drain_outputs(&mut client).packets;
-        assert!(
-            !retransmission.is_empty(),
-            "final flight must be retransmitted"
-        );
+        let _lost_retransmissions = retransmit_final_flight(&mut client, now);
 
         assert!(accept_packets(&mut client, ack).is_empty());
         // The original ACK is sufficient even if the retransmission is lost.
@@ -129,14 +137,7 @@ fn final_flight_accepts_late_ack_for_original_transmission() {
 fn final_flight_recovers_after_lost_ack() {
     for auto in [false, true] {
         let (mut client, mut server, now, _lost_ack) = handshake_with_held_final_ack(auto);
-        client
-            .handle_timeout(now + Duration::from_secs(2))
-            .expect("retransmit final flight");
-        let retransmission = drain_outputs(&mut client).packets;
-        assert!(
-            !retransmission.is_empty(),
-            "final flight must be retransmitted"
-        );
+        let retransmission = retransmit_final_flight(&mut client, now);
 
         let ack = accept_packets(&mut server, retransmission);
         assert!(!ack.is_empty(), "server must retransmit its final ACK");
