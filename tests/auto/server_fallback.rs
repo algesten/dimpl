@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, Error, Output, ProtocolVersion, PskResolver};
+use dimpl::{Config, Dtls, Output, ProtocolVersion, PskResolver};
 
 use crate::common::*;
 
