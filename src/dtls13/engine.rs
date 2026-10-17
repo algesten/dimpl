@@ -360,28 +360,10 @@ impl Engine {
         let Some(incoming) = Incoming::parse_packet(packet, self, cs)? else {
             return Ok(false);
         };
-        if self.is_client || self.timers.handshake_deadline() != Timeout::Unarmed {
-            self.insert_incoming(incoming)?;
-            return Ok(false);
-        }
-        let client_hello = incoming
-            .records()
-            .iter()
-            .filter(|record| record.record().sequence.epoch == 0)
-            .flat_map(|record| record.handshakes())
-            .any(|handshake| {
-                let h = &handshake.header;
-                h.msg_type == MessageType::ClientHello
-                    && h.message_seq == 0
-                    && h.length >= 42
-                    && h.fragment_length > 0
-                    && h.fragment_offset + h.fragment_length <= h.length
-            });
-        self.insert_incoming(incoming)?;
-        Ok(client_hello)
+        Ok(self.insert_incoming(incoming)?)
     }
 
-    fn insert_incoming(&mut self, incoming: Incoming) -> Result<(), Error> {
+    fn insert_incoming(&mut self, incoming: Incoming) -> Result<bool, Error> {
         if self.queue_rx.len() >= self.config.max_queue_rx() {
             warn!(
                 "Receive queue full (max {}): {:?}",
@@ -395,11 +377,11 @@ impl Engine {
         if incoming.first().first_handshake().is_some() {
             self.insert_incoming_handshake(incoming)
         } else {
-            self.insert_incoming_non_handshake(incoming)
+            self.insert_incoming_non_handshake(incoming).map(|_| false)
         }
     }
 
-    fn insert_incoming_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
+    fn insert_incoming_handshake(&mut self, incoming: Incoming) -> Result<bool, Error> {
         let first_record = incoming.first();
         let handshake = first_record
             .first_handshake()
@@ -432,7 +414,7 @@ impl Engine {
         // Drop old duplicates we've already processed
         if handshake.header.message_seq < self.peer_handshake_seq_no {
             self.recycle_incoming(incoming);
-            return Ok(());
+            return Ok(false);
         }
 
         // Reject new handshakes after initial handshake is complete,
@@ -444,6 +426,14 @@ impl Engine {
             self.recycle_incoming(incoming);
             return Err(Error::RenegotiationAttempt);
         }
+
+        let h = &handshake.header;
+        let client_hello = first_record.record().sequence.epoch == 0
+            && h.msg_type == MessageType::ClientHello
+            && h.message_seq == 0
+            && h.length >= 42
+            && h.fragment_length > 0
+            && h.fragment_offset + h.fragment_length <= h.length;
 
         let search_result = self.queue_rx.binary_search_by(|item| {
             let key_other = item
@@ -507,7 +497,7 @@ impl Engine {
             }
         }
 
-        Ok(())
+        Ok(client_hello)
     }
 
     fn insert_incoming_non_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {
