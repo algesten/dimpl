@@ -226,10 +226,12 @@ impl Engine {
     /// Queue a datagram and report whether it contains the first ClientHello fragment.
     pub fn parse_packet(&mut self, packet: &[u8]) -> Result<bool, InternalError> {
         let cs = self.cipher_suite;
-        let Some(incoming) = Incoming::parse_packet(packet, self, cs)? else {
-            return Ok(false);
-        };
-        Ok(self.insert_incoming(incoming)?)
+        let incoming = Incoming::parse_packet(packet, self, cs)?;
+        if let Some(incoming) = incoming {
+            return Ok(self.insert_incoming(incoming)?);
+        }
+
+        Ok(false)
     }
 
     /// Insert a parsed datagram into the receive queue.
