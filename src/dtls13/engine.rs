@@ -359,8 +359,8 @@ impl Engine {
         let cs = self.cipher_suite;
         let incoming = Incoming::parse_packet(packet, self, cs)?;
         if let Some(incoming) = incoming {
-            let client_hello = self.insert_incoming(incoming)?;
-            return Ok(client_hello);
+            let is_client_hello = self.insert_incoming(incoming)?;
+            return Ok(is_client_hello);
         }
 
         Ok(false)
@@ -430,7 +430,7 @@ impl Engine {
             return Err(Error::RenegotiationAttempt);
         }
 
-        let client_hello = first_record.record().sequence.epoch == 0
+        let is_client_hello = first_record.record().sequence.epoch == 0
             && handshake.header.msg_type == MessageType::ClientHello
             && handshake.header.message_seq == self.peer_handshake_seq_no;
 
@@ -496,7 +496,7 @@ impl Engine {
             }
         }
 
-        Ok(client_hello)
+        Ok(is_client_hello)
     }
 
     fn insert_incoming_non_handshake(&mut self, incoming: Incoming) -> Result<(), Error> {

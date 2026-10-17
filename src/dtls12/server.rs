@@ -204,12 +204,15 @@ impl Server {
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        match self.engine.parse_packet(packet).and_then(|client_hello| {
-            if client_hello {
-                self.engine.start_handshake(self.last_now);
-            }
-            self.make_progress()
-        }) {
+        match self
+            .engine
+            .parse_packet(packet)
+            .and_then(|is_client_hello| {
+                if is_client_hello {
+                    self.engine.start_handshake(self.last_now);
+                }
+                self.make_progress()
+            }) {
             Ok(()) => Ok(()),
             Err(e) => e.into_public_error().map_or(Ok(()), Err),
         }

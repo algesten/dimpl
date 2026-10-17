@@ -270,12 +270,15 @@ impl Server {
             self.retained_hello.push_back(packet.to_buf());
         }
 
-        match self.engine.parse_packet(packet).and_then(|client_hello| {
-            if client_hello {
-                self.engine.start_handshake(self.last_now);
-            }
-            self.make_progress()
-        }) {
+        match self
+            .engine
+            .parse_packet(packet)
+            .and_then(|is_client_hello| {
+                if is_client_hello {
+                    self.engine.start_handshake(self.last_now);
+                }
+                self.make_progress()
+            }) {
             Ok(()) => {}
             Err(e) => {
                 if let Some(err) = e.into_public_error() {
