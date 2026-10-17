@@ -204,7 +204,7 @@ impl Server {
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        let handshake_was_idle = self.engine.handshake_deadline() == Timeout::Unarmed;
+        let initial_client_hello = self.engine.awaiting_initial_client_hello();
         match self
             .engine
             .handle_packet(packet, self.last_now)
@@ -214,7 +214,7 @@ impl Server {
             Err(error) => match error.into_public_error() {
                 Some(error) => Err(error),
                 None => {
-                    if handshake_was_idle && self.state == State::AwaitClientHello {
+                    if initial_client_hello && self.state == State::AwaitClientHello {
                         self.engine.discard_initial_client_hello();
                     }
                     Ok(())

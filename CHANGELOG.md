@@ -10,7 +10,7 @@
   * Reject zero or over-3650-day `handshake_timeout` and `flight_start_rto` in `ConfigBuilder::build` #161
   * Apply retransmission jitter as ±25% of the RTO instead of ±250 ms with a 50 ms floor #161
   * Limit duplicate-triggered flight resends to `flight_retries`, except answers to the peer's final flight #161
-  * Accept a valid ClientHello after a server rejects a malformed first ClientHello #161
+  * Accept a corrected ClientHello within the original per-peer deadline after rejecting a malformed body #161
 
 # 0.7.6
 

@@ -204,7 +204,7 @@ fn corrupt_client_hello_extension(hello: &mut [u8], extension_type: u16) {
 }
 
 #[test]
-fn rejected_extensions_leave_server_idle_until_a_valid_client_hello() {
+fn rejected_extensions_and_corrected_hello_share_original_deadline() {
     let base = Instant::now();
     let certificate = generate_self_signed_certificate().expect("certificate");
     let config = Arc::new(
@@ -235,15 +235,19 @@ fn rejected_extensions_leave_server_idle_until_a_valid_client_hello() {
             let rejected = drain(&mut server);
             assert!(rejected.0.is_empty());
             assert!(
-                rejected.1 > base + BUDGET,
+                rejected.1 == base + BUDGET,
                 "{client_version:?} -> {server_version:?}"
             );
 
-            let reception = base + Duration::from_secs(1);
+            let reception = base + Duration::from_millis(50);
             server
                 .handle_timeout(reception)
-                .expect("rejected input did not start the clock");
+                .expect("original budget remains");
             drain(&mut server);
+            server
+                .handle_packet(&malformed)
+                .expect("repeated rejection");
+            assert_eq!(drain(&mut server).1, base + BUDGET);
             server
                 .handle_packet(&hello[0])
                 .expect("valid ClientHello after rejected input");
@@ -252,8 +256,8 @@ fn rejected_extensions_leave_server_idle_until_a_valid_client_hello() {
                 !accepted.0.is_empty(),
                 "{client_version:?} -> {server_version:?}, extension {extension_type}: {server:?}"
             );
-            assert_eq!(accepted.1, reception + BUDGET);
-            assert_expires_at(&mut server, reception + BUDGET);
+            assert_eq!(accepted.1, base + BUDGET);
+            assert_expires_at(&mut server, base + BUDGET);
         }
     }
 }
@@ -1216,7 +1220,7 @@ fn server_fragments_duplicates_and_auto_fallback_preserve_first_reception() {
 }
 
 #[test]
-fn rejected_client_hellos_and_unrelated_input_do_not_start_server_clocks() {
+fn server_clock_start_depends_on_fragment_structure_not_body_validity() {
     let base = Instant::now();
     let certificate = generate_self_signed_certificate().expect("certificate");
     for &version in VERSIONS {
@@ -1274,6 +1278,11 @@ fn rejected_client_hellos_and_unrelated_input_do_not_start_server_clocks() {
                 .expect("discard or defer unrelated input");
             let output = drain(&mut server);
             assert!(output.0.is_empty(), "{version:?}: {label}");
+            if label == "malformed complete body" {
+                assert_eq!(output.1, base + BUDGET, "{version:?}: {label}");
+                assert_expires_at(&mut server, base + BUDGET);
+                continue;
+            }
             assert!(
                 output.1 > base + BUDGET,
                 "{version:?}: {label} started the clock"

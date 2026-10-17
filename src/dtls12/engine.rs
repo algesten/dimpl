@@ -9,7 +9,7 @@ use crate::crypto::{Aad, Iv, Nonce};
 use crate::dtls12::context::{AuthMode, CryptoContext};
 use crate::dtls12::incoming::{Incoming, Record, RecordHandler};
 use crate::dtls12::message::{Body, HashAlgorithm, Header, MessageType, ProtocolVersion, Sequence};
-use crate::dtls12::message::{ClientHello, ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
+use crate::dtls12::message::{ContentType, DTLSRecord, Dtls12CipherSuite, Handshake};
 use crate::error::bounded_error_len;
 use crate::timer::{HandshakeTimers, Timeout, deadline};
 use crate::util::accepts_client_hello_fragment;
@@ -172,12 +172,12 @@ impl Engine {
         self.timers.set_handshake_deadline(deadline);
     }
 
-    pub fn handshake_deadline(&self) -> Timeout {
-        self.timers.handshake_deadline()
+    pub fn awaiting_initial_client_hello(&self) -> bool {
+        self.peer_handshake_seq_no == 0
     }
 
+    /// Allow a corrected initial hello without resetting this peer's deadline.
     pub fn discard_initial_client_hello(&mut self) {
-        self.timers.set_handshake_deadline(Timeout::Unarmed);
         self.peer_handshake_seq_no = 0;
         self.transcript.clear();
     }
@@ -243,7 +243,7 @@ impl Engine {
                         && record.handshakes().iter().any(|handshake| {
                             let header = &handshake.header;
                             match &handshake.body {
-                                Body::Fragment(range)
+                                Body::Fragment(_)
                                     if header.msg_type == MessageType::ClientHello
                                         && header.message_seq == self.peer_handshake_seq_no =>
                                 {
@@ -251,9 +251,6 @@ impl Engine {
                                         header.length,
                                         header.fragment_offset,
                                         header.fragment_length,
-                                        record.buffer(),
-                                        range.clone(),
-                                        ClientHello::parse,
                                     )
                                 }
                                 _ => false,

@@ -260,7 +260,7 @@ impl Server {
             return Ok(());
         }
 
-        let handshake_was_idle = self.engine.handshake_deadline() == Timeout::Unarmed;
+        let initial_client_hello = self.engine.awaiting_initial_client_hello();
         // In auto-sense mode, buffer raw packets while still waiting for
         // the ClientHello so they can be replayed to Server12 on fallback.
         if self.auto_mode && self.state == State::AwaitClientHello {
@@ -281,7 +281,7 @@ impl Server {
                 if let Some(err) = e.into_public_error() {
                     return Err(err);
                 }
-                if handshake_was_idle && self.state == State::AwaitClientHello {
+                if initial_client_hello && self.state == State::AwaitClientHello {
                     self.engine.discard_initial_client_hello();
                     self.retained_hello.clear();
                 }

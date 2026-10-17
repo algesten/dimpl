@@ -17,7 +17,6 @@ use crate::crypto::SupportedKxGroup;
 use crate::crypto::prf_hkdf;
 use crate::dtls13::incoming::{Incoming, Record, RecordHandler};
 use crate::dtls13::message::Body;
-use crate::dtls13::message::ClientHello;
 use crate::dtls13::message::ContentType;
 use crate::dtls13::message::Dtls13CipherSuite;
 use crate::dtls13::message::Dtls13Record;
@@ -272,12 +271,12 @@ impl Engine {
         self.is_client = is_client;
     }
 
-    pub fn handshake_deadline(&self) -> Timeout {
-        self.timers.handshake_deadline()
+    pub fn awaiting_initial_client_hello(&self) -> bool {
+        self.peer_handshake_seq_no == 0
     }
 
+    /// Allow a corrected initial hello without resetting this peer's deadline.
     pub fn discard_initial_client_hello(&mut self) {
-        self.timers.set_handshake_deadline(Timeout::Unarmed);
         self.peer_handshake_seq_no = 0;
         self.transcript.clear();
     }
@@ -374,7 +373,7 @@ impl Engine {
                         && record.handshakes().iter().any(|handshake| {
                             let header = &handshake.header;
                             match &handshake.body {
-                                Body::Fragment(range)
+                                Body::Fragment(_)
                                     if header.msg_type == MessageType::ClientHello
                                         && header.message_seq == self.peer_handshake_seq_no =>
                                 {
@@ -382,9 +381,6 @@ impl Engine {
                                         header.length,
                                         header.fragment_offset,
                                         header.fragment_length,
-                                        record.buffer(),
-                                        range.clone(),
-                                        ClientHello::parse_allow_unknown_suites,
                                     )
                                 }
                                 _ => false,

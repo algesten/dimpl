@@ -674,9 +674,10 @@ impl Dtls {
     ///
     /// Refresh the logical clock with [`Self::handle_timeout`] before receiving
     /// packets at a new instant, even if no advertised timer is due. A server's
-    /// overall handshake deadline starts at that time when the first valid
-    /// ClientHello fragment is accepted. Rejected or unrelated input does not
-    /// start the deadline. Poll until [`Output::Timeout`] after each mutation.
+    /// overall handshake deadline starts at that time when the first structurally
+    /// valid ClientHello fragment is accepted. Later body validation failures do
+    /// not reset this peer's deadline. Unrelated input does not start the deadline.
+    /// Poll until [`Output::Timeout`] after each mutation.
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
         // unwrap is ok. The inner is only Option to work around borrowing
         // issues when doing auto-sensing of DTLS version.

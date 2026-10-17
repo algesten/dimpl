@@ -396,7 +396,9 @@ impl ConfigBuilder {
     ///
     /// Starts when the client emits its first ClientHello packet through
     /// [`crate::Output::Packet`], or when the server accepts its first
-    /// ClientHello fragment. Construction and idle time do not consume this
+    /// structurally valid ClientHello fragment, even if its body is later rejected.
+    /// A corrected ClientHello shares the same deadline for this peer.
+    /// Construction and idle time do not consume this
     /// budget. Uses the logical time supplied to [`crate::Dtls::handle_timeout`].
     ///
     /// The absolute deadline survives Auto version selection, cookie exchanges,
