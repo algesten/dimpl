@@ -102,6 +102,9 @@ impl UseSrtpExtension {
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], UseSrtpExtension> {
         let (input, profiles_length) = be_u16(input)?;
+        if profiles_length == 0 {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
         let (input, profiles_data) = take(profiles_length)(input)?;
 
         // Parse the profiles (ignore unknown profile IDs instead of failing)

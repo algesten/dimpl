@@ -56,6 +56,9 @@ impl ECPointFormatsExtension {
     #[allow(unused)]
     pub fn parse(input: &[u8]) -> IResult<&[u8], ECPointFormatsExtension> {
         let (input, list_len) = be_u8(input)?;
+        if list_len == 0 {
+            return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
+        }
         let (input, formats_data) = take(list_len)(input)?;
         if !input.is_empty() {
             return Err(Err::Failure(Error::new(input, ErrorKind::LengthValue)));
