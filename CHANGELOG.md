@@ -1,11 +1,10 @@
 # Unreleased
 
   * Update OpenSSL test dependency to resolve security advisories #176
-  * Remove `HandshakePending`; closing an unresolved Auto endpoint now aborts normally #175
-  * Return accepted byte counts from `send_application_data`, with zero while Auto is pending #175
-
-  * Accept DTLS 1.3 ACKs for earlier handshake and KeyUpdate transmissions #173
+  * Remove `HandshakePending`. All errors are fatal. #175
+  * Return accepted byte counts from `send_application_data` #175
   * Parse DTLS 1.2/1.3 handshake payloads before committing transcript state #174
+  * Accept DTLS 1.3 ACKs for earlier handshake and KeyUpdate transmissions #173
 
 # 0.7.6
 
