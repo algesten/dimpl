@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Update OpenSSL test dependency to resolve security advisories #176
   * Accept DTLS 1.3 ACKs for earlier handshake and KeyUpdate transmissions #173
 
 # 0.7.6
