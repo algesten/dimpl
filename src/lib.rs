@@ -560,7 +560,7 @@ impl Dtls {
     /// [`poll_output`](Self::poll_output). Callers should continue polling
     /// until this returns false or [`is_closed`](Self::is_closed) returns true.
     ///
-    /// Pending auto-sense handshakes are neither closing nor closed.
+    /// Pending auto-sense handshakes close immediately when `close()` is called.
     pub fn is_closing(&self) -> bool {
         let Some(inner) = self.inner.as_ref() else {
             return false;
@@ -589,7 +589,7 @@ impl Dtls {
     /// its internal closed state before the queued `close_notify` packet has
     /// been polled out; this method remains false until that output is drained.
     ///
-    /// Pending auto-sense handshakes are neither closing nor closed.
+    /// Pending auto-sense handshakes close immediately when `close()` is called.
     pub fn is_closed(&self) -> bool {
         let Some(inner) = self.inner.as_ref() else {
             return false;
@@ -599,14 +599,8 @@ impl Dtls {
             Inner::Client12(client) => client.is_closed(),
             Inner::Server12(server) => server.is_closed(),
             Inner::Client13(client) => client.is_closed(),
-            Inner::Server13(server) => {
-                if server.is_auto_mode() {
-                    false
-                } else {
-                    server.is_closed()
-                }
-            }
-            Inner::ClientPending(_) => false,
+            Inner::Server13(server) => server.is_closed(),
+            Inner::ClientPending(client) => client.is_closed(),
         }
     }
 
@@ -685,7 +679,7 @@ impl Dtls {
             Inner::Server12(server) => server.handle_packet(packet),
             Inner::Client13(client) => client.handle_packet(packet),
             Inner::Server13(server) => server.handle_packet(packet),
-            Inner::ClientPending(_) => unreachable!(),
+            Inner::ClientPending(_) => Ok(()),
         }
     }
 
@@ -815,15 +809,20 @@ impl Dtls {
 
     /// Send application data over the established DTLS session.
     ///
-    /// Returns [`Error::HandshakePending`] if the DTLS version has not
-    /// yet been resolved (auto-sense pending).  Callers should buffer
-    /// the data externally and retry after the handshake progresses.
-    pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
+    /// Returns the number of bytes accepted for buffering or transmission, not
+    /// delivery. Currently accepts the entire slice or none of it.
+    ///
+    /// Returns `Ok(0)` while an auto-sense instance has not resolved its DTLS
+    /// version. Retain unaccepted data and retry after the handshake progresses.
+    /// Once the version is selected, data sent before handshake completion is
+    /// buffered internally and returns `Ok(data.len())`. An empty slice also
+    /// returns `Ok(0)` on success; this does not indicate handshake readiness.
+    pub fn send_application_data(&mut self, data: &[u8]) -> Result<usize, Error> {
         // unwrap is ok, we only have an Option to deal with pending auto.
         let inner = self.inner.as_mut().unwrap();
 
         if inner.is_pending() {
-            return Err(Error::HandshakePending);
+            return Ok(0);
         }
 
         match inner {
@@ -831,8 +830,9 @@ impl Dtls {
             Inner::Server12(server) => server.send_application_data(data),
             Inner::Client13(client) => client.send_application_data(data),
             Inner::Server13(server) => server.send_application_data(data),
-            Inner::ClientPending(_) => Err(Error::HandshakePending),
+            Inner::ClientPending(_) => return Err(Error::ConnectionClosed),
         }
+        .map(|()| data.len())
     }
 
     /// Initiate graceful shutdown by sending a `close_notify` alert.
@@ -846,24 +846,19 @@ impl Dtls {
     /// [`send_application_data`](Self::send_application_data) will return
     /// an error.
     ///
-    /// **Pending** (version not yet resolved): returns
-    /// [`Error::HandshakePending`]. Callers who want to discard a pending
-    /// connection can simply drop the [`Dtls`] value.
+    /// **Pending** (version not yet resolved): aborts immediately without
+    /// sending an alert. Repeated calls to `close()` succeed.
     ///
     /// The alert is not retransmitted (per RFC 6347 §4.2.7 / RFC 9147 §5.10).
     pub fn close(&mut self) -> Result<(), Error> {
         let inner = self.inner.as_mut().unwrap();
-
-        if inner.is_pending() {
-            return Err(Error::HandshakePending);
-        }
 
         match inner {
             Inner::Client12(client) => client.close(),
             Inner::Server12(server) => server.close(),
             Inner::Client13(client) => client.close(),
             Inner::Server13(server) => server.close(),
-            Inner::ClientPending(_) => Err(Error::HandshakePending),
+            Inner::ClientPending(client) => client.close(),
         }
     }
 }
@@ -871,8 +866,8 @@ impl Dtls {
 impl Inner {
     fn is_pending(&self) -> bool {
         match self {
-            Inner::Server13(v) => v.is_auto_mode(),
-            Inner::ClientPending(_) => true,
+            Inner::Server13(v) => v.is_auto_mode() && !v.is_closed(),
+            Inner::ClientPending(client) => !client.is_closed(),
             _ => false,
         }
     }
@@ -1143,15 +1138,14 @@ mod test {
     #[test]
     fn test_auto_server_send_application_data_pending() {
         let mut dtls = new_instance_auto();
-        let err = dtls.send_application_data(b"early data").unwrap_err();
-        assert!(matches!(err, Error::HandshakePending));
+        assert_eq!(dtls.send_application_data(b"early data"), Ok(0));
     }
 
     #[test]
     fn test_auto_close_pending() {
         let mut dtls = new_instance_auto();
-        let err = dtls.close().unwrap_err();
-        assert!(matches!(err, Error::HandshakePending));
+        dtls.close().expect("close pending Auto server");
+        assert!(dtls.is_closed());
     }
 
     fn make_record(content_type: u8, body: &[u8]) -> Vec<u8> {

@@ -273,6 +273,7 @@ pub(crate) struct ClientPending {
     retransmit_at: Option<Instant>,
     /// How many retransmits have occurred.
     retransmit_count: usize,
+    closed: bool,
 }
 
 impl ClientPending {
@@ -292,11 +293,15 @@ impl ClientPending {
             last_now: now,
             retransmit_at: None,
             retransmit_count: 0,
+            closed: false,
         })
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         self.last_now = now;
+        if self.closed {
+            return Ok(());
+        }
         // Arm initial retransmit timer on first call
         if self.retransmit_at.is_none() {
             self.retransmit_at = Some(now + Duration::from_secs(1));
@@ -319,6 +324,9 @@ impl ClientPending {
     }
 
     pub fn poll_output<'a>(&mut self, buf: &'a mut [u8]) -> Output<'a> {
+        if self.closed {
+            return Output::Timeout(self.last_now + Duration::from_secs(10 * 365 * 24 * 60 * 60));
+        }
         if self.needs_send {
             let len = self.wire_packet.len();
             if buf.len() < len {
@@ -333,6 +341,17 @@ impl ClientPending {
             .retransmit_at
             .unwrap_or(self.last_now + Duration::from_secs(1));
         Output::Timeout(next)
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    pub fn close(&mut self) -> Result<(), Error> {
+        self.closed = true;
+        self.needs_send = false;
+        self.retransmit_at = None;
+        Ok(())
     }
 
     pub fn into_parts(self) -> (HybridClientHello, Arc<Config>, DtlsCertificate, Instant) {

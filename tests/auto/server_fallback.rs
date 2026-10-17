@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, Error, Output, ProtocolVersion, PskResolver};
+use dimpl::{Config, Dtls, Output, ProtocolVersion, PskResolver};
 
 use crate::common::*;
 
@@ -99,10 +99,10 @@ fn auto_server_send_application_data_pending() {
 
     let mut server = Dtls::new_auto(config, server_cert, Instant::now());
 
-    let err = server
-        .send_application_data(b"early auto-server data")
-        .unwrap_err();
-    assert!(matches!(err, Error::HandshakePending));
+    assert_eq!(
+        server.send_application_data(b"early auto-server data"),
+        Ok(0)
+    );
 
     let (cc, sc, cv, sv) = run_handshake(&mut client, &mut server);
 

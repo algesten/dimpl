@@ -887,7 +887,7 @@ fn dtls13_queue_overflow_tx() {
 
     for i in 0..50 {
         match client.send_application_data(&big_msg) {
-            Ok(()) => {}
+            Ok(accepted) => assert_eq!(accepted, big_msg.len()),
             Err(e) => {
                 eprintln!("TX queue overflow at message {}: {}", i, e);
                 assert!(
