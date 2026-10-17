@@ -307,6 +307,7 @@ enum Inner {
     Client13(Client13),
     Server13(Server13),
     ClientPending(ClientPending),
+    ClosedPending { active: bool, now: Instant },
 }
 
 fn is_dtls12_psk_only(config: &Config) -> bool {
@@ -536,7 +537,7 @@ impl Dtls {
     /// Returns the negotiated DTLS protocol version.
     ///
     /// Returns `None` for auto-sense instances that have not yet completed
-    /// version negotiation (i.e. still in a `Pending` state).
+    /// version negotiation, including ones closed before version selection.
     pub fn protocol_version(&self) -> Option<ProtocolVersion> {
         match self.inner.as_ref()? {
             Inner::Client12(_) | Inner::Server12(_) => Some(ProtocolVersion::DTLS1_2),
@@ -549,7 +550,7 @@ impl Dtls {
                     Some(ProtocolVersion::DTLS1_3)
                 }
             }
-            Inner::ClientPending(_) => None,
+            Inner::ClientPending(_) | Inner::ClosedPending { .. } => None,
         }
     }
 
@@ -560,7 +561,7 @@ impl Dtls {
     /// [`poll_output`](Self::poll_output). Callers should continue polling
     /// until this returns false or [`is_closed`](Self::is_closed) returns true.
     ///
-    /// Pending auto-sense handshakes are neither closing nor closed.
+    /// Pending auto-sense handshakes close immediately when `close()` is called.
     pub fn is_closing(&self) -> bool {
         let Some(inner) = self.inner.as_ref() else {
             return false;
@@ -577,7 +578,7 @@ impl Dtls {
                     server.is_closing()
                 }
             }
-            Inner::ClientPending(_) => false,
+            Inner::ClientPending(_) | Inner::ClosedPending { .. } => false,
         }
     }
 
@@ -589,7 +590,7 @@ impl Dtls {
     /// its internal closed state before the queued `close_notify` packet has
     /// been polled out; this method remains false until that output is drained.
     ///
-    /// Pending auto-sense handshakes are neither closing nor closed.
+    /// Pending auto-sense handshakes close immediately when `close()` is called.
     pub fn is_closed(&self) -> bool {
         let Some(inner) = self.inner.as_ref() else {
             return false;
@@ -607,6 +608,7 @@ impl Dtls {
                 }
             }
             Inner::ClientPending(_) => false,
+            Inner::ClosedPending { .. } => true,
         }
     }
 
@@ -614,7 +616,12 @@ impl Dtls {
     pub fn is_active(&self) -> bool {
         matches!(
             self.inner,
-            Some(Inner::Client12(_) | Inner::Client13(_) | Inner::ClientPending(_))
+            Some(
+                Inner::Client12(_)
+                    | Inner::Client13(_)
+                    | Inner::ClientPending(_)
+                    | Inner::ClosedPending { active: true, .. }
+            )
         )
     }
 
@@ -627,6 +634,9 @@ impl Dtls {
     /// and 1.3. The version is determined from the server's first
     /// response.
     pub fn set_active(&mut self, active: bool) {
+        if matches!(self.inner, Some(Inner::ClosedPending { .. })) {
+            return;
+        }
         match (self.is_active(), active) {
             (true, false) => {
                 let inner = self.inner.take().unwrap();
@@ -686,6 +696,7 @@ impl Dtls {
             Inner::Client13(client) => client.handle_packet(packet),
             Inner::Server13(server) => server.handle_packet(packet),
             Inner::ClientPending(_) => unreachable!(),
+            Inner::ClosedPending { .. } => Ok(()),
         }
     }
 
@@ -799,6 +810,10 @@ impl Dtls {
             Inner::Client13(client) => client.poll_output(buf),
             Inner::Server13(server) => server.poll_output(buf),
             Inner::ClientPending(cp) => cp.poll_output(buf),
+            Inner::ClosedPending { now, .. } => Output::Timeout(
+                now.checked_add(std::time::Duration::from_secs(10 * 365 * 24 * 60 * 60))
+                    .unwrap_or(*now),
+            ),
         }
     }
 
@@ -810,6 +825,10 @@ impl Dtls {
             Inner::Client13(client) => client.handle_timeout(now),
             Inner::Server13(server) => server.handle_timeout(now),
             Inner::ClientPending(cp) => cp.handle_timeout(now),
+            Inner::ClosedPending { now: clock, .. } => {
+                *clock = now;
+                Ok(())
+            }
         }
     }
 
@@ -837,6 +856,7 @@ impl Dtls {
             Inner::Client13(client) => client.send_application_data(data),
             Inner::Server13(server) => server.send_application_data(data),
             Inner::ClientPending(_) => return Ok(0),
+            Inner::ClosedPending { .. } => return Err(Error::ConnectionClosed),
         }
         .map(|()| data.len())
     }
@@ -852,16 +872,28 @@ impl Dtls {
     /// [`send_application_data`](Self::send_application_data) will return
     /// an error.
     ///
-    /// **Pending** (version not yet resolved): returns
-    /// [`Error::HandshakePending`]. Callers who want to discard a pending
-    /// connection can simply drop the [`Dtls`] value.
+    /// **Pending** (version not yet resolved): aborts immediately without
+    /// sending an alert. Repeated calls to `close()` succeed.
     ///
     /// The alert is not retransmitted (per RFC 6347 §4.2.7 / RFC 9147 §5.10).
     pub fn close(&mut self) -> Result<(), Error> {
         let inner = self.inner.as_mut().unwrap();
 
         if inner.is_pending() {
-            return Err(Error::HandshakePending);
+            // unwrap: inner was present above and has not been taken.
+            let (active, now) = match self.inner.take().unwrap() {
+                Inner::ClientPending(client) => {
+                    let (_, _, _, now) = client.into_parts();
+                    (true, now)
+                }
+                Inner::Server13(server) => {
+                    let (_, _, now, _) = server.into_parts();
+                    (false, now)
+                }
+                _ => unreachable!("only Auto endpoints can be pending"),
+            };
+            self.inner = Some(Inner::ClosedPending { active, now });
+            return Ok(());
         }
 
         match inner {
@@ -869,7 +901,8 @@ impl Dtls {
             Inner::Server12(server) => server.close(),
             Inner::Client13(client) => client.close(),
             Inner::Server13(server) => server.close(),
-            Inner::ClientPending(_) => Err(Error::HandshakePending),
+            Inner::ClientPending(_) => unreachable!("handled pending close above"),
+            Inner::ClosedPending { .. } => Ok(()),
         }
     }
 }
@@ -892,6 +925,7 @@ impl fmt::Debug for Dtls {
             Some(Inner::Client13(c)) => ("Client13", c.state_name()),
             Some(Inner::Server13(s)) => ("Server13", s.state_name()),
             Some(Inner::ClientPending(_)) => ("ClientPending", ""),
+            Some(Inner::ClosedPending { .. }) => ("Auto", "Closed"),
             None => ("None", ""),
         };
         f.debug_struct("Dtls")
@@ -1155,8 +1189,8 @@ mod test {
     #[test]
     fn test_auto_close_pending() {
         let mut dtls = new_instance_auto();
-        let err = dtls.close().unwrap_err();
-        assert!(matches!(err, Error::HandshakePending));
+        dtls.close().expect("close pending Auto server");
+        assert!(dtls.is_closed());
     }
 
     fn make_record(content_type: u8, body: &[u8]) -> Vec<u8> {

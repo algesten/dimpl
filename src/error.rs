@@ -45,10 +45,6 @@ pub enum Error {
     ConfigError(ConfigError),
     /// Peer attempted renegotiation (not supported).
     RenegotiationAttempt,
-    /// Graceful shutdown is unavailable while an auto-sense instance has not
-    /// resolved its DTLS version. Drop the instance to discard it, or retry
-    /// closing after version selection.
-    HandshakePending,
     /// The connection has been closed (close_notify sent or received).
     ConnectionClosed,
     /// If we are in auto-sense mode for a server and we received too
@@ -784,9 +780,6 @@ impl fmt::Display for Error {
             Error::Timeout(err) => write!(f, "timeout: {err}"),
             Error::ConfigError(err) => write!(f, "config error: {err}"),
             Error::RenegotiationAttempt => write!(f, "peer attempted renegotiation"),
-            Error::HandshakePending => {
-                write!(f, "handshake pending: DTLS version not yet resolved")
-            }
             Error::TooManyClientHelloFragments => write!(f, "too many client hello fragments"),
             Error::ConnectionClosed => write!(f, "connection closed"),
             Error::Dtls12Fallback => write!(f, "dtls 1.2 fallback (internal)"),

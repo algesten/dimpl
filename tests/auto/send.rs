@@ -83,3 +83,45 @@ fn accepted_data_is_delivered_once_in_both_directions() {
         }
     }
 }
+
+#[test]
+fn closing_pending_auto_aborts_without_an_alert() {
+    for active in [false, true] {
+        for started in [false, true] {
+            let now = Instant::now();
+            let certificate = generate_self_signed_certificate().expect("certificate");
+            let mut endpoint = Dtls::new_auto(default_config(), certificate, now);
+            endpoint.set_active(active);
+            if started {
+                endpoint.handle_timeout(now).expect("start handshake");
+                drain_outputs(&mut endpoint);
+            }
+            endpoint.close().expect("close pending endpoint");
+            assert!(endpoint.is_closed());
+            assert!(!endpoint.is_closing());
+            assert_eq!(endpoint.is_active(), active);
+            assert_eq!(endpoint.protocol_version(), None);
+            assert_eq!(
+                endpoint.send_application_data(b"data"),
+                Err(Error::ConnectionClosed)
+            );
+            endpoint.close().expect("idempotent close");
+            assert!(drain_outputs(&mut endpoint).packets.is_empty());
+
+            let later = now + Duration::from_secs(120);
+            endpoint
+                .handle_timeout(later)
+                .expect("closed endpoint has no retry timer");
+            let output = drain_outputs(&mut endpoint);
+            assert!(output.packets.is_empty());
+            assert!(output.timeout.expect("idle timeout") > later);
+            endpoint
+                .handle_packet(b"late packet")
+                .expect("ignore input after close");
+            assert!(drain_outputs(&mut endpoint).packets.is_empty());
+            endpoint.set_active(!active);
+            assert!(endpoint.is_closed());
+            assert_eq!(endpoint.is_active(), active);
+        }
+    }
+}
