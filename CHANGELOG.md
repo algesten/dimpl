@@ -1,7 +1,7 @@
 # Unreleased
 
   * Update OpenSSL test dependency to resolve security advisories #176
-  * Return accepted byte counts from `send_application_data`, with zero while Auto is pending
+  * Return accepted byte counts from `send_application_data`, with zero while Auto is pending #175
 
   * Accept DTLS 1.3 ACKs for earlier handshake and KeyUpdate transmissions #173
   * Parse DTLS 1.2/1.3 handshake payloads before committing transcript state #174
