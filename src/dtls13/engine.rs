@@ -421,7 +421,8 @@ impl Engine {
         if handshake.header.message_seq < self.peer_handshake_seq_no {
             let result = self.ack_processed_post_handshake_records(&incoming);
             self.recycle_incoming(incoming);
-            return result.map(|()| false);
+            result?;
+            return Ok(false);
         }
 
         // Reject new handshakes after initial handshake is complete,
