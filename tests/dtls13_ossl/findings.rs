@@ -264,9 +264,13 @@ fn openssl_server_aborts_on_ack_for_partial_flight() {
         link.handshake().is_err(),
         "the lost datagram stalls the handshake"
     );
-    // dimpl ACKs the gap right away, before its flight timer fires.
-    link.advance_dimpl(Duration::ZERO)
+    // dimpl ACKs what it has after RTO/4 (at most ~312 ms with jitter), well
+    // before its ClientHello timer (at least 750 ms), so OpenSSL only gets the
+    // ACK.
+    let sent = link.sent(Dir::ToOssl);
+    link.advance_dimpl(Duration::from_millis(400))
         .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(link.sent(Dir::ToOssl), sent + 1, "dimpl sends only its ACK");
     link.handshake_with_retries(8)
         .unwrap_or_else(|e| panic!("{e}"));
     link.assert_dtls13_session();
