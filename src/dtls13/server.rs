@@ -363,7 +363,11 @@ impl Server {
                 body.push(0); // description: close_notify
             })?;
         self.engine.cancel_flights();
-        self.state = State::HalfClosedLocal;
+        self.state = if self.engine.close_notify_received() {
+            State::Closed
+        } else {
+            State::HalfClosedLocal
+        };
         Ok(())
     }
 
