@@ -425,10 +425,11 @@ impl Engine {
             for record in incoming.records().iter() {
                 let seq = record.record().sequence;
                 if seq.epoch >= 3 && record.record().content_type == ContentType::Handshake {
-                    needs_ack |= self
+                    let recorded = self
                         .received_record_numbers
                         .try_push((seq.epoch as u64, seq.sequence_number))
                         .is_ok();
+                    needs_ack |= recorded;
                 }
             }
             self.recycle_incoming(incoming);
