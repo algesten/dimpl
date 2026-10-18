@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Complete DTLS 1.3 shutdown when answering the peer close_notify #181
   * Start handshake clocks at ClientHello and honor timing settings consistently #162
   * Update OpenSSL test dependency to resolve security advisories #176
   * Remove `HandshakePending`. All errors are fatal. #175
