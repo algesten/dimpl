@@ -419,32 +419,9 @@ impl Engine {
 
         // Drop old duplicates we've already processed
         if handshake.header.message_seq < self.peer_handshake_seq_no {
-            // RFC 9147 section 7: ACK post-handshake retransmissions too, since
-            // the original ACK may have been lost. Do not process the update twice.
-            let mut needs_ack = false;
-            for record in incoming.records().iter() {
-                let seq = record.record().sequence;
-                let is_post_handshake_record =
-                    seq.epoch >= 3 && record.record().content_type == ContentType::Handshake;
-                // The datagram may also contain fresh messages. Do not ACK
-                // those when discarding it, so the peer can retransmit them.
-                let already_processed = record
-                    .handshakes()
-                    .iter()
-                    .all(|h| h.header.message_seq < self.peer_handshake_seq_no);
-                if is_post_handshake_record && already_processed {
-                    let recorded = self
-                        .received_record_numbers
-                        .try_push((seq.epoch as u64, seq.sequence_number))
-                        .is_ok();
-                    needs_ack |= recorded;
-                }
-            }
+            let result = self.ack_processed_post_handshake_records(&incoming);
             self.recycle_incoming(incoming);
-            if needs_ack {
-                self.send_ack()?;
-            }
-            return Ok(false);
+            return result.map(|()| false);
         }
 
         // Reject new handshakes after initial handshake is complete,
@@ -1335,6 +1312,34 @@ impl Engine {
         self.flight_saved_records.clear();
         self.timers.stop();
         self.handshake_ack_deadline = None;
+    }
+
+    fn ack_processed_post_handshake_records(&mut self, incoming: &Incoming) -> Result<(), Error> {
+        // RFC 9147 section 7: ACK post-handshake retransmissions too, since
+        // the original ACK may have been lost. Do not process the update twice.
+        let mut needs_ack = false;
+        for record in incoming.records().iter() {
+            let seq = record.record().sequence;
+            let is_post_handshake_record =
+                seq.epoch >= 3 && record.record().content_type == ContentType::Handshake;
+            // The datagram may also contain fresh messages. Do not ACK
+            // those when discarding it, so the peer can retransmit them.
+            let already_processed = record
+                .handshakes()
+                .iter()
+                .all(|h| h.header.message_seq < self.peer_handshake_seq_no);
+            if is_post_handshake_record && already_processed {
+                let recorded = self
+                    .received_record_numbers
+                    .try_push((seq.epoch as u64, seq.sequence_number))
+                    .is_ok();
+                needs_ack |= recorded;
+            }
+        }
+        if needs_ack {
+            self.send_ack()?;
+        }
+        Ok(())
     }
 
     /// Send an ACK record listing received handshake record numbers.
