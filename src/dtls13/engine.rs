@@ -417,6 +417,10 @@ impl Engine {
             }
         }
 
+        let is_session_ticket = self.is_client
+            && handshake.header.msg_type == MessageType::NewSessionTicket
+            && first_record.record().sequence.epoch >= 3;
+
         // Drop old duplicates we've already processed
         if handshake.header.message_seq < self.peer_handshake_seq_no {
             let result = self.ack_processed_post_handshake_records(&incoming);
@@ -426,10 +430,11 @@ impl Engine {
         }
 
         // Reject new handshakes after initial handshake is complete,
-        // but allow KeyUpdate (a post-handshake message).
+        // but allow KeyUpdate and server-issued session tickets.
         if self.release_app_data
             && handshake.header.message_seq >= self.peer_handshake_seq_no
             && handshake.header.msg_type != MessageType::KeyUpdate
+            && !is_session_ticket
         {
             self.recycle_incoming(incoming);
             return Err(Error::RenegotiationAttempt);

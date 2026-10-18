@@ -337,6 +337,7 @@ pub struct MessageType(u8);
 impl MessageType {
     pub const ClientHello: Self = Self(1);
     pub const ServerHello: Self = Self(2);
+    pub const NewSessionTicket: Self = Self(4);
     pub const EncryptedExtensions: Self = Self(8);
     pub const Certificate: Self = Self(11);
     pub const CertificateRequest: Self = Self(13);
@@ -353,11 +354,12 @@ impl MessageType {
     }
 
     const fn is_unknown(&self) -> bool {
-        !matches!(*self, Self(1..=2 | 8 | 11 | 13 | 15 | 20 | 24))
+        !matches!(*self, Self(1..=2 | 4 | 8 | 11 | 13 | 15 | 20 | 24))
     }
 
     const fn rejects_trailing_body_bytes(&self) -> bool {
-        !self.is_unknown()
+        // Tickets are opaque because session resumption is not supported.
+        !self.is_unknown() && !matches!(*self, Self::NewSessionTicket)
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], MessageType> {
@@ -375,6 +377,7 @@ impl fmt::Debug for MessageType {
         let name = match *self {
             MessageType::ClientHello => "ClientHello",
             MessageType::ServerHello => "ServerHello",
+            MessageType::NewSessionTicket => "NewSessionTicket",
             MessageType::EncryptedExtensions => "EncryptedExtensions",
             MessageType::Certificate => "Certificate",
             MessageType::CertificateRequest => "CertificateRequest",

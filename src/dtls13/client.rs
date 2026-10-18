@@ -373,6 +373,21 @@ impl State {
     }
 
     fn make_progress(self, client: &mut Client) -> Result<Self, InternalError> {
+        if matches!(self, Self::AwaitApplicationData | Self::HalfClosedLocal) {
+            // Session resumption is unsupported; consume tickets without changing the transcript.
+            while client
+                .engine
+                .next_handshake_no_transcript(
+                    MessageType::NewSessionTicket,
+                    &mut client.defragment_buffer,
+                )?
+                .is_some()
+            {
+                client.engine.advance_peer_handshake_seq();
+                client.engine.send_ack()?;
+            }
+        }
+
         match self {
             State::SendClientHello => self.send_client_hello(client),
             State::AwaitServerHello => self.await_server_hello(client),
@@ -1501,6 +1516,111 @@ mod tests {
         packet.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
         packet.extend_from_slice(body);
         packet
+    }
+
+    #[test]
+    fn post_handshake_tickets_are_discarded_and_acked() {
+        for half_closed in [false, true] {
+            let mut client = client();
+            let cert = generate_self_signed_certificate().expect("server certificate");
+            let mut server = Engine::new(Arc::new(Config::default()), cert);
+            let mut secret = Buf::new();
+            secret.extend_from_slice(&[0x42; 32]);
+            for engine in [&mut client.engine, &mut server] {
+                engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+                engine
+                    .install_application_keys(&secret, &secret)
+                    .expect("application keys");
+                engine.enable_peer_encryption().expect("enable encryption");
+                engine.release_application_data();
+            }
+            client.state = if half_closed {
+                State::HalfClosedLocal
+            } else {
+                State::AwaitApplicationData
+            };
+            let now = Instant::now();
+            let mut buffer = [0; 2048];
+            // A ticket, its retransmission in a new record, another ticket, then KeyUpdate.
+            for (seq, msg_type, body) in [
+                (
+                    0,
+                    MessageType::NewSessionTicket,
+                    &[0, 0, 0, 60, 0, 0, 0, 0, 0, 0, 1, 42, 0, 0][..],
+                ),
+                (
+                    0,
+                    MessageType::NewSessionTicket,
+                    &[0, 0, 0, 60, 0, 0, 0, 0, 0, 0, 1, 42, 0, 0][..],
+                ),
+                (
+                    1,
+                    MessageType::NewSessionTicket,
+                    &[0, 0, 0, 60, 0, 0, 0, 0, 0, 0, 1, 43, 0, 0][..],
+                ),
+                (2, MessageType::KeyUpdate, &[0][..]),
+            ] {
+                let packet = epoch0_handshake_packet(msg_type, seq, body);
+                server
+                    .create_ciphertext_record(ContentType::Handshake, 3, false, |fragment| {
+                        fragment.extend_from_slice(&packet[13..]);
+                    })
+                    .expect("send post-handshake message");
+                loop {
+                    match server.poll_output(&mut buffer, now) {
+                        Output::Packet(packet) => client
+                            .handle_packet(packet)
+                            .expect("accept post-handshake message"),
+                        Output::Timeout(_) => break,
+                        output => panic!("unexpected server output: {output:?}"),
+                    }
+                }
+                let mut acks = 0;
+                loop {
+                    match client.poll_output(&mut buffer) {
+                        Output::Packet(packet) => {
+                            server.parse_packet(packet).expect("receive ACK");
+                            acks += 1;
+                        }
+                        Output::Timeout(_) => break,
+                        output => panic!("unexpected client output: {output:?}"),
+                    }
+                }
+                if msg_type == MessageType::NewSessionTicket || !half_closed {
+                    assert_eq!(acks, 1, "ACK each ticket, including retransmissions");
+                }
+            }
+            assert_eq!(
+                crate::dtls13::incoming::RecordHandler::resolve_epoch(&client.engine, 0),
+                4
+            );
+            server
+                .create_ciphertext_record(ContentType::ApplicationData, 3, false, |body| {
+                    body.extend_from_slice(b"after tickets");
+                })
+                .expect("send application data");
+            loop {
+                match server.poll_output(&mut buffer, now) {
+                    Output::Packet(packet) => client
+                        .handle_packet(packet)
+                        .expect("receive application data"),
+                    Output::Timeout(_) => break,
+                    output => panic!("unexpected server output: {output:?}"),
+                }
+            }
+            let mut received = false;
+            loop {
+                match client.poll_output(&mut buffer) {
+                    Output::ApplicationData(data) => {
+                        assert_eq!(data, b"after tickets");
+                        received = true;
+                    }
+                    Output::Timeout(_) => break,
+                    output => panic!("unexpected client output: {output:?}"),
+                }
+            }
+            assert!(received, "tickets must not block the following KeyUpdate");
+        }
     }
 
     fn server_hello_with_key_share(group: NamedGroup) -> Vec<u8> {
