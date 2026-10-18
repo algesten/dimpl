@@ -76,7 +76,7 @@ jobs:
             - exclude:
                 id: rust/hard-coded-cryptographic-value
             - exclude:
-                id: rust/cleartext-logging-of-sensitive-information
+                id: rust/cleartext-logging
 
     # If the analyze step fails for one of the languages you are analyzing with
     # "We were unable to automatically build your code", modify the matrix above
