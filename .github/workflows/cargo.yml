@@ -15,9 +15,23 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Cover toolchains and crypto providers on Linux.
+        os: [ubuntu-latest]
         rust: [stable, beta, 1.85.0]
-        feature: ["aws-lc-rs", "rust-crypto", "rcgen", ""]
+        # rcgen includes aws-lc-rs and enables certificate-dependent tests.
+        feature: ["rcgen", "rust-crypto"]
+        include:
+          # Building without a crypto provider only needs one check.
+          - os: ubuntu-latest
+            rust: stable
+            feature: ""
+          # Cover other platforms once using the default feature set.
+          - os: macos-latest
+            rust: stable
+            feature: "rcgen"
+          - os: windows-latest
+            rust: stable
+            feature: "rcgen"
 
     runs-on: ${{ matrix.os }}
 
