@@ -51,8 +51,8 @@ pub struct Client {
     /// It might remain null if there is no HelloVerifyRequest.
     cookie: Option<Cookie>,
 
-    /// Whether the initial ClientHello offered both protocol versions.
-    hybrid_offer: bool,
+    /// Original auto-sense offer, retained for cookie retries.
+    hybrid: Option<Box<crate::auto::HybridClientHello>>,
 
     /// Storage for extension data
     extension_data: Buf,
@@ -105,7 +105,7 @@ impl Client {
             random: None,
             session_id: None,
             cookie: None,
-            hybrid_offer: false,
+            hybrid: None,
             extension_data,
             negotiated_srtp_profile: None,
             server_random: None,
@@ -129,8 +129,7 @@ impl Client {
     /// If the server does send HVR, `reset_client_for_hello_verify_request`
     /// clears the transcript anyway, so the injected bytes are harmless.
     pub(crate) fn new_from_hybrid(
-        random: Random,
-        handshake_fragment: &[u8],
+        hybrid: crate::auto::HybridClientHello,
         config: std::sync::Arc<Config>,
         certificate: DtlsCertificate,
         now: Instant,
@@ -155,17 +154,17 @@ impl Client {
         };
         let mut engine = Engine::new(config, auth);
         engine.set_client(true);
-        engine.inject_hybrid_client_hello(handshake_fragment, timers);
+        engine.inject_hybrid_client_hello(&hybrid.handshake_fragment, timers);
         let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
 
         Client {
             state: State::AwaitHelloVerifyRequest,
             engine,
-            random: Some(random),
+            random: Some(hybrid.random),
             session_id: None,
             cookie: None,
-            hybrid_offer: true,
+            hybrid: Some(Box::new(hybrid)),
             extension_data,
             negotiated_srtp_profile: None,
             server_random: None,
@@ -369,14 +368,9 @@ impl State {
         client
             .engine
             .create_handshake(MessageType::ClientHello, |body, engine| {
-                if client.hybrid_offer {
-                    crate::auto::HybridClientHello::serialize_body(
-                        engine.config(),
-                        random,
-                        None,
-                        &cookie,
-                        body,
-                    );
+                if let Some(hybrid) = &mut client.hybrid {
+                    hybrid.set_legacy_cookie(cookie);
+                    hybrid.serialize(body);
                     return Ok(());
                 }
                 handshake_create_client_hello(
@@ -549,6 +543,8 @@ impl State {
             debug!("Negotiated SRTP profile: {:?}", profile);
         }
         trace!("Extended Master Secret enabled");
+
+        client.hybrid = None;
 
         // PSK suites skip Certificate; go directly to ServerKeyExchange
         if cs.is_psk() {
