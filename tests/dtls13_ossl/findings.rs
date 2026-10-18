@@ -13,7 +13,7 @@ use crate::{config, connect, role};
 /// dimpl. RFC 8446 §4.6.1 lets a server send NewSessionTicket any time after
 /// the client Finished; a client that does not resume ignores it, and DTLS
 /// 1.3 ACKs it (RFC 9147 §5.8.4). dimpl rejects every post-handshake message
-/// except KeyUpdate as `RenegotiationAttempt`, a fatal error.
+/// except KeyUpdate as `RenegotiationAttempt`, a fatal error. Filed as #178.
 #[test]
 fn dimpl_client_rejects_post_handshake_ticket() {
     require_dtls13!();
@@ -33,7 +33,7 @@ fn dimpl_client_rejects_post_handshake_ticket() {
 /// dimpl's ACK for a KeyUpdate is lost, OpenSSL retransmits the KeyUpdate but
 /// dimpl drops the duplicate silently. OpenSSL never completes the update and
 /// holds all further application data (RFC 9147 §8), so its sending
-/// direction stalls for good.
+/// direction stalls for good. Filed as #177.
 #[test]
 fn dimpl_does_not_reack_retransmitted_key_update() {
     require_dtls13!();
@@ -91,6 +91,7 @@ fn dimpl_client_resends_client_hello_after_server_hello() {
 /// ours, nothing is left to do, yet `is_closing()` stays true and `is_closed()`
 /// false until some later `handle_packet`/`handle_timeout`. The next timeout
 /// is ~10 years out, so an embedder waiting for `is_closed()` never gets it.
+/// Filed as #179.
 #[test]
 fn dimpl_is_not_closed_after_answering_close_notify() {
     require_dtls13!();
