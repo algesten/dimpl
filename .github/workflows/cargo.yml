@@ -79,7 +79,7 @@ jobs:
       - name: fmt
         run: cargo +${{steps.toolchain.outputs.name}} fmt --all -- --check
       - name: clippy
-        run: cargo +${{steps.toolchain.outputs.name}} clippy -- -D warnings
+        run: cargo +${{steps.toolchain.outputs.name}} clippy --all-targets -- -D warnings
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
