@@ -240,7 +240,7 @@ mod test {
         let sh = ServerHello::new(
             ProtocolVersion::DTLS1_2,
             hrr_random,
-            SessionId::default(),
+            SessionId::empty(),
             Dtls13CipherSuite::AES_128_GCM_SHA256,
             CompressionMethod::Null,
             None,

@@ -18,12 +18,31 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use arrayvec::ArrayVec;
+
 use crate::buffer::Buf;
-use crate::client_hello_builder::{ClientHelloBuilder, Offer};
 use crate::crypto::ActiveKeyExchange;
+use crate::dtls13::message::KeyShareClientHello;
+use crate::dtls13::message::KeyShareEntry;
 use crate::dtls13::message::Random;
+use crate::dtls13::message::SignatureAlgorithmsExtension;
+use crate::dtls13::message::SupportedGroupsExtension;
+use crate::dtls13::message::UseSrtpExtension;
 use crate::timer::HandshakeTimers;
+use crate::types::NamedGroup;
 use crate::{Config, CryptoError, DtlsCertificate, Error, Output, SeededRng, TimeoutError};
+// Extension type constants
+const EXT_SUPPORTED_GROUPS: u16 = 0x000A;
+const EXT_EC_POINT_FORMATS: u16 = 0x000B;
+const EXT_SIGNATURE_ALGORITHMS: u16 = 0x000D;
+const EXT_USE_SRTP: u16 = 0x000E;
+const EXT_PADDING: u16 = 0x0015;
+const EXT_EXTENDED_MASTER_SECRET: u16 = 0x0017;
+const EXT_SUPPORTED_VERSIONS: u16 = 0x002B;
+const EXT_COOKIE: u16 = 0x002C;
+const EXT_KEY_SHARE: u16 = 0x0033;
+const EXT_RENEGOTIATION_INFO: u16 = 0xFF01;
+
 /// A self-contained hybrid ClientHello compatible with both DTLS 1.2 and 1.3.
 ///
 /// Holds the serialized bytes and crypto state needed to fork into either
@@ -31,8 +50,8 @@ use crate::{Config, CryptoError, DtlsCertificate, Error, Output, SeededRng, Time
 ///
 /// - **DTLS 1.3 fork**: transcript bytes and ECDHE private key are injected
 ///   into a `Client13` via `new_from_hybrid`.
-/// - **DTLS 1.2 fork**: the random and transcript are injected into a `Client12`.
-///   Both forks retain the hybrid offer for cookie retries.
+/// - **DTLS 1.2 fork**: all state is discarded (HelloVerifyRequest clears
+///   the transcript), and a fresh `Client12` is created.
 ///
 /// These buffers are temporary probe state created before an engine exists.
 /// The selected engine copies the needed bytes into its own buffers; probe
@@ -74,9 +93,13 @@ impl HybridClientHello {
         let key_exchange = group.start_exchange(kx_buf).map_err(Error::CryptoError)?;
 
         let mut ch_body = Buf::new();
-        ClientHelloBuilder::new(config, random, Offer::Hybrid)
-            .key_share(group.name(), key_exchange.pub_key())
-            .serialize(&mut ch_body);
+        Self::serialize_body(
+            config,
+            random,
+            Some((group.name(), key_exchange.pub_key())),
+            &[],
+            &mut ch_body,
+        );
 
         // ---- Build transcript bytes: msg_type(1) + length(3) + body ----
         let mut transcript_bytes = Buf::new();
@@ -101,6 +124,149 @@ impl HybridClientHello {
             transcript_bytes,
             handshake_fragment,
         })
+    }
+
+    /// Build the original hybrid offer or its cookie retry from handshake state.
+    /// A missing key share selects the DTLS 1.2 HVR path.
+    pub fn serialize_body(
+        config: &Config,
+        random: Random,
+        key_share: Option<(NamedGroup, &[u8])>,
+        cookie: &[u8],
+        ch_body: &mut Buf,
+    ) {
+        // ---- Build the ClientHello body ----
+
+        // legacy_version: DTLS 1.2
+        ch_body.extend_from_slice(&0xFEFDu16.to_be_bytes());
+
+        // random
+        random.serialize(ch_body);
+
+        // legacy_session_id: empty
+        ch_body.push(0);
+
+        // HVR uses the legacy cookie; HRR uses the cookie extension instead.
+        let legacy_cookie = if key_share.is_none() { cookie } else { &[] };
+        ch_body.push(legacy_cookie.len() as u8);
+        ch_body.extend_from_slice(legacy_cookie);
+
+        // cipher_suites: 1.3 suites first, then non-PSK DTLS 1.2 suites.
+        // The DTLS 1.2 fallback (`Client12::new_from_hybrid`) is
+        // certificate-auth only and cannot complete a PSK suite.
+        let mut suites: ArrayVec<u16, 16> = ArrayVec::new();
+        for cs in config.dtls13_cipher_suites() {
+            suites.push(cs.suite().as_u16());
+        }
+        for cs in config
+            .dtls12_cipher_suites()
+            .filter(|cs| !cs.suite().is_psk())
+        {
+            suites.push(cs.suite().as_u16());
+        }
+        ch_body.extend_from_slice(&((suites.len() * 2) as u16).to_be_bytes());
+        for &suite in &suites {
+            ch_body.extend_from_slice(&suite.to_be_bytes());
+        }
+
+        // compression_methods: [null]
+        ch_body.push(1);
+        ch_body.push(0);
+
+        // ---- Extensions ----
+        // Build extension data into a separate buffer, then write the
+        // extensions_length + extension entries into ch_body.
+        let mut ext_buf = Buf::new();
+        let mut ext_entries: Vec<(u16, usize, usize)> = Vec::new();
+
+        // 1. supported_versions: [DTLS 1.3, DTLS 1.2]
+        if key_share.is_some() {
+            let start = ext_buf.len();
+            ext_buf.push(4); // list_len = 2 versions * 2 bytes
+            ext_buf.extend_from_slice(&0xFEFCu16.to_be_bytes()); // DTLS 1.3
+            ext_buf.extend_from_slice(&0xFEFDu16.to_be_bytes()); // DTLS 1.2
+            ext_entries.push((EXT_SUPPORTED_VERSIONS, start, ext_buf.len()));
+        }
+
+        // 2. supported_groups (filtered by config)
+        let start = ext_buf.len();
+        let groups: ArrayVec<NamedGroup, 4> = config.kx_groups().map(|g| g.name()).collect();
+        let sg = SupportedGroupsExtension { groups };
+        sg.serialize(&mut ext_buf);
+        ext_entries.push((EXT_SUPPORTED_GROUPS, start, ext_buf.len()));
+
+        // 3. key_share (ECDHE public key)
+        if let Some((group, pub_key)) = key_share {
+            let start = ext_buf.len();
+            let mut entries = ArrayVec::new();
+            entries.push(KeyShareEntry {
+                group,
+                key_exchange_range: 0..pub_key.len(),
+            });
+            KeyShareClientHello { entries }.serialize(pub_key, &mut ext_buf);
+            ext_entries.push((EXT_KEY_SHARE, start, ext_buf.len()));
+        }
+
+        // 4. signature_algorithms
+        let start = ext_buf.len();
+        let sa = SignatureAlgorithmsExtension::default();
+        sa.serialize(&mut ext_buf);
+        ext_entries.push((EXT_SIGNATURE_ALGORITHMS, start, ext_buf.len()));
+
+        // 5. use_srtp
+        let start = ext_buf.len();
+        let use_srtp = UseSrtpExtension::default();
+        use_srtp.serialize(&mut ext_buf);
+        ext_entries.push((EXT_USE_SRTP, start, ext_buf.len()));
+
+        // 6. ec_point_formats (DTLS 1.2 compat: uncompressed only)
+        let start = ext_buf.len();
+        ext_buf.push(1); // list length
+        ext_buf.push(0); // ECPointFormat::Uncompressed
+        ext_entries.push((EXT_EC_POINT_FORMATS, start, ext_buf.len()));
+
+        // 7. extended_master_secret (empty, DTLS 1.2 compat)
+        ext_entries.push((EXT_EXTENDED_MASTER_SECRET, ext_buf.len(), ext_buf.len()));
+
+        // 8. renegotiation_info (empty renegotiated_connection, DTLS 1.2 compat)
+        let start = ext_buf.len();
+        ext_buf.push(0); // renegotiated_connection length = 0
+        ext_entries.push((EXT_RENEGOTIATION_INFO, start, ext_buf.len()));
+
+        if key_share.is_some() && !cookie.is_empty() {
+            let start = ext_buf.len();
+            // The saved HRR cookie already contains its u16 length prefix.
+            ext_buf.extend_from_slice(cookie);
+            ext_entries.push((EXT_COOKIE, start, ext_buf.len()));
+        }
+
+        // 9. padding: fill to MTU
+        let record_header = 13usize;
+        let handshake_header = 12usize;
+        let body_so_far = ch_body.len()
+            + 2 // extensions_length field
+            + ext_entries.iter().map(|(_, s, e)| 4 + (e - s)).sum::<usize>();
+        let total_so_far = record_header + handshake_header + body_so_far;
+        let deficit = config.mtu().saturating_sub(total_so_far);
+        if deficit >= 4 {
+            let pad_data_len = deficit - 4; // 4 = type(2) + len(2)
+            let start = ext_buf.len();
+            for _ in 0..pad_data_len {
+                ext_buf.push(0);
+            }
+            ext_entries.push((EXT_PADDING, start, ext_buf.len()));
+        }
+
+        // Write extensions into ch_body
+        let ext_total_len: usize = ext_entries.iter().map(|(_, s, e)| 4 + (e - s)).sum();
+        ch_body.extend_from_slice(&(ext_total_len as u16).to_be_bytes());
+        for &(ext_type, start, end) in &ext_entries {
+            ch_body.extend_from_slice(&ext_type.to_be_bytes());
+            ch_body.extend_from_slice(&((end - start) as u16).to_be_bytes());
+            if end > start {
+                ch_body.extend_from_slice(&ext_buf[start..end]);
+            }
+        }
     }
 
     /// Build the full wire-format DTLSPlaintext record for the hybrid CH.

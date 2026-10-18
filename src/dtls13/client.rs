@@ -27,7 +27,6 @@ use subtle::ConstantTimeEq;
 
 use crate::buffer::Buf;
 use crate::buffer::ToBuf;
-use crate::client_hello_builder::{ClientHelloBuilder, Offer};
 use crate::crypto::{ActiveKeyExchange, SrtpProfile};
 use crate::dtls13::Server;
 use crate::dtls13::engine::Engine;
@@ -35,16 +34,26 @@ use crate::dtls13::message::Asn1Cert;
 use crate::dtls13::message::Body;
 use crate::dtls13::message::Certificate;
 use crate::dtls13::message::CertificateEntry;
+use crate::dtls13::message::ClientHello;
 use crate::dtls13::message::CompressionMethod;
 use crate::dtls13::message::ContentType;
+use crate::dtls13::message::Cookie;
+use crate::dtls13::message::Dtls13CipherSuite;
+use crate::dtls13::message::Extension;
 use crate::dtls13::message::ExtensionType;
+use crate::dtls13::message::KeyShareClientHello;
+use crate::dtls13::message::KeyShareEntry;
 use crate::dtls13::message::KeyUpdateRequest;
 use crate::dtls13::message::MessageType;
 use crate::dtls13::message::NamedGroup;
 use crate::dtls13::message::ProtocolVersion;
 use crate::dtls13::message::Random;
 use crate::dtls13::message::SessionId;
+use crate::dtls13::message::SignatureAlgorithmsExtension;
 use crate::dtls13::message::SignatureScheme;
+use crate::dtls13::message::SupportedGroupsExtension;
+use crate::dtls13::message::SupportedVersionsClientHello;
+use crate::dtls13::message::UseSrtpExtension;
 use crate::timer::HandshakeTimers;
 use crate::{Error, InternalError, KeyingMaterial, Output};
 
@@ -62,7 +71,7 @@ pub struct Client {
     /// Legacy session ID echoed from ServerHello.
     session_id: Option<SessionId>,
 
-    /// Keep offering both versions after an auto-sense cookie challenge.
+    /// Whether the initial ClientHello offered both protocol versions.
     hybrid_offer: bool,
 
     /// Storage for extension data
@@ -465,20 +474,25 @@ impl State {
         client
             .engine
             .create_handshake(MessageType::ClientHello, |body, engine| {
-                let offer = if client.hybrid_offer {
-                    Offer::Hybrid
-                } else {
-                    Offer::Dtls13
-                };
-                ClientHelloBuilder::new(engine.config(), random, offer)
-                    .key_share(group, &client.extension_data[pub_key_start..pub_key_end])
-                    .retry_cookie(
-                        cookie_range
-                            .as_ref()
-                            .map(|range| &client.extension_data[range.clone()]),
-                    )
-                    .serialize(body);
-                Ok(())
+                if client.hybrid_offer {
+                    crate::auto::HybridClientHello::serialize_body(
+                        engine.config(),
+                        random,
+                        Some((group, &client.extension_data[pub_key_start..pub_key_end])),
+                        client.saved_cookie.as_deref().unwrap_or(&[]),
+                        body,
+                    );
+                    return Ok(());
+                }
+                handshake_create_client_hello(
+                    body,
+                    engine,
+                    random,
+                    group,
+                    pub_key_start..pub_key_end,
+                    cookie_range.clone(),
+                    &client.extension_data,
+                )
             })?;
 
         Ok(Self::AwaitServerHello)
@@ -1146,6 +1160,153 @@ impl State {
 // Helper Functions
 // =========================================================================
 
+fn handshake_create_client_hello(
+    body: &mut Buf,
+    engine: &mut Engine,
+    random: Random,
+    kx_group: NamedGroup,
+    pub_key_range: std::ops::Range<usize>,
+    cookie_range: Option<std::ops::Range<usize>>,
+    extension_data: &Buf,
+) -> Result<(), Error> {
+    let legacy_version = ProtocolVersion::DTLS1_2;
+    let legacy_session_id = SessionId::empty();
+    // DTLS 1.3: legacy_cookie MUST be zero length
+    let legacy_cookie = Cookie::empty();
+
+    // Cipher suites from config (filtered)
+    let cipher_suites: ArrayVec<Dtls13CipherSuite, 3> = engine
+        .config()
+        .dtls13_cipher_suites()
+        .map(|cs| cs.suite())
+        .take(3)
+        .collect();
+
+    debug!(
+        "Sending ClientHello: offering {} cipher suites",
+        cipher_suites.len()
+    );
+
+    let mut compression_methods = ArrayVec::new();
+    compression_methods.push(CompressionMethod::Null);
+
+    // Build extensions
+    let mut extensions: ArrayVec<Extension, 8> = ArrayVec::new();
+    let mut ext_buf = Buf::new();
+
+    // 1. supported_versions extension (DTLS 1.3)
+    let sv_start = ext_buf.len();
+    let mut versions = ArrayVec::new();
+    versions.push(ProtocolVersion::DTLS1_3);
+    let sv = SupportedVersionsClientHello { versions };
+    sv.serialize(&mut ext_buf);
+    let sv_end = ext_buf.len();
+    extensions.push(Extension {
+        extension_type: ExtensionType::SupportedVersions,
+        extension_data_range: sv_start..sv_end,
+    });
+
+    // 2. supported_groups extension
+    let sg_start = ext_buf.len();
+    let groups: ArrayVec<NamedGroup, 4> = engine.config().kx_groups().map(|g| g.name()).collect();
+    let sg = SupportedGroupsExtension { groups };
+    sg.serialize(&mut ext_buf);
+    let sg_end = ext_buf.len();
+    extensions.push(Extension {
+        extension_type: ExtensionType::SupportedGroups,
+        extension_data_range: sg_start..sg_end,
+    });
+
+    // 3. key_share extension
+    let ks_start = ext_buf.len();
+    let mut entries = ArrayVec::new();
+    entries.push(KeyShareEntry {
+        group: kx_group,
+        key_exchange_range: pub_key_range,
+    });
+    let ks = KeyShareClientHello { entries };
+    ks.serialize(extension_data, &mut ext_buf);
+    let ks_end = ext_buf.len();
+    extensions.push(Extension {
+        extension_type: ExtensionType::KeyShare,
+        extension_data_range: ks_start..ks_end,
+    });
+
+    // 4. signature_algorithms extension
+    let sa_start = ext_buf.len();
+    let sa = SignatureAlgorithmsExtension::default();
+    sa.serialize(&mut ext_buf);
+    let sa_end = ext_buf.len();
+    extensions.push(Extension {
+        extension_type: ExtensionType::SignatureAlgorithms,
+        extension_data_range: sa_start..sa_end,
+    });
+
+    // 5. use_srtp extension
+    let srtp_start = ext_buf.len();
+    let use_srtp = UseSrtpExtension::default();
+    use_srtp.serialize(&mut ext_buf);
+    let srtp_end = ext_buf.len();
+    extensions.push(Extension {
+        extension_type: ExtensionType::UseSrtp,
+        extension_data_range: srtp_start..srtp_end,
+    });
+
+    // 6. cookie extension (echo from HRR if present)
+    if let Some(cookie_range) = cookie_range {
+        let cookie_start = ext_buf.len();
+        // Cookie data already includes the u16 length prefix from the HRR
+        ext_buf.extend_from_slice(&extension_data[cookie_range]);
+        let cookie_end = ext_buf.len();
+        extensions.push(Extension {
+            extension_type: ExtensionType::Cookie,
+            extension_data_range: cookie_start..cookie_end,
+        });
+    }
+
+    // 7. padding extension (RFC 7685) — pad ClientHello to fill the MTU,
+    // reducing the server-to-client amplification factor.
+    let mtu = engine.config().mtu();
+    let record_header = 13; // DTLSPlaintext header
+    let handshake_header = 12; // DTLS handshake header
+    let body_without_padding = 2 // legacy_version
+        + 32 // random
+        + 1 + legacy_session_id.len()
+        + 1 + legacy_cookie.len()
+        + 2 + cipher_suites.len() * 2
+        + 1 + compression_methods.len()
+        + 2 // extensions_len
+        + extensions.len() * 4 // type(2) + len(2) per extension
+        + ext_buf.len(); // all extension data
+    let total_without_padding = record_header + handshake_header + body_without_padding;
+    let deficit = mtu.saturating_sub(total_without_padding);
+    if deficit >= 4 {
+        let pad_data_len = deficit - 4;
+        let pad_start = ext_buf.len();
+        for _ in 0..pad_data_len {
+            ext_buf.push(0);
+        }
+        let pad_end = ext_buf.len();
+        extensions.push(Extension {
+            extension_type: ExtensionType::Padding,
+            extension_data_range: pad_start..pad_end,
+        });
+    }
+
+    let mut client_hello = ClientHello::new(
+        legacy_version,
+        random,
+        legacy_session_id,
+        legacy_cookie,
+        cipher_suites,
+        compression_methods,
+    );
+    client_hello.extensions = extensions;
+
+    client_hello.serialize(&ext_buf, body);
+    Ok(())
+}
+
 pub(crate) fn handshake_create_certificate(
     body: &mut Buf,
     engine: &mut Engine,
@@ -1323,7 +1484,6 @@ impl LocalEvent {
 
 #[cfg(all(test, feature = "rcgen"))]
 mod tests {
-    use crate::dtls13::message::Dtls13CipherSuite;
     use std::sync::Arc;
 
     use super::*;

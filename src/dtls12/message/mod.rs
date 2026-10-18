@@ -162,6 +162,14 @@ impl Dtls12CipherSuite {
         }
     }
 
+    fn need_encrypt_then_mac(&self) -> bool {
+        // We do not support and ciphers such as:
+        // ECDHE-RSA-AES128-SHA
+        // ECDHE-RSA-AES256-SHA
+        // DHE-RSA-AES128-SHA256
+        false
+    }
+
     /// The hash algorithm used by this cipher suite.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
         match *self {
