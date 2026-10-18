@@ -88,6 +88,20 @@ Comment `unwrap()` calls explaining why they're safe:
 let random = self.random.unwrap();
 ```
 
+## CodeQL and Debug Logging
+
+Before changing a debug or trace log in response to a CodeQL sensitive-data
+report, check the actual fields being logged and whether they are public data
+already sent in unencrypted UDP packets. Much of the handshake is sent in
+plaintext; those public on-wire values are not sensitive to log merely because
+they are part of a cryptographic protocol.
+
+Keep useful logs of public handshake data. Document or dismiss false positives
+with the protocol reasoning instead of removing or redacting logs solely to
+satisfy CodeQL. Check the protocol version and handshake stage: private keys,
+PSKs, shared or derived secrets, traffic keys, and decrypted protected payloads
+are not public just because they are used during a handshake.
+
 ## Sans-IO API Contract
 
 dimpl is Sans-IO: no sockets, no threads, no async. The caller drives I/O.
