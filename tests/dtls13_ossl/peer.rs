@@ -309,6 +309,10 @@ impl OsslPeer {
         Ok(())
     }
 
+    pub fn is_connected(&self) -> bool {
+        matches!(self.stage, Stage::Established(_))
+    }
+
     /// Negotiated protocol, e.g. `DTLSv1.3`.
     pub fn version(&self) -> Option<&'static str> {
         self.ssl().map(|ssl| ssl.version_str())

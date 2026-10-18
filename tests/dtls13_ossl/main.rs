@@ -51,6 +51,7 @@ macro_rules! require_dtls13 {
 
 // After the macro so the findings can use it.
 mod findings;
+mod openssl_only;
 
 fn connect(setup: Setup) -> Link {
     let mut link = setup.link();
