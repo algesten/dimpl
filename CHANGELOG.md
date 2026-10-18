@@ -6,8 +6,8 @@
   * Complete DTLS 1.3 shutdown when answering the peer close_notify #181
   * Start handshake clocks at ClientHello and honor timing settings consistently #162
   * Update OpenSSL test dependency to resolve security advisories #176
-  * Remove `HandshakePending`. All errors are fatal. #175
-  * Return accepted byte counts from `send_application_data` #175
+  * Remove `HandshakePending`. All errors are fatal. (breaking) #175
+  * Return accepted byte counts from `send_application_data` (breaking) #175
   * Parse DTLS 1.2/1.3 handshake payloads before committing transcript state #174
   * Accept DTLS 1.3 ACKs for earlier handshake and KeyUpdate transmissions #173
 
