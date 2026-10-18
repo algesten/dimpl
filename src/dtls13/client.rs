@@ -25,6 +25,7 @@ use std::time::Instant;
 use arrayvec::ArrayVec;
 use subtle::ConstantTimeEq;
 
+use crate::auto::HybridClientHello;
 use crate::buffer::Buf;
 use crate::buffer::ToBuf;
 use crate::crypto::{ActiveKeyExchange, SrtpProfile};
@@ -72,7 +73,7 @@ pub struct Client {
     session_id: Option<SessionId>,
 
     /// Original auto-sense offer, retained for cookie retries.
-    hybrid: Option<Box<crate::auto::HybridClientHello>>,
+    hybrid: Option<Box<HybridClientHello>>,
 
     /// Storage for extension data
     extension_data: Buf,
@@ -173,7 +174,7 @@ impl Client {
     /// already sent on the wire by `ClientPending`, so no record is
     /// enqueued for output.
     pub(crate) fn new_from_hybrid(
-        mut hybrid: crate::auto::HybridClientHello,
+        mut hybrid: HybridClientHello,
         config: std::sync::Arc<crate::Config>,
         certificate: crate::DtlsCertificate,
         now: Instant,

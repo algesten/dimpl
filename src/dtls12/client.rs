@@ -18,6 +18,7 @@ use std::time::Instant;
 use arrayvec::ArrayVec;
 use subtle::ConstantTimeEq;
 
+use crate::auto::HybridClientHello;
 use crate::buffer::{Buf, ToBuf};
 use crate::crypto::SrtpProfile;
 use crate::dtls12::Server;
@@ -52,7 +53,7 @@ pub struct Client {
     cookie: Option<Cookie>,
 
     /// Original auto-sense offer, retained for cookie retries.
-    hybrid: Option<Box<crate::auto::HybridClientHello>>,
+    hybrid: Option<Box<HybridClientHello>>,
 
     /// Storage for extension data
     extension_data: Buf,
@@ -129,7 +130,7 @@ impl Client {
     /// If the server does send HVR, `reset_client_for_hello_verify_request`
     /// clears the transcript anyway, so the injected bytes are harmless.
     pub(crate) fn new_from_hybrid(
-        hybrid: crate::auto::HybridClientHello,
+        hybrid: HybridClientHello,
         config: std::sync::Arc<Config>,
         certificate: DtlsCertificate,
         now: Instant,
