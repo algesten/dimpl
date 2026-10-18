@@ -158,6 +158,7 @@ fn queued_data_in_its_own_datagram_is_delivered() {
 /// `dtls_get_more_records` returns RETRY without reading the BIO, so
 /// `SSL_get_error` reports `SSL_ERROR_SYSCALL` with an empty error queue
 /// instead of `SSL_ERROR_WANT_READ`. Applications treat that as fatal.
+/// Filed as openssl/openssl#33241.
 #[test]
 fn openssl_client_syscall_on_lost_server_hello_after_hrr() {
     require_dtls13!();
@@ -250,7 +251,8 @@ fn crossing_key_updates(dimpl_client: bool) {
 /// OpenSSL. RFC 9147 §7.1: on a gap in the incoming flight a receiver SHOULD
 /// ACK what it has, and §7.2 says the sender SHOULD then retransmit the rest.
 /// The OpenSSL 4.1 server only accepts ACKs after KeyUpdate/NewSessionTicket;
-/// in `TLS_ST_SW_FINISHED` it aborts with `unexpected_message`.
+/// in `TLS_ST_SW_FINISHED` it aborts with `unexpected_message`. Filed as
+/// openssl/openssl#33242.
 #[test]
 fn openssl_server_aborts_on_ack_for_partial_flight() {
     require_dtls13!();

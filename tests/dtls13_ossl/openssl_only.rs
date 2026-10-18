@@ -199,7 +199,8 @@ fn openssl_pair_sequential_key_updates() {
 /// (X25519MLKEM768, X25519) with a HelloRetryRequest for P-256, and its next
 /// flight spans several datagrams. If the one with the ServerHello is lost,
 /// the client buffers the encrypted remainder and `SSL_connect` fails with
-/// `SSL_ERROR_SYSCALL` and an empty error queue.
+/// `SSL_ERROR_SYSCALL` and an empty error queue. Filed as
+/// openssl/openssl#33241.
 #[test]
 fn openssl_pair_lost_server_hello_after_hrr() {
     require_dtls13!();
