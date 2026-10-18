@@ -491,6 +491,7 @@ dependencies = [
  "der",
  "ecdsa",
  "env_logger",
+ "foreign-types",
  "generic-array",
  "hkdf",
  "hmac",
