@@ -426,7 +426,13 @@ impl Engine {
                 let seq = record.record().sequence;
                 let is_post_handshake_record =
                     seq.epoch >= 3 && record.record().content_type == ContentType::Handshake;
-                if is_post_handshake_record {
+                // The datagram may also contain fresh messages. Do not ACK
+                // those when discarding it, so the peer can retransmit them.
+                let already_processed = record
+                    .handshakes()
+                    .iter()
+                    .all(|h| h.header.message_seq < self.peer_handshake_seq_no);
+                if is_post_handshake_record && already_processed {
                     let recorded = self
                         .received_record_numbers
                         .try_push((seq.epoch as u64, seq.sequence_number))
