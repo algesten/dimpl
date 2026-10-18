@@ -1519,6 +1519,69 @@ mod tests {
     }
 
     #[test]
+    fn retransmitted_ticket_does_not_discard_coalesced_new_ticket() {
+        let mut client = client();
+        let cert = generate_self_signed_certificate().expect("server certificate");
+        let mut server = Engine::new(Arc::new(Config::default()), cert);
+        let mut secret = Buf::new();
+        secret.extend_from_slice(&[0x42; 32]);
+        for engine in [&mut client.engine, &mut server] {
+            engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+            engine
+                .install_application_keys(&secret, &secret)
+                .expect("application keys");
+            engine.enable_peer_encryption().expect("enable encryption");
+            engine.release_application_data();
+        }
+        client.state = State::AwaitApplicationData;
+        let now = Instant::now();
+        let mut buffer = [0; 2048];
+        let ticket = &[0, 0, 0, 60, 0, 0, 0, 0, 0, 0, 1, 42, 0, 0][..];
+        // Lose the first ACK, then coalesce the retransmission and a fresh ticket.
+        for messages in [
+            &[(0, MessageType::NewSessionTicket, ticket)][..],
+            &[
+                (0, MessageType::NewSessionTicket, ticket),
+                (1, MessageType::NewSessionTicket, ticket),
+            ][..],
+            &[(2, MessageType::KeyUpdate, &[0][..])][..],
+        ] {
+            for &(seq, msg_type, body) in messages {
+                let packet = epoch0_handshake_packet(msg_type, seq, body);
+                server
+                    .create_ciphertext_record(ContentType::Handshake, 3, false, |fragment| {
+                        fragment.extend_from_slice(&packet[13..]);
+                    })
+                    .expect("send post-handshake message");
+            }
+            let mut packets = 0;
+            loop {
+                match server.poll_output(&mut buffer, now) {
+                    Output::Packet(packet) => {
+                        packets += 1;
+                        client.handle_packet(packet).expect("accept messages");
+                        loop {
+                            match client.poll_output(&mut [0; 2048]) {
+                                Output::Packet(_) => {}
+                                Output::Timeout(_) => break,
+                                output => panic!("unexpected client output: {output:?}"),
+                            }
+                        }
+                    }
+                    Output::Timeout(_) => break,
+                    output => panic!("unexpected server output: {output:?}"),
+                }
+            }
+            assert_eq!(packets, 1, "messages must share one datagram");
+        }
+        assert_eq!(
+            crate::dtls13::incoming::RecordHandler::resolve_epoch(&client.engine, 0),
+            4,
+            "the fresh ticket must advance the sequence so KeyUpdate can be processed"
+        );
+    }
+
+    #[test]
     fn post_handshake_tickets_are_discarded_and_acked() {
         for half_closed in [false, true] {
             let mut client = client();
