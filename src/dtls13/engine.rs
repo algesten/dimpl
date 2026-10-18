@@ -419,7 +419,9 @@ impl Engine {
 
         // Drop old duplicates we've already processed
         if handshake.header.message_seq < self.peer_handshake_seq_no {
+            let result = self.ack_processed_post_handshake_records(&incoming);
             self.recycle_incoming(incoming);
+            result?;
             return Ok(false);
         }
 
@@ -1311,6 +1313,34 @@ impl Engine {
         self.flight_saved_records.clear();
         self.timers.stop();
         self.handshake_ack_deadline = None;
+    }
+
+    fn ack_processed_post_handshake_records(&mut self, incoming: &Incoming) -> Result<(), Error> {
+        // RFC 9147 section 7: ACK post-handshake retransmissions too, since
+        // the original ACK may have been lost. Do not process the update twice.
+        let mut needs_ack = false;
+        for record in incoming.records().iter() {
+            let seq = record.record().sequence;
+            let is_post_handshake_record =
+                seq.epoch >= 3 && record.record().content_type == ContentType::Handshake;
+            // The datagram may also contain fresh messages. Do not ACK
+            // those when discarding it, so the peer can retransmit them.
+            let already_processed = record
+                .handshakes()
+                .iter()
+                .all(|h| h.header.message_seq < self.peer_handshake_seq_no);
+            if is_post_handshake_record && already_processed {
+                let recorded = self
+                    .received_record_numbers
+                    .try_push((seq.epoch as u64, seq.sequence_number))
+                    .is_ok();
+                needs_ack |= recorded;
+            }
+        }
+        if needs_ack {
+            self.send_ack()?;
+        }
+        Ok(())
     }
 
     /// Send an ACK record listing received handshake record numbers.
@@ -3065,6 +3095,56 @@ mod tests {
             .expect("intermediate ACK");
         assert!(engine.flight_saved_records.is_empty());
         assert!(engine.timers.poll_timeout(now) > now + Duration::from_secs(60));
+    }
+
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn duplicate_key_update_does_not_ack_discarded_new_update() {
+        let now = Instant::now();
+        let mut sender = protected_test_engine();
+        let mut peer = protected_test_engine();
+        sender
+            .create_key_update(KeyUpdateRequest::UpdateNotRequested)
+            .expect("send first update");
+        for packet in engine_packets(&mut sender, now) {
+            peer.parse_packet(&packet).expect("receive first update");
+            engine_packets(&mut peer, now);
+        }
+        let mut buffer = Buf::new();
+        assert!(
+            peer.next_handshake_no_transcript(MessageType::KeyUpdate, &mut buffer)
+                .expect("parse first update")
+                .is_some()
+        );
+        peer.advance_peer_handshake_seq();
+        peer.update_recv_keys().expect("rotate receive keys");
+        peer.send_ack().expect("ACK first update");
+        let first_ack = engine_packets(&mut peer, now);
+
+        // A retry can already be queued when the original ACK arrives. Bundle
+        // that old retry with a new update sent after the ACK permits it.
+        sender.flight_resend("queued retry").expect("resend update");
+        let mut coalesced = engine_packets(&mut sender, now).concat();
+        for packet in first_ack {
+            sender.parse_packet(&packet).expect("receive first ACK");
+            engine_packets(&mut sender, now);
+        }
+        assert_eq!(sender.app_send_epoch(), 4);
+        sender
+            .create_key_update(KeyUpdateRequest::UpdateNotRequested)
+            .expect("send second update");
+        coalesced.extend(engine_packets(&mut sender, now).concat());
+
+        peer.parse_packet(&coalesced)
+            .expect("receive old and new updates together");
+        for packet in engine_packets(&mut peer, now) {
+            sender.parse_packet(&packet).expect("receive duplicate ACK");
+            engine_packets(&mut sender, now);
+        }
+        assert!(
+            sender.is_key_update_in_flight() || peer.has_complete_handshake(MessageType::KeyUpdate),
+            "ACK must not retire a fresh KeyUpdate that the receiver discarded"
+        );
     }
 
     #[cfg(feature = "rcgen")]

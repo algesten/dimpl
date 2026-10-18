@@ -640,3 +640,89 @@ fn dtls13_key_update_high_frequency() {
         "All 50 messages should be received despite high-frequency KeyUpdates"
     );
 }
+
+/// Losing the first ACK must not strand either peer's KeyUpdate.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls13_key_update_retransmission_is_acked_again() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    for sender_is_client in [false, true] {
+        let now = Instant::now();
+        let low_limit = Arc::new(
+            Config::builder()
+                .aead_encryption_limit(2)
+                .build()
+                .expect("build config"),
+        );
+        let (client_config, server_config) = if sender_is_client {
+            (low_limit, dtls13_config())
+        } else {
+            (dtls13_config(), low_limit)
+        };
+        let mut client = Dtls::new_13(
+            client_config,
+            generate_self_signed_certificate().expect("client cert"),
+            now,
+        );
+        client.set_active(true);
+        let mut server = Dtls::new_13(
+            server_config,
+            generate_self_signed_certificate().expect("server cert"),
+            now,
+        );
+        let mut now = complete_dtls13_handshake(&mut client, &mut server, now);
+        drain_outputs(&mut client);
+        drain_outputs(&mut server);
+        let (sender, receiver) = if sender_is_client {
+            (&mut client, &mut server)
+        } else {
+            (&mut server, &mut client)
+        };
+
+        // Reach the encryption limit and discard the initial KeyUpdate ACK.
+        for _ in 0..2 {
+            sender.send_application_data(b"rotate").expect("send data");
+            let packets = drain_outputs(sender).packets;
+            for packet in packets {
+                receiver
+                    .handle_packet(&packet)
+                    .expect("receive data/update");
+                drain_outputs(receiver);
+            }
+        }
+        sender.handle_timeout(now).expect("start key update");
+        for packet in drain_outputs(sender).packets {
+            receiver.handle_packet(&packet).expect("receive key update");
+            drain_outputs(receiver);
+        }
+
+        // Deliver every retry and response. Before the fix the sender exhausts
+        // its retry budget because the duplicate KeyUpdate is never ACKed.
+        for round in 1..=8 {
+            now += Duration::from_secs(1 << round);
+            sender.handle_timeout(now).expect("KeyUpdate must recover");
+            for packet in drain_outputs(sender).packets {
+                receiver.handle_packet(&packet).expect("receive retry");
+                for response in drain_outputs(receiver).packets {
+                    sender.handle_packet(&response).expect("receive response");
+                    for reply in drain_outputs(sender).packets {
+                        receiver.handle_packet(&reply).expect("receive reply");
+                        drain_outputs(receiver);
+                    }
+                }
+            }
+        }
+        sender
+            .send_application_data(b"recovered")
+            .expect("send after recovery");
+        let mut received = Vec::new();
+        for packet in drain_outputs(sender).packets {
+            receiver
+                .handle_packet(&packet)
+                .expect("receive after recovery");
+            received.extend(drain_outputs(receiver).app_data);
+        }
+        assert_eq!(received, [b"recovered".to_vec()]);
+    }
+}

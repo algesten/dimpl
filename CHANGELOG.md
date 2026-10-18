@@ -1,5 +1,6 @@
 # Unreleased
 
+  * ACK retransmitted DTLS 1.3 KeyUpdates after ACK loss #180
   * Complete DTLS 1.3 shutdown when answering the peer close_notify #181
   * Start handshake clocks at ClientHello and honor timing settings consistently #162
   * Update OpenSSL test dependency to resolve security advisories #176
