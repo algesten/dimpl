@@ -417,6 +417,10 @@ impl Engine {
             }
         }
 
+        let is_session_ticket = self.is_client
+            && handshake.header.msg_type == MessageType::NewSessionTicket
+            && first_record.record().sequence.epoch >= 3;
+
         // Drop old duplicates we've already processed
         if handshake.header.message_seq < self.peer_handshake_seq_no {
             let result = self.ack_processed_post_handshake_records(&incoming);
@@ -426,10 +430,11 @@ impl Engine {
         }
 
         // Reject new handshakes after initial handshake is complete,
-        // but allow KeyUpdate (a post-handshake message).
+        // but allow KeyUpdate and server-issued session tickets.
         if self.release_app_data
             && handshake.header.message_seq >= self.peer_handshake_seq_no
             && handshake.header.msg_type != MessageType::KeyUpdate
+            && !is_session_ticket
         {
             self.recycle_incoming(incoming);
             return Err(Error::RenegotiationAttempt);
@@ -2380,7 +2385,7 @@ impl RecordHandler for Engine {
         Engine::push_buffer(self, buffer);
     }
 
-    fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
+    fn classify_record(&mut self, mut record: Record) -> Result<Option<Record>, Error> {
         if let Some(cn_seq) = self.close_notify_sequence {
             if record.record().sequence > cn_seq {
                 self.push_buffer(record.into_buffer());
@@ -2403,6 +2408,27 @@ impl RecordHandler for Engine {
         }
 
         match record.record().content_type {
+            ContentType::Handshake if self.release_app_data && self.is_client && epoch >= 3 => {
+                let count = record.handshakes().len();
+                record.retain_handshakes(|handshake| {
+                    handshake.header.msg_type != MessageType::NewSessionTicket
+                        || handshake.header.message_seq >= self.peer_handshake_seq_no
+                });
+                if record.handshakes().len() != count {
+                    // Re-ACK old tickets without discarding fresh messages beside them.
+                    let seq = record.record().sequence;
+                    let _ = self
+                        .received_record_numbers
+                        .try_push((seq.epoch as u64, seq.sequence_number));
+                    let ack = self.send_ack();
+                    if record.handshakes().is_empty() || ack.is_err() {
+                        self.push_buffer(record.into_buffer());
+                        ack?;
+                        return Ok(None);
+                    }
+                }
+                Ok(Some(record))
+            }
             ContentType::Ack => {
                 let fragment = record.record().fragment(record.buffer());
                 self.process_ack(fragment)?;
