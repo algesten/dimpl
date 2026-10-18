@@ -250,6 +250,7 @@ use dtls13::{Client as Client13, Server as Server13};
 use auto::ClientPending;
 
 mod auto;
+mod client_hello_builder;
 mod time_tricks;
 
 pub(crate) mod buffer;

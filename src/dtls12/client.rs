@@ -19,14 +19,15 @@ use arrayvec::ArrayVec;
 use subtle::ConstantTimeEq;
 
 use crate::buffer::{Buf, ToBuf};
+use crate::client_hello_builder::{ClientHelloBuilder, Offer};
 use crate::crypto::SrtpProfile;
 use crate::dtls12::Server;
 use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
-use crate::dtls12::message::{Body, CipherSuiteVec, ClientHello, ClientKeyExchange};
+use crate::dtls12::message::DigitallySigned;
+use crate::dtls12::message::{Body, ClientKeyExchange};
 use crate::dtls12::message::{ClientPskKeys, ServerKeyExchangeParams};
 use crate::dtls12::message::{CompressionMethod, ContentType, Cookie};
-use crate::dtls12::message::{DigitallySigned, Dtls12CipherSuite};
 use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm};
 use crate::timer::HandshakeTimers;
@@ -51,11 +52,8 @@ pub struct Client {
     /// It might remain null if there is no HelloVerifyRequest.
     cookie: Option<Cookie>,
 
-    /// Original hybrid ClientHello body, retained for cookie retries.
-    hybrid_client_hello: Option<Buf>,
-
-    /// Storage for extension data
-    extension_data: Buf,
+    /// Keep offering both versions after an auto-sense cookie challenge.
+    hybrid_offer: bool,
 
     /// The negotiated SRTP profile (if any)
     negotiated_srtp_profile: Option<SrtpProfile>,
@@ -96,7 +94,6 @@ pub(crate) enum LocalEvent {
 impl Client {
     pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Client {
         engine.set_client(true);
-        let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
 
         Client {
@@ -105,8 +102,7 @@ impl Client {
             random: None,
             session_id: None,
             cookie: None,
-            hybrid_client_hello: None,
-            extension_data,
+            hybrid_offer: false,
             negotiated_srtp_profile: None,
             server_random: None,
             server_certificates: Vec::with_capacity(3),
@@ -156,11 +152,7 @@ impl Client {
         let mut engine = Engine::new(config, auth);
         engine.set_client(true);
         engine.inject_hybrid_client_hello(handshake_fragment, timers);
-        let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
-
-        let mut hybrid_client_hello = engine.pop_buffer();
-        hybrid_client_hello.extend_from_slice(&handshake_fragment[12..]);
 
         Client {
             state: State::AwaitHelloVerifyRequest,
@@ -168,8 +160,7 @@ impl Client {
             random: Some(random),
             session_id: None,
             cookie: None,
-            hybrid_client_hello: Some(hybrid_client_hello),
-            extension_data,
+            hybrid_offer: true,
             negotiated_srtp_profile: None,
             server_random: None,
             server_certificates: Vec::with_capacity(3),
@@ -372,17 +363,27 @@ impl State {
         client
             .engine
             .create_handshake(MessageType::ClientHello, |body, engine| {
-                handshake_create_client_hello(
-                    body,
-                    engine,
-                    cookie,
-                    random,
-                    session_id,
-                    &mut client.extension_data,
-                )?;
-                if let Some(original) = &client.hybrid_client_hello {
-                    crate::auto::restore_client_hello_offer(original, body, false);
+                let offer = if client.hybrid_offer {
+                    Offer::Hybrid
+                } else {
+                    Offer::Dtls12
+                };
+                let mut hello = ClientHelloBuilder::new(engine.config(), random, offer)
+                    .session_id(&session_id)
+                    .legacy_cookie(&cookie);
+                if !client.hybrid_offer {
+                    hello = hello.cipher_suites(
+                        engine
+                            .config()
+                            .dtls12_cipher_suites()
+                            .map(|cs| cs.suite())
+                            .filter(|suite| {
+                                engine.crypto_context().is_cipher_suite_compatible(*suite)
+                            })
+                            .map(|suite| suite.as_u16()),
+                    );
                 }
+                hello.serialize(body);
                 Ok(())
             })?;
 
@@ -546,10 +547,6 @@ impl State {
             debug!("Negotiated SRTP profile: {:?}", profile);
         }
         trace!("Extended Master Secret enabled");
-
-        if let Some(original) = client.hybrid_client_hello.take() {
-            client.engine.push_buffer(original);
-        }
 
         // PSK suites skip Certificate; go directly to ServerKeyExchange
         if cs.is_psk() {
@@ -1223,50 +1220,6 @@ impl State {
     }
 }
 
-fn handshake_create_client_hello(
-    body: &mut Buf,
-    engine: &mut Engine,
-    cookie: Cookie,
-    random: Random,
-    session_id: SessionId,
-    extension_data: &mut Buf,
-) -> Result<(), Error> {
-    let client_version = ProtocolVersion::DTLS1_2;
-
-    // Get cipher suites from config that are compatible with our key
-    let cipher_suites: CipherSuiteVec = engine
-        .config()
-        .dtls12_cipher_suites()
-        .map(|cs| cs.suite())
-        .filter(|suite| engine.crypto_context().is_cipher_suite_compatible(*suite))
-        .take(Dtls12CipherSuite::supported().len())
-        .collect();
-
-    debug!(
-        "Sending ClientHello: DTLS version={:?}, cookie_len={}, offering {} cipher suites",
-        client_version,
-        cookie.len(),
-        cipher_suites.len()
-    );
-
-    let mut compression_methods = ArrayVec::new();
-    compression_methods.push(CompressionMethod::Null);
-
-    // Create ClientHello with all required extensions
-    let client_hello = ClientHello::new(
-        client_version,
-        random,
-        session_id,
-        cookie,
-        cipher_suites,
-        compression_methods,
-    )
-    .with_extensions(extension_data, engine.config());
-
-    client_hello.serialize(extension_data, body);
-    Ok(())
-}
-
 fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
     let crypto = engine.crypto_context();
     crypto.serialize_client_certificate(body);
@@ -1405,6 +1358,7 @@ impl LocalEvent {
 
 #[cfg(test)]
 mod tests {
+    use crate::dtls12::message::Dtls12CipherSuite;
     use std::sync::Arc;
 
     use super::*;

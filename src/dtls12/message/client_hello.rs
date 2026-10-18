@@ -10,7 +10,6 @@ use nom::number::complete::{be_u8, be_u16};
 use nom::{Err, IResult};
 
 use super::extension::ExtensionVec;
-use crate::Config;
 use crate::buffer::Buf;
 use crate::util::many1;
 
@@ -35,6 +34,7 @@ struct ParsedExtensions {
 }
 
 impl ClientHello {
+    #[cfg(test)]
     pub fn new(
         client_version: ProtocolVersion,
         random: Random,
@@ -53,82 +53,6 @@ impl ClientHello {
             extensions: ArrayVec::new(),
             parsed_extensions: ParsedExtensions::default(),
         }
-    }
-
-    /// Add all required extensions for DTLS handshake
-    pub fn with_extensions(mut self, buf: &mut Buf, config: &Config) -> Self {
-        // Clear the extension data buffer
-        buf.clear();
-
-        // First write all extension data
-        let mut ranges = ArrayVec::<(ExtensionType, usize, usize), 8>::new();
-
-        // Check if provider has ECDH support
-        let has_ecdh = config.crypto_provider().has_ecdh();
-
-        // Add supported groups and EC point formats if using ECDH
-        if has_ecdh {
-            // Add supported groups extension from config
-            let mut groups = super::NamedGroupVec::new();
-            for kx_group in config.kx_groups() {
-                groups.push(kx_group.name());
-            }
-            let supported_groups = SupportedGroupsExtension { groups };
-            let start_pos = buf.len();
-            supported_groups.serialize(buf);
-            ranges.push((ExtensionType::SupportedGroups, start_pos, buf.len()));
-
-            // Add EC point formats extension
-            let ec_point_formats = ECPointFormatsExtension::default();
-            let start_pos = buf.len();
-            ec_point_formats.serialize(buf);
-            ranges.push((ExtensionType::EcPointFormats, start_pos, buf.len()));
-        }
-
-        // Add signature algorithms extension (required for TLS 1.2+)
-        let signature_algorithms = SignatureAlgorithmsExtension::default();
-        let start_pos = buf.len();
-        signature_algorithms.serialize(buf);
-        ranges.push((ExtensionType::SignatureAlgorithms, start_pos, buf.len()));
-
-        // Add use_srtp extension for DTLS-SRTP support
-        let use_srtp = UseSrtpExtension::default();
-        let start_pos = buf.len();
-        use_srtp.serialize(buf);
-        ranges.push((ExtensionType::UseSrtp, start_pos, buf.len()));
-
-        // // Add session_ticket extension (empty)
-        // let start_pos = buf.len();
-        // buf.extend_from_slice(&[0x00]); // Empty extension data
-        // ranges.push((ExtensionType::SessionTicket, start_pos, buf.len()));
-
-        let need_etm = self
-            .cipher_suites
-            .iter()
-            .any(|suite| suite.need_encrypt_then_mac());
-        if need_etm {
-            // Add encrypt_then_mac extension (empty)
-            let start_pos = buf.len();
-            buf.extend_from_slice(&[0x00]); // Empty extension data
-            ranges.push((ExtensionType::EncryptThenMac, start_pos, buf.len()));
-        }
-
-        let start_pos = buf.len();
-        ranges.push((
-            ExtensionType::ExtendedMasterSecret,
-            start_pos,
-            start_pos, // No data at all
-        ));
-
-        // Now create all extensions using ranges
-        for (extension_type, start, end) in ranges {
-            self.extensions.push(Extension {
-                extension_type,
-                extension_data_range: start..end,
-            });
-        }
-
-        self
     }
 
     pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], ClientHello> {

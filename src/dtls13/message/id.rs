@@ -59,13 +59,6 @@ macro_rules! var_array {
                 Ok($name(array, data.len()))
             }
 
-            pub fn empty() -> Self {
-                if $min > 0 {
-                    panic!("{}::empty() is not valid", stringify!($name));
-                }
-                Self([0; $max], 0)
-            }
-
             pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
                 let (input, len) = be_u8(input)?;
                 if len < $min as u8 || len > $max as u8 {
@@ -75,6 +68,13 @@ macro_rules! var_array {
                 // unwrap() is ok because we check the size above.
                 let instance = Self::try_new(data).unwrap();
                 Ok((input, instance))
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                assert!($min == 0, "empty ID is not valid");
+                Self([0; $max], 0)
             }
         }
 

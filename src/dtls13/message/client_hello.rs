@@ -35,6 +35,7 @@ struct ParsedExtensions {
 }
 
 impl ClientHello {
+    #[cfg(test)]
     pub fn new(
         legacy_version: ProtocolVersion,
         random: Random,
@@ -367,8 +368,8 @@ mod tests {
         let client_hello = ClientHello {
             legacy_version: ProtocolVersion::DTLS1_2,
             random: Random::parse(&MESSAGE[2..34]).unwrap().1,
-            legacy_session_id: SessionId::empty(),
-            legacy_cookie: Cookie::empty(),
+            legacy_session_id: SessionId::default(),
+            legacy_cookie: Cookie::default(),
             cipher_suites: ArrayVec::new(),
             legacy_compression_methods: ArrayVec::new(),
             extensions: ArrayVec::new(),
@@ -387,8 +388,8 @@ mod tests {
         let client_hello = ClientHello {
             legacy_version: ProtocolVersion::DTLS1_2,
             random: Random::parse(&MESSAGE[2..34]).unwrap().1,
-            legacy_session_id: SessionId::empty(),
-            legacy_cookie: Cookie::empty(),
+            legacy_session_id: SessionId::default(),
+            legacy_cookie: Cookie::default(),
             cipher_suites: ArrayVec::new(),
             legacy_compression_methods: ArrayVec::new(),
             extensions: ArrayVec::new(),

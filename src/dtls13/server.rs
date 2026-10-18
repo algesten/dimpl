@@ -788,7 +788,7 @@ impl State {
         // Truncate the metadata we appended
         server.extension_data.resize(meta_start, 0);
 
-        let client_session_id = SessionId::empty();
+        let client_session_id = SessionId::default();
 
         server.engine.flight_begin(2);
 
@@ -1275,7 +1275,7 @@ fn send_hello_retry_request(
     selected_group: Option<NamedGroup>,
 ) -> Result<(), Error> {
     let hrr_random = Random { bytes: HRR_RANDOM };
-    let client_session_id = SessionId::empty();
+    let client_session_id = SessionId::default();
 
     server.engine.flight_begin(2);
 
