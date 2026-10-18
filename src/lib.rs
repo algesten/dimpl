@@ -737,14 +737,8 @@ impl Dtls {
         let (hybrid, config, certificate, now, timers) = cp.into_parts();
         match version {
             auto::DetectedVersion::Dtls12 => {
-                let mut client12 = Client12::new_from_hybrid(
-                    hybrid.random,
-                    &hybrid.handshake_fragment,
-                    config,
-                    certificate,
-                    now,
-                    timers,
-                );
+                let mut client12 =
+                    Client12::new_from_hybrid(hybrid, config, certificate, now, timers);
                 // Feed the HVR to Client12 — it enters
                 // AwaitHelloVerifyRequest and processes the cookie.
                 if let Err(e) = client12.handle_packet(packet) {

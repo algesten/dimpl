@@ -25,6 +25,7 @@ use std::time::Instant;
 use arrayvec::ArrayVec;
 use subtle::ConstantTimeEq;
 
+use crate::auto::HybridClientHello;
 use crate::buffer::Buf;
 use crate::buffer::ToBuf;
 use crate::crypto::{ActiveKeyExchange, SrtpProfile};
@@ -70,6 +71,9 @@ pub struct Client {
 
     /// Legacy session ID echoed from ServerHello.
     session_id: Option<SessionId>,
+
+    /// Original auto-sense offer, retained for cookie retries.
+    hybrid: Option<Box<HybridClientHello>>,
 
     /// Storage for extension data
     extension_data: Buf,
@@ -141,6 +145,7 @@ impl Client {
             engine,
             random: None,
             session_id: None,
+            hybrid: None,
             extension_data,
             negotiated_srtp_profile: None,
             server_certificates: Vec::with_capacity(3),
@@ -169,7 +174,7 @@ impl Client {
     /// already sent on the wire by `ClientPending`, so no record is
     /// enqueued for output.
     pub(crate) fn new_from_hybrid(
-        hybrid: crate::auto::HybridClientHello,
+        mut hybrid: HybridClientHello,
         config: std::sync::Arc<crate::Config>,
         certificate: crate::DtlsCertificate,
         now: Instant,
@@ -188,11 +193,14 @@ impl Client {
         let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
 
+        let active_key_exchange = hybrid.active_key_exchange.take();
+
         Client {
             state: State::AwaitServerHello,
             engine,
             random: Some(hybrid.random),
             session_id: None,
+            hybrid: Some(Box::new(hybrid)),
             extension_data,
             negotiated_srtp_profile: None,
             server_certificates: Vec::with_capacity(3),
@@ -204,7 +212,7 @@ impl Client {
             local_events: VecDeque::new(),
             queued_data: Vec::new(),
             pending_key_update_response: false,
-            active_key_exchange: Some(hybrid.active_key_exchange),
+            active_key_exchange,
             hello_retry: false,
             hrr_selected_group: None,
             handshake_secret: None,
@@ -469,6 +477,19 @@ impl State {
         client
             .engine
             .create_handshake(MessageType::ClientHello, |body, engine| {
+                if let Some(hybrid) = &mut client.hybrid {
+                    if let Some(cookie) = &client.saved_cookie {
+                        hybrid.set_retry_cookie(cookie);
+                    }
+                    if client.hrr_selected_group.is_some() {
+                        hybrid.set_key_share(
+                            group,
+                            &client.extension_data[pub_key_start..pub_key_end],
+                        );
+                    }
+                    hybrid.serialize(body);
+                    return Ok(());
+                }
                 handshake_create_client_hello(
                     body,
                     engine,
@@ -663,6 +684,8 @@ impl State {
 
         // Enable peer encryption for server's epoch 2 messages
         client.engine.enable_peer_encryption()?;
+
+        client.hybrid = None;
 
         client.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitEncryptedExtensions)

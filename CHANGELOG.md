@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Preserve auto-client ClientHello offers across cookie retries #184
   * Ignore and ACK DTLS 1.3 post-handshake session tickets #182
   * ACK retransmitted DTLS 1.3 KeyUpdates after ACK loss #180
   * Complete DTLS 1.3 shutdown when answering the peer close_notify #181
