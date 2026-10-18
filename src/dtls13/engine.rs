@@ -419,7 +419,22 @@ impl Engine {
 
         // Drop old duplicates we've already processed
         if handshake.header.message_seq < self.peer_handshake_seq_no {
+            // RFC 9147 section 7: ACK post-handshake retransmissions too, since
+            // the original ACK may have been lost. Do not process the update twice.
+            if self.release_app_data {
+                for record in incoming.records().iter() {
+                    let seq = record.record().sequence;
+                    if seq.epoch >= 3 && record.record().content_type == ContentType::Handshake {
+                        let _ = self
+                            .received_record_numbers
+                            .try_push((seq.epoch as u64, seq.sequence_number));
+                    }
+                }
+            }
             self.recycle_incoming(incoming);
+            if self.release_app_data {
+                self.send_ack()?;
+            }
             return Ok(false);
         }
 
