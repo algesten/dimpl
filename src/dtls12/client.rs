@@ -51,6 +51,9 @@ pub struct Client {
     /// It might remain null if there is no HelloVerifyRequest.
     cookie: Option<Cookie>,
 
+    /// Original hybrid ClientHello body, retained for cookie retries.
+    hybrid_client_hello: Option<Buf>,
+
     /// Storage for extension data
     extension_data: Buf,
 
@@ -102,6 +105,7 @@ impl Client {
             random: None,
             session_id: None,
             cookie: None,
+            hybrid_client_hello: None,
             extension_data,
             negotiated_srtp_profile: None,
             server_random: None,
@@ -155,12 +159,16 @@ impl Client {
         let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
 
+        let mut hybrid_client_hello = engine.pop_buffer();
+        hybrid_client_hello.extend_from_slice(&handshake_fragment[12..]);
+
         Client {
             state: State::AwaitHelloVerifyRequest,
             engine,
             random: Some(random),
             session_id: None,
             cookie: None,
+            hybrid_client_hello: Some(hybrid_client_hello),
             extension_data,
             negotiated_srtp_profile: None,
             server_random: None,
@@ -371,7 +379,11 @@ impl State {
                     random,
                     session_id,
                     &mut client.extension_data,
-                )
+                )?;
+                if let Some(original) = &client.hybrid_client_hello {
+                    crate::auto::restore_client_hello_offer(original, body, false);
+                }
+                Ok(())
             })?;
 
         let can_hello_verify = client.cookie.is_none();
@@ -534,6 +546,10 @@ impl State {
             debug!("Negotiated SRTP profile: {:?}", profile);
         }
         trace!("Extended Master Secret enabled");
+
+        if let Some(original) = client.hybrid_client_hello.take() {
+            client.engine.push_buffer(original);
+        }
 
         // PSK suites skip Certificate; go directly to ServerKeyExchange
         if cs.is_psk() {

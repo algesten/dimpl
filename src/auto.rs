@@ -39,6 +39,7 @@ const EXT_USE_SRTP: u16 = 0x000E;
 const EXT_PADDING: u16 = 0x0015;
 const EXT_EXTENDED_MASTER_SECRET: u16 = 0x0017;
 const EXT_SUPPORTED_VERSIONS: u16 = 0x002B;
+const EXT_COOKIE: u16 = 0x002C;
 const EXT_KEY_SHARE: u16 = 0x0033;
 const EXT_RENEGOTIATION_INFO: u16 = 0xFF01;
 
@@ -255,6 +256,64 @@ impl HybridClientHello {
         pkt.extend_from_slice(&(self.handshake_fragment.len() as u16).to_be_bytes());
         pkt.extend_from_slice(&self.handshake_fragment);
         pkt
+    }
+}
+
+/// Preserve the hybrid offer when a version-specific client builds a cookie retry.
+/// Both inputs are locally serialized ClientHello bodies, never peer-controlled bytes.
+pub fn restore_client_hello_offer(original: &[u8], retry: &mut Buf, dtls13: bool) {
+    // The cookie follows version, random and the length-prefixed session ID.
+    let original_cookie = 35 + original[34] as usize;
+    let retry_cookie = 35 + retry[34] as usize;
+    let original_suites = original_cookie + 1 + original[original_cookie] as usize;
+    let retry_suites = retry_cookie + 1 + retry[retry_cookie] as usize;
+    let suites_end = |body: &[u8], start: usize| {
+        start + 2 + u16::from_be_bytes([body[start], body[start + 1]]) as usize
+    };
+    let original_compression = suites_end(original, original_suites);
+    let retry_compression = suites_end(retry, retry_suites);
+    let original_extensions = original_compression + 1 + original[original_compression] as usize;
+    let retry_extensions = retry_compression + 1 + retry[retry_compression] as usize;
+
+    let mut restored = Buf::new();
+    restored.extend_from_slice(&original[..original_cookie]);
+    restored.extend_from_slice(&retry[retry_cookie..retry_suites]);
+    restored.extend_from_slice(&original[original_suites..original_extensions]);
+    if dtls13 {
+        restored.extend_from_slice(&[0, 0]); // extensions length, filled below
+        let extensions_start = restored.len();
+        let mut offset = original_extensions + 2;
+        while offset < original.len() {
+            let kind = u16::from_be_bytes([original[offset], original[offset + 1]]);
+            let len = u16::from_be_bytes([original[offset + 2], original[offset + 3]]) as usize;
+            // Replace key_share at its original position and omit optional padding.
+            if kind != EXT_KEY_SHARE && kind != EXT_PADDING {
+                restored.extend_from_slice(&original[offset..offset + 4 + len]);
+            } else if kind == EXT_KEY_SHARE {
+                copy_retry_extensions(retry, retry_extensions + 2, &mut restored, true);
+            }
+            offset += 4 + len;
+        }
+        copy_retry_extensions(retry, retry_extensions + 2, &mut restored, false);
+        let len = (restored.len() - extensions_start) as u16;
+        restored[extensions_start - 2..extensions_start].copy_from_slice(&len.to_be_bytes());
+    } else {
+        // HVR commits us to DTLS 1.2: keep its extensions, without supported_versions
+        // or key_share, since DTLS 1.3 forbids a nonempty legacy cookie.
+        restored.extend_from_slice(&retry[retry_extensions..]);
+    }
+    retry.clear();
+    retry.extend_from_slice(&restored);
+}
+
+fn copy_retry_extensions(retry: &[u8], mut offset: usize, output: &mut Buf, key_share: bool) {
+    while offset < retry.len() {
+        let kind = u16::from_be_bytes([retry[offset], retry[offset + 1]]);
+        let len = u16::from_be_bytes([retry[offset + 2], retry[offset + 3]]) as usize;
+        if (key_share && kind == EXT_KEY_SHARE) || (!key_share && kind == EXT_COOKIE) {
+            output.extend_from_slice(&retry[offset..offset + 4 + len]);
+        }
+        offset += 4 + len;
     }
 }
 

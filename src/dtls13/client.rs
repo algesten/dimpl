@@ -71,6 +71,9 @@ pub struct Client {
     /// Legacy session ID echoed from ServerHello.
     session_id: Option<SessionId>,
 
+    /// Original hybrid ClientHello body, retained for cookie retries.
+    hybrid_client_hello: Option<Buf>,
+
     /// Storage for extension data
     extension_data: Buf,
 
@@ -141,6 +144,7 @@ impl Client {
             engine,
             random: None,
             session_id: None,
+            hybrid_client_hello: None,
             extension_data,
             negotiated_srtp_profile: None,
             server_certificates: Vec::with_capacity(3),
@@ -188,11 +192,15 @@ impl Client {
         let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
 
+        let mut hybrid_client_hello = engine.pop_buffer();
+        hybrid_client_hello.extend_from_slice(&hybrid.handshake_fragment[12..]);
+
         Client {
             state: State::AwaitServerHello,
             engine,
             random: Some(hybrid.random),
             session_id: None,
+            hybrid_client_hello: Some(hybrid_client_hello),
             extension_data,
             negotiated_srtp_profile: None,
             server_certificates: Vec::with_capacity(3),
@@ -477,7 +485,11 @@ impl State {
                     pub_key_start..pub_key_end,
                     cookie_range.clone(),
                     &client.extension_data,
-                )
+                )?;
+                if let Some(original) = &client.hybrid_client_hello {
+                    crate::auto::restore_client_hello_offer(original, body, true);
+                }
+                Ok(())
             })?;
 
         Ok(Self::AwaitServerHello)
@@ -663,6 +675,10 @@ impl State {
 
         // Enable peer encryption for server's epoch 2 messages
         client.engine.enable_peer_encryption()?;
+
+        if let Some(original) = client.hybrid_client_hello.take() {
+            client.engine.push_buffer(original);
+        }
 
         client.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitEncryptedExtensions)
