@@ -1581,7 +1581,7 @@ mod tests {
                                 match client.poll_output(&mut [0; 2048]) {
                                     Output::Packet(_) => {}
                                     Output::Timeout(_) => break,
-                                    _ => panic!("unexpected client output"),
+                                    output => panic!("unexpected client output: {output:?}"),
                                 }
                             }
                         }
@@ -1664,7 +1664,7 @@ mod tests {
                             acks += 1;
                         }
                         Output::Timeout(_) => break,
-                        _ => panic!("unexpected client output"),
+                        output => panic!("unexpected client output: {output:?}"),
                     }
                 }
                 if msg_type == MessageType::NewSessionTicket || !half_closed {
@@ -1697,7 +1697,7 @@ mod tests {
                         received = true;
                     }
                     Output::Timeout(_) => break,
-                    _ => panic!("unexpected client output"),
+                    output => panic!("unexpected client output: {output:?}"),
                 }
             }
             assert!(received, "tickets must not block the following KeyUpdate");
