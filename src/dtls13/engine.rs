@@ -3085,6 +3085,56 @@ mod tests {
         assert!(engine.timers.poll_timeout(now) > now + Duration::from_secs(60));
     }
 
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn duplicate_key_update_does_not_ack_discarded_new_update() {
+        let now = Instant::now();
+        let mut sender = protected_test_engine();
+        let mut peer = protected_test_engine();
+        sender
+            .create_key_update(KeyUpdateRequest::UpdateNotRequested)
+            .expect("send first update");
+        for packet in engine_packets(&mut sender, now) {
+            peer.parse_packet(&packet).expect("receive first update");
+            engine_packets(&mut peer, now);
+        }
+        let mut buffer = Buf::new();
+        assert!(
+            peer.next_handshake_no_transcript(MessageType::KeyUpdate, &mut buffer)
+                .expect("parse first update")
+                .is_some()
+        );
+        peer.advance_peer_handshake_seq();
+        peer.update_recv_keys().expect("rotate receive keys");
+        peer.send_ack().expect("ACK first update");
+        let first_ack = engine_packets(&mut peer, now);
+
+        // A retry can already be queued when the original ACK arrives. Bundle
+        // that old retry with a new update sent after the ACK permits it.
+        sender.flight_resend("queued retry").expect("resend update");
+        let mut coalesced = engine_packets(&mut sender, now).concat();
+        for packet in first_ack {
+            sender.parse_packet(&packet).expect("receive first ACK");
+            engine_packets(&mut sender, now);
+        }
+        assert_eq!(sender.app_send_epoch(), 4);
+        sender
+            .create_key_update(KeyUpdateRequest::UpdateNotRequested)
+            .expect("send second update");
+        coalesced.extend(engine_packets(&mut sender, now).concat());
+
+        peer.parse_packet(&coalesced)
+            .expect("receive old and new updates together");
+        for packet in engine_packets(&mut peer, now) {
+            sender.parse_packet(&packet).expect("receive duplicate ACK");
+            engine_packets(&mut sender, now);
+        }
+        assert!(
+            sender.is_key_update_in_flight() || peer.has_complete_handshake(MessageType::KeyUpdate),
+            "ACK must not retire a fresh KeyUpdate that the receiver discarded"
+        );
+    }
+
     #[cfg(feature = "rcgen")]
     fn key_update_ack_after_retransmission(lost: bool) {
         let now = Instant::now();
