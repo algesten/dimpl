@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-Code style guide for Claude sessions working on dimpl.
+Code style guide for agents working on dimpl.
 
 ## File Ordering
 
