@@ -424,7 +424,9 @@ impl Engine {
             let mut needs_ack = false;
             for record in incoming.records().iter() {
                 let seq = record.record().sequence;
-                if seq.epoch >= 3 && record.record().content_type == ContentType::Handshake {
+                let is_post_handshake_record =
+                    seq.epoch >= 3 && record.record().content_type == ContentType::Handshake;
+                if is_post_handshake_record {
                     let recorded = self
                         .received_record_numbers
                         .try_push((seq.epoch as u64, seq.sequence_number))
