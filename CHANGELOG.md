@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.8.0
+
   * Preserve auto-client ClientHello offers across cookie retries #184
   * Ignore and ACK DTLS 1.3 post-handshake session tickets #182
   * ACK retransmitted DTLS 1.3 KeyUpdates after ACK loss #180
