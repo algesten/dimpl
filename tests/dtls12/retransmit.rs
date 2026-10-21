@@ -1284,3 +1284,86 @@ fn dtls12_forged_epoch1_appdata_before_encryption_does_not_confirm_peer() {
         "forged pre-encryption app data must not confirm the peer; flight 6 must still resend"
     );
 }
+
+/// A byte-identical duplicate of an epoch-1 datagram that arrives before the
+/// server has processed the client CCS must be dropped, not panic. Before peer
+/// encryption is enabled, epoch-1 records are queued undecrypted and bypass the
+/// replay window, so the duplicate reaches the receive queue. Here the first
+/// flight-5 datagram is lost, which holds the server short of the CCS while the
+/// Finished datagram is parked; a network-duplicated copy of it then arrives.
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_duplicate_epoch1_before_ccs_is_dropped() {
+    use dimpl::certificate::generate_self_signed_certificate;
+
+    let _ = env_logger::try_init();
+
+    let now = Instant::now();
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    // Small MTU so the epoch-1 Finished leads its own datagram.
+    let config_client = Arc::new(Config::builder().mtu(115).build().expect("config"));
+    let config_server = Arc::new(Config::builder().mtu(115).build().expect("config"));
+
+    let mut client = Dtls::new_12(config_client, client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_12(config_server, server_cert, now);
+    server.set_active(false);
+
+    // Flight 1: ClientHello.
+    client.handle_timeout(now).expect("client timeout start");
+    client.handle_timeout(now).expect("client arm flight 1");
+    let f1 = collect_packets(&mut client);
+    for packet in &f1 {
+        server.handle_packet(packet).expect("server recv f1");
+    }
+
+    // Flight 2: HelloVerifyRequest.
+    server.handle_timeout(now).expect("server arm flight 2");
+    let f2 = collect_packets(&mut server);
+    assert!(!f2.is_empty(), "server should emit flight 2");
+    for packet in &f2 {
+        client.handle_packet(packet).expect("client recv f2");
+    }
+
+    // Flight 3: ClientHello with cookie.
+    client.handle_timeout(now).expect("client arm flight 3");
+    let f3 = collect_packets(&mut client);
+    assert!(!f3.is_empty(), "client should emit flight 3");
+    for packet in &f3 {
+        server.handle_packet(packet).expect("server recv f3");
+    }
+
+    // Flight 4: server hello flight.
+    server.handle_timeout(now).expect("server arm flight 4");
+    let f4 = collect_packets(&mut server);
+    assert!(!f4.is_empty(), "server should emit flight 4");
+    for packet in &f4 {
+        client.handle_packet(packet).expect("client recv f4");
+    }
+
+    // Flight 5: Certificate, CKE, CertificateVerify, CCS, Finished.
+    client.handle_timeout(now).expect("client arm flight 5");
+    let f5 = collect_packets(&mut client);
+    let finished = f5
+        .iter()
+        .find(|d| parse_records(d).first().map(|h| h.epoch) == Some(1))
+        .expect("flight 5 should have a datagram led by the epoch-1 Finished")
+        .clone();
+
+    // Lose the first flight-5 datagram. The server cannot reach the CCS, so the
+    // Finished stays queued undecrypted.
+    for packet in &f5[1..] {
+        server.handle_packet(packet).expect("server recv f5");
+        drain_outputs(&mut server);
+    }
+
+    // A byte-identical duplicate of the Finished datagram arrives.
+    server
+        .handle_packet(&finished)
+        .expect("server recv duplicate Finished");
+    drain_outputs(&mut server);
+
+    // The client retransmits flight 5 and the handshake completes.
+    complete_dtls12_handshake(&mut client, &mut server, now);
+}

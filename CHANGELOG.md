@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Drop duplicate DTLS 1.2 epoch-1 records queued before peer encryption #189
+
 # 0.8.0
 
   * Preserve auto-client ClientHello offers across cookie retries #184
