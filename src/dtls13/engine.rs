@@ -2813,6 +2813,69 @@ mod tests {
         );
     }
 
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn buffered_ciphertext_with_colliding_masked_sequences_is_not_a_duplicate() {
+        let now = Instant::now();
+        let mut sender = protected_test_engine();
+        // With the helper's fixed AES-GCM keys, these distinct record numbers
+        // produce the same masked two-byte sequence in their unified headers.
+        let sequences = [376u16, 382u16];
+        let mut records = Vec::new();
+        for sequence in sequences {
+            sender.app_send_seq = u64::from(sequence);
+            sender
+                .create_ciphertext_record(ContentType::ApplicationData, 3, false, |fragment| {
+                    fragment.extend_from_slice(&sequence.to_be_bytes());
+                })
+                .expect("create protected data");
+            let packets = engine_packets(&mut sender, now);
+            assert_eq!(packets.len(), 1);
+            records.push(packets.into_iter().next().expect("one packet"));
+        }
+        assert_eq!(records[0][1..3], records[1][1..3], "fixture collision");
+        assert_ne!(records[0], records[1], "distinct protected records");
+
+        let mut receiver = test_engine();
+        receiver.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+        let mut output = [0; 2048];
+        for packet in &records {
+            receiver
+                .parse_packet(packet)
+                .expect("buffer protected data");
+            assert!(matches!(
+                receiver.poll_output(&mut output, now),
+                Output::Timeout(_)
+            ));
+        }
+
+        let mut secret = Buf::new();
+        secret.extend_from_slice(&[0x42; 32]);
+        receiver
+            .install_application_keys(&secret, &secret)
+            .expect("application keys");
+        receiver
+            .enable_peer_encryption()
+            .expect("authenticate buffered data");
+        receiver.release_application_data();
+        let mut data = Vec::new();
+        loop {
+            match receiver.poll_output(&mut output, now) {
+                Output::ApplicationData(payload) => data.push(payload.to_vec()),
+                Output::Timeout(_) => break,
+                unexpected => panic!("unexpected output: {unexpected:?}"),
+            }
+        }
+        assert_eq!(
+            data,
+            sequences
+                .iter()
+                .map(|sequence| sequence.to_be_bytes().to_vec())
+                .collect::<Vec<_>>(),
+            "masked record numbers do not identify records before deprotection"
+        );
+    }
+
     fn parsed_key_update(seq: u16) -> Incoming {
         Incoming::parse_packet(
             &encrypted_key_update_record(seq),
