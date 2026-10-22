@@ -242,6 +242,10 @@ impl Record {
                 return Ok(None);
             }
         };
+        // Renegotiation is unsupported, so only epochs 0 and 1 have cipher states.
+        if parsed.record.sequence.epoch > 1 {
+            return Ok(None);
+        }
         let parsed = Box::new(parsed);
 
         // It is not enough to only look at the epoch, since to be able to decrypt the entire

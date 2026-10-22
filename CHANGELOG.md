@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Drop unsupported epochs before buffering DTLS records #191
+
 # 0.8.0
 
   * Preserve auto-client ClientHello offers across cookie retries #184

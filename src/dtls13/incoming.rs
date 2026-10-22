@@ -213,6 +213,12 @@ impl Record {
     ) -> Result<Option<Box<ParsedRecord>>, InternalError> {
         let is_ciphertext = Dtls13Record::is_ciphertext_header(buffer[0]);
 
+        // Before keys are available, only handshake epoch 2 and application
+        // epoch 3 can be buffered. Epochs with low bits 0 or 1 require KeyUpdate.
+        if is_ciphertext && !decrypt.is_peer_encryption_enabled() && buffer[0] & 0x03 < 2 {
+            return Ok(None);
+        }
+
         // Decrypt record number in-place before parsing (RFC 9147 Section 4.2.3)
         if is_ciphertext && decrypt.is_peer_encryption_enabled() {
             let flags = buffer[0];
