@@ -198,11 +198,11 @@ impl Client {
     }
 
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<(), Error> {
-        match self
-            .engine
-            .parse_packet(packet)
-            .and_then(|_| self.make_progress())
-        {
+        match self.engine.parse_packet(packet).and_then(|_| {
+            let result = self.make_progress();
+            self.engine.discard_undecryptable();
+            result
+        }) {
             Ok(()) => Ok(()),
             Err(e) => e.into_public_error().map_or(Ok(()), Err),
         }

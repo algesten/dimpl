@@ -277,7 +277,9 @@ impl Server {
                 if is_client_hello {
                     self.engine.start_handshake(self.last_now);
                 }
-                self.make_progress()
+                let result = self.make_progress();
+                self.engine.discard_undecryptable();
+                result
             }) {
             Ok(()) => {}
             Err(e) => {

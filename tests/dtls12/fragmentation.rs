@@ -429,7 +429,9 @@ fn dtls12_out_of_order_fragments() {
             break;
         }
 
-        now += Duration::from_millis(10);
+        // Reordered protected records may be discarded until CCS is processed.
+        // Give the retransmission timer enough time to recover those records.
+        now += Duration::from_secs(1);
     }
 
     assert!(

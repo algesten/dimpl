@@ -359,11 +359,34 @@ impl Engine {
         let cs = self.cipher_suite;
         let incoming = Incoming::parse_packet(packet, self, cs)?;
         if let Some(incoming) = incoming {
+            // A reordered protected flight can be retransmitted once keys are ready.
+            // A coalesced flight starts with its plaintext key-establishing records.
+            if !self.peer_encryption_enabled
+                && Dtls13Record::is_ciphertext_header(incoming.first().buffer()[0])
+            {
+                self.recycle_incoming(incoming);
+                return Ok(false);
+            }
             let is_client_hello = self.insert_incoming(incoming)?;
             return Ok(is_client_hello);
         }
 
         Ok(false)
+    }
+
+    /// Discard ciphertext still awaiting keys after processing the datagram.
+    pub fn discard_undecryptable(&mut self) {
+        if self.peer_encryption_enabled {
+            return;
+        }
+        for incoming in self.queue_rx.iter() {
+            for record in incoming.records().iter() {
+                if Dtls13Record::is_ciphertext_header(record.buffer()[0]) {
+                    record.set_handled();
+                }
+            }
+        }
+        self.purge_handled_queue_rx();
     }
 
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<bool, Error> {
@@ -2396,6 +2419,25 @@ impl RecordHandler for Engine {
         let epoch = record.record().sequence.epoch;
         if epoch == 0
             && self.peer_encryption_enabled
+            && record.record().content_type == ContentType::Handshake
+        {
+            // Preserve duplicate-flight responses while discarding only the
+            // plaintext record, including when protected records follow it.
+            let dupe_seq = record
+                .first_handshake()
+                .and_then(|handshake| handshake.dupe_triggers_resend());
+            self.push_buffer(record.into_buffer());
+            if dupe_seq.is_some_and(|seq| seq < self.peer_handshake_seq_no)
+                && !self.flight_saved_records.is_empty()
+                && self.timers.request_resend(&mut self.rng)
+            {
+                self.flight_resend("dupe triggers resend")?;
+            }
+            return Ok(None);
+        }
+
+        if epoch == 0
+            && self.peer_encryption_enabled
             && matches!(
                 record.record().content_type,
                 ContentType::Ack | ContentType::Alert
@@ -2775,10 +2817,12 @@ mod tests {
 
     #[test]
     #[cfg(feature = "rcgen")]
-    fn duplicate_datagram_recycles_its_pooled_buffer() {
+    fn premature_datagram_recycles_its_pooled_buffer() {
         let mut engine = test_engine();
         let packet = encrypted_application_data_record(1, b"buffered ciphertext");
-        engine.parse_packet(&packet).expect("queue first datagram");
+        engine
+            .parse_packet(&packet)
+            .expect("discard premature datagram");
         let mut output = [0u8; 2048];
         assert!(matches!(
             engine.poll_output(&mut output, Instant::now()),
@@ -2796,7 +2840,7 @@ mod tests {
             engine.poll_output(&mut output, Instant::now()),
             Output::Timeout(_)
         ));
-        assert_eq!(engine.queue_rx.len(), 1);
+        assert!(engine.queue_rx.is_empty());
         assert!(
             engine.pop_buffer().into_vec().capacity() >= 2048,
             "discarding a duplicate must preserve its reusable receive allocation"
