@@ -371,10 +371,12 @@ impl Engine {
         match search_result {
             Err(index) => self.queue_rx.insert(index, incoming),
             Ok(_) => {
-                // For epoch 0, we can get duplicates due to resends.
-                // For epoch 1, we have the replay window and there should
-                // be no duplicates.
-                assert_eq!(seq_current.epoch, 0);
+                // Exact duplicate. For epoch 0 these come from resends. Before
+                // peer encryption is enabled, epoch-1 records are queued
+                // undecrypted and bypass the replay window, so duplicates can
+                // land here too. After that, Record::parse replay-checks every
+                // epoch-1 record before it is queued.
+                assert!(seq_current.epoch == 0 || !self.peer_encryption_enabled);
                 self.recycle_incoming(incoming);
             }
         }
