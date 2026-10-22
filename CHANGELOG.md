@@ -1,7 +1,7 @@
 # Unreleased
 
-  * Reject pending handshake-epoch records before entering application data in DTLS 1.2 and 1.3 #200
-  * Discard premature protected records and preserve authenticated data beside stale handshakes #199
+  * Reject leftover handshake epochs in DTLS 1.2/1.3 #200
+  * Discard premature ciphertext and stale plaintext handshakes #199
   * Drop unsupported epochs before buffering DTLS records #198
   * Drop duplicate DTLS 1.2 epoch-1 records queued before peer encryption #190
 

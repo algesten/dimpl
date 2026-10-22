@@ -1022,12 +1022,11 @@ impl State {
             .pending_records()
             .find(|record| record.record().sequence.epoch < 3);
         if let Some(record) = unexpected_record {
-            return Err(
-                Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch {
-                    epoch: record.record().sequence.epoch,
-                })
-                .into(),
-            );
+            let epoch = record.record().sequence.epoch;
+            return Err((Error::UnexpectedMessage(
+                crate::UnexpectedMessageError::UnexpectedEpoch { epoch },
+            ))
+            .into());
         }
 
         // When the server did NOT request client authentication, we skip
