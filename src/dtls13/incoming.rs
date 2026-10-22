@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use arrayvec::ArrayVec;
 
 use crate::buffer::{Buf, TmpBuf};
-use crate::dtls13::message::{ContentType, Dtls13CipherSuite, Dtls13Record, Handshake, Sequence};
+use crate::dtls13::message::{ContentType, Dtls13CipherSuite, Dtls13Record, Handshake};
+use crate::dtls13::message::{MessageType, Sequence};
 use crate::{Error, InternalError};
 
 /// Holds both the UDP packet and the parsed result of that packet.
@@ -247,6 +248,19 @@ impl Record {
                 return Ok(None);
             }
         };
+        // RFC 9147 section 6.1: only ClientHello and ServerHello (including HRR)
+        // are plaintext handshakes. Never queue protected-only messages from
+        // plaintext input, even before receive keys have been installed.
+        if !is_ciphertext
+            && parsed.handshakes.iter().any(|handshake| {
+                !matches!(
+                    handshake.header.msg_type,
+                    MessageType::ClientHello | MessageType::ServerHello
+                )
+            })
+        {
+            return Ok(None);
+        }
         let parsed = Box::new(parsed);
 
         // Plaintext records (epoch 0) are not encrypted

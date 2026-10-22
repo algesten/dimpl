@@ -1755,17 +1755,42 @@ mod tests {
     #[test]
     fn empty_server_certificate_is_certificate_error() {
         let mut client = client();
+        let cert = generate_self_signed_certificate().expect("server certificate");
+        let mut server = Engine::new(Arc::new(Config::default()), cert);
+        let mut secret = Buf::new();
+        secret.extend_from_slice(&[0x42; 32]);
+        for engine in [&mut client.engine, &mut server] {
+            engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
+            engine
+                .install_handshake_keys(&secret, &secret)
+                .expect("handshake keys");
+        }
+        client
+            .engine
+            .enable_peer_encryption()
+            .expect("enable encryption");
         client.engine.advance_peer_handshake_seq(); // ServerHello
         client.engine.advance_peer_handshake_seq(); // EncryptedExtensions
 
-        client
-            .engine
-            .parse_packet(&epoch0_handshake_packet(
-                MessageType::Certificate,
-                2,
-                &[0, 0, 0, 0],
-            ))
-            .expect("queue empty Certificate");
+        let handshake = epoch0_handshake_packet(MessageType::Certificate, 2, &[0, 0, 0, 0]);
+        server
+            .create_ciphertext_record(ContentType::Handshake, 2, false, |fragment| {
+                fragment.extend_from_slice(&handshake[13..]);
+            })
+            .expect("protect empty Certificate");
+        let mut output = [0; 2048];
+        loop {
+            match server.poll_output(&mut output, client.last_now) {
+                Output::Packet(packet) => {
+                    client
+                        .engine
+                        .parse_packet(packet)
+                        .expect("queue empty Certificate");
+                }
+                Output::Timeout(_) => break,
+                unexpected => panic!("unexpected output: {unexpected:?}"),
+            }
+        }
 
         let err = State::AwaitCertificate
             .await_certificate(&mut client)

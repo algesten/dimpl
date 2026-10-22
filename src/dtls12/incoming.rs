@@ -233,7 +233,7 @@ impl Record {
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls12CipherSuite>,
     ) -> Result<Option<Box<ParsedRecord>>, InternalError> {
-        let parsed = match ParsedRecord::parse(buffer, cs, 0) {
+        let parsed = match ParsedRecord::parse(buffer, cs, 0, false) {
             Ok(p) => p,
             Err(e) => {
                 // RFC 6347 §4.1.2.7: Invalid records SHOULD be silently discarded.
@@ -245,6 +245,13 @@ impl Record {
         // Renegotiation is unsupported, so only epochs 0 and 1 have cipher states.
         // Never retain unauthenticated records from an unsupported epoch.
         if parsed.record.sequence.epoch > 1 {
+            return Ok(None);
+        }
+        // The initial CCS is plaintext. Protected CCS records would require
+        // renegotiation, which this implementation does not support.
+        if parsed.record.content_type == ContentType::ChangeCipherSpec
+            && parsed.record.sequence.epoch != 0
+        {
             return Ok(None);
         }
         let parsed = Box::new(parsed);
@@ -312,7 +319,7 @@ impl Record {
         buffer[11] = (new_len >> 8) as u8;
         buffer[12] = new_len as u8;
 
-        let parsed = ParsedRecord::parse(buffer, cs, explicit_nonce_len)?;
+        let parsed = ParsedRecord::parse(buffer, cs, explicit_nonce_len, true)?;
         let parsed = Box::new(parsed);
 
         Ok(Some(parsed))
@@ -365,12 +372,15 @@ impl ParsedRecord {
         input: &[u8],
         cipher_suite: Option<Dtls12CipherSuite>,
         offset: usize,
+        decrypted: bool,
     ) -> Result<ParsedRecord, InternalError> {
         let (_, record) = DTLSRecord::parse(input, 0, offset)?;
 
-        let handshakes = if record.content_type == ContentType::Handshake {
-            // This will also return None on the encrypted Finished after ChangeCipherSpec.
-            // However we will then decrypt and try again.
+        let handshakes = if record.content_type == ContentType::Handshake
+            && (record.sequence.epoch == 0 || decrypted)
+        {
+            // Protected payloads stay opaque until authentication, including
+            // suites without an explicit nonce where offset is still zero.
             let fragment_offset = record.fragment_range.start;
             parse_handshakes(record.fragment(input), fragment_offset, cipher_suite)
         } else {
