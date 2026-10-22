@@ -353,19 +353,36 @@ impl Engine {
             }
         }
 
+        // Before peer encryption, record numbers are unauthenticated. Only
+        // identical record bytes can be dropped; a different copy must reach
+        // authentication rather than hiding a valid record.
+        if !self.peer_encryption_enabled
+            && self.queue_rx.iter().any(|queued| {
+                queued.records().len() == incoming.records().len()
+                    && queued
+                        .records()
+                        .iter()
+                        .zip(incoming.records().iter())
+                        .all(|(left, right)| left.buffer() == right.buffer())
+            })
+        {
+            self.recycle_incoming(incoming);
+            return Ok(());
+        }
+
         let search_result = self
             .queue_rx
             .binary_search_by_key(&seq_current, |item| item.first().record().sequence);
 
         match search_result {
             Err(index) => self.insert_incoming_at(index, incoming)?,
+            Ok(index) if !self.peer_encryption_enabled => {
+                self.insert_incoming_at(index, incoming)?
+            }
             Ok(_) => {
-                // Exact duplicate. For epoch 0 these come from resends. Before
-                // peer encryption is enabled, epoch-1 records are queued
-                // undecrypted and bypass the replay window, so duplicates can
-                // land here too. After that, Record::parse replay-checks every
-                // epoch-1 record before it is queued.
-                debug_assert!(seq_current.epoch == 0 || !self.peer_encryption_enabled);
+                // Once peer encryption is enabled, the replay window filters
+                // protected records before they are queued.
+                debug_assert_eq!(seq_current.epoch, 0);
                 self.recycle_incoming(incoming);
             }
         }

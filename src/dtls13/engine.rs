@@ -503,16 +503,34 @@ impl Engine {
         let first = incoming.first();
         let seq_current = first.record().sequence;
 
+        // Before peer encryption, sequence numbers are still masked. Only
+        // identical record bytes can be dropped; distinct ciphertext can share
+        // a masked sequence number.
+        if !self.peer_encryption_enabled
+            && self.queue_rx.iter().any(|queued| {
+                queued.records().len() == incoming.records().len()
+                    && queued
+                        .records()
+                        .iter()
+                        .zip(incoming.records().iter())
+                        .all(|(left, right)| left.buffer() == right.buffer())
+            })
+        {
+            self.recycle_incoming(incoming);
+            return Ok(());
+        }
+
         let search_result = self
             .queue_rx
             .binary_search_by_key(&seq_current, |item| item.first().record().sequence);
 
         match search_result {
             Err(index) => self.insert_incoming_at(index, incoming)?,
+            Ok(index) if !self.peer_encryption_enabled => {
+                self.insert_incoming_at(index, incoming)?
+            }
             Ok(_) => {
-                // Duplicate - silently drop. For encrypted records (epoch >= 2) the replay
-                // window filters most duplicates, but undecrypted ciphertext records can
-                // reach here before enable_peer_encryption is called.
+                // Protected records pass the replay window before insertion.
                 self.recycle_incoming(incoming);
             }
         }
