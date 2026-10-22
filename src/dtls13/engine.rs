@@ -354,6 +354,14 @@ impl Engine {
         &mut *self.signing_key
     }
 
+    /// Unconsumed records for protocol-state validation.
+    pub fn pending_records(&self) -> impl Iterator<Item = &Record> {
+        self.queue_rx
+            .iter()
+            .flat_map(|incoming| incoming.records().iter())
+            .filter(|record| !record.is_handled())
+    }
+
     /// Queue a datagram and report whether it contains the first ClientHello fragment.
     pub fn parse_packet(&mut self, packet: &[u8]) -> Result<bool, InternalError> {
         let cs = self.cipher_suite;

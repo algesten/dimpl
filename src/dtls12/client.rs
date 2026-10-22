@@ -1140,6 +1140,22 @@ impl State {
             .into());
         }
 
+        // No records from the handshake epochs may survive into application data.
+        let unexpected_record = client
+            .engine
+            .pending_records()
+            .find(|record| record.record().sequence.epoch != 1);
+        if let Some(record) = unexpected_record {
+            debug!(
+                "Unexpected epoch at handshake completion: record={:?}, handshake={:?}",
+                record.record(),
+                record.first_handshake().map(|handshake| &handshake.header),
+            );
+            return Err(
+                Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch).into(),
+            );
+        }
+
         trace!("Server Finished verified successfully");
 
         // Receiving server Finished implicitly acks our Flight 5; stop resends

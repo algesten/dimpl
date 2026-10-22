@@ -1016,6 +1016,22 @@ impl State {
     fn send_finished(self, client: &mut Client) -> Result<Self, InternalError> {
         trace!("Sending Finished message to complete handshake");
 
+        // No records from the handshake epochs may survive into application data.
+        let unexpected_record = client
+            .engine
+            .pending_records()
+            .find(|record| record.record().sequence.epoch < 3);
+        if let Some(record) = unexpected_record {
+            debug!(
+                "Unexpected epoch at handshake completion: record={:?}, handshake={:?}",
+                record.record(),
+                record.first_handshake().map(|handshake| &handshake.header),
+            );
+            return Err(
+                Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch).into(),
+            );
+        }
+
         // When the server did NOT request client authentication, we skip
         // send_certificate (which calls flight_begin(5)). Start flight 5
         // here so the old ClientHello flight records are cleared before

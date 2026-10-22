@@ -1126,6 +1126,22 @@ impl State {
 
         server.engine.advance_peer_handshake_seq();
 
+        // No records from the handshake epochs may survive into application data.
+        let unexpected_record = server
+            .engine
+            .pending_records()
+            .find(|record| record.record().sequence.epoch < 3);
+        if let Some(record) = unexpected_record {
+            debug!(
+                "Unexpected epoch at handshake completion: record={:?}, handshake={:?}",
+                record.record(),
+                record.first_handshake().map(|handshake| &handshake.header),
+            );
+            return Err(
+                Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch).into(),
+            );
+        }
+
         // ACK the client's epoch-2 flight so it stops retransmitting
         server.engine.send_ack_retransmittable()?;
 
