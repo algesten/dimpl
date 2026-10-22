@@ -1,6 +1,6 @@
 # Unreleased
 
-  * Drop unsupported epochs before buffering DTLS records #191
+  * Drop unsupported epochs before buffering DTLS records #198
 
 # 0.8.0
 
