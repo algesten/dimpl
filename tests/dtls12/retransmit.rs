@@ -2,6 +2,7 @@
 
 #![allow(unused)]
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1310,41 +1311,33 @@ fn dtls12_duplicate_epoch1_before_ccs_is_dropped() {
     let mut server = Dtls::new_12(config_server, server_cert, now);
     server.set_active(false);
 
-    // Flight 1: ClientHello.
+    // Poll after every packet and retain any response emitted during polling.
+    let deliver_flight = |endpoint: &mut Dtls, flight: &[Vec<u8>]| {
+        let mut response = Vec::new();
+        for packet in flight {
+            endpoint.handle_packet(packet).expect("receive flight");
+            response.extend(collect_packets(endpoint));
+        }
+        response
+    };
+
+    server
+        .handle_timeout(now)
+        .expect("initialize server random");
+    assert!(collect_packets(&mut server).is_empty());
+
+    // Flights 1-5: ClientHello, HelloVerifyRequest, ClientHello with cookie,
+    // server hello flight, then Certificate/CKE/CertificateVerify/CCS/Finished.
     client.handle_timeout(now).expect("client timeout start");
-    client.handle_timeout(now).expect("client arm flight 1");
     let f1 = collect_packets(&mut client);
-    for packet in &f1 {
-        server.handle_packet(packet).expect("server recv f1");
-    }
-
-    // Flight 2: HelloVerifyRequest.
-    server.handle_timeout(now).expect("server arm flight 2");
-    let f2 = collect_packets(&mut server);
+    assert!(!f1.is_empty(), "client should emit flight 1");
+    let f2 = deliver_flight(&mut server, &f1);
     assert!(!f2.is_empty(), "server should emit flight 2");
-    for packet in &f2 {
-        client.handle_packet(packet).expect("client recv f2");
-    }
-
-    // Flight 3: ClientHello with cookie.
-    client.handle_timeout(now).expect("client arm flight 3");
-    let f3 = collect_packets(&mut client);
+    let f3 = deliver_flight(&mut client, &f2);
     assert!(!f3.is_empty(), "client should emit flight 3");
-    for packet in &f3 {
-        server.handle_packet(packet).expect("server recv f3");
-    }
-
-    // Flight 4: server hello flight.
-    server.handle_timeout(now).expect("server arm flight 4");
-    let f4 = collect_packets(&mut server);
+    let f4 = deliver_flight(&mut server, &f3);
     assert!(!f4.is_empty(), "server should emit flight 4");
-    for packet in &f4 {
-        client.handle_packet(packet).expect("client recv f4");
-    }
-
-    // Flight 5: Certificate, CKE, CertificateVerify, CCS, Finished.
-    client.handle_timeout(now).expect("client arm flight 5");
-    let f5 = collect_packets(&mut client);
+    let f5 = deliver_flight(&mut client, &f4);
     let finished = f5
         .iter()
         .find(|d| parse_records(d).first().map(|h| h.epoch) == Some(1))
@@ -1364,6 +1357,28 @@ fn dtls12_duplicate_epoch1_before_ccs_is_dropped() {
         .expect("server recv duplicate Finished");
     drain_outputs(&mut server);
 
-    // The client retransmits flight 5 and the handshake completes.
-    complete_dtls12_handshake(&mut client, &mut server, now);
+    // The client retransmits flight 5 and the handshake completes. Drain each
+    // mutation immediately, retaining responses and connection notifications.
+    let mut pending = VecDeque::new();
+    let mut connected = [false; 2];
+    for attempt in 1..=60 {
+        let now = now + Duration::from_secs(attempt);
+        for (index, endpoint) in [&mut client, &mut server].into_iter().enumerate() {
+            endpoint.handle_timeout(now).expect("recovery timeout");
+            let output = drain_outputs(endpoint);
+            connected[index] |= output.connected;
+            pending.extend(output.packets.into_iter().map(|packet| (1 - index, packet)));
+        }
+        while let Some((index, packet)) = pending.pop_front() {
+            let endpoint = if index == 0 { &mut client } else { &mut server };
+            endpoint.handle_packet(&packet).expect("recovery packet");
+            let output = drain_outputs(endpoint);
+            connected[index] |= output.connected;
+            pending.extend(output.packets.into_iter().map(|packet| (1 - index, packet)));
+        }
+        if connected.iter().all(|connected| *connected) {
+            return;
+        }
+    }
+    panic!("handshake should complete after retransmission");
 }
