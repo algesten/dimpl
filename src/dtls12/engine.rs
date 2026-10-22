@@ -1287,7 +1287,7 @@ impl RecordHandler for Engine {
         Engine::push_buffer(self, buffer);
     }
 
-    fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {
+    fn classify_record(&mut self, mut record: Record) -> Result<Option<Record>, Error> {
         let epoch = record.record().sequence.epoch;
 
         if record.record().content_type == ContentType::ChangeCipherSpec
@@ -1303,20 +1303,36 @@ impl RecordHandler for Engine {
             return Ok(None);
         }
 
-        if record.record().content_type == ContentType::Handshake
-            && epoch == 0
-            && self.peer_encryption_enabled
-            && record
-                .first_handshake()
-                .and_then(|handshake| handshake.dupe_triggers_resend())
-                .is_none()
-        {
-            // Stale plaintext handshakes must still be visible to
-            // insert_incoming_handshake when they can trigger final-flight
-            // retransmission. Other post-encryption epoch-0 handshakes are
-            // unauthenticated and no longer actionable.
-            self.push_buffer(record.into_buffer());
-            return Ok(None);
+        if record.record().content_type == ContentType::Handshake && self.peer_encryption_enabled {
+            let needs_resend = record
+                .handshakes()
+                .iter()
+                .filter_map(|handshake| handshake.dupe_triggers_resend())
+                .any(|seq| seq < self.peer_handshake_seq_no);
+            if needs_resend && !self.peer_handshake_confirmed {
+                if let Err(error) = self.flight_resend_on_dupe() {
+                    self.push_buffer(record.into_buffer());
+                    return Err(error);
+                }
+            }
+
+            let had_old_handshakes = record
+                .handshakes()
+                .iter()
+                .any(|handshake| handshake.header.message_seq < self.peer_handshake_seq_no);
+            record.retain_handshakes(|handshake| {
+                handshake.header.message_seq >= self.peer_handshake_seq_no
+            });
+
+            // Discard only the stale record, preserving fresh records beside it
+            // in the same datagram. No plaintext handshake can advance state
+            // after peer encryption, even if its sequence number looks new.
+            if (had_old_handshakes && record.handshakes().is_empty())
+                || (epoch == 0 && self.peer_encryption_enabled)
+            {
+                self.push_buffer(record.into_buffer());
+                return Ok(None);
+            }
         }
 
         if record.record().content_type == ContentType::Alert {

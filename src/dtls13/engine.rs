@@ -392,19 +392,9 @@ impl Engine {
             .filter_map(|h| h.dupe_triggers_resend())
             .next();
 
-        if let Some(dupe_seq) = maybe_dupe_seq {
-            // Only answer an already processed flight when we have a saved response.
-            if dupe_seq < self.peer_handshake_seq_no && !self.flight_saved_records.is_empty() {
-                // Reserve a resend and advance backoff using the same budget as
-                // timed retries, so duplicates cannot bypass flight_retries.
-                let resend_requested = self.timers.request_resend(&mut self.rng);
-                if resend_requested {
-                    if let Err(error) = self.flight_resend("dupe triggers resend") {
-                        self.recycle_incoming(incoming);
-                        return Err(error);
-                    }
-                }
-            }
+        if let Err(error) = self.flight_resend_on_dupe(maybe_dupe_seq) {
+            self.recycle_incoming(incoming);
+            return Err(error);
         }
 
         let is_session_ticket = self.is_client
@@ -706,6 +696,22 @@ impl Engine {
         for entry in self.flight_saved_records.drain(..) {
             self.buffers_free.push(entry.fragment);
         }
+    }
+
+    fn flight_resend_on_dupe(&mut self, dupe_seq: Option<u16>) -> Result<(), Error> {
+        let Some(dupe_seq) = dupe_seq else {
+            return Ok(());
+        };
+
+        // Only answer an already processed flight when we have a saved response.
+        if dupe_seq < self.peer_handshake_seq_no && !self.flight_saved_records.is_empty() {
+            // Duplicates share the timed retry budget and backoff.
+            if self.timers.request_resend(&mut self.rng) {
+                self.flight_resend("dupe triggers resend")?;
+            }
+        }
+
+        Ok(())
     }
 
     pub fn flight_resend(&mut self, reason: &str) -> Result<(), Error> {
@@ -2416,47 +2422,51 @@ impl RecordHandler for Engine {
         }
 
         let epoch = record.record().sequence.epoch;
-        if epoch == 0 && self.peer_encryption_enabled {
-            let discard = match record.record().content_type {
-                ContentType::Handshake => {
-                    // Old plaintext hellos can request a flight retransmission,
-                    // but cannot introduce a new handshake after keys exist.
-                    record.retain_handshakes(|handshake| {
-                        handshake.header.message_seq < self.peer_handshake_seq_no
-                    });
-                    record.handshakes().is_empty()
-                }
-                ContentType::Ack | ContentType::Alert => true,
-                _ => false,
-            };
-            if discard {
+        if record.record().content_type == ContentType::Handshake && self.peer_encryption_enabled {
+            let maybe_dupe_seq = record
+                .handshakes()
+                .iter()
+                .filter_map(|handshake| handshake.dupe_triggers_resend())
+                .find(|seq| *seq < self.peer_handshake_seq_no);
+            if let Err(error) = self.flight_resend_on_dupe(maybe_dupe_seq) {
                 self.push_buffer(record.into_buffer());
-                return Ok(None);
+                return Err(error);
             }
-        }
 
-        match record.record().content_type {
-            ContentType::Handshake if self.release_app_data && self.is_client && epoch >= 3 => {
-                let count = record.handshakes().len();
-                record.retain_handshakes(|handshake| {
-                    handshake.header.msg_type != MessageType::NewSessionTicket
-                        || handshake.header.message_seq >= self.peer_handshake_seq_no
-                });
-                if record.handshakes().len() != count {
-                    // Re-ACK old tickets without discarding fresh messages beside them.
+            let had_old_handshakes = record
+                .handshakes()
+                .iter()
+                .any(|handshake| handshake.header.message_seq < self.peer_handshake_seq_no);
+            record.retain_handshakes(|handshake| {
+                handshake.header.message_seq >= self.peer_handshake_seq_no
+            });
+
+            if had_old_handshakes && record.handshakes().is_empty() {
+                // Re-ACK processed protected messages without discarding other
+                // records in the datagram or pinning them behind a stale record.
+                let ack = if epoch >= 3 {
                     let seq = record.record().sequence;
                     let _ = self
                         .received_record_numbers
                         .try_push((seq.epoch as u64, seq.sequence_number));
-                    let ack = self.send_ack();
-                    if record.handshakes().is_empty() || ack.is_err() {
-                        self.push_buffer(record.into_buffer());
-                        ack?;
-                        return Ok(None);
-                    }
-                }
-                Ok(Some(record))
+                    self.send_ack()
+                } else {
+                    Ok(())
+                };
+                self.push_buffer(record.into_buffer());
+                ack?;
+                return Ok(None);
             }
+        }
+
+        if epoch == 0 && self.peer_encryption_enabled {
+            // Plaintext can request a prior flight above, but cannot introduce
+            // new messages or process ACKs/alerts after keys are installed.
+            self.push_buffer(record.into_buffer());
+            return Ok(None);
+        }
+
+        match record.record().content_type {
             ContentType::Ack => {
                 let fragment = record.record().fragment(record.buffer());
                 self.process_ack(fragment)?;

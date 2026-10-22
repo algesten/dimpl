@@ -1,6 +1,6 @@
 # Unreleased
 
-  * Drop duplicate buffered DTLS 1.2/1.3 records without panics or false queue overflows #190
+  * Handle duplicate DTLS 1.2/1.3 records without panics, data loss, or false queue overflows #190
   * Require authentication before processing protected DTLS 1.2/1.3 records #190
   * Preserve valid DTLS 1.2/1.3 records arriving after damaged buffered copies #190
 

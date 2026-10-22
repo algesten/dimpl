@@ -333,6 +333,10 @@ impl Record {
         &self.parsed.handshakes
     }
 
+    pub fn retain_handshakes(&mut self, mut keep: impl FnMut(&Handshake) -> bool) {
+        self.parsed.handshakes.retain(|handshake| keep(handshake));
+    }
+
     pub fn first_handshake(&self) -> Option<&Handshake> {
         self.parsed.handshakes.first()
     }
