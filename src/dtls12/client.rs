@@ -1141,11 +1141,11 @@ impl State {
         }
 
         // No records from the handshake epochs may survive into application data.
-        if let Some(record) = client
+        let unexpected_record = client
             .engine
             .pending_records()
-            .find(|record| record.record().sequence.epoch != 1)
-        {
+            .find(|record| record.record().sequence.epoch != 1);
+        if let Some(record) = unexpected_record {
             return Err(
                 Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch {
                     epoch: record.record().sequence.epoch,

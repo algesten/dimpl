@@ -1127,11 +1127,11 @@ impl State {
         server.engine.advance_peer_handshake_seq();
 
         // No records from the handshake epochs may survive into application data.
-        if let Some(record) = server
+        let unexpected_record = server
             .engine
             .pending_records()
-            .find(|record| record.record().sequence.epoch < 3)
-        {
+            .find(|record| record.record().sequence.epoch < 3);
+        if let Some(record) = unexpected_record {
             return Err(
                 Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch {
                     epoch: record.record().sequence.epoch,

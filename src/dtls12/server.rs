@@ -1060,11 +1060,11 @@ impl State {
         trace!("Sending Finished message to complete handshake");
 
         // No records from the handshake epochs may survive into application data.
-        if let Some(record) = server
+        let unexpected_record = server
             .engine
             .pending_records()
-            .find(|record| record.record().sequence.epoch != 1)
-        {
+            .find(|record| record.record().sequence.epoch != 1);
+        if let Some(record) = unexpected_record {
             return Err(
                 Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch {
                     epoch: record.record().sequence.epoch,
