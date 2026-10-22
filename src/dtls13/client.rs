@@ -1017,11 +1017,16 @@ impl State {
         trace!("Sending Finished message to complete handshake");
 
         // No records from the handshake epochs may survive into application data.
-        let has_unexpected_epoch = client
+        let unexpected_record = client
             .engine
             .pending_records()
-            .any(|record| record.record().sequence.epoch < 3);
-        if has_unexpected_epoch {
+            .find(|record| record.record().sequence.epoch < 3);
+        if let Some(record) = unexpected_record {
+            debug!(
+                "Unexpected epoch at handshake completion: record={:?}, handshake={:?}",
+                record.record(),
+                record.first_handshake().map(|handshake| &handshake.header),
+            );
             return Err(
                 Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch).into(),
             );
