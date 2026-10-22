@@ -237,17 +237,6 @@ impl Engine {
 
     /// Insert a parsed datagram into the receive queue.
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<bool, Error> {
-        // Capacity guard before iterating records.
-        if self.queue_rx.len() >= self.config.max_queue_rx() {
-            warn!(
-                "Receive queue full (max {}): {:?}",
-                self.config.max_queue_rx(),
-                self.queue_rx
-            );
-            self.recycle_incoming(incoming);
-            return Err(Error::ReceiveQueueFull);
-        }
-
         // Dispatch to specialized handlers
         if incoming.first().first_handshake().is_some() {
             self.insert_incoming_handshake(incoming)
@@ -325,7 +314,7 @@ impl Engine {
         match search_result {
             Err(index) => {
                 // Insert in order of handshake key
-                self.queue_rx.insert(index, incoming);
+                self.insert_incoming_at(index, incoming)?;
             }
             Ok(_) => {
                 // Exact duplicate handshake fragment
@@ -369,7 +358,7 @@ impl Engine {
             .binary_search_by_key(&seq_current, |item| item.first().record().sequence);
 
         match search_result {
-            Err(index) => self.queue_rx.insert(index, incoming),
+            Err(index) => self.insert_incoming_at(index, incoming)?,
             Ok(_) => {
                 // Exact duplicate. For epoch 0 these come from resends. Before
                 // peer encryption is enabled, epoch-1 records are queued
@@ -381,6 +370,22 @@ impl Engine {
             }
         }
 
+        Ok(())
+    }
+
+    fn insert_incoming_at(&mut self, index: usize, incoming: Incoming) -> Result<(), Error> {
+        // Duplicates need no additional slot, so guard only new queue entries.
+        if self.queue_rx.len() >= self.config.max_queue_rx() {
+            warn!(
+                "Receive queue full (max {}): {:?}",
+                self.config.max_queue_rx(),
+                self.queue_rx
+            );
+            self.recycle_incoming(incoming);
+            return Err(Error::ReceiveQueueFull);
+        }
+
+        self.queue_rx.insert(index, incoming);
         Ok(())
     }
 

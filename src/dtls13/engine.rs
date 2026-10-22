@@ -367,16 +367,6 @@ impl Engine {
     }
 
     fn insert_incoming(&mut self, incoming: Incoming) -> Result<bool, Error> {
-        if self.queue_rx.len() >= self.config.max_queue_rx() {
-            warn!(
-                "Receive queue full (max {}): {:?}",
-                self.config.max_queue_rx(),
-                self.queue_rx
-            );
-            self.recycle_incoming(incoming);
-            return Err(Error::ReceiveQueueFull);
-        }
-
         if incoming.first().first_handshake().is_some() {
             self.insert_incoming_handshake(incoming)
         } else {
@@ -456,8 +446,9 @@ impl Engine {
 
         match search_result {
             Err(index) => {
+                self.insert_incoming_at(index, incoming)?;
                 // Track received record numbers for ACK generation
-                for record in incoming.records().iter() {
+                for record in self.queue_rx[index].records().iter() {
                     let seq = record.record().sequence;
                     if seq.epoch >= 2 && record.record().content_type == ContentType::Handshake {
                         let _ = self
@@ -465,7 +456,6 @@ impl Engine {
                             .try_push((seq.epoch as u64, seq.sequence_number));
                     }
                 }
-                self.queue_rx.insert(index, incoming);
             }
             Ok(index) => {
                 // Duplicate message_seq + fragment_offset. Replace if either:
@@ -518,7 +508,7 @@ impl Engine {
             .binary_search_by_key(&seq_current, |item| item.first().record().sequence);
 
         match search_result {
-            Err(index) => self.queue_rx.insert(index, incoming),
+            Err(index) => self.insert_incoming_at(index, incoming)?,
             Ok(_) => {
                 // Duplicate - silently drop. For encrypted records (epoch >= 2) the replay
                 // window filters most duplicates, but undecrypted ciphertext records can
@@ -527,6 +517,22 @@ impl Engine {
             }
         }
 
+        Ok(())
+    }
+
+    fn insert_incoming_at(&mut self, index: usize, incoming: Incoming) -> Result<(), Error> {
+        // Duplicates and replacements do not increase the queue length.
+        if self.queue_rx.len() >= self.config.max_queue_rx() {
+            warn!(
+                "Receive queue full (max {}): {:?}",
+                self.config.max_queue_rx(),
+                self.queue_rx
+            );
+            self.recycle_incoming(incoming);
+            return Err(Error::ReceiveQueueFull);
+        }
+
+        self.queue_rx.insert(index, incoming);
         Ok(())
     }
 
@@ -2184,11 +2190,15 @@ impl Engine {
         debug!("Peer encryption enabled");
         self.peer_encryption_enabled = true;
 
-        // Re-parse any buffered epoch 2+ records
-        let maybe_index = self
-            .queue_rx
-            .iter()
-            .position(|i| i.records().iter().any(|r| r.record().sequence.epoch >= 2));
+        // Buffered unified headers contain only the low two epoch bits, so
+        // ciphertext can appear to have epoch 0 or 1. Select by header format
+        // so every buffered ciphertext record is authenticated or discarded.
+        let maybe_index = self.queue_rx.iter().position(|incoming| {
+            incoming
+                .records()
+                .iter()
+                .any(|record| Dtls13Record::is_ciphertext_header(record.buffer()[0]))
+        });
 
         let Some(index) = maybe_index else {
             return Ok(());

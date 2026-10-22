@@ -1,6 +1,7 @@
 # Unreleased
 
-  * Drop duplicate DTLS 1.2 epoch-1 records queued before peer encryption #189
+  * Drop duplicate buffered DTLS 1.2/1.3 records without panics or false queue overflows #190
+  * Authenticate buffered DTLS 1.2/1.3 records before delivering application data #190
 
 # 0.8.0
 
