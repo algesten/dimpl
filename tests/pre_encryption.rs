@@ -326,3 +326,182 @@ fn dtls12_buffered_short_copy_does_not_discard_clean_finished() {
         "both peers complete without a timed retry"
     );
 }
+
+#[test]
+fn dtls12_pre_encryption_handshake_ciphertext_cannot_advance_the_handshake() {
+    let now = Instant::now();
+    let config = Arc::new(
+        Config::builder()
+            .mtu(200)
+            .use_server_cookie(false)
+            .build()
+            .expect("config"),
+    );
+    let client_cert = generate_self_signed_certificate().expect("client certificate");
+    let server_cert = generate_self_signed_certificate().expect("server certificate");
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+    let mut client_out = Observed::default();
+    let mut server_out = Observed::default();
+    server.handle_timeout(now).expect("server timeout");
+    drain(&mut server, &mut server_out);
+    client.handle_timeout(now).expect("client timeout");
+    drain(&mut client, &mut client_out);
+    deliver_packets(&mut client_out, &mut server, &mut server_out, false);
+
+    let flight = split_records(&std::mem::take(&mut server_out.packets), false);
+    let hello_done = flight
+        .iter()
+        .find(|record| record[0] == 22 && record[13] == 14)
+        .expect("server emits ServerHelloDone");
+    for record in flight.iter().filter(|record| *record != hello_done) {
+        client.handle_packet(record).expect("receive server flight");
+        drain(&mut client, &mut client_out);
+    }
+    assert!(client_out.packets.is_empty(), "await ServerHelloDone");
+
+    // An epoch-1 record is ciphertext even when its opaque payload happens to
+    // have the shape of a plaintext handshake. This record is too short to
+    // authenticate and must never substitute for the missing epoch-0 message.
+    let mut opaque = hello_done.clone();
+    opaque[3..5].copy_from_slice(&1u16.to_be_bytes());
+    client.handle_packet(&opaque).expect("buffer future epoch");
+    drain(&mut client, &mut client_out);
+    assert!(
+        client_out.packets.is_empty(),
+        "unauthenticated epoch-1 bytes must not trigger the client's next flight"
+    );
+
+    client
+        .handle_packet(hello_done)
+        .expect("receive genuine ServerHelloDone");
+    drain(&mut client, &mut client_out);
+    assert!(
+        !client_out.packets.is_empty(),
+        "genuine handshake progresses"
+    );
+    deliver_packets(&mut client_out, &mut server, &mut server_out, false);
+    deliver_packets(&mut server_out, &mut client, &mut client_out, false);
+    assert!(client_out.connected && server_out.connected);
+}
+
+#[test]
+fn dtls12_pre_encryption_ciphertext_cannot_substitute_for_plaintext_ccs() {
+    let now = Instant::now();
+    let config = Arc::new(
+        Config::builder()
+            .use_server_cookie(false)
+            .build()
+            .expect("config"),
+    );
+    let client_cert = generate_self_signed_certificate().expect("client certificate");
+    let server_cert = generate_self_signed_certificate().expect("server certificate");
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+    let mut client_out = Observed::default();
+    let mut server_out = Observed::default();
+    server.handle_timeout(now).expect("server timeout");
+    drain(&mut server, &mut server_out);
+    client.handle_timeout(now).expect("client timeout");
+    drain(&mut client, &mut client_out);
+    deliver_packets(&mut client_out, &mut server, &mut server_out, false);
+    deliver_packets(&mut server_out, &mut client, &mut client_out, false);
+    deliver_packets(&mut client_out, &mut server, &mut server_out, false);
+    let flight = split_records(&std::mem::take(&mut server_out.packets), false);
+    let ccs = flight
+        .iter()
+        .find(|record| record[0] == 20)
+        .expect("server emits CCS");
+    let finished = flight
+        .iter()
+        .find(|record| record[0] == 22 && record[3..5] == [0, 1])
+        .expect("server emits protected Finished");
+
+    // This is an undecryptable future-epoch control record, not a legitimate
+    // epoch-0 CCS. It must not make buffered Finished eligible for processing.
+    let mut opaque = ccs.clone();
+    opaque[3..5].copy_from_slice(&1u16.to_be_bytes());
+    client.handle_packet(&opaque).expect("buffer future CCS");
+    drain(&mut client, &mut client_out);
+    client.handle_packet(finished).expect("buffer Finished");
+    drain(&mut client, &mut client_out);
+    assert!(
+        !client_out.connected,
+        "unauthenticated epoch-1 CCS must not enable peer encryption"
+    );
+
+    client.handle_packet(ccs).expect("receive genuine CCS");
+    drain(&mut client, &mut client_out);
+    assert!(
+        client_out.connected,
+        "genuine CCS releases the valid Finished"
+    );
+}
+
+#[test]
+fn dtls13_buffered_plaintext_key_updates_cannot_evict_authenticated_receive_keys() {
+    let mut now = Instant::now();
+    let config = Arc::new(
+        Config::builder()
+            .use_server_cookie(false)
+            .build()
+            .expect("config"),
+    );
+    let client_cert = generate_self_signed_certificate().expect("client certificate");
+    let server_cert = generate_self_signed_certificate().expect("server certificate");
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+    let mut client_out = Observed::default();
+    let mut server_out = Observed::default();
+    server.handle_timeout(now).expect("server timeout");
+    drain(&mut server, &mut server_out);
+
+    // ClientHello, Certificate, CertificateVerify and Finished use sequences
+    // 0..=3. These future messages must not survive as actionable KeyUpdates:
+    // post-handshake control messages require application-epoch protection.
+    for sequence in 4..8u16 {
+        let mut packet = vec![22, 0xfe, 0xfd, 0, 0];
+        packet.extend_from_slice(&(sequence as u64).to_be_bytes()[2..]);
+        packet.extend_from_slice(&13u16.to_be_bytes());
+        packet.extend_from_slice(&[24, 0, 0, 1]); // KeyUpdate, body length 1
+        packet.extend_from_slice(&sequence.to_be_bytes());
+        packet.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0]); // offset, length, request
+        server.handle_packet(&packet).expect("receive before keys");
+        drain(&mut server, &mut server_out);
+    }
+
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        drain(&mut client, &mut client_out);
+        server.handle_timeout(now).expect("server timeout");
+        drain(&mut server, &mut server_out);
+        deliver_packets(&mut client_out, &mut server, &mut server_out, true);
+        deliver_packets(&mut server_out, &mut client, &mut client_out, true);
+        if client_out.connected && server_out.connected {
+            break;
+        }
+        now += Duration::from_millis(10);
+    }
+    assert!(client_out.connected && server_out.connected);
+    for _ in 0..4 {
+        server.handle_timeout(now).expect("server timeout");
+        drain(&mut server, &mut server_out);
+    }
+
+    client
+        .send_application_data(b"authenticated")
+        .expect("send application data");
+    drain(&mut client, &mut client_out);
+    deliver_packets(&mut client_out, &mut server, &mut server_out, true);
+    assert_eq!(
+        server_out.app_data,
+        [b"authenticated".to_vec()],
+        "unauthenticated buffered KeyUpdates must not change receive keys"
+    );
+}
