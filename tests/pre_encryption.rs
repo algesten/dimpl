@@ -159,7 +159,25 @@ fn dtls13_pre_encryption_epoch_bits_one_is_not_application_data() {
     assert_pre_encryption_record_is_not_delivered(true, 1);
 }
 
-fn endpoints(dtls13: bool) -> (Dtls, Dtls, Instant) {
+fn split_records(packets: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+    let mut records = Vec::new();
+    for packet in packets {
+        let mut remaining = packet.as_slice();
+        while !remaining.is_empty() {
+            let length = if remaining[0] & 0xe0 == 0x20 {
+                assert_eq!(remaining[0] & 0x1c, 0x0c, "two-byte sequence and length");
+                5 + u16::from_be_bytes([remaining[3], remaining[4]]) as usize
+            } else {
+                13 + u16::from_be_bytes([remaining[11], remaining[12]]) as usize
+            };
+            records.push(remaining[..length].to_vec());
+            remaining = &remaining[length..];
+        }
+    }
+    records
+}
+
+fn assert_handshake_completion_rejects_old_epoch(dtls13: bool, to_server: bool, key_update: bool) {
     let now = Instant::now();
     let config = Arc::new(
         Config::builder()
@@ -182,39 +200,6 @@ fn endpoints(dtls13: bool) -> (Dtls, Dtls, Instant) {
     };
     client.set_active(true);
     server.set_active(false);
-    (client, server, now)
-}
-
-fn handshake_epoch_error(message_type: u8) -> Error {
-    Error::UnexpectedMessage(UnexpectedMessageError::HandshakeEpoch {
-        message_type,
-        epoch: 0,
-    })
-}
-
-fn assert_plaintext_protected_handshake_errors(dtls13: bool, to_server: bool) {
-    let (mut client, mut server, now) = endpoints(dtls13);
-    let mut observed = Observed::default();
-    let destination = if to_server { &mut server } else { &mut client };
-    destination.handle_timeout(now).expect("start endpoint");
-    drain(destination, &mut observed);
-
-    let message_type = if dtls13 { 24 } else { 20 }; // KeyUpdate or Finished
-    let body = if dtls13 { vec![0] } else { vec![0; 12] };
-    let mut packet = vec![22, 0xfe, 0xfd, 0, 0];
-    packet.extend_from_slice(&4u64.to_be_bytes()[2..]);
-    packet.extend_from_slice(&((12 + body.len()) as u16).to_be_bytes());
-    packet.extend_from_slice(&[message_type, 0, 0, body.len() as u8]);
-    packet.extend_from_slice(&4u16.to_be_bytes()); // future handshake sequence
-    packet.extend_from_slice(&[0, 0, 0, 0, 0, body.len() as u8]);
-    packet.extend_from_slice(&body);
-    let result = destination.handle_packet(&packet);
-    drain(destination, &mut observed);
-    assert_eq!(result, Err(handshake_epoch_error(message_type)));
-}
-
-fn assert_buffered_future_hello_errors(dtls13: bool, to_server: bool) {
-    let (mut client, mut server, now) = endpoints(dtls13);
     let mut client_out = Observed::default();
     let mut server_out = Observed::default();
     server.handle_timeout(now).expect("start server");
@@ -229,21 +214,34 @@ fn assert_buffered_future_hello_errors(dtls13: bool, to_server: bool) {
     } else {
         (&mut server_out, &mut client, &mut client_out)
     };
-    let message_type = if to_server { 1 } else { 2 };
-    let packet = source
-        .packets
-        .iter()
-        .find(|packet| packet[0] == 22 && packet[13] == message_type)
-        .expect("plaintext hello flight");
-    let length = 13 + u16::from_be_bytes([packet[11], packet[12]]) as usize;
-    let mut future_hello = packet[..length].to_vec();
-    future_hello[17..19].copy_from_slice(&0xff00u16.to_be_bytes());
-    let result = destination.handle_packet(&future_hello);
+    let mut invalid = if key_update {
+        let mut packet = vec![22, 0xfe, 0xfd, 0, 0];
+        packet.extend_from_slice(&0xff00u64.to_be_bytes()[2..]);
+        packet.extend_from_slice(&13u16.to_be_bytes());
+        packet.extend_from_slice(&[24, 0, 0, 1]); // KeyUpdate, body length 1
+        packet.extend_from_slice(&0xff00u16.to_be_bytes());
+        packet.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0]); // offset, length, request
+        packet
+    } else {
+        let message_type = if to_server { 1 } else { 2 };
+        let packet = source
+            .packets
+            .iter()
+            .find(|packet| packet[0] == 22 && packet[13] == message_type)
+            .expect("plaintext hello flight");
+        let length = 13 + u16::from_be_bytes([packet[11], packet[12]]) as usize;
+        packet[..length].to_vec()
+    };
+    // Buffer a future message. A high record sequence lets DTLS 1.2's CCS
+    // sort ahead of it, so the genuine handshake can reach completion.
+    invalid[5..11].copy_from_slice(&0xff00u64.to_be_bytes()[2..]);
+    invalid[17..19].copy_from_slice(&0xff00u16.to_be_bytes());
+    let result = destination.handle_packet(&invalid);
     drain(destination, observed);
-    result.expect("buffer future hello while still awaiting the genuine hello");
+    result.expect("buffer future plaintext while the handshake is in progress");
 
-    // Progress the genuine handshake. The state machine must reject the
-    // leftover plaintext before waiting for protected handshake messages.
+    // Deliver records separately so enabling encryption does not reparse and
+    // discard the buffered plaintext alongside a coalesced protected flight.
     for _ in 0..10 {
         for to_server_now in [true, false] {
             let (source, destination, observed) = if to_server_now {
@@ -251,56 +249,60 @@ fn assert_buffered_future_hello_errors(dtls13: bool, to_server: bool) {
             } else {
                 (&mut server_out, &mut client, &mut client_out)
             };
-            for packet in std::mem::take(&mut source.packets) {
+            for packet in split_records(std::mem::take(&mut source.packets)) {
                 let result = destination.handle_packet(&packet);
                 drain(destination, observed);
                 if result.is_err() {
                     assert_eq!(to_server_now, to_server);
-                    assert_eq!(result, Err(handshake_epoch_error(message_type)));
+                    assert_eq!(
+                        result,
+                        Err(Error::UnexpectedMessage(
+                            UnexpectedMessageError::UnexpectedEpoch { epoch: 0 }
+                        ))
+                    );
+                    assert!(!observed.connected, "must reject before emitting Connected");
+                    assert!(
+                        if dtls13 {
+                            packet[0] & 0xe0 == 0x20
+                        } else {
+                            packet[3..5] == [0, 1]
+                        },
+                        "error must occur at completion, after receiving protected Finished"
+                    );
                     return;
                 }
             }
         }
     }
-    panic!("buffered plaintext hello survived the transition to protected handshakes");
+    panic!("old-epoch record survived the transition to application data");
 }
 
 #[test]
-fn dtls12_client_errors_on_plaintext_finished() {
-    assert_plaintext_protected_handshake_errors(false, false);
+fn dtls12_client_errors_on_old_epoch_at_handshake_completion() {
+    assert_handshake_completion_rejects_old_epoch(false, false, false);
 }
 
 #[test]
-fn dtls12_server_errors_on_plaintext_finished() {
-    assert_plaintext_protected_handshake_errors(false, true);
+fn dtls12_server_errors_on_old_epoch_at_handshake_completion() {
+    assert_handshake_completion_rejects_old_epoch(false, true, false);
 }
 
 #[test]
-fn dtls13_client_errors_on_plaintext_key_update() {
-    assert_plaintext_protected_handshake_errors(true, false);
+fn dtls13_client_errors_on_old_epoch_at_handshake_completion() {
+    assert_handshake_completion_rejects_old_epoch(true, false, false);
 }
 
 #[test]
-fn dtls13_server_errors_on_plaintext_key_update() {
-    assert_plaintext_protected_handshake_errors(true, true);
+fn dtls13_server_errors_on_old_epoch_at_handshake_completion() {
+    assert_handshake_completion_rejects_old_epoch(true, true, false);
 }
 
 #[test]
-fn dtls12_client_errors_on_buffered_future_server_hello() {
-    assert_buffered_future_hello_errors(false, false);
+fn dtls13_client_errors_on_plaintext_key_update_at_handshake_completion() {
+    assert_handshake_completion_rejects_old_epoch(true, false, true);
 }
 
 #[test]
-fn dtls12_server_errors_on_buffered_future_client_hello() {
-    assert_buffered_future_hello_errors(false, true);
-}
-
-#[test]
-fn dtls13_client_errors_on_buffered_future_server_hello() {
-    assert_buffered_future_hello_errors(true, false);
-}
-
-#[test]
-fn dtls13_server_errors_on_buffered_future_client_hello() {
-    assert_buffered_future_hello_errors(true, true);
+fn dtls13_server_errors_on_plaintext_key_update_at_handshake_completion() {
+    assert_handshake_completion_rejects_old_epoch(true, true, true);
 }

@@ -329,12 +329,10 @@ impl Client {
     }
 
     fn make_progress(&mut self) -> Result<(), InternalError> {
-        validate_handshake_epochs(&self.engine, self.state.handshake_epoch())?;
         loop {
             let prev_state = self.state;
 
             let new_state = prev_state.make_progress(self)?;
-            validate_handshake_epochs(&self.engine, new_state.handshake_epoch())?;
             if prev_state != new_state {
                 self.state = new_state;
                 trace!("{:?} -> {:?}", prev_state, new_state);
@@ -412,15 +410,6 @@ impl State {
             State::AwaitApplicationData => self.await_application_data(client),
             State::HalfClosedLocal => self.half_closed_local(client),
             State::Closed => Ok(self),
-        }
-    }
-
-    /// Minimum epoch for handshake messages still pending after this state.
-    fn handshake_epoch(self) -> u16 {
-        match self {
-            Self::SendClientHello | Self::AwaitServerHello => 0,
-            Self::AwaitApplicationData | Self::HalfClosedLocal | Self::Closed => 3,
-            _ => 2,
         }
     }
 
@@ -692,13 +681,6 @@ impl State {
         // Retain the derived buffers for Finished verification and client flight.
         client.server_hs_traffic_secret = Some(s_hs_traffic);
         client.client_hs_traffic_secret = Some(c_hs_traffic);
-
-        // The ServerHello is consumed. Reject leftover plaintext before enabling
-        // encryption can reparse and discard buffered records.
-        validate_handshake_epochs(
-            &client.engine,
-            Self::AwaitEncryptedExtensions.handshake_epoch(),
-        )?;
 
         // Enable peer encryption for server's epoch 2 messages
         client.engine.enable_peer_encryption()?;
@@ -1034,6 +1016,20 @@ impl State {
     fn send_finished(self, client: &mut Client) -> Result<Self, InternalError> {
         trace!("Sending Finished message to complete handshake");
 
+        // No records from the handshake epochs may survive into application data.
+        if let Some(record) = client
+            .engine
+            .pending_records()
+            .find(|record| record.record().sequence.epoch < 3)
+        {
+            return Err(
+                Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch {
+                    epoch: record.record().sequence.epoch,
+                })
+                .into(),
+            );
+        }
+
         // When the server did NOT request client authentication, we skip
         // send_certificate (which calls flight_begin(5)). Start flight 5
         // here so the old ClientHello flight records are cleared before
@@ -1185,34 +1181,6 @@ impl State {
 // =========================================================================
 // Helper Functions
 // =========================================================================
-
-/// Validate buffered handshakes against the receiving state and message protection.
-pub fn validate_handshake_epochs(engine: &Engine, minimum_epoch: u16) -> Result<(), Error> {
-    for record in engine.pending_records() {
-        let epoch = record.record().sequence.epoch;
-        for handshake in record
-            .handshakes()
-            .iter()
-            .filter(|handshake| !handshake.is_handled())
-        {
-            let message_type = handshake.header.msg_type;
-            let valid_epoch = match message_type {
-                MessageType::ClientHello | MessageType::ServerHello => epoch == 0,
-                MessageType::KeyUpdate | MessageType::NewSessionTicket => epoch >= 3,
-                _ => epoch == 2,
-            };
-            if epoch < minimum_epoch || !valid_epoch {
-                return Err(Error::UnexpectedMessage(
-                    crate::UnexpectedMessageError::HandshakeEpoch {
-                        message_type: message_type.as_u8(),
-                        epoch,
-                    },
-                ));
-            }
-        }
-    }
-    Ok(())
-}
 
 fn handshake_create_client_hello(
     body: &mut Buf,

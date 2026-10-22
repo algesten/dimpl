@@ -23,7 +23,6 @@ use crate::buffer::{Buf, ToBuf};
 use crate::crypto::SrtpProfile;
 use crate::dtls12::Client;
 use crate::dtls12::client::LocalEvent;
-use crate::dtls12::client::validate_handshake_epochs;
 use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
 use crate::dtls12::message::PskParams;
@@ -281,12 +280,10 @@ impl Server {
     }
 
     fn make_progress(&mut self) -> Result<(), InternalError> {
-        validate_handshake_epochs(&self.engine, self.state.handshake_epoch())?;
         loop {
             let prev_state = self.state;
 
             let new_state = prev_state.make_progress(self)?;
-            validate_handshake_epochs(&self.engine, new_state.handshake_epoch())?;
             if prev_state != new_state {
                 self.state = new_state;
                 trace!("{:?} -> {:?}", prev_state, new_state);
@@ -336,19 +333,6 @@ impl State {
             State::SendFinished => self.send_finished(server),
             State::AwaitApplicationData => self.await_application_data(server),
             State::Closed => Ok(self),
-        }
-    }
-
-    /// Minimum epoch for handshake messages still pending after this state.
-    fn handshake_epoch(self) -> u16 {
-        match self {
-            Self::AwaitChangeCipherSpec
-            | Self::AwaitFinished
-            | Self::SendChangeCipherSpec
-            | Self::SendFinished
-            | Self::AwaitApplicationData
-            | Self::Closed => 1,
-            _ => 0,
         }
     }
 
@@ -1074,6 +1058,20 @@ impl State {
 
     fn send_finished(self, server: &mut Server) -> Result<Self, InternalError> {
         trace!("Sending Finished message to complete handshake");
+
+        // No records from the handshake epochs may survive into application data.
+        if let Some(record) = server
+            .engine
+            .pending_records()
+            .find(|record| record.record().sequence.epoch != 1)
+        {
+            return Err(
+                Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch {
+                    epoch: record.record().sequence.epoch,
+                })
+                .into(),
+            );
+        }
 
         server
             .engine

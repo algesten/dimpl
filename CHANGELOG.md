@@ -1,6 +1,6 @@
 # Unreleased
 
-  * Reject handshake messages in invalid epochs from the DTLS 1.2 and 1.3 state machines #200
+  * Reject pending handshake-epoch records before entering application data in DTLS 1.2 and 1.3 #200
   * Discard premature protected records and preserve authenticated data beside stale handshakes #199
   * Drop unsupported epochs before buffering DTLS records #198
   * Drop duplicate DTLS 1.2 epoch-1 records queued before peer encryption #190

@@ -39,7 +39,6 @@ use crate::dtls13::client::LocalEvent;
 use crate::dtls13::client::handshake_create_certificate;
 use crate::dtls13::client::handshake_create_certificate_verify;
 use crate::dtls13::client::signature_scheme_to_components;
-use crate::dtls13::client::validate_handshake_epochs;
 #[cfg(feature = "_crypto-common")]
 use crate::dtls13::client::verify_scheme_curve;
 use crate::dtls13::engine::Engine;
@@ -375,16 +374,10 @@ impl Server {
     }
 
     fn make_progress(&mut self) -> Result<(), InternalError> {
-        // Auto-detection must inspect ClientHello before applying DTLS 1.3
-        // protection rules to the rest of a possible DTLS 1.2 flight.
-        if self.state != State::AwaitClientHello {
-            validate_handshake_epochs(&self.engine, self.state.handshake_epoch())?;
-        }
         loop {
             let prev_state = self.state;
 
             let new_state = prev_state.make_progress(self)?;
-            validate_handshake_epochs(&self.engine, new_state.handshake_epoch())?;
             if prev_state != new_state {
                 self.state = new_state;
                 trace!("{:?} -> {:?}", prev_state, new_state);
@@ -430,15 +423,6 @@ impl State {
             State::AwaitApplicationData => self.await_application_data(server),
             State::HalfClosedLocal => self.half_closed_local(server),
             State::Closed => Ok(self),
-        }
-    }
-
-    /// Minimum epoch for handshake messages still pending after this state.
-    fn handshake_epoch(self) -> u16 {
-        match self {
-            Self::AwaitClientHello => 0,
-            Self::AwaitApplicationData | Self::HalfClosedLocal | Self::Closed => 3,
-            _ => 2,
         }
     }
 
@@ -1141,6 +1125,20 @@ impl State {
         drop(maybe);
 
         server.engine.advance_peer_handshake_seq();
+
+        // No records from the handshake epochs may survive into application data.
+        if let Some(record) = server
+            .engine
+            .pending_records()
+            .find(|record| record.record().sequence.epoch < 3)
+        {
+            return Err(
+                Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch {
+                    epoch: record.record().sequence.epoch,
+                })
+                .into(),
+            );
+        }
 
         // ACK the client's epoch-2 flight so it stops retransmitting
         server.engine.send_ack_retransmittable()?;

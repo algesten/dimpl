@@ -67,11 +67,9 @@ pub enum Error {
 pub enum UnexpectedMessageError {
     /// Auto-detection received a server response that was neither DTLS 1.2 nor DTLS 1.3.
     UnrecognizedAutoServerResponse,
-    /// A handshake message used an epoch invalid for its type or protocol stage.
-    HandshakeEpoch {
-        /// The handshake message type from the wire.
-        message_type: u8,
-        /// The record epoch containing the message.
+    /// A record from a handshake epoch remained when entering application data.
+    UnexpectedEpoch {
+        /// The epoch of the pending record.
         epoch: u16,
     },
     /// A DTLS 1.2 `ServerKeyExchange` omitted its required signature.
@@ -802,13 +800,10 @@ impl fmt::Display for UnexpectedMessageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnrecognizedAutoServerResponse => write!(f, "unrecognized response from server"),
-            Self::HandshakeEpoch {
-                message_type,
-                epoch,
-            } => {
+            Self::UnexpectedEpoch { epoch } => {
                 write!(
                     f,
-                    "handshake message {message_type} in unexpected epoch {epoch}"
+                    "pending record in unexpected epoch {epoch} at handshake completion"
                 )
             }
             Self::ServerKeyExchangeWithoutSignature => {
