@@ -1017,16 +1017,14 @@ impl State {
         trace!("Sending Finished message to complete handshake");
 
         // No records from the handshake epochs may survive into application data.
-        let unexpected_record = client
+        let has_unexpected_epoch = client
             .engine
             .pending_records()
-            .find(|record| record.record().sequence.epoch < 3);
-        if let Some(record) = unexpected_record {
-            let epoch = record.record().sequence.epoch;
-            return Err((Error::UnexpectedMessage(
-                crate::UnexpectedMessageError::UnexpectedEpoch { epoch },
-            ))
-            .into());
+            .any(|record| record.record().sequence.epoch < 3);
+        if has_unexpected_epoch {
+            return Err(
+                Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch).into(),
+            );
         }
 
         // When the server did NOT request client authentication, we skip

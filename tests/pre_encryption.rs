@@ -257,7 +257,7 @@ fn assert_handshake_completion_rejects_old_epoch(dtls13: bool, to_server: bool, 
                     assert_eq!(
                         result,
                         Err(Error::UnexpectedMessage(
-                            UnexpectedMessageError::UnexpectedEpoch { epoch: 0 }
+                            UnexpectedMessageError::UnexpectedEpoch
                         ))
                     );
                     assert!(!observed.connected, "must reject before emitting Connected");

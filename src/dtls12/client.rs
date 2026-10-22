@@ -1141,16 +1141,14 @@ impl State {
         }
 
         // No records from the handshake epochs may survive into application data.
-        let unexpected_record = client
+        let has_unexpected_epoch = client
             .engine
             .pending_records()
-            .find(|record| record.record().sequence.epoch != 1);
-        if let Some(record) = unexpected_record {
-            let epoch = record.record().sequence.epoch;
-            return Err((Error::UnexpectedMessage(
-                crate::UnexpectedMessageError::UnexpectedEpoch { epoch },
-            ))
-            .into());
+            .any(|record| record.record().sequence.epoch != 1);
+        if has_unexpected_epoch {
+            return Err(
+                Error::UnexpectedMessage(crate::UnexpectedMessageError::UnexpectedEpoch).into(),
+            );
         }
 
         trace!("Server Finished verified successfully");
