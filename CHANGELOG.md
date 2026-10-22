@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Discard buffered DTLS 1.3 plaintext handshakes when enabling peer encryption #200
   * Discard premature protected records and preserve authenticated data beside stale handshakes #199
   * Drop unsupported epochs before buffering DTLS records #198
   * Drop duplicate DTLS 1.2 epoch-1 records queued before peer encryption #190
