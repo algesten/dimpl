@@ -395,7 +395,7 @@ fn rejected_later_fragments_keep_first_reception_deadline() {
 }
 
 #[test]
-fn later_message_rejection_does_not_undo_accepted_client_hello() {
+fn later_message_rejection_respects_epoch_and_deadline() {
     let base = Instant::now();
     let certificate = generate_self_signed_certificate().expect("certificate");
     let config = Arc::new(
@@ -425,9 +425,25 @@ fn later_message_rejection_does_not_undo_accepted_client_hello() {
         let mut server = server_version.endpoint(config.clone(), certificate.clone(), base);
         server.handle_timeout(base).expect("server clock");
         drain(&mut server);
-        server
-            .handle_packet(&packet)
-            .expect("accept ClientHello and discard malformed certificate");
+        let result = server.handle_packet(&packet);
+        let dtls12 =
+            matches!(client_version, Version::Dtls12) || matches!(server_version, Version::Dtls12);
+        if !dtls12 {
+            // A plaintext Certificate is a protocol violation in DTLS 1.3,
+            // even when its body would otherwise cause a transient parse error.
+            assert_eq!(
+                result,
+                Err(Error::UnexpectedMessage(
+                    dimpl::UnexpectedMessageError::HandshakeEpoch {
+                        message_type: 11,
+                        epoch: 0,
+                    }
+                ))
+            );
+            drain(&mut server);
+            continue;
+        }
+        result.expect("accept ClientHello and discard malformed certificate");
         let output = drain(&mut server);
         assert!(!output.0.is_empty());
         assert_eq!(

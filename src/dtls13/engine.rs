@@ -354,6 +354,14 @@ impl Engine {
         &mut *self.signing_key
     }
 
+    /// Unconsumed records for protocol-state validation.
+    pub fn pending_records(&self) -> impl Iterator<Item = &Record> {
+        self.queue_rx
+            .iter()
+            .flat_map(|incoming| incoming.records().iter())
+            .filter(|record| !record.is_handled())
+    }
+
     /// Queue a datagram and report whether it contains the first ClientHello fragment.
     pub fn parse_packet(&mut self, packet: &[u8]) -> Result<bool, InternalError> {
         let cs = self.cipher_suite;
@@ -2207,9 +2215,17 @@ impl Engine {
         debug!("Peer encryption enabled");
         self.peer_encryption_enabled = true;
 
-        // Reclassify the entire queue now that plaintext handshakes are stale,
-        // including future-sequence messages buffered before any protected record.
-        let all = self.queue_rx.split_off(0);
+        // Re-parse any buffered epoch 2+ records
+        let maybe_index = self
+            .queue_rx
+            .iter()
+            .position(|i| i.records().iter().any(|r| r.record().sequence.epoch >= 2));
+
+        let Some(index) = maybe_index else {
+            return Ok(());
+        };
+
+        let all = self.queue_rx.split_off(index);
 
         for incoming in all {
             let unhandled = incoming.into_records().filter(|r| !r.is_handled());

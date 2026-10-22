@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dimpl::certificate::generate_self_signed_certificate;
-use dimpl::{Config, Dtls, Output};
+use dimpl::{Config, Dtls, Error, Output, UnexpectedMessageError};
 
 const UNAUTHENTICATED_INPUT: &[u8] = b"unauthenticated input";
 
@@ -159,168 +159,148 @@ fn dtls13_pre_encryption_epoch_bits_one_is_not_application_data() {
     assert_pre_encryption_record_is_not_delivered(true, 1);
 }
 
-fn split_records(packets: &[Vec<u8>]) -> Vec<Vec<u8>> {
-    let mut records = Vec::new();
-    for packet in packets {
-        let mut remaining = packet.as_slice();
-        while !remaining.is_empty() {
-            let length = if remaining[0] & 0xe0 == 0x20 {
-                assert_eq!(remaining[0] & 0x1c, 0x0c, "two-byte sequence and length");
-                5 + u16::from_be_bytes([remaining[3], remaining[4]]) as usize
-            } else {
-                13 + u16::from_be_bytes([remaining[11], remaining[12]]) as usize
-            };
-            records.push(remaining[..length].to_vec());
-            remaining = &remaining[length..];
-        }
-    }
-    records
-}
-
-#[test]
-fn dtls13_buffered_plaintext_key_updates_cannot_evict_authenticated_receive_keys() {
-    let mut now = Instant::now();
-    let config = Arc::new(
-        Config::builder()
-            .use_server_cookie(false)
-            .build()
-            .expect("config"),
-    );
-    let client_cert = generate_self_signed_certificate().expect("client certificate");
-    let server_cert = generate_self_signed_certificate().expect("server certificate");
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
-    client.set_active(true);
-    let mut server = Dtls::new_13(config, server_cert, now);
-    server.set_active(false);
-    let mut client_out = Observed::default();
-    let mut server_out = Observed::default();
-    server.handle_timeout(now).expect("server timeout");
-    drain(&mut server, &mut server_out);
-
-    // ClientHello, Certificate, CertificateVerify and Finished use sequences
-    // 0..=3. These future messages must not survive as actionable KeyUpdates:
-    // post-handshake control messages require application-epoch protection.
-    for sequence in 4..8u16 {
-        let mut packet = vec![22, 0xfe, 0xfd, 0, 0];
-        packet.extend_from_slice(&(sequence as u64).to_be_bytes()[2..]);
-        packet.extend_from_slice(&13u16.to_be_bytes());
-        packet.extend_from_slice(&[24, 0, 0, 1]); // KeyUpdate, body length 1
-        packet.extend_from_slice(&sequence.to_be_bytes());
-        packet.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0]); // offset, length, request
-        server.handle_packet(&packet).expect("receive before keys");
-        drain(&mut server, &mut server_out);
-    }
-
-    for _ in 0..40 {
-        client.handle_timeout(now).expect("client timeout");
-        drain(&mut client, &mut client_out);
-        server.handle_timeout(now).expect("server timeout");
-        drain(&mut server, &mut server_out);
-        deliver_packets(&mut client_out, &mut server, &mut server_out, true);
-        deliver_packets(&mut server_out, &mut client, &mut client_out, true);
-        if client_out.connected && server_out.connected {
-            break;
-        }
-        now += Duration::from_millis(10);
-    }
-    assert!(client_out.connected && server_out.connected);
-    for _ in 0..4 {
-        server.handle_timeout(now).expect("server timeout");
-        drain(&mut server, &mut server_out);
-    }
-
-    client
-        .send_application_data(b"authenticated")
-        .expect("send application data");
-    drain(&mut client, &mut client_out);
-    deliver_packets(&mut client_out, &mut server, &mut server_out, true);
-    assert_eq!(
-        server_out.app_data,
-        [b"authenticated".to_vec()],
-        "unauthenticated buffered KeyUpdates must not change receive keys"
-    );
-}
-
-fn assert_dtls13_future_plaintext_client_hello_is_discarded(before_keys: bool) {
+fn endpoints(dtls13: bool) -> (Dtls, Dtls, Instant) {
     let now = Instant::now();
     let config = Arc::new(
         Config::builder()
-            .max_queue_rx(8)
             .use_server_cookie(false)
             .build()
             .expect("config"),
     );
     let client_cert = generate_self_signed_certificate().expect("client certificate");
     let server_cert = generate_self_signed_certificate().expect("server certificate");
-    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    let (mut client, mut server) = if dtls13 {
+        (
+            Dtls::new_13(Arc::clone(&config), client_cert, now),
+            Dtls::new_13(config, server_cert, now),
+        )
+    } else {
+        (
+            Dtls::new_12(Arc::clone(&config), client_cert, now),
+            Dtls::new_12(config, server_cert, now),
+        )
+    };
     client.set_active(true);
-    let mut server = Dtls::new_13(config, server_cert, now);
     server.set_active(false);
+    (client, server, now)
+}
+
+fn handshake_epoch_error(message_type: u8) -> Error {
+    Error::UnexpectedMessage(UnexpectedMessageError::HandshakeEpoch {
+        message_type,
+        epoch: 0,
+    })
+}
+
+fn assert_plaintext_protected_handshake_errors(dtls13: bool, to_server: bool) {
+    let (mut client, mut server, now) = endpoints(dtls13);
+    let mut observed = Observed::default();
+    let destination = if to_server { &mut server } else { &mut client };
+    destination.handle_timeout(now).expect("start endpoint");
+    drain(destination, &mut observed);
+
+    let message_type = if dtls13 { 24 } else { 20 }; // KeyUpdate or Finished
+    let body = if dtls13 { vec![0] } else { vec![0; 12] };
+    let mut packet = vec![22, 0xfe, 0xfd, 0, 0];
+    packet.extend_from_slice(&4u64.to_be_bytes()[2..]);
+    packet.extend_from_slice(&((12 + body.len()) as u16).to_be_bytes());
+    packet.extend_from_slice(&[message_type, 0, 0, body.len() as u8]);
+    packet.extend_from_slice(&4u16.to_be_bytes()); // future handshake sequence
+    packet.extend_from_slice(&[0, 0, 0, 0, 0, body.len() as u8]);
+    packet.extend_from_slice(&body);
+    let result = destination.handle_packet(&packet);
+    drain(destination, &mut observed);
+    assert_eq!(result, Err(handshake_epoch_error(message_type)));
+}
+
+fn assert_buffered_future_hello_errors(dtls13: bool, to_server: bool) {
+    let (mut client, mut server, now) = endpoints(dtls13);
     let mut client_out = Observed::default();
     let mut server_out = Observed::default();
-    server.handle_timeout(now).expect("server timeout");
+    server.handle_timeout(now).expect("start server");
     drain(&mut server, &mut server_out);
-    client.handle_timeout(now).expect("client timeout");
+    client.handle_timeout(now).expect("start client");
     drain(&mut client, &mut client_out);
-
-    let mut future_hello = split_records(&client_out.packets)
-        .into_iter()
-        .find(|record| record[0] == 22 && record[13] == 1)
-        .expect("client emits plaintext ClientHello");
-    // The record and message are entirely public. A new message_seq makes this
-    // a forged future message, rather than a genuine same-flight retransmission.
+    if !to_server {
+        deliver_packets(&mut client_out, &mut server, &mut server_out, dtls13);
+    }
+    let (source, destination, observed) = if to_server {
+        (&mut client_out, &mut server, &mut server_out)
+    } else {
+        (&mut server_out, &mut client, &mut client_out)
+    };
+    let message_type = if to_server { 1 } else { 2 };
+    let packet = source
+        .packets
+        .iter()
+        .find(|packet| packet[0] == 22 && packet[13] == message_type)
+        .expect("plaintext hello flight");
+    let length = 13 + u16::from_be_bytes([packet[11], packet[12]]) as usize;
+    let mut future_hello = packet[..length].to_vec();
     future_hello[17..19].copy_from_slice(&0xff00u16.to_be_bytes());
-    if before_keys {
-        let result = server.handle_packet(&future_hello);
-        drain(&mut server, &mut server_out);
-        result.expect("receive future plaintext hello before keys");
-    }
+    let result = destination.handle_packet(&future_hello);
+    drain(destination, observed);
+    result.expect("buffer future hello while still awaiting the genuine hello");
 
-    deliver_packets(&mut client_out, &mut server, &mut server_out, true);
-    deliver_packets(&mut server_out, &mut client, &mut client_out, true);
-    deliver_packets(&mut client_out, &mut server, &mut server_out, true);
-    deliver_packets(&mut server_out, &mut client, &mut client_out, true);
-    assert!(client_out.connected && server_out.connected);
-
-    if !before_keys {
-        let result = server.handle_packet(&future_hello);
-        drain(&mut server, &mut server_out);
-        assert_eq!(
-            result,
-            Ok(()),
-            "unauthenticated new plaintext hellos cannot terminate an established association"
-        );
-    }
-
-    // A retained pre-key hello must not pin handled authenticated data behind
-    // it until the receive queue fills. Poll fully after every mutation.
-    for sequence in 0..16u8 {
-        client
-            .send_application_data(&[sequence])
-            .expect("send authenticated data");
-        drain(&mut client, &mut client_out);
-        for packet in std::mem::take(&mut client_out.packets) {
-            let result = server.handle_packet(&packet);
-            drain(&mut server, &mut server_out);
-            assert_eq!(
-                result,
-                Ok(()),
-                "a stale plaintext hello must not exhaust the receive queue at data record {sequence}"
-            );
+    // Progress the genuine handshake. The state machine must reject the
+    // leftover plaintext before waiting for protected handshake messages.
+    for _ in 0..10 {
+        for to_server_now in [true, false] {
+            let (source, destination, observed) = if to_server_now {
+                (&mut client_out, &mut server, &mut server_out)
+            } else {
+                (&mut server_out, &mut client, &mut client_out)
+            };
+            for packet in std::mem::take(&mut source.packets) {
+                let result = destination.handle_packet(&packet);
+                drain(destination, observed);
+                if result.is_err() {
+                    assert_eq!(to_server_now, to_server);
+                    assert_eq!(result, Err(handshake_epoch_error(message_type)));
+                    return;
+                }
+            }
         }
     }
-    assert_eq!(
-        server_out.app_data,
-        (0..16u8).map(|sequence| vec![sequence]).collect::<Vec<_>>()
-    );
+    panic!("buffered plaintext hello survived the transition to protected handshakes");
 }
 
 #[test]
-fn dtls13_new_plaintext_client_hello_after_handshake_is_ignored() {
-    assert_dtls13_future_plaintext_client_hello_is_discarded(false);
+fn dtls12_client_errors_on_plaintext_finished() {
+    assert_plaintext_protected_handshake_errors(false, false);
 }
 
 #[test]
-fn dtls13_buffered_future_plaintext_client_hello_does_not_pin_receive_queue() {
-    assert_dtls13_future_plaintext_client_hello_is_discarded(true);
+fn dtls12_server_errors_on_plaintext_finished() {
+    assert_plaintext_protected_handshake_errors(false, true);
+}
+
+#[test]
+fn dtls13_client_errors_on_plaintext_key_update() {
+    assert_plaintext_protected_handshake_errors(true, false);
+}
+
+#[test]
+fn dtls13_server_errors_on_plaintext_key_update() {
+    assert_plaintext_protected_handshake_errors(true, true);
+}
+
+#[test]
+fn dtls12_client_errors_on_buffered_future_server_hello() {
+    assert_buffered_future_hello_errors(false, false);
+}
+
+#[test]
+fn dtls12_server_errors_on_buffered_future_client_hello() {
+    assert_buffered_future_hello_errors(false, true);
+}
+
+#[test]
+fn dtls13_client_errors_on_buffered_future_server_hello() {
+    assert_buffered_future_hello_errors(true, false);
+}
+
+#[test]
+fn dtls13_server_errors_on_buffered_future_client_hello() {
+    assert_buffered_future_hello_errors(true, true);
 }

@@ -275,10 +275,12 @@ impl Client {
     }
 
     fn make_progress(&mut self) -> Result<(), InternalError> {
+        validate_handshake_epochs(&self.engine, self.state.handshake_epoch())?;
         loop {
             let prev_state = self.state;
 
             let new_state = prev_state.make_progress(self)?;
+            validate_handshake_epochs(&self.engine, new_state.handshake_epoch())?;
             if prev_state != new_state {
                 self.state = new_state;
                 trace!("{:?} -> {:?}", prev_state, new_state);
@@ -353,6 +355,20 @@ impl State {
             State::AwaitFinished => self.await_finished(client),
             State::AwaitApplicationData => self.await_application_data(client),
             State::Closed => Ok(self),
+        }
+    }
+
+    /// Minimum epoch for handshake messages still pending after this state.
+    fn handshake_epoch(self) -> u16 {
+        match self {
+            Self::SendClientHello
+            | Self::AwaitHelloVerifyRequest
+            | Self::AwaitServerHello
+            | Self::AwaitCertificate
+            | Self::AwaitServerKeyExchange
+            | Self::AwaitCertificateRequest
+            | Self::AwaitServerHelloDone => 0,
+            _ => 1,
         }
     }
 
@@ -1217,6 +1233,30 @@ impl State {
 
         Ok(self)
     }
+}
+
+/// Validate buffered handshakes against the receiving state and message protection.
+pub fn validate_handshake_epochs(engine: &Engine, minimum_epoch: u16) -> Result<(), Error> {
+    for record in engine.pending_records() {
+        let epoch = record.record().sequence.epoch;
+        for handshake in record
+            .handshakes()
+            .iter()
+            .filter(|handshake| !handshake.is_handled())
+        {
+            let message_type = handshake.header.msg_type;
+            let valid_epoch = message_type != MessageType::Finished || epoch == 1;
+            if epoch < minimum_epoch || !valid_epoch {
+                return Err(Error::UnexpectedMessage(
+                    crate::UnexpectedMessageError::HandshakeEpoch {
+                        message_type: message_type.as_u8(),
+                        epoch,
+                    },
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn handshake_create_client_hello(
