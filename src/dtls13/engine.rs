@@ -3264,6 +3264,68 @@ mod tests {
         );
     }
 
+    #[test]
+    #[cfg(feature = "rcgen")]
+    fn duplicate_key_update_preserves_coalesced_application_data() {
+        let now = Instant::now();
+        let mut sender = protected_test_engine();
+        let mut peer = protected_test_engine();
+        sender
+            .create_key_update(KeyUpdateRequest::UpdateNotRequested)
+            .expect("send update");
+        for packet in engine_packets(&mut sender, now) {
+            peer.parse_packet(&packet).expect("receive update");
+            engine_packets(&mut peer, now);
+        }
+        let mut defragment = Buf::new();
+        assert!(
+            peer.next_handshake_no_transcript(MessageType::KeyUpdate, &mut defragment)
+                .expect("parse update")
+                .is_some()
+        );
+        peer.advance_peer_handshake_seq();
+        peer.update_recv_keys().expect("rotate receive keys");
+        peer.send_ack().expect("ACK original update");
+        // Lose the original ACK. Until an ACK arrives, the sender retransmits
+        // the old KeyUpdate and may send application data on the same epoch.
+        engine_packets(&mut peer, now);
+        sender.flight_resend("lost ACK").expect("resend update");
+        let mut mixed = engine_packets(&mut sender, now).concat();
+        sender
+            .create_ciphertext_record(ContentType::ApplicationData, 3, false, |fragment| {
+                fragment.extend_from_slice(b"data beside a retransmitted update");
+            })
+            .expect("send data while awaiting ACK");
+        let protected = engine_packets(&mut sender, now).concat();
+        mixed.extend_from_slice(&protected);
+
+        let mut output = [0; 2048];
+        let mut data = Vec::new();
+        let mut acks = Vec::new();
+        for packet in [mixed, protected] {
+            peer.parse_packet(&packet)
+                .expect("receive protected records");
+            loop {
+                match peer.poll_output(&mut output, now) {
+                    Output::ApplicationData(payload) => data.push(payload.to_vec()),
+                    Output::Packet(packet) => acks.push(packet.to_vec()),
+                    Output::Timeout(_) => break,
+                    unexpected => panic!("unexpected output: {unexpected:?}"),
+                }
+            }
+        }
+        for ack in acks {
+            sender.parse_packet(&ack).expect("receive retry ACK");
+            engine_packets(&mut sender, now);
+        }
+        assert_eq!(sender.app_send_epoch(), 4, "duplicate update is re-ACKed");
+        assert_eq!(
+            data,
+            [b"data beside a retransmitted update".to_vec()],
+            "dropping an old authenticated handshake must retain fresh records beside it"
+        );
+    }
+
     #[cfg(feature = "rcgen")]
     fn key_update_ack_after_retransmission(lost: bool) {
         let now = Instant::now();

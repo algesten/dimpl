@@ -589,3 +589,110 @@ fn dtls13_new_plaintext_client_hello_after_handshake_is_ignored() {
 fn dtls13_buffered_future_plaintext_client_hello_does_not_pin_receive_queue() {
     assert_dtls13_future_plaintext_client_hello_is_discarded(true);
 }
+
+fn assert_old_plaintext_hello_preserves_authenticated_data(dtls13: bool, plaintext_first: bool) {
+    let now = Instant::now();
+    let config = Arc::new(
+        Config::builder()
+            .max_queue_rx(8)
+            .use_server_cookie(false)
+            .build()
+            .expect("config"),
+    );
+    let client_cert = generate_self_signed_certificate().expect("client certificate");
+    let server_cert = generate_self_signed_certificate().expect("server certificate");
+    let mut client = if dtls13 {
+        Dtls::new_13(Arc::clone(&config), client_cert, now)
+    } else {
+        Dtls::new_12(Arc::clone(&config), client_cert, now)
+    };
+    client.set_active(true);
+    let mut server = if dtls13 {
+        Dtls::new_13(config, server_cert, now)
+    } else {
+        Dtls::new_12(config, server_cert, now)
+    };
+    server.set_active(false);
+    let mut client_out = Observed::default();
+    let mut server_out = Observed::default();
+    server.handle_timeout(now).expect("server timeout");
+    drain(&mut server, &mut server_out);
+    client.handle_timeout(now).expect("client timeout");
+    drain(&mut client, &mut client_out);
+    let client_hello = split_records(&client_out.packets, dtls13)
+        .into_iter()
+        .find(|record| record[0] == 22 && record[13] == 1)
+        .expect("client emits plaintext ClientHello");
+    for _ in 0..4 {
+        deliver_packets(&mut client_out, &mut server, &mut server_out, dtls13);
+        deliver_packets(&mut server_out, &mut client, &mut client_out, dtls13);
+    }
+    assert!(client_out.connected && server_out.connected);
+
+    client
+        .send_application_data(b"authenticated beside an old hello")
+        .expect("send application data");
+    drain(&mut client, &mut client_out);
+    assert_eq!(client_out.packets.len(), 1, "one protected data record");
+    let protected = client_out.packets.pop().expect("protected data packet");
+    let mixed = if plaintext_first {
+        [client_hello, protected.clone()].concat()
+    } else {
+        [protected.clone(), client_hello].concat()
+    };
+    server
+        .handle_packet(&mixed)
+        .expect("receive mixed datagram");
+    drain(&mut server, &mut server_out);
+
+    // If the old hello discards its entire datagram after the protected record
+    // updates the replay window, even a clean copy cannot recover the data.
+    server
+        .handle_packet(&protected)
+        .expect("receive clean protected copy");
+    drain(&mut server, &mut server_out);
+    assert_eq!(
+        server_out.app_data,
+        [b"authenticated beside an old hello".to_vec()],
+        "discarding a stale plaintext hello must preserve authenticated records beside it"
+    );
+
+    // A trailing stale hello must not retain its already consumed datagram and
+    // pin every subsequent handled record until the bounded queue is full.
+    for sequence in 0..16u8 {
+        client
+            .send_application_data(&[sequence])
+            .expect("send subsequent authenticated data");
+        drain(&mut client, &mut client_out);
+        for packet in std::mem::take(&mut client_out.packets) {
+            let result = server.handle_packet(&packet);
+            drain(&mut server, &mut server_out);
+            assert_eq!(
+                result,
+                Ok(()),
+                "a stale hello must not fill the queue at data record {sequence}"
+            );
+        }
+    }
+    assert_eq!(server_out.app_data.len(), 17);
+}
+
+#[test]
+fn dtls12_old_plaintext_hello_does_not_discard_authenticated_data() {
+    assert_old_plaintext_hello_preserves_authenticated_data(false, true);
+}
+
+#[test]
+fn dtls13_old_plaintext_hello_does_not_discard_authenticated_data() {
+    assert_old_plaintext_hello_preserves_authenticated_data(true, true);
+}
+
+#[test]
+fn dtls12_trailing_old_plaintext_hello_does_not_pin_receive_queue() {
+    assert_old_plaintext_hello_preserves_authenticated_data(false, false);
+}
+
+#[test]
+fn dtls13_trailing_old_plaintext_hello_does_not_pin_receive_queue() {
+    assert_old_plaintext_hello_preserves_authenticated_data(true, false);
+}
