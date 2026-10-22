@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Discard premature protected records and preserve authenticated data beside stale handshakes
   * Drop unsupported epochs before buffering DTLS records #198
   * Drop duplicate DTLS 1.2 epoch-1 records queued before peer encryption #190
 

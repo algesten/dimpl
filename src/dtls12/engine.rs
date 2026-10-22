@@ -228,11 +228,32 @@ impl Engine {
         let cs = self.cipher_suite;
         let incoming = Incoming::parse_packet(packet, self, cs)?;
         if let Some(incoming) = incoming {
+            // A reordered protected flight can be retransmitted once keys are ready.
+            // A coalesced flight starts with its plaintext key-establishing records.
+            if !self.peer_encryption_enabled && incoming.first().record().sequence.epoch != 0 {
+                self.recycle_incoming(incoming);
+                return Ok(false);
+            }
             let is_client_hello = self.insert_incoming(incoming)?;
             return Ok(is_client_hello);
         }
 
         Ok(false)
+    }
+
+    /// Discard ciphertext still awaiting keys after processing the datagram.
+    pub fn discard_undecryptable(&mut self) {
+        if self.peer_encryption_enabled {
+            return;
+        }
+        for incoming in self.queue_rx.iter() {
+            for record in incoming.records().iter() {
+                if record.record().sequence.epoch != 0 {
+                    record.set_handled();
+                }
+            }
+        }
+        self.purge_handled_queue_rx();
     }
 
     /// Insert a parsed datagram into the receive queue.
@@ -1284,16 +1305,18 @@ impl RecordHandler for Engine {
         if record.record().content_type == ContentType::Handshake
             && epoch == 0
             && self.peer_encryption_enabled
-            && record
-                .first_handshake()
-                .and_then(|handshake| handshake.dupe_triggers_resend())
-                .is_none()
         {
-            // Stale plaintext handshakes must still be visible to
-            // insert_incoming_handshake when they can trigger final-flight
-            // retransmission. Other post-encryption epoch-0 handshakes are
-            // unauthenticated and no longer actionable.
+            // A stale plaintext handshake can request our previous flight, but
+            // must not discard authenticated records alongside it in this datagram.
+            let dupe_seq = record
+                .first_handshake()
+                .and_then(|handshake| handshake.dupe_triggers_resend());
             self.push_buffer(record.into_buffer());
+            if dupe_seq.is_some_and(|seq| seq < self.peer_handshake_seq_no)
+                && !self.peer_handshake_confirmed
+            {
+                self.flight_resend_on_dupe()?;
+            }
             return Ok(None);
         }
 
@@ -1321,8 +1344,8 @@ impl RecordHandler for Engine {
             }
 
             if !self.peer_encryption_enabled {
-                // Epoch >= 1 before peer encryption is enabled must stay queued
-                // for re-parsing after enable_peer_encryption().
+                // A CCS earlier in this datagram may enable authentication.
+                // Otherwise discard_undecryptable() will discard this record.
                 return Ok(Some(record));
             }
 

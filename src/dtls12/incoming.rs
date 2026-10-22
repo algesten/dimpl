@@ -233,7 +233,7 @@ impl Record {
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls12CipherSuite>,
     ) -> Result<Option<Box<ParsedRecord>>, InternalError> {
-        let parsed = match ParsedRecord::parse(buffer, cs, 0) {
+        let parsed = match ParsedRecord::parse(buffer, cs, 0, false) {
             Ok(p) => p,
             Err(e) => {
                 // RFC 6347 §4.1.2.7: Invalid records SHOULD be silently discarded.
@@ -242,15 +242,19 @@ impl Record {
                 return Ok(None);
             }
         };
-        // Renegotiation is unsupported, so only epochs 0 and 1 have cipher states.
-        if parsed.record.sequence.epoch > 1 {
+        // There is no cipher state beyond epoch 1 (renegotiation is unsupported).
+        // CCS belongs to epoch 0, never to the protected epoch it enables.
+        if parsed.record.sequence.epoch > 1
+            || (parsed.record.sequence.epoch != 0
+                && parsed.record.content_type == ContentType::ChangeCipherSpec)
+        {
             return Ok(None);
         }
         let parsed = Box::new(parsed);
 
-        // It is not enough to only look at the epoch, since to be able to decrypt the entire
-        // preceeding set of flights sets up the cryptographic context. In a situation with
-        // packet loss, we can end up seeing epoch 1 records before we can decrypt them.
+        // A coalesced datagram may contain CCS followed by protected Finished.
+        // Stage ciphertext opaquely until the state machine processes that CCS;
+        // anything still undecryptable afterward is discarded.
         let is_epoch_0 = parsed.record.sequence.epoch == 0;
         if is_epoch_0 || !decrypt.is_peer_encryption_enabled() {
             return Ok(Some(parsed));
@@ -311,7 +315,7 @@ impl Record {
         buffer[11] = (new_len >> 8) as u8;
         buffer[12] = new_len as u8;
 
-        let parsed = ParsedRecord::parse(buffer, cs, explicit_nonce_len)?;
+        let parsed = ParsedRecord::parse(buffer, cs, explicit_nonce_len, true)?;
         let parsed = Box::new(parsed);
 
         Ok(Some(parsed))
@@ -364,12 +368,14 @@ impl ParsedRecord {
         input: &[u8],
         cipher_suite: Option<Dtls12CipherSuite>,
         offset: usize,
+        authenticated: bool,
     ) -> Result<ParsedRecord, InternalError> {
         let (_, record) = DTLSRecord::parse(input, 0, offset)?;
 
-        let handshakes = if record.content_type == ContentType::Handshake {
-            // This will also return None on the encrypted Finished after ChangeCipherSpec.
-            // However we will then decrypt and try again.
+        // Protected bytes must remain opaque until authentication succeeds.
+        let handshakes = if record.content_type == ContentType::Handshake
+            && (record.sequence.epoch == 0 || authenticated)
+        {
             let fragment_offset = record.fragment_range.start;
             parse_handshakes(record.fragment(input), fragment_offset, cipher_suite)
         } else {
