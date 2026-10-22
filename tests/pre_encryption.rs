@@ -505,3 +505,87 @@ fn dtls13_buffered_plaintext_key_updates_cannot_evict_authenticated_receive_keys
         "unauthenticated buffered KeyUpdates must not change receive keys"
     );
 }
+
+fn assert_dtls13_future_plaintext_client_hello_is_discarded(before_keys: bool) {
+    let now = Instant::now();
+    let config = Arc::new(
+        Config::builder()
+            .max_queue_rx(8)
+            .use_server_cookie(false)
+            .build()
+            .expect("config"),
+    );
+    let client_cert = generate_self_signed_certificate().expect("client certificate");
+    let server_cert = generate_self_signed_certificate().expect("server certificate");
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+    let mut client_out = Observed::default();
+    let mut server_out = Observed::default();
+    server.handle_timeout(now).expect("server timeout");
+    drain(&mut server, &mut server_out);
+    client.handle_timeout(now).expect("client timeout");
+    drain(&mut client, &mut client_out);
+
+    let mut future_hello = split_records(&client_out.packets, true)
+        .into_iter()
+        .find(|record| record[0] == 22 && record[13] == 1)
+        .expect("client emits plaintext ClientHello");
+    // The record and message are entirely public. A new message_seq makes this
+    // a forged future message, rather than a genuine same-flight retransmission.
+    future_hello[17..19].copy_from_slice(&0xff00u16.to_be_bytes());
+    if before_keys {
+        let result = server.handle_packet(&future_hello);
+        drain(&mut server, &mut server_out);
+        result.expect("receive future plaintext hello before keys");
+    }
+
+    deliver_packets(&mut client_out, &mut server, &mut server_out, true);
+    deliver_packets(&mut server_out, &mut client, &mut client_out, true);
+    deliver_packets(&mut client_out, &mut server, &mut server_out, true);
+    deliver_packets(&mut server_out, &mut client, &mut client_out, true);
+    assert!(client_out.connected && server_out.connected);
+
+    if !before_keys {
+        let result = server.handle_packet(&future_hello);
+        drain(&mut server, &mut server_out);
+        assert_eq!(
+            result,
+            Ok(()),
+            "unauthenticated new plaintext hellos cannot terminate an established association"
+        );
+    }
+
+    // A retained pre-key hello must not pin handled authenticated data behind
+    // it until the receive queue fills. Poll fully after every mutation.
+    for sequence in 0..16u8 {
+        client
+            .send_application_data(&[sequence])
+            .expect("send authenticated data");
+        drain(&mut client, &mut client_out);
+        for packet in std::mem::take(&mut client_out.packets) {
+            let result = server.handle_packet(&packet);
+            drain(&mut server, &mut server_out);
+            assert_eq!(
+                result,
+                Ok(()),
+                "a stale plaintext hello must not exhaust the receive queue at data record {sequence}"
+            );
+        }
+    }
+    assert_eq!(
+        server_out.app_data,
+        (0..16u8).map(|sequence| vec![sequence]).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn dtls13_new_plaintext_client_hello_after_handshake_is_ignored() {
+    assert_dtls13_future_plaintext_client_hello_is_discarded(false);
+}
+
+#[test]
+fn dtls13_buffered_future_plaintext_client_hello_does_not_pin_receive_queue() {
+    assert_dtls13_future_plaintext_client_hello_is_discarded(true);
+}
