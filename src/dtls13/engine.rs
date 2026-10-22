@@ -2208,29 +2208,23 @@ impl Engine {
         debug!("Peer encryption enabled");
         self.peer_encryption_enabled = true;
 
-        // Buffered unified headers contain only the low two epoch bits, so
-        // ciphertext can appear to have epoch 0 or 1. Select by header format
-        // so every buffered ciphertext record is authenticated or discarded.
-        let maybe_index = self.queue_rx.iter().position(|incoming| {
-            incoming
-                .records()
-                .iter()
-                .any(|record| Dtls13Record::is_ciphertext_header(record.buffer()[0]))
-        });
-
-        let Some(index) = maybe_index else {
-            return Ok(());
-        };
-
-        let all = self.queue_rx.split_off(index);
+        // Reclassify the entire queue: buffered plaintext hellos must no longer
+        // introduce new messages, and every ciphertext record must authenticate.
+        // Unified headers expose only the low epoch bits, so their parsed epoch
+        // cannot identify which records need decryption.
+        let all = self.queue_rx.split_off(0);
 
         for incoming in all {
-            let unhandled = incoming.into_records().filter(|r| !r.is_handled());
-
-            for record in unhandled {
+            for record in incoming.into_records() {
+                let handled = record.is_handled();
                 let buf = record.into_buffer();
-                self.parse_packet(&buf)?;
-                self.buffers_free.push(buf);
+                let result = if handled {
+                    Ok(false)
+                } else {
+                    self.parse_packet(&buf)
+                };
+                self.push_buffer(buf);
+                result?;
             }
         }
 
@@ -2422,17 +2416,23 @@ impl RecordHandler for Engine {
         }
 
         let epoch = record.record().sequence.epoch;
-        if epoch == 0
-            && self.peer_encryption_enabled
-            && matches!(
-                record.record().content_type,
-                ContentType::Ack | ContentType::Alert
-            )
-        {
-            // Plaintext ACKs and alerts after peer encryption is enabled are
-            // unauthenticated and must not be acted on. Mirrors DTLS 1.2.
-            self.push_buffer(record.into_buffer());
-            return Ok(None);
+        if epoch == 0 && self.peer_encryption_enabled {
+            let discard = match record.record().content_type {
+                ContentType::Handshake => {
+                    // Old plaintext hellos can request a flight retransmission,
+                    // but cannot introduce a new handshake after keys exist.
+                    record.retain_handshakes(|handshake| {
+                        handshake.header.message_seq < self.peer_handshake_seq_no
+                    });
+                    record.handshakes().is_empty()
+                }
+                ContentType::Ack | ContentType::Alert => true,
+                _ => false,
+            };
+            if discard {
+                self.push_buffer(record.into_buffer());
+                return Ok(None);
+            }
         }
 
         match record.record().content_type {
