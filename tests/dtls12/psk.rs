@@ -69,15 +69,19 @@ fn psk_configs_for_suite(suite: Dtls12CipherSuite) -> (Arc<Config>, Arc<Config>)
     (client, server)
 }
 
-fn psk_configs() -> (Arc<Config>, Arc<Config>) {
-    psk_configs_for_suite(Dtls12CipherSuite::PSK_AES128_CCM_8)
-}
+const PSK_SUITES: [Dtls12CipherSuite; 1] = [Dtls12CipherSuite::PSK_AES128_CCM_8];
 
 #[test]
 fn dtls12_psk_self_handshake() {
+    for suite in PSK_SUITES {
+        self_handshake(suite);
+    }
+}
+
+fn self_handshake(suite: Dtls12CipherSuite) {
     let _ = env_logger::try_init();
 
-    let (client_config, server_config) = psk_configs();
+    let (client_config, server_config) = psk_configs_for_suite(suite);
     let now = Instant::now();
 
     let mut client = Dtls::new_12_psk(client_config, now);
@@ -112,15 +116,21 @@ fn dtls12_psk_self_handshake() {
         }
     }
 
-    assert!(client_connected, "PSK client should connect");
-    assert!(server_connected, "PSK server should connect");
+    assert!(client_connected, "PSK client should connect ({suite:?})");
+    assert!(server_connected, "PSK server should connect ({suite:?})");
 }
 
 #[test]
 fn dtls12_psk_application_data_roundtrip() {
+    for suite in PSK_SUITES {
+        application_data_roundtrip(suite);
+    }
+}
+
+fn application_data_roundtrip(suite: Dtls12CipherSuite) {
     let _ = env_logger::try_init();
 
-    let (client_config, server_config) = psk_configs();
+    let (client_config, server_config) = psk_configs_for_suite(suite);
     let now = Instant::now();
 
     let mut client = Dtls::new_12_psk(client_config, now);
@@ -280,6 +290,12 @@ fn psk_invalid_identity_fails_at_finished() {
 
 #[test]
 fn psk_mismatched_keys_fail_at_finished_via_mac() {
+    for suite in PSK_SUITES {
+        mismatched_keys_fail_at_finished_via_mac(suite);
+    }
+}
+
+fn mismatched_keys_fail_at_finished_via_mac(suite: Dtls12CipherSuite) {
     // Both resolvers return Some, so server.psk_valid stays Some(true) and
     // the defense-in-depth flag check is bypassed — any failure here must
     // come from the Finished MAC mismatch itself. Exercises the primary
@@ -300,12 +316,14 @@ fn psk_mismatched_keys_fail_at_finished_via_mac() {
     }
 
     let server_config = dimpl::Config::builder()
+        .with_crypto_provider(psk_provider(suite))
         .with_psk_server(None, Arc::new(ZeroKey))
         .build()
         .expect("server config should build");
     let mut server = Dtls::new_12_psk(Arc::new(server_config), Instant::now());
 
     let client_config = dimpl::Config::builder()
+        .with_crypto_provider(psk_provider(suite))
         .with_psk_client(b"test_identity".to_vec(), Arc::new(OneKey))
         .build()
         .expect("client config should build");
