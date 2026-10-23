@@ -40,6 +40,14 @@ where
         }
     }
 
+    /// A stream that skips the SRTP export: PSK sessions have no peer certificate.
+    pub fn new_without_srtp(ssl: Ssl, stream: S) -> Self {
+        TlsStream {
+            exported: true,
+            ..Self::new(ssl, stream)
+        }
+    }
+
     pub fn is_active(&self) -> Option<bool> {
         self.active
     }

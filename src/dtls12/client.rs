@@ -25,7 +25,7 @@ use crate::dtls12::Server;
 use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
 use crate::dtls12::message::{Body, CipherSuiteVec, ClientHello, ClientKeyExchange};
-use crate::dtls12::message::{ClientPskKeys, ServerKeyExchangeParams};
+use crate::dtls12::message::{ClientEcdhePskKeys, ClientPskKeys, ServerKeyExchangeParams};
 use crate::dtls12::message::{CompressionMethod, ContentType, Cookie};
 use crate::dtls12::message::{DigitallySigned, Dtls12CipherSuite};
 use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
@@ -605,10 +605,10 @@ impl State {
             crate::InvalidStateError::NoCipherSuiteSelected,
         ))?;
 
-        if cipher_suite.is_psk() {
-            self.await_server_key_exchange_psk(client)
-        } else {
-            self.await_server_key_exchange_ecdhe(client)
+        match cipher_suite.as_key_exchange_algorithm() {
+            KeyExchangeAlgorithm::ECDHE_PSK => self.await_server_key_exchange_ecdhe_psk(client),
+            KeyExchangeAlgorithm::PSK => self.await_server_key_exchange_psk(client),
+            _ => self.await_server_key_exchange_ecdhe(client),
         }
     }
 
@@ -648,7 +648,7 @@ impl State {
                     ecdh.named_group,
                     ecdh.public_key_range.clone(),
                 ),
-                ServerKeyExchangeParams::Psk(_) => {
+                ServerKeyExchangeParams::Psk(_) | ServerKeyExchangeParams::EcdhePsk(_) => {
                     return Err(Error::UnexpectedMessage(
                         crate::UnexpectedMessageError::PskServerKeyExchangeInEcdhePath,
                     )
@@ -743,6 +743,58 @@ impl State {
             .map_err(Error::CryptoError)?;
 
         Ok(Self::AwaitCertificateRequest)
+    }
+
+    fn await_server_key_exchange_ecdhe_psk(
+        self,
+        client: &mut Client,
+    ) -> Result<Self, InternalError> {
+        let maybe = client.engine.next_handshake(
+            MessageType::ServerKeyExchange,
+            &mut client.defragment_buffer,
+        )?;
+
+        let Some(handshake) = maybe else {
+            return Ok(self);
+        };
+
+        let Body::ServerKeyExchange(ske) = &handshake.body else {
+            unreachable!()
+        };
+
+        // ECDHE_PSK ServerKeyExchange carries an identity hint and the server's ECDH
+        // parameters. They are unsigned, the PSK is mixed into the pre-master secret
+        // so a peer without it cannot produce a valid Finished.
+        let (hint_range, named_group, public_key_range) = match &ske.params {
+            ServerKeyExchangeParams::EcdhePsk(p) => (
+                p.hint.hint_range.clone(),
+                p.ecdh.named_group,
+                p.ecdh.public_key_range.clone(),
+            ),
+            _ => {
+                return Err(Error::UnexpectedMessage(
+                    crate::UnexpectedMessageError::ServerKeyExchangeNotEcdhePsk,
+                )
+                .into());
+            }
+        };
+
+        drop(handshake);
+
+        trace!("ECDHE_PSK identity hint ({} bytes)", hint_range.len());
+        // Hint is informational only; we don't use it for PSK lookup currently
+
+        let public_key = &client.defragment_buffer[public_key_range];
+        let kx_buf = client.engine.pop_buffer();
+        let shared_secret = client.engine.pop_buffer();
+        client
+            .engine
+            .crypto_context_mut()
+            .process_ecdh_params(named_group, public_key, kx_buf, shared_secret)
+            .map_err(Error::CryptoError)?;
+
+        // PSK has no CertificateRequest
+        Ok(Self::AwaitServerHelloDone)
     }
 
     /// PSK ServerKeyExchange carries only an optional identity hint (no signature).
@@ -1319,7 +1371,7 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
             trace!("Generated public key size: {} bytes", public_key.len());
             ClientKeyExchange::serialize_from_bytes(public_key, body);
         }
-        KeyExchangeAlgorithm::PSK => {
+        KeyExchangeAlgorithm::PSK | KeyExchangeAlgorithm::ECDHE_PSK => {
             let identity = engine
                 .config()
                 .psk_identity()
@@ -1337,11 +1389,21 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
             // Set the PSK and compute pre-master secret
             let crypto = engine.crypto_context_mut();
             crypto.set_psk(psk);
-            crypto
-                .compute_psk_pre_master_secret()
-                .map_err(Error::CryptoError)?;
-
-            ClientPskKeys::serialize_from_bytes(&identity, body);
+            if key_exchange_algorithm == KeyExchangeAlgorithm::ECDHE_PSK {
+                // The ServerKeyExchange already gave us the ECDH shared secret
+                crypto
+                    .compute_ecdhe_psk_pre_master_secret()
+                    .map_err(Error::CryptoError)?;
+                let public_key = crypto
+                    .maybe_init_key_exchange()
+                    .map_err(Error::CryptoError)?;
+                ClientEcdhePskKeys::serialize_from_bytes(&identity, public_key, body);
+            } else {
+                crypto
+                    .compute_psk_pre_master_secret()
+                    .map_err(Error::CryptoError)?;
+                ClientPskKeys::serialize_from_bytes(&identity, body);
+            }
         }
         _ => {
             return Err(Error::SecurityError(

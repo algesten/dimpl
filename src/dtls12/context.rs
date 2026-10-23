@@ -173,6 +173,28 @@ impl CryptoContext {
         Ok(())
     }
 
+    /// Compute the ECDHE_PSK pre-master secret per RFC 5489 §2 from the ECDH shared secret
+    /// and the PSK.
+    /// `compute_shared_secret` leaves the ECDH shared secret in `pre_master_secret`; this
+    /// replaces it with the combined value.
+    ///
+    /// Format: `uint16(Z) || Z || uint16(N) || PSK(N)`, where Z is the ECDH shared secret.
+    pub fn compute_ecdhe_psk_pre_master_secret(&mut self) -> Result<(), CryptoError> {
+        let psk = self.psk.as_ref().ok_or(CryptoError::PskNotSet)?;
+        let z = self
+            .pre_master_secret
+            .take()
+            .ok_or(CryptoError::PreMasterSecretNotAvailable)?;
+        // Not taken from the buffer pool: the secret is dropped after deriving the master secret.
+        let mut pms = Buf::new();
+        pms.extend_from_slice(&(z.len() as u16).to_be_bytes());
+        pms.extend_from_slice(&z);
+        pms.extend_from_slice(&(psk.len() as u16).to_be_bytes());
+        pms.extend_from_slice(psk);
+        self.pre_master_secret = Some(pms);
+        Ok(())
+    }
+
     /// Initialize ECDHE key exchange (server role) and return our ephemeral public key
     pub fn init_ecdh_server(
         &mut self,
