@@ -91,7 +91,8 @@ fn dtls12_min_protected_fragment_len(suite: Dtls12CipherSuite) -> usize {
     match suite {
         Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
         | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256 => 24,
-        Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256 => 16,
+        Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256
+        | Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256 => 16,
         Dtls12CipherSuite::PSK_AES128_CCM_8 => 16,
         _ => panic!("unknown cipher suite"),
     }
