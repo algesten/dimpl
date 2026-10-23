@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use dimpl::SrtpProfile;
@@ -17,8 +18,11 @@ const DTLS_CIPHERS: &str =
     "ECDHE+CHACHA20:DHE+CHACHA20:ECDHE+AESGCM:DHE+AESGCM:ECDHE+AES256:DHE+AES256";
 
 pub struct OsslDtlsImpl {
-    /// Certificate for the DTLS session.
-    _cert: OsslDtlsCert,
+    /// Certificate for the DTLS session; `None` for PSK sessions.
+    _cert: Option<OsslDtlsCert>,
+
+    /// PSK identity hint the server sent, as seen by a PSK client.
+    psk_hint: Arc<Mutex<Option<Vec<u8>>>>,
 
     /// Context belongs together with Fingerprint.
     ///
@@ -42,14 +46,34 @@ impl OsslDtlsImpl {
         let context = dtls_create_ctx_with_groups(&cert, groups_list)?;
         let ssl = dtls_ssl_create(&context)?;
         Ok(OsslDtlsImpl {
-            _cert: cert,
+            _cert: Some(cert),
+            psk_hint: Arc::default(),
             _context: context,
             tls: TlsStream::new(ssl, IoBuffer::default()),
+        })
+    }
+
+    /// An endpoint that authenticates with `identity` and `key` only: no certificate and no
+    /// SRTP. It can act as either client or server.
+    pub fn new_psk(cipher_list: &str, identity: &[u8], key: &[u8]) -> Result<Self, CryptoError> {
+        let psk_hint = Arc::default();
+        let context = dtls_create_psk_ctx(cipher_list, identity, key, Arc::clone(&psk_hint))?;
+        let ssl = dtls_ssl_create(&context)?;
+        Ok(OsslDtlsImpl {
+            _cert: None,
+            psk_hint,
+            _context: context,
+            tls: TlsStream::new_without_srtp(ssl, IoBuffer::default()),
         })
     }
 }
 
 impl OsslDtlsImpl {
+    /// The PSK identity hint the server sent, if this PSK client received one.
+    pub fn psk_hint(&self) -> Option<Vec<u8>> {
+        self.psk_hint.lock().unwrap().clone()
+    }
+
     pub fn set_active(&mut self, active: bool) {
         self.tls.set_active(active);
     }
@@ -125,14 +149,14 @@ impl OsslDtlsImpl {
         } else if self.tls.complete_handshake_until_block()? {
             output.push_back(DtlsEvent::Connected);
 
-            let (keying_material, srtp_profile, fingerprint) = self
-                .tls
-                .take_srtp_keying_material()
-                .expect("Exported keying material");
+            // PSK sessions skip the SRTP export, so they have no keying material
+            if let Some((keying_material, srtp_profile, fingerprint)) =
+                self.tls.take_srtp_keying_material()
+            {
+                output.push_back(DtlsEvent::RemoteFingerprint(fingerprint));
 
-            output.push_back(DtlsEvent::RemoteFingerprint(fingerprint));
-
-            output.push_back(DtlsEvent::SrtpKeyingMaterial(keying_material, srtp_profile));
+                output.push_back(DtlsEvent::SrtpKeyingMaterial(keying_material, srtp_profile));
+            }
             Ok(false)
         } else {
             Ok(true)
@@ -188,6 +212,41 @@ pub fn dtls_create_ctx_with_groups(
     let ctx = ctx.build();
 
     Ok(ctx)
+}
+
+/// A DTLS context with PSK callbacks for both roles. The client callback records the
+/// server's identity hint in `psk_hint`.
+pub fn dtls_create_psk_ctx(
+    cipher_list: &str,
+    identity: &[u8],
+    key: &[u8],
+    psk_hint: Arc<Mutex<Option<Vec<u8>>>>,
+) -> Result<SslContext, CryptoError> {
+    let mut ctx = SslContextBuilder::new(SslMethod::dtls())?;
+    ctx.set_cipher_list(cipher_list)?;
+    ctx.set_options(SslOptions::NO_DTLSV1);
+
+    let (client_identity, client_key) = (identity.to_vec(), key.to_vec());
+    ctx.set_psk_client_callback(move |_ssl, hint, identity_out, psk_out| {
+        *psk_hint.lock().unwrap() = hint.map(<[u8]>::to_vec);
+        // OpenSSL reads the identity as a NUL-terminated string
+        identity_out[..client_identity.len()].copy_from_slice(&client_identity);
+        identity_out[client_identity.len()] = 0;
+        psk_out[..client_key.len()].copy_from_slice(&client_key);
+        Ok(client_key.len())
+    });
+
+    let (server_identity, server_key) = (identity.to_vec(), key.to_vec());
+    ctx.set_psk_server_callback(move |_ssl, identity, psk_out| {
+        // Returning 0 rejects an unknown identity
+        if identity != Some(server_identity.as_slice()) {
+            return Ok(0);
+        }
+        psk_out[..server_key.len()].copy_from_slice(&server_key);
+        Ok(server_key.len())
+    });
+
+    Ok(ctx.build())
 }
 
 fn openssl_name(profile: &SrtpProfile) -> &'static str {

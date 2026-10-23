@@ -35,6 +35,7 @@
 //!   - `ECDHE_ECDSA_CHACHA20_POLY1305_SHA256`
 //! - **PSK cipher suites (TLS 1.2 over DTLS)**
 //!   - `PSK_AES128_CCM_8`
+//!   - `ECDHE_PSK_CHACHA20_POLY1305_SHA256`
 //! - **Cipher suites (TLS 1.3 over DTLS)**
 //!   - `TLS_AES_128_GCM_SHA256`
 //!   - `TLS_AES_256_GCM_SHA384`

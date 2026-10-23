@@ -1,12 +1,17 @@
 //! DTLS 1.2 PSK handshake tests.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::crypto::Dtls12CipherSuite;
+use dimpl::crypto::{Dtls12CipherSuite, NamedGroup};
 use dimpl::{Config, Dtls, Error, PskResolver};
 
 use crate::common::{deliver_packets, drain_outputs};
+use crate::ossl_helper::{DtlsEvent, OsslDtlsImpl};
+
+const PSK_IDENTITY: &[u8] = b"test-device";
+const PSK_KEY: &[u8] = b"0123456789abcdef"; // 16 bytes
 
 /// Simple PSK resolver that returns a fixed key for a known identity.
 struct FixedPsk {
@@ -40,8 +45,8 @@ fn psk_provider(suite: Dtls12CipherSuite) -> dimpl::crypto::CryptoProvider {
 
 /// Returns (client_config, server_config) for PSK tests.
 fn psk_configs_for_suite(suite: Dtls12CipherSuite) -> (Arc<Config>, Arc<Config>) {
-    let identity = b"test-device".to_vec();
-    let key = b"0123456789abcdef".to_vec(); // 16 bytes
+    let identity = PSK_IDENTITY.to_vec();
+    let key = PSK_KEY.to_vec();
 
     let resolver = Arc::new(FixedPsk {
         identity: identity.clone(),
@@ -69,7 +74,10 @@ fn psk_configs_for_suite(suite: Dtls12CipherSuite) -> (Arc<Config>, Arc<Config>)
     (client, server)
 }
 
-const PSK_SUITES: [Dtls12CipherSuite; 1] = [Dtls12CipherSuite::PSK_AES128_CCM_8];
+const PSK_SUITES: [Dtls12CipherSuite; 2] = [
+    Dtls12CipherSuite::PSK_AES128_CCM_8,
+    Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256,
+];
 
 #[test]
 fn dtls12_psk_self_handshake() {
@@ -443,4 +451,317 @@ fn psk_valid_identity_succeeds() {
 
     assert!(client_connected, "PSK client should connect");
     assert!(server_connected, "PSK server should connect");
+}
+
+/// Runs a PSK handshake and returns whether both sides connected.
+fn psk_handshake_connects(client_config: Arc<Config>, server_config: Arc<Config>) -> bool {
+    let now = Instant::now();
+
+    let mut client = Dtls::new_12_psk(client_config, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_12_psk(server_config, now);
+    server.set_active(false);
+
+    let mut client_connected = false;
+    let mut server_connected = false;
+
+    for _ in 0..60 {
+        if client.handle_timeout(Instant::now()).is_err()
+            || server.handle_timeout(Instant::now()).is_err()
+        {
+            return false;
+        }
+
+        let client_out = drain_outputs(&mut client);
+        client_connected |= client_out.connected;
+        deliver_packets(&client_out.packets, &mut server);
+
+        let server_out = drain_outputs(&mut server);
+        server_connected |= server_out.connected;
+        deliver_packets(&server_out.packets, &mut client);
+
+        if client_connected && server_connected {
+            return true;
+        }
+    }
+    false
+}
+
+fn psk_configs_with_groups(
+    suites: &[Dtls12CipherSuite],
+    client_groups: &[NamedGroup],
+    server_groups: &[NamedGroup],
+) -> (Arc<Config>, Arc<Config>) {
+    let identity = b"test-device".to_vec();
+    let resolver = Arc::new(FixedPsk {
+        identity: identity.clone(),
+        key: b"0123456789abcdef".to_vec(),
+    });
+
+    let mut provider = Config::default().crypto_provider().clone();
+    let selected: Vec<_> = provider
+        .cipher_suites
+        .iter()
+        .copied()
+        .filter(|cs| suites.contains(&cs.suite()))
+        .collect();
+    provider.cipher_suites = Box::leak(selected.into_boxed_slice());
+
+    let client = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider.clone())
+            .kx_groups(client_groups)
+            .with_psk_client(identity, resolver.clone())
+            .build()
+            .expect("build PSK client config"),
+    );
+    let server = Arc::new(
+        Config::builder()
+            .with_crypto_provider(provider)
+            .kx_groups(server_groups)
+            .with_psk_server(None, resolver)
+            .build()
+            .expect("build PSK server config"),
+    );
+    (client, server)
+}
+
+#[test]
+fn ecdhe_psk_falls_back_to_plain_psk_without_common_group() {
+    let _ = env_logger::try_init();
+
+    // ECDHE_PSK is preferred, but the peers share no ECDHE group, so the server
+    // must choose a plain PSK suite instead.
+    let (client, server) = psk_configs_with_groups(
+        &[
+            Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256,
+            Dtls12CipherSuite::PSK_AES128_CCM_8,
+        ],
+        &[NamedGroup::X25519],
+        &[NamedGroup::Secp256r1],
+    );
+
+    assert!(
+        psk_handshake_connects(client, server),
+        "handshake should fall back to a plain PSK suite"
+    );
+}
+
+#[test]
+fn ecdhe_psk_only_fails_without_common_group() {
+    let _ = env_logger::try_init();
+
+    let (client, server) = psk_configs_with_groups(
+        &[Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256],
+        &[NamedGroup::X25519],
+        &[NamedGroup::Secp256r1],
+    );
+
+    assert!(
+        !psk_handshake_connects(client, server),
+        "ECDHE_PSK alone cannot connect without a common group"
+    );
+}
+
+#[test]
+fn ecdhe_psk_connects_with_common_group() {
+    let _ = env_logger::try_init();
+
+    let (client, server) = psk_configs_with_groups(
+        &[Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256],
+        &[NamedGroup::X25519, NamedGroup::Secp256r1],
+        &[NamedGroup::Secp256r1],
+    );
+
+    assert!(psk_handshake_connects(client, server));
+}
+
+/// OpenSSL's cipher-list name for a PSK suite.
+fn ossl_cipher(suite: Dtls12CipherSuite) -> &'static str {
+    match suite {
+        // OpenSSL 3 only offers CCM_8 (an 8-byte tag) at security level 0
+        Dtls12CipherSuite::PSK_AES128_CCM_8 => "PSK-AES128-CCM8:@SECLEVEL=0",
+        Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256 => "ECDHE-PSK-CHACHA20-POLY1305",
+        _ => panic!("no OpenSSL name for {suite:?}"),
+    }
+}
+
+#[test]
+fn dtls12_psk_dimpl_client_vs_ossl_server() {
+    let _ = env_logger::try_init();
+
+    for suite in PSK_SUITES {
+        let (client_config, _) = psk_configs_for_suite(suite);
+
+        let mut server = OsslDtlsImpl::new_psk(ossl_cipher(suite), PSK_IDENTITY, PSK_KEY)
+            .expect("create OpenSSL PSK server");
+        server.set_active(false);
+
+        let mut client = Dtls::new_12_psk(client_config, Instant::now());
+        client.set_active(true);
+
+        let mut server_events = VecDeque::new();
+        let mut client_connected = false;
+        let mut server_connected = false;
+
+        for _ in 0..60 {
+            client.handle_timeout(Instant::now()).unwrap();
+            let client_out = drain_outputs(&mut client);
+            client_connected |= client_out.connected;
+            for packet in &client_out.packets {
+                server
+                    .handle_receive(packet, &mut server_events)
+                    .expect("OpenSSL server failed to handle client packet");
+            }
+
+            while let Some(event) = server_events.pop_front() {
+                if let DtlsEvent::Connected = event {
+                    server_connected = true;
+                }
+            }
+
+            while let Some(datagram) = server.poll_datagram() {
+                client
+                    .handle_packet(&datagram)
+                    .expect("Client failed to handle server packet");
+            }
+
+            if client_connected && server_connected {
+                break;
+            }
+        }
+
+        assert!(client_connected, "dimpl client should connect ({suite:?})");
+        assert!(
+            server_connected,
+            "OpenSSL server should connect ({suite:?})"
+        );
+
+        // Application data in both directions checks the derived record keys
+        client
+            .send_application_data(b"ping")
+            .expect("send app data");
+        for packet in drain_outputs(&mut client).packets {
+            server
+                .handle_receive(&packet, &mut server_events)
+                .expect("OpenSSL server failed to handle app data");
+        }
+        assert!(
+            server_events
+                .iter()
+                .any(|e| matches!(e, DtlsEvent::Data(d) if d == b"ping")),
+            "OpenSSL server should receive client's application data ({suite:?})"
+        );
+
+        server.handle_input(b"pong").expect("OpenSSL send app data");
+        while let Some(datagram) = server.poll_datagram() {
+            client
+                .handle_packet(&datagram)
+                .expect("Client failed to handle app data");
+        }
+        assert!(
+            drain_outputs(&mut client)
+                .app_data
+                .iter()
+                .any(|d| d == b"pong"),
+            "dimpl client should receive server's application data ({suite:?})"
+        );
+    }
+}
+
+#[test]
+fn dtls12_psk_ossl_client_vs_dimpl_server() {
+    let _ = env_logger::try_init();
+
+    for suite in PSK_SUITES {
+        let (_, server_config) = psk_configs_for_suite(suite);
+
+        let mut client = OsslDtlsImpl::new_psk(ossl_cipher(suite), PSK_IDENTITY, PSK_KEY)
+            .expect("create OpenSSL PSK client");
+        client.set_active(true);
+
+        let mut server = Dtls::new_12_psk(server_config, Instant::now());
+        server.set_active(false);
+
+        let mut client_events = VecDeque::new();
+        let mut client_connected = false;
+        let mut server_connected = false;
+
+        for _ in 0..60 {
+            server.handle_timeout(Instant::now()).unwrap();
+            client.handle_handshake(&mut client_events).unwrap();
+
+            while let Some(datagram) = client.poll_datagram() {
+                server
+                    .handle_packet(&datagram)
+                    .expect("Server failed to handle client packet");
+            }
+
+            let server_out = drain_outputs(&mut server);
+            server_connected |= server_out.connected;
+            for packet in &server_out.packets {
+                client
+                    .handle_receive(packet, &mut client_events)
+                    .expect("OpenSSL client failed to handle server packet");
+            }
+
+            while let Some(event) = client_events.pop_front() {
+                if let DtlsEvent::Connected = event {
+                    client_connected = true;
+                }
+            }
+
+            while let Some(datagram) = client.poll_datagram() {
+                server
+                    .handle_packet(&datagram)
+                    .expect("Server failed to handle client packet");
+            }
+
+            if client_connected && server_connected {
+                break;
+            }
+        }
+
+        assert!(
+            client_connected,
+            "OpenSSL client should connect ({suite:?})"
+        );
+        assert!(server_connected, "dimpl server should connect ({suite:?})");
+        assert_eq!(
+            client.psk_hint().as_deref(),
+            Some(&b"hint"[..]),
+            "OpenSSL client should receive the server's identity hint ({suite:?})"
+        );
+
+        // Application data in both directions checks the derived record keys
+        client.handle_input(b"ping").expect("OpenSSL send app data");
+        while let Some(datagram) = client.poll_datagram() {
+            server
+                .handle_packet(&datagram)
+                .expect("Server failed to handle app data");
+        }
+        assert!(
+            drain_outputs(&mut server)
+                .app_data
+                .iter()
+                .any(|d| d == b"ping"),
+            "dimpl server should receive client's application data ({suite:?})"
+        );
+
+        server
+            .send_application_data(b"pong")
+            .expect("send app data");
+        for packet in drain_outputs(&mut server).packets {
+            client
+                .handle_receive(&packet, &mut client_events)
+                .expect("OpenSSL client failed to handle app data");
+        }
+        assert!(
+            client_events
+                .iter()
+                .any(|e| matches!(e, DtlsEvent::Data(d) if d == b"pong")),
+            "OpenSSL client should receive server's application data ({suite:?})"
+        );
+    }
 }
