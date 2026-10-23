@@ -741,9 +741,11 @@ mod tests {
         let hybrid = HybridClientHello::new(&config).expect("hybrid ClientHello should build");
         let offered = offered_cipher_suites(&hybrid);
 
-        assert!(
-            !offered.contains(&Dtls12CipherSuite::PSK_AES128_CCM_8.as_u16()),
-            "auto client must not advertise PSK DTLS 1.2 suites it cannot use after fallback"
-        );
+        for suite in Dtls12CipherSuite::all().iter().filter(|s| s.is_psk()) {
+            assert!(
+                !offered.contains(&suite.as_u16()),
+                "auto client must not advertise PSK DTLS 1.2 suite {suite:?} it cannot use after fallback"
+            );
+        }
     }
 }

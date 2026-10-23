@@ -72,6 +72,8 @@ impl Dtls12CipherSuite {
     pub const ECDHE_ECDSA_CHACHA20_POLY1305_SHA256: Self = Self(0xCCA9);
     /// PSK with AES-128-CCM-8 (8-byte tag), SHA-256.
     pub const PSK_AES128_CCM_8: Self = Self(0xC0A8);
+    /// PSK with AES-128-GCM, SHA-256 (RFC 5487).
+    pub const PSK_AES128_GCM_SHA256: Self = Self(0x00A8);
 
     /// Convert the 16-bit IANA value to a `Dtls12CipherSuite`.
     pub const fn from_u16(value: u16) -> Self {
@@ -85,7 +87,7 @@ impl Dtls12CipherSuite {
 
     /// Returns true if this is not a known DTLS 1.2 cipher suite wire value.
     pub const fn is_unknown(&self) -> bool {
-        !matches!(*self, Self(0xC02B..=0xC02C | 0xC0A8 | 0xCCA9))
+        !matches!(*self, Self(0xC02B..=0xC02C | 0xC0A8 | 0xCCA9 | 0x00A8))
     }
 
     /// Parse a `Dtls12CipherSuite` from network byte order.
@@ -101,7 +103,8 @@ impl Dtls12CipherSuite {
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384
             | Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
             | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256
-            | Dtls12CipherSuite::PSK_AES128_CCM_8 => 12,
+            | Dtls12CipherSuite::PSK_AES128_CCM_8
+            | Dtls12CipherSuite::PSK_AES128_GCM_SHA256 => 12,
 
             _ => 12, // Default length for unknown cipher suites
         }
@@ -117,7 +120,9 @@ impl Dtls12CipherSuite {
                 KeyExchangeAlgorithm::EECDH
             }
 
-            Dtls12CipherSuite::PSK_AES128_CCM_8 => KeyExchangeAlgorithm::PSK,
+            Dtls12CipherSuite::PSK_AES128_CCM_8 | Dtls12CipherSuite::PSK_AES128_GCM_SHA256 => {
+                KeyExchangeAlgorithm::PSK
+            }
 
             _ => KeyExchangeAlgorithm::Unknown,
         }
@@ -135,15 +140,19 @@ impl Dtls12CipherSuite {
 
     /// Whether this cipher suite uses PSK (Pre-Shared Key) key exchange.
     pub fn is_psk(&self) -> bool {
-        matches!(*self, Dtls12CipherSuite::PSK_AES128_CCM_8)
+        matches!(
+            *self,
+            Dtls12CipherSuite::PSK_AES128_CCM_8 | Dtls12CipherSuite::PSK_AES128_GCM_SHA256
+        )
     }
 
     /// All supported cipher suites in server preference order.
-    pub const fn all() -> &'static [Dtls12CipherSuite; 4] {
+    pub const fn all() -> &'static [Dtls12CipherSuite; 5] {
         &[
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
             Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
             Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256,
+            Dtls12CipherSuite::PSK_AES128_GCM_SHA256,
             Dtls12CipherSuite::PSK_AES128_CCM_8,
         ]
     }
@@ -176,7 +185,8 @@ impl Dtls12CipherSuite {
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384 => HashAlgorithm::SHA384,
             Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
             | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256
-            | Dtls12CipherSuite::PSK_AES128_CCM_8 => HashAlgorithm::SHA256,
+            | Dtls12CipherSuite::PSK_AES128_CCM_8
+            | Dtls12CipherSuite::PSK_AES128_GCM_SHA256 => HashAlgorithm::SHA256,
             _ => HashAlgorithm::UNKNOWN_DERIVED,
         }
     }
@@ -191,7 +201,7 @@ impl Dtls12CipherSuite {
             | Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256 => {
                 Some(SignatureAlgorithm::ECDSA)
             }
-            Dtls12CipherSuite::PSK_AES128_CCM_8 => None,
+            Dtls12CipherSuite::PSK_AES128_CCM_8 | Dtls12CipherSuite::PSK_AES128_GCM_SHA256 => None,
             _ => Some(SignatureAlgorithm::UNKNOWN_DERIVED),
         }
     }
@@ -202,7 +212,7 @@ impl Dtls12CipherSuite {
     }
 
     /// Supported DTLS 1.2 cipher suites in server preference order.
-    pub const fn supported() -> &'static [Dtls12CipherSuite; 4] {
+    pub const fn supported() -> &'static [Dtls12CipherSuite; 5] {
         Self::all()
     }
 }
@@ -220,6 +230,7 @@ impl fmt::Debug for Dtls12CipherSuite {
                 f.write_str("ECDHE_ECDSA_CHACHA20_POLY1305_SHA256")
             }
             Dtls12CipherSuite::PSK_AES128_CCM_8 => f.write_str("PSK_AES128_CCM_8"),
+            Dtls12CipherSuite::PSK_AES128_GCM_SHA256 => f.write_str("PSK_AES128_GCM_SHA256"),
             _ => f.debug_tuple("Unknown").field(&self.0).finish(),
         }
     }

@@ -69,7 +69,10 @@ fn psk_configs_for_suite(suite: Dtls12CipherSuite) -> (Arc<Config>, Arc<Config>)
     (client, server)
 }
 
-const PSK_SUITES: [Dtls12CipherSuite; 1] = [Dtls12CipherSuite::PSK_AES128_CCM_8];
+const PSK_SUITES: [Dtls12CipherSuite; 2] = [
+    Dtls12CipherSuite::PSK_AES128_CCM_8,
+    Dtls12CipherSuite::PSK_AES128_GCM_SHA256,
+];
 
 #[test]
 fn dtls12_psk_self_handshake() {

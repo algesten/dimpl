@@ -4,6 +4,7 @@
   * Discard premature ciphertext and stale plaintext handshakes #199
   * Drop unsupported epochs before buffering DTLS records #198
   * Drop duplicate DTLS 1.2 epoch-1 records queued before peer encryption #190
+  * Add PSK (Pre-Shared Key) cipher suite `PSK_AES128_GCM_SHA256` for DTLS 1.2 #201
 
 # 0.8.0
 
