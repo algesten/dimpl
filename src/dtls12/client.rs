@@ -26,7 +26,7 @@ use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
 use crate::dtls12::message::{Body, CipherSuiteVec, ClientHello, ClientKeyExchange};
 use crate::dtls12::message::{ClientEcdhePskKeys, ClientPskKeys, ServerKeyExchangeParams};
-use crate::dtls12::message::{CompressionMethod, ContentType, Cookie};
+use crate::dtls12::message::{CompressionMethod, ContentType, Cookie, CurveType};
 use crate::dtls12::message::{DigitallySigned, Dtls12CipherSuite};
 use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
 use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm};
@@ -665,6 +665,14 @@ impl State {
             )
         };
 
+        // Only named curves are currently supported
+        if curve_type != CurveType::NamedCurve {
+            return Err(Error::SecurityError(
+                crate::SecurityError::UnsupportedKeyExchangeAlgorithm,
+            )
+            .into());
+        }
+
         // unwrap: is ok because we verify the order of the flight
         let client_random = client.random.unwrap();
         let server_random = client.server_random.unwrap();
@@ -765,9 +773,10 @@ impl State {
         // ECDHE_PSK ServerKeyExchange carries an identity hint and the server's ECDH
         // parameters. They are unsigned, the PSK is mixed into the pre-master secret
         // so a peer without it cannot produce a valid Finished.
-        let (hint_range, named_group, public_key_range) = match &ske.params {
+        let (hint_range, curve_type, named_group, public_key_range) = match &ske.params {
             ServerKeyExchangeParams::EcdhePsk(p) => (
                 p.hint.hint_range.clone(),
+                p.ecdh.curve_type,
                 p.ecdh.named_group,
                 p.ecdh.public_key_range.clone(),
             ),
@@ -780,6 +789,14 @@ impl State {
         };
 
         drop(handshake);
+
+        // Only named curves are currently supported
+        if curve_type != CurveType::NamedCurve {
+            return Err(Error::SecurityError(
+                crate::SecurityError::UnsupportedKeyExchangeAlgorithm,
+            )
+            .into());
+        }
 
         trace!("ECDHE_PSK identity hint ({} bytes)", hint_range.len());
         // Hint is informational only; we don't use it for PSK lookup currently

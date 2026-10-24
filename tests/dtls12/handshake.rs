@@ -945,3 +945,40 @@ fn dtls12_handshake_p384_certificate() {
     assert!(client_connected, "Client should connect with P-384 cert");
     assert!(server_connected, "Server should connect with P-384 cert");
 }
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_client_rejects_non_named_curve() {
+    //! Rewrite the ServerKeyExchange curve_type to explicit_prime; the client must
+    //! reject it as unsupported rather than fail later on the signature.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::{Error, SecurityError};
+
+    let config = dtls12_config();
+    let now = Instant::now();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+
+    let error = client_error_with_tampered_server(&mut client, &mut server, |datagram| {
+        if let Some(body) = server_key_exchange_body_mut(datagram) {
+            body[0] = 1; // curve_type: explicit_prime
+        }
+    });
+
+    assert!(
+        matches!(
+            error,
+            Some(Error::SecurityError(
+                SecurityError::UnsupportedKeyExchangeAlgorithm
+            ))
+        ),
+        "expected UnsupportedKeyExchangeAlgorithm, got {error:?}"
+    );
+}

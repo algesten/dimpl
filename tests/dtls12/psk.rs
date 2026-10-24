@@ -765,3 +765,40 @@ fn dtls12_psk_ossl_client_vs_dimpl_server() {
         );
     }
 }
+
+/// Offset of the ECDH parameters in an ECDHE_PSK ServerKeyExchange body (after the hint).
+fn ecdhe_psk_params_offset(body: &[u8]) -> usize {
+    2 + u16::from_be_bytes([body[0], body[1]]) as usize
+}
+
+#[test]
+fn ecdhe_psk_client_rejects_non_named_curve() {
+    use crate::common::{client_error_with_tampered_server, server_key_exchange_body_mut};
+    use dimpl::SecurityError;
+
+    let _ = env_logger::try_init();
+
+    let (client_config, server_config) =
+        psk_configs_for_suite(Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256);
+    let mut client = Dtls::new_12_psk(client_config, Instant::now());
+    client.set_active(true);
+    let mut server = Dtls::new_12_psk(server_config, Instant::now());
+    server.set_active(false);
+
+    let error = client_error_with_tampered_server(&mut client, &mut server, |datagram| {
+        if let Some(body) = server_key_exchange_body_mut(datagram) {
+            let params = ecdhe_psk_params_offset(body);
+            body[params] = 1; // curve_type: explicit_prime
+        }
+    });
+
+    assert!(
+        matches!(
+            error,
+            Some(Error::SecurityError(
+                SecurityError::UnsupportedKeyExchangeAlgorithm
+            ))
+        ),
+        "expected UnsupportedKeyExchangeAlgorithm, got {error:?}"
+    );
+}
