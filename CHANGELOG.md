@@ -2,6 +2,7 @@
   * Add PSK + ECDHE cipher suite `ECDHE_PSK_CHACHA20_POLY1305_SHA256` for DTLS 1.2
   * Skip ECDHE suites in the DTLS 1.2 server when the client shares no key exchange group
   * Reject a DTLS 1.2 ServerKeyExchange with a non-named curve
+  * Reject a DTLS 1.2 ServerKeyExchange group the client did not offer
 
 # 0.9.0
 
