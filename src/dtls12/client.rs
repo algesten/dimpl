@@ -24,11 +24,12 @@ use crate::crypto::SrtpProfile;
 use crate::dtls12::Server;
 use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
+use crate::dtls12::message::ProtocolVersion;
 use crate::dtls12::message::{Body, CipherSuiteVec, ClientHello, ClientKeyExchange};
 use crate::dtls12::message::{ClientEcdhePskKeys, ClientPskKeys, ServerKeyExchangeParams};
 use crate::dtls12::message::{CompressionMethod, ContentType, Cookie, CurveType};
 use crate::dtls12::message::{DigitallySigned, Dtls12CipherSuite};
-use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
+use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, NamedGroup};
 use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm};
 use crate::timer::HandshakeTimers;
 use crate::{Config, DtlsCertificate, Error, InternalError, KeyingMaterial, Output};
@@ -680,6 +681,8 @@ impl State {
         // Drop maybe to release the buffer borrow
         drop(maybe);
 
+        check_group_offered(client, named_group)?;
+
         // Now we can access the buffer to get the actual bytes
         let signature_bytes = &client.defragment_buffer[signature_range];
         let public_key_vec = &client.defragment_buffer[public_key_range];
@@ -797,6 +800,8 @@ impl State {
             )
             .into());
         }
+
+        check_group_offered(client, named_group)?;
 
         trace!("ECDHE_PSK identity hint ({} bytes)", hint_range.len());
         // Hint is informational only; we don't use it for PSK lookup currently
@@ -1346,6 +1351,22 @@ fn handshake_create_client_hello(
 
     client_hello.serialize(extension_data, body);
     Ok(())
+}
+
+/// Check that the server-chosen group is one the client was configured to offer.
+fn check_group_offered(client: &Client, group: NamedGroup) -> Result<(), Error> {
+    if client
+        .engine
+        .config()
+        .kx_groups()
+        .any(|g| g.name() == group)
+    {
+        Ok(())
+    } else {
+        Err(Error::CryptoError(
+            crate::CryptoError::UnsupportedEcdheNamedGroup(group),
+        ))
+    }
 }
 
 fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
