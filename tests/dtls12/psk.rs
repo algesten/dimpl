@@ -802,3 +802,40 @@ fn ecdhe_psk_client_rejects_non_named_curve() {
         "expected UnsupportedKeyExchangeAlgorithm, got {error:?}"
     );
 }
+
+#[test]
+fn ecdhe_psk_client_rejects_group_it_did_not_offer() {
+    use crate::common::{client_error_with_tampered_server, server_key_exchange_body_mut};
+    use dimpl::CryptoError;
+
+    let _ = env_logger::try_init();
+
+    // The client offers only X25519; P-256 is supported by the provider but filtered out.
+    let (client_config, server_config) = psk_configs_with_groups(
+        &[Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256],
+        &[NamedGroup::X25519],
+        &[NamedGroup::X25519],
+    );
+    let mut client = Dtls::new_12_psk(client_config, Instant::now());
+    client.set_active(true);
+    let mut server = Dtls::new_12_psk(server_config, Instant::now());
+    server.set_active(false);
+
+    let error = client_error_with_tampered_server(&mut client, &mut server, |datagram| {
+        if let Some(body) = server_key_exchange_body_mut(datagram) {
+            // named_group follows the one-byte curve_type
+            let group = ecdhe_psk_params_offset(body) + 1;
+            body[group..group + 2].copy_from_slice(&NamedGroup::Secp256r1.as_u16().to_be_bytes());
+        }
+    });
+
+    assert!(
+        matches!(
+            error,
+            Some(Error::CryptoError(CryptoError::UnsupportedEcdheNamedGroup(
+                NamedGroup::Secp256r1
+            )))
+        ),
+        "expected UnsupportedEcdheNamedGroup(Secp256r1), got {error:?}"
+    );
+}
