@@ -462,7 +462,7 @@ fn client_hello_wants_psk(packet: &[u8], config: &Config) -> bool {
     }
 
     let allowed: Vec<_> = config.dtls12_cipher_suites().map(|cs| cs.suite()).collect();
-    for chunk in body[pos..pos + suites_len].chunks_exact(2) {
+    for chunk in body[pos..pos + suites_len].as_chunks::<2>().0 {
         let suite = Dtls12CipherSuite::from_u16(u16::from_be_bytes([chunk[0], chunk[1]]));
         if allowed.contains(&suite) {
             return suite.is_psk();

@@ -2343,8 +2343,10 @@ impl Entry {
     fn was_sent_as(&self, seq: u64) -> bool {
         self.send_seq == seq
             || self.fragment[self.fragment_len..]
-                .chunks_exact(8)
-                .any(|previous| previous == seq.to_be_bytes())
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .any(|previous| *previous == seq.to_be_bytes())
     }
 }
 
