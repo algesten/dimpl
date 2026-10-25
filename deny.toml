@@ -34,6 +34,9 @@ ignore = [
   # certificate generation — no RFC 2822 parsing. A clippy disallowed-types
   # rule prevents accidental introduction of Rfc2822.
   "RUSTSEC-2026-0009",
+  # crypto-bigint 0.5.5 is pulled in by the RustCrypto P-256/P-384 backend.
+  # The patched release (>=0.7.6) requires Rust 1.87, above our 1.85 MSRV.
+  "RUSTSEC-2026-0387",
 ]
 
 [bans]
