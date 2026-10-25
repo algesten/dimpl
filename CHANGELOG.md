@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Update yanked crypto-bigint and remove unused cargo-deny license allowances #206
+
 # 0.9.0
 
   * Update deps to fix cargo-deny; bump MSRV to 1.89.0 (breaking) #205
