@@ -139,7 +139,7 @@ impl Dtls12CipherSuite {
     }
 
     /// All supported cipher suites in server preference order.
-    pub const fn all() -> &'static [Dtls12CipherSuite; 4] {
+    pub const fn all() -> &'static [Dtls12CipherSuite] {
         &[
             Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
             Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256,
@@ -151,7 +151,7 @@ impl Dtls12CipherSuite {
     /// Cipher suites compatible with a given certificate's signature algorithm.
     pub fn compatible_with_certificate(
         cert_type: SignatureAlgorithm,
-    ) -> &'static [Dtls12CipherSuite; 3] {
+    ) -> &'static [Dtls12CipherSuite] {
         match cert_type {
             SignatureAlgorithm::ECDSA => &[
                 Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384,
@@ -202,7 +202,7 @@ impl Dtls12CipherSuite {
     }
 
     /// Supported DTLS 1.2 cipher suites in server preference order.
-    pub const fn supported() -> &'static [Dtls12CipherSuite; 4] {
+    pub const fn supported() -> &'static [Dtls12CipherSuite] {
         Self::all()
     }
 }
