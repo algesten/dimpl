@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.9.0
+
   * Update deps to fix cargo-deny; bump MSRV to 1.89.0 (breaking) #205
   * Return slices from DTLS 1.2 cipher suite list methods (breaking) #204
   * Reject leftover handshake epochs in DTLS 1.2/1.3 #200
