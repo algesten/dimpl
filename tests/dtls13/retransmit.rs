@@ -336,7 +336,7 @@ fn dtls13_survives_random_packet_loss_pattern() {
     let should_drop = |round: usize, packet_idx: usize| -> bool {
         // Only drop on certain rounds, and only if there are multiple packets
         // This ensures we don't drop critical single-packet flights
-        round > 2 && round % 7 == 0 && packet_idx == 0
+        round > 2 && round.is_multiple_of(7) && packet_idx == 0
     };
 
     for round in 0..100 {

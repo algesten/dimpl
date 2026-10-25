@@ -369,7 +369,7 @@ pub fn cert_named_group(cert_der: &[u8]) -> Result<NamedGroup, CertificateError>
     use x509_cert::Certificate as X509Certificate;
 
     let cert = X509Certificate::from_der(cert_der).map_err(|_| CertificateError::ParseFailed)?;
-    let spki = &cert.tbs_certificate.subject_public_key_info;
+    let spki = cert.tbs_certificate().subject_public_key_info();
 
     let curve_oid: ObjectIdentifier = spki
         .algorithm

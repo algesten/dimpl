@@ -457,7 +457,7 @@ fn client_hello_wants_psk(packet: &[u8], config: &Config) -> bool {
     }
     let suites_len = u16::from_be_bytes([body[pos], body[pos + 1]]) as usize;
     pos += 2;
-    if pos + suites_len > body.len() || suites_len % 2 != 0 {
+    if pos + suites_len > body.len() || !suites_len.is_multiple_of(2) {
         return false;
     }
 

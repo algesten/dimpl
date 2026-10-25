@@ -150,9 +150,11 @@ impl KeyProvider for RustCryptoKeyProvider {
                     parameters: Some(curve_params_any),
                 };
 
-                let pkcs8 = pkcs8::PrivateKeyInfo {
+                let private_key = der::asn1::OctetStringRef::new(key_der)
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
+                let pkcs8 = pkcs8::PrivateKeyInfoRef {
                     algorithm,
-                    private_key: key_der,
+                    private_key,
                     public_key: None,
                 };
 
@@ -208,7 +210,7 @@ impl SignatureVerifier for RustCryptoSignatureVerifier {
 
         let cert =
             X509Certificate::from_der(cert_der).map_err(|_| CryptoError::CertificateParseFailed)?;
-        let spki = &cert.tbs_certificate.subject_public_key_info;
+        let spki = cert.tbs_certificate().subject_public_key_info();
 
         const OID_EC_PUBLIC_KEY: ObjectIdentifier =
             ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");

@@ -1,6 +1,6 @@
 //! Key exchange group implementations using RustCrypto.
 
-use p256::{PublicKey as P256PublicKey, ecdh::EphemeralSecret};
+use p256::{PublicKey as P256PublicKey, ecdh::EphemeralSecret, elliptic_curve::Generate};
 use p384::{PublicKey as P384PublicKey, ecdh::EphemeralSecret as P384EphemeralSecret};
 
 use super::super::{ActiveKeyExchange, SupportedKxGroup};
@@ -47,8 +47,7 @@ impl EcdhKeyExchange {
     fn new(group: NamedGroup, mut buf: Buf) -> Result<Self, CryptoError> {
         match group {
             NamedGroup::X25519 => {
-                use rand_core::OsRng;
-                let secret = x25519_dalek::EphemeralSecret::random_from_rng(OsRng);
+                let secret = x25519_dalek::EphemeralSecret::random();
                 let public_key_obj = x25519_dalek::PublicKey::from(&secret);
                 buf.clear();
                 buf.extend_from_slice(public_key_obj.as_bytes());
@@ -58,8 +57,7 @@ impl EcdhKeyExchange {
                 })
             }
             NamedGroup::Secp256r1 => {
-                use rand_core::OsRng;
-                let secret = EphemeralSecret::random(&mut OsRng);
+                let secret = EphemeralSecret::generate();
                 let public_key_obj = P256PublicKey::from(&secret);
                 let public_key_bytes = public_key_obj.to_sec1_bytes();
                 buf.clear();
@@ -70,8 +68,7 @@ impl EcdhKeyExchange {
                 })
             }
             NamedGroup::Secp384r1 => {
-                use rand_core::OsRng;
-                let secret = P384EphemeralSecret::random(&mut OsRng);
+                let secret = P384EphemeralSecret::generate();
                 let public_key_obj = P384PublicKey::from(&secret);
                 let public_key_bytes = public_key_obj.to_sec1_bytes();
                 buf.clear();

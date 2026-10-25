@@ -3,7 +3,7 @@
 //! Shared by both aws-lc-rs and rust-crypto backends since aws-lc-rs
 //! does not expose CCM in its high-level API.
 
-use ccm::aead::AeadInPlace;
+use ccm::aead::AeadInOut;
 use ccm::aead::KeyInit;
 use ccm::consts::{U8, U12};
 
@@ -43,10 +43,10 @@ impl AesCcm8Cipher {
 
 impl Cipher for AesCcm8Cipher {
     fn encrypt(&mut self, plaintext: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), CryptoError> {
-        let ccm_nonce = ccm::aead::generic_array::GenericArray::from_slice(&nonce[..12]);
+        let ccm_nonce = ccm::Nonce::<U12>::from(nonce.0);
         let tag = self
             .cipher
-            .encrypt_in_place_detached(ccm_nonce, &aad[..], plaintext.as_mut())
+            .encrypt_inout_detached(&ccm_nonce, &aad[..], plaintext.as_mut().into())
             .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))?;
 
         // Append the 8-byte tag
@@ -68,19 +68,19 @@ impl Cipher for AesCcm8Cipher {
             });
         }
 
-        let ccm_nonce = ccm::aead::generic_array::GenericArray::from_slice(&nonce[..12]);
+        let ccm_nonce = ccm::Nonce::<U12>::from(nonce.0);
 
         // Split off the 8-byte tag from the end
         let data_len = ciphertext.len() - 8;
         let mut tag_bytes = [0u8; 8];
         tag_bytes.copy_from_slice(&ciphertext.as_ref()[data_len..]);
-        let tag = ccm::aead::generic_array::GenericArray::from(tag_bytes);
+        let tag = ccm::Tag::<U8>::from(tag_bytes);
 
         // Truncate to just the ciphertext (without tag)
         ciphertext.truncate(data_len);
 
         self.cipher
-            .decrypt_in_place_detached(ccm_nonce, &aad[..], ciphertext.as_mut(), &tag)
+            .decrypt_inout_detached(&ccm_nonce, &aad[..], ciphertext.as_mut().into(), &tag)
             .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))?;
 
         Ok(())

@@ -1427,7 +1427,7 @@ impl Engine {
         let record_numbers_len = u16::from_be_bytes([ack_data[0], ack_data[1]]) as usize;
         let entries_data = &ack_data[2..];
 
-        if entries_data.len() != record_numbers_len || record_numbers_len % 16 != 0 {
+        if entries_data.len() != record_numbers_len || !record_numbers_len.is_multiple_of(16) {
             return Ok(());
         }
 
