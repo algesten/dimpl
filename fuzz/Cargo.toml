@@ -3,7 +3,7 @@ name = "dimpl-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
-rust-version = "1.87.0"
+rust-version = "1.89.0"
 
 [package.metadata]
 cargo-fuzz = true

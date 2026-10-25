@@ -163,28 +163,27 @@ impl KeyProvider for RustCryptoKeyProvider {
                     .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
 
                 let p256_curve = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
-                if curve_oid == p256_curve {
-                    if let Ok(key) = SigningKey::<NistP256>::from_pkcs8_der(pkcs8_der.as_slice()) {
-                        return Ok(Box::new(EcdsaSigningKey::P256(key)));
-                    }
+                if curve_oid == p256_curve
+                    && let Ok(key) = SigningKey::<NistP256>::from_pkcs8_der(pkcs8_der.as_slice())
+                {
+                    return Ok(Box::new(EcdsaSigningKey::P256(key)));
                 }
 
                 let p384_curve = ObjectIdentifier::new_unwrap("1.3.132.0.34");
-                if curve_oid == p384_curve {
-                    if let Ok(key) = SigningKey::<NistP384>::from_pkcs8_der(pkcs8_der.as_slice()) {
-                        return Ok(Box::new(EcdsaSigningKey::P384(key)));
-                    }
+                if curve_oid == p384_curve
+                    && let Ok(key) = SigningKey::<NistP384>::from_pkcs8_der(pkcs8_der.as_slice())
+                {
+                    return Ok(Box::new(EcdsaSigningKey::P384(key)));
                 }
             }
         }
 
         // Check if it's a PEM encoded key
-        if let Ok(pem_str) = str::from_utf8(key_der) {
-            if pem_str.contains("-----BEGIN") {
-                if let Ok((_label, doc)) = pkcs8::Document::from_pem(pem_str) {
-                    return self.load_private_key(doc.as_bytes());
-                }
-            }
+        if let Ok(pem_str) = str::from_utf8(key_der)
+            && pem_str.contains("-----BEGIN")
+            && let Ok((_label, doc)) = pkcs8::Document::from_pem(pem_str)
+        {
+            return self.load_private_key(doc.as_bytes());
         }
 
         Err(CryptoError::InvalidPrivateKey)

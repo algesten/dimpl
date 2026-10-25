@@ -585,11 +585,12 @@ fn dtls13_selective_retransmit_only_missing_records() {
             attempts_connected += 1;
         }
 
-        if let Some(retransmit_flight_size) = selective_retransmit_flight_size {
-            if client_connected && server_connected {
-                success = Some((attempt, original_flight_size, retransmit_flight_size));
-                break;
-            }
+        if let Some(retransmit_flight_size) = selective_retransmit_flight_size
+            && client_connected
+            && server_connected
+        {
+            success = Some((attempt, original_flight_size, retransmit_flight_size));
+            break;
         }
     }
 

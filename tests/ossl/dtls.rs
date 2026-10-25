@@ -87,10 +87,10 @@ impl OsslDtlsImpl {
 
     pub fn poll_datagram(&mut self) -> Option<super::DatagramSend> {
         let x = self.tls.inner_mut().pop_outgoing();
-        if let Some(x) = &x {
-            if x.len() > DATAGRAM_MTU_WARN {
-                eprintln!("DTLS above MTU {}: {}", DATAGRAM_MTU_WARN, x.len());
-            }
+        if let Some(x) = &x
+            && x.len() > DATAGRAM_MTU_WARN
+        {
+            eprintln!("DTLS above MTU {}: {}", DATAGRAM_MTU_WARN, x.len());
         }
         x
     }

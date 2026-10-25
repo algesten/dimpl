@@ -17,7 +17,7 @@ jobs:
       matrix:
         # Cover toolchains and crypto providers on Linux.
         os: [ubuntu-latest]
-        rust: [stable, beta, 1.87.0]
+        rust: [stable, beta, 1.89.0]
         # rcgen includes aws-lc-rs and enables certificate-dependent tests.
         feature: ["rcgen", "rust-crypto"]
         include:

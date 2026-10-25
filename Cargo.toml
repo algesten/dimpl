@@ -11,7 +11,7 @@ keywords = ["dtls", "tls", "webrtc", "psk"]
 categories = ["network-programming", "cryptography", "security"]
 
 # MSRV
-rust-version = "1.87.0"
+rust-version = "1.89.0"
 
 [features]
 default = ["aws-lc-rs", "rcgen"]

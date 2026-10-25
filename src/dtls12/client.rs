@@ -700,16 +700,16 @@ impl State {
         }
 
         // Ensure the signature algorithm is compatible with the cipher suite
-        if let Some(expected_sig) = cipher_suite.signature_algorithm() {
-            if signature_algorithm.signature != expected_sig {
-                return Err(
-                    Error::CryptoError(crate::CryptoError::SignatureAlgorithmMismatch {
-                        expected: expected_sig,
-                        actual: signature_algorithm.signature,
-                    })
-                    .into(),
-                );
-            }
+        if let Some(expected_sig) = cipher_suite.signature_algorithm()
+            && signature_algorithm.signature != expected_sig
+        {
+            return Err(
+                Error::CryptoError(crate::CryptoError::SignatureAlgorithmMismatch {
+                    expected: expected_sig,
+                    actual: signature_algorithm.signature,
+                })
+                .into(),
+            );
         }
 
         // unwrap: is ok because we verify the order of the flight
