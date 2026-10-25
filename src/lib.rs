@@ -457,12 +457,12 @@ fn client_hello_wants_psk(packet: &[u8], config: &Config) -> bool {
     }
     let suites_len = u16::from_be_bytes([body[pos], body[pos + 1]]) as usize;
     pos += 2;
-    if pos + suites_len > body.len() || suites_len % 2 != 0 {
+    if pos + suites_len > body.len() || !suites_len.is_multiple_of(2) {
         return false;
     }
 
     let allowed: Vec<_> = config.dtls12_cipher_suites().map(|cs| cs.suite()).collect();
-    for chunk in body[pos..pos + suites_len].chunks_exact(2) {
+    for chunk in body[pos..pos + suites_len].as_chunks::<2>().0 {
         let suite = Dtls12CipherSuite::from_u16(u16::from_be_bytes([chunk[0], chunk[1]]));
         if allowed.contains(&suite) {
             return suite.is_psk();

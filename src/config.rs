@@ -607,7 +607,7 @@ impl ConfigBuilder {
         if has_non_psk_dtls12 {
             let dtls12_kx_count = crypto_provider
                 .supported_kx_groups()
-                .filter(|kx| filtered_kx(kx))
+                .filter(&filtered_kx)
                 .count();
             if dtls12_kx_count == 0 {
                 return Err(Error::ConfigError(
@@ -618,7 +618,7 @@ impl ConfigBuilder {
         if dtls13_count > 0 {
             let kx_count = crypto_provider
                 .supported_kx_groups()
-                .filter(|kx| filtered_kx(kx))
+                .filter(filtered_kx)
                 .count();
             if kx_count == 0 {
                 return Err(Error::ConfigError(

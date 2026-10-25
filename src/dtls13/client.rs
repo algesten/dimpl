@@ -1067,19 +1067,18 @@ impl State {
         client.local_events.push_back(LocalEvent::Connected);
 
         // Extract and emit SRTP keying material if negotiated
-        if let Some(profile) = client.negotiated_srtp_profile {
-            if let Ok((keying_material, profile)) =
+        if let Some(profile) = client.negotiated_srtp_profile
+            && let Ok((keying_material, profile)) =
                 client.engine.extract_srtp_keying_material(profile)
-            {
-                debug!(
-                    "SRTP keying material extracted ({} bytes) for profile: {:?}",
-                    keying_material.len(),
-                    profile
-                );
-                client
-                    .local_events
-                    .push_back(LocalEvent::KeyingMaterial(keying_material, profile));
-            }
+        {
+            debug!(
+                "SRTP keying material extracted ({} bytes) for profile: {:?}",
+                keying_material.len(),
+                profile
+            );
+            client
+                .local_events
+                .push_back(LocalEvent::KeyingMaterial(keying_material, profile));
         }
 
         client.engine.release_application_data();

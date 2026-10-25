@@ -130,9 +130,11 @@ impl KeyProvider for AwsLcKeyProvider {
                     parameters: Some(curve_params_any),
                 };
 
-                let pkcs8 = pkcs8::PrivateKeyInfo {
+                let private_key = der::asn1::OctetStringRef::new(key_der)
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
+                let pkcs8 = pkcs8::PrivateKeyInfoRef {
                     algorithm,
-                    private_key: key_der,
+                    private_key,
                     public_key: None,
                 };
 
@@ -141,38 +143,35 @@ impl KeyProvider for AwsLcKeyProvider {
                     .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
 
                 let p256_curve = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
-                if curve_oid == p256_curve {
-                    if let Ok(key_pair) =
+                if curve_oid == p256_curve
+                    && let Ok(key_pair) =
                         EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &pkcs8_der)
-                    {
-                        return Ok(Box::new(EcdsaSigningKey {
-                            key_pair,
-                            signing_algorithm: &ECDSA_P256_SHA256_ASN1_SIGNING,
-                        }));
-                    }
+                {
+                    return Ok(Box::new(EcdsaSigningKey {
+                        key_pair,
+                        signing_algorithm: &ECDSA_P256_SHA256_ASN1_SIGNING,
+                    }));
                 }
 
                 let p384_curve = ObjectIdentifier::new_unwrap("1.3.132.0.34");
-                if curve_oid == p384_curve {
-                    if let Ok(key_pair) =
+                if curve_oid == p384_curve
+                    && let Ok(key_pair) =
                         EcdsaKeyPair::from_pkcs8(&ECDSA_P384_SHA384_ASN1_SIGNING, &pkcs8_der)
-                    {
-                        return Ok(Box::new(EcdsaSigningKey {
-                            key_pair,
-                            signing_algorithm: &ECDSA_P384_SHA384_ASN1_SIGNING,
-                        }));
-                    }
+                {
+                    return Ok(Box::new(EcdsaSigningKey {
+                        key_pair,
+                        signing_algorithm: &ECDSA_P384_SHA384_ASN1_SIGNING,
+                    }));
                 }
             }
         }
 
         // Check if it's a PEM encoded key
-        if let Ok(pem_str) = str::from_utf8(key_der) {
-            if pem_str.contains("-----BEGIN") {
-                if let Ok((_label, doc)) = pkcs8::Document::from_pem(pem_str) {
-                    return self.load_private_key(doc.as_bytes());
-                }
-            }
+        if let Ok(pem_str) = str::from_utf8(key_der)
+            && pem_str.contains("-----BEGIN")
+            && let Ok((_label, doc)) = pkcs8::Document::from_pem(pem_str)
+        {
+            return self.load_private_key(doc.as_bytes());
         }
 
         Err(CryptoError::InvalidPrivateKey)
@@ -198,7 +197,7 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
 
         let cert =
             X509Certificate::from_der(cert_der).map_err(|_| CryptoError::CertificateParseFailed)?;
-        let spki = &cert.tbs_certificate.subject_public_key_info;
+        let spki = cert.tbs_certificate().subject_public_key_info();
 
         const OID_EC_PUBLIC_KEY: ObjectIdentifier =
             ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");

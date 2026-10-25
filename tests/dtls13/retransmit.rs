@@ -336,7 +336,7 @@ fn dtls13_survives_random_packet_loss_pattern() {
     let should_drop = |round: usize, packet_idx: usize| -> bool {
         // Only drop on certain rounds, and only if there are multiple packets
         // This ensures we don't drop critical single-packet flights
-        round > 2 && round % 7 == 0 && packet_idx == 0
+        round > 2 && round.is_multiple_of(7) && packet_idx == 0
     };
 
     for round in 0..100 {
@@ -585,11 +585,12 @@ fn dtls13_selective_retransmit_only_missing_records() {
             attempts_connected += 1;
         }
 
-        if let Some(retransmit_flight_size) = selective_retransmit_flight_size {
-            if client_connected && server_connected {
-                success = Some((attempt, original_flight_size, retransmit_flight_size));
-                break;
-            }
+        if let Some(retransmit_flight_size) = selective_retransmit_flight_size
+            && client_connected
+            && server_connected
+        {
+            success = Some((attempt, original_flight_size, retransmit_flight_size));
+            break;
         }
     }
 

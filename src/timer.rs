@@ -104,18 +104,18 @@ impl HandshakeTimers {
         now: Instant,
         rng: &mut SeededRng,
     ) -> Result<bool, TimeoutError> {
-        if let Timeout::Armed(timeout) = self.handshake {
-            if now >= timeout {
-                return Err(TimeoutError::Connect);
-            }
+        if let Timeout::Armed(timeout) = self.handshake
+            && now >= timeout
+        {
+            return Err(TimeoutError::Connect);
         }
-        if let Timeout::Armed(timeout) = self.flight {
-            if now >= timeout {
-                if !self.request_resend(rng) {
-                    return Err(TimeoutError::Handshake);
-                }
-                return Ok(true);
+        if let Timeout::Armed(timeout) = self.flight
+            && now >= timeout
+        {
+            if !self.request_resend(rng) {
+                return Err(TimeoutError::Handshake);
             }
+            return Ok(true);
         }
         Ok(false)
     }

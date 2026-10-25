@@ -308,13 +308,13 @@ impl Engine {
         // to have completed the handshake, a stale plaintext handshake is just
         // unauthenticated noise (or a replay/amplification attempt) and must not
         // drive a resend.
-        if let Some(dupe_seq) = maybe_dupe_seq {
-            if dupe_seq < self.peer_handshake_seq_no && !self.peer_handshake_confirmed {
-                if let Err(error) = self.flight_resend_on_dupe() {
-                    self.recycle_incoming(incoming);
-                    return Err(error);
-                }
-            }
+        if let Some(dupe_seq) = maybe_dupe_seq
+            && dupe_seq < self.peer_handshake_seq_no
+            && !self.peer_handshake_confirmed
+            && let Err(error) = self.flight_resend_on_dupe()
+        {
+            self.recycle_incoming(incoming);
+            return Err(error);
         }
 
         // Drop old duplicates we've already processed - don't let them block newer messages.
@@ -420,10 +420,10 @@ impl Engine {
     }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
-        if let Timeout::Armed(deadline) = self.flight_dupe_timeout {
-            if now >= deadline {
-                self.flight_dupe_timeout = Timeout::Disabled;
-            }
+        if let Timeout::Armed(deadline) = self.flight_dupe_timeout
+            && now >= deadline
+        {
+            self.flight_dupe_timeout = Timeout::Disabled;
         }
         if self
             .timers

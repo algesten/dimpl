@@ -1,5 +1,6 @@
 # Unreleased
 
+  * Update dependencies to resolve security advisories; bump MSRV to 1.89.0 #205
   * Reject leftover handshake epochs in DTLS 1.2/1.3 #200
   * Discard premature ciphertext and stale plaintext handshakes #199
   * Drop unsupported epochs before buffering DTLS records #198

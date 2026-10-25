@@ -439,11 +439,9 @@ impl Engine {
                 // Reserve a resend and advance backoff using the same budget as
                 // timed retries, so duplicates cannot bypass flight_retries.
                 let resend_requested = self.timers.request_resend(&mut self.rng);
-                if resend_requested {
-                    if let Err(error) = self.flight_resend("dupe triggers resend") {
-                        self.recycle_incoming(incoming);
-                        return Err(error);
-                    }
+                if resend_requested && let Err(error) = self.flight_resend("dupe triggers resend") {
+                    self.recycle_incoming(incoming);
+                    return Err(error);
                 }
             }
         }
@@ -689,10 +687,10 @@ impl Engine {
     fn poll_timeout(&self, now: Instant) -> Instant {
         let mut timeout = self.timers.poll_timeout(now);
 
-        if let Some(deadline) = self.handshake_ack_deadline {
-            if deadline < timeout {
-                timeout = deadline;
-            }
+        if let Some(deadline) = self.handshake_ack_deadline
+            && deadline < timeout
+        {
+            timeout = deadline;
         }
 
         timeout
@@ -1427,7 +1425,7 @@ impl Engine {
         let record_numbers_len = u16::from_be_bytes([ack_data[0], ack_data[1]]) as usize;
         let entries_data = &ack_data[2..];
 
-        if entries_data.len() != record_numbers_len || record_numbers_len % 16 != 0 {
+        if entries_data.len() != record_numbers_len || !record_numbers_len.is_multiple_of(16) {
             return Ok(());
         }
 
@@ -2345,8 +2343,10 @@ impl Entry {
     fn was_sent_as(&self, seq: u64) -> bool {
         self.send_seq == seq
             || self.fragment[self.fragment_len..]
-                .chunks_exact(8)
-                .any(|previous| previous == seq.to_be_bytes())
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .any(|previous| *previous == seq.to_be_bytes())
     }
 }
 
@@ -2417,11 +2417,11 @@ impl RecordHandler for Engine {
     }
 
     fn classify_record(&mut self, mut record: Record) -> Result<Option<Record>, Error> {
-        if let Some(cn_seq) = self.close_notify_sequence {
-            if record.record().sequence > cn_seq {
-                self.push_buffer(record.into_buffer());
-                return Ok(None);
-            }
+        if let Some(cn_seq) = self.close_notify_sequence
+            && record.record().sequence > cn_seq
+        {
+            self.push_buffer(record.into_buffer());
+            return Ok(None);
         }
 
         let epoch = record.record().sequence.epoch;

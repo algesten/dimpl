@@ -202,7 +202,7 @@ dtls.set_active(true); // client role
 ```
 
 #### MSRV
-Rust 1.85.0
+Rust 1.89.0
 
 #### Status
 - Session resumption is not implemented (WebRTC does a full handshake on ICE restart).

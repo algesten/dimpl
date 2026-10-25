@@ -1,8 +1,8 @@
 //! Cipher suite implementations using RustCrypto.
-use aes_gcm::aead::AeadInPlace;
-use aes_gcm::aes::cipher::{BlockEncrypt, KeyInit as BlockKeyInit};
+use aes_gcm::aead::AeadInOut;
+use aes_gcm::aes::cipher::{BlockCipherEncrypt, KeyInit as BlockKeyInit};
 use aes_gcm::aes::{Aes128, Aes256};
-use aes_gcm::{Aes128Gcm, Aes256Gcm, Key};
+use aes_gcm::{Aes128Gcm, Aes256Gcm};
 use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use chacha20poly1305::ChaCha20Poly1305 as ChaCha20Poly1305Aead;
 
@@ -33,12 +33,14 @@ impl AesGcm {
     fn new(key: &[u8]) -> Result<Self, CryptoError> {
         match key.len() {
             16 => {
-                let key = Key::<Aes128Gcm>::from_slice(key);
-                Ok(AesGcm::Aes128(Box::new(Aes128Gcm::new(key))))
+                let cipher = Aes128Gcm::new_from_slice(key)
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::CreateCipher))?;
+                Ok(AesGcm::Aes128(Box::new(cipher)))
             }
             32 => {
-                let key = Key::<Aes256Gcm>::from_slice(key);
-                Ok(AesGcm::Aes256(Box::new(Aes256Gcm::new(key))))
+                let cipher = Aes256Gcm::new_from_slice(key)
+                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::CreateCipher))?;
+                Ok(AesGcm::Aes256(Box::new(cipher)))
             }
             _ => Err(CryptoError::InvalidAesGcmKeySize {
                 actual: bounded_error_len(key.len()),
@@ -56,17 +58,13 @@ impl Cipher for AesGcm {
 
         match self {
             AesGcm::Aes128(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{GenericArray, typenum::U12};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+                let aes_nonce = aes_gcm::Nonce::from(nonce_array);
                 cipher
                     .encrypt_in_place(&aes_nonce, &aad, data)
                     .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))?;
             }
             AesGcm::Aes256(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{GenericArray, typenum::U12};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+                let aes_nonce = aes_gcm::Nonce::from(nonce_array);
                 cipher
                     .encrypt_in_place(&aes_nonce, &aad, data)
                     .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))?;
@@ -96,17 +94,13 @@ impl Cipher for AesGcm {
 
         match self {
             AesGcm::Aes128(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{GenericArray, typenum::U12};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+                let aes_nonce = aes_gcm::Nonce::from(nonce_array);
                 cipher
                     .decrypt_in_place(&aes_nonce, &aad, ciphertext)
                     .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))?;
             }
             AesGcm::Aes256(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{GenericArray, typenum::U12};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+                let aes_nonce = aes_gcm::Nonce::from(nonce_array);
                 cipher
                     .decrypt_in_place(&aes_nonce, &aad, ciphertext)
                     .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))?;
@@ -140,9 +134,10 @@ impl ChaCha20Poly1305Cipher {
                 actual: bounded_error_len(key.len()),
             });
         }
-        let key = chacha20poly1305::Key::from_slice(key);
+        let key = chacha20poly1305::Key::try_from(key)
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::CreateCipher))?;
         Ok(ChaCha20Poly1305Cipher {
-            cipher: Box::new(ChaCha20Poly1305Aead::new(key)),
+            cipher: Box::new(ChaCha20Poly1305Aead::new(&key)),
         })
     }
 }
@@ -153,8 +148,7 @@ impl Cipher for ChaCha20Poly1305Cipher {
             .try_into()
             .map_err(|_| CryptoError::InvalidNonce)?;
 
-        use generic_array::{GenericArray, typenum::U12};
-        let chacha_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+        let chacha_nonce = chacha20poly1305::Nonce::from(nonce_array);
         self.cipher
             .encrypt_in_place(&chacha_nonce, &aad, data)
             .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))?;
@@ -179,8 +173,7 @@ impl Cipher for ChaCha20Poly1305Cipher {
             .try_into()
             .map_err(|_| CryptoError::InvalidNonce)?;
 
-        use generic_array::{GenericArray, typenum::U12};
-        let chacha_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+        let chacha_nonce = chacha20poly1305::Nonce::from(nonce_array);
         self.cipher
             .decrypt_in_place(&chacha_nonce, &aad, ciphertext)
             .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))?;
@@ -361,7 +354,7 @@ impl SupportedDtls13CipherSuite for Tls13Aes128GcmSha256 {
     fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16] {
         // unwrap: sn_key length matches AES-128 key size
         let cipher = Aes128::new_from_slice(sn_key).unwrap();
-        let mut block = aes_gcm::aes::Block::clone_from_slice(sample);
+        let mut block = aes_gcm::aes::Block::from(*sample);
         cipher.encrypt_block(&mut block);
         block.into()
     }
@@ -399,7 +392,7 @@ impl SupportedDtls13CipherSuite for Tls13Aes256GcmSha384 {
     fn encrypt_sn(&self, sn_key: &[u8], sample: &[u8; 16]) -> [u8; 16] {
         // unwrap: sn_key length matches AES-256 key size
         let cipher = Aes256::new_from_slice(sn_key).unwrap();
-        let mut block = aes_gcm::aes::Block::clone_from_slice(sample);
+        let mut block = aes_gcm::aes::Block::from(*sample);
         cipher.encrypt_block(&mut block);
         block.into()
     }
@@ -441,10 +434,11 @@ impl SupportedDtls13CipherSuite for Tls13ChaCha20Poly1305Sha256 {
         let counter = u32::from_le_bytes(sample[0..4].try_into().unwrap());
         let nonce: [u8; 12] = sample[4..16].try_into().unwrap();
 
-        let key = chacha20::Key::from_slice(sn_key);
-        let nonce = chacha20::Nonce::from_slice(&nonce);
+        // unwrap: cipher suite keys are validated to be 32 bytes before use.
+        let key = chacha20::Key::try_from(sn_key).unwrap();
+        let nonce = chacha20::Nonce::from(nonce);
 
-        let mut cipher = chacha20::ChaCha20::new(key, nonce);
+        let mut cipher = chacha20::ChaCha20::new(&key, &nonce);
         // Seek to the correct block counter position (each block = 64 bytes)
         cipher.seek(counter as u64 * 64);
 

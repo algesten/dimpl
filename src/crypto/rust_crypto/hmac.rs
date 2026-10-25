@@ -1,6 +1,6 @@
 //! HMAC implementation using RustCrypto.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Sha256, Sha384};
 
 use super::super::HmacProvider;

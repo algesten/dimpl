@@ -112,10 +112,8 @@ impl EcdhParams {
         output.push(public_key.len() as u8);
         output.extend_from_slice(public_key);
 
-        if with_signature {
-            if let Some(signed) = &self.signature {
-                signed.serialize(buf, output);
-            }
+        if with_signature && let Some(signed) = &self.signature {
+            signed.serialize(buf, output);
         }
     }
 }
