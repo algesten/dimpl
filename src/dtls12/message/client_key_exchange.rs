@@ -16,6 +16,38 @@ pub struct ClientKeyExchange {
 pub enum ExchangeKeys {
     Ecdh(ClientEcdhKeys),
     Psk(ClientPskKeys),
+    EcdhePsk(ClientEcdhePskKeys),
+}
+
+/// ECDHE_PSK client key exchange (RFC 5489): the PSK identity, then the client's ECDH point.
+///
+/// Wire format: `uint16 identity_length + identity + uint8 point_length + point`
+#[derive(Debug, PartialEq, Eq)]
+pub struct ClientEcdhePskKeys {
+    pub identity: ClientPskKeys,
+    pub ecdh: ClientEcdhKeys,
+}
+
+impl ClientEcdhePskKeys {
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], ClientEcdhePskKeys> {
+        let original_input = input;
+        let (input, identity) = ClientPskKeys::parse(input, base_offset)?;
+        let ecdh_offset =
+            base_offset + (input.as_ptr() as usize - original_input.as_ptr() as usize);
+        let (input, ecdh) = ClientEcdhKeys::parse(input, ecdh_offset)?;
+        Ok((input, ClientEcdhePskKeys { identity, ecdh }))
+    }
+
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
+        self.identity.serialize(buf, output);
+        self.ecdh.serialize(buf, output);
+    }
+
+    /// Serialize directly from the identity and public key bytes (for sending).
+    pub fn serialize_from_bytes(identity: &[u8], public_key: &[u8], output: &mut Buf) {
+        ClientPskKeys::serialize_from_bytes(identity, output);
+        ClientKeyExchange::serialize_from_bytes(public_key, output);
+    }
 }
 
 /// ECDHE key exchange parameters
@@ -77,6 +109,10 @@ impl ClientKeyExchange {
                 let (input, psk_keys) = ClientPskKeys::parse(input, base_offset)?;
                 (input, ExchangeKeys::Psk(psk_keys))
             }
+            KeyExchangeAlgorithm::ECDHE_PSK => {
+                let (input, keys) = ClientEcdhePskKeys::parse(input, base_offset)?;
+                (input, ExchangeKeys::EcdhePsk(keys))
+            }
             _ => return Err(Err::Failure(Error::new(input, nom::error::ErrorKind::Tag))),
         };
 
@@ -87,6 +123,7 @@ impl ClientKeyExchange {
         match &self.exchange_keys {
             ExchangeKeys::Ecdh(ecdh_keys) => ecdh_keys.serialize(buf, output),
             ExchangeKeys::Psk(psk_keys) => psk_keys.serialize(buf, output),
+            ExchangeKeys::EcdhePsk(keys) => keys.serialize(buf, output),
         }
     }
 
@@ -207,5 +244,45 @@ mod test {
             panic!("expected Psk variant");
         };
         assert!(psk.identity_range.is_empty());
+    }
+
+    // ECDHE_PSK ClientKeyExchange: identity, then the client's ECDH point
+    const ECDHE_PSK_MESSAGE: &[u8] = &[
+        0x00, 0x05, // identity length = 5
+        b'h', b'e', b'l', b'l', b'o', // identity
+        0x04, // Public key length
+        0x01, 0x02, 0x03, 0x04, // Public key data
+    ];
+
+    #[test]
+    fn ecdhe_psk_roundtrip() {
+        let (rest, parsed) =
+            ClientKeyExchange::parse(ECDHE_PSK_MESSAGE, 0, KeyExchangeAlgorithm::ECDHE_PSK)
+                .unwrap();
+        assert!(rest.is_empty());
+
+        let ExchangeKeys::EcdhePsk(keys) = &parsed.exchange_keys else {
+            panic!("expected EcdhePsk variant");
+        };
+        assert_eq!(keys.identity.identity(ECDHE_PSK_MESSAGE), b"hello");
+        assert_eq!(
+            keys.ecdh.public_key(ECDHE_PSK_MESSAGE),
+            &[0x01, 0x02, 0x03, 0x04]
+        );
+
+        let mut serialized = Buf::new();
+        parsed.serialize(ECDHE_PSK_MESSAGE, &mut serialized);
+        assert_eq!(&*serialized, ECDHE_PSK_MESSAGE);
+    }
+
+    #[test]
+    fn ecdhe_psk_rejects_oversized_public_key_length() {
+        // public_key length=4 but only 2 bytes follow — parser must fail
+        let bad = &ECDHE_PSK_MESSAGE[..ECDHE_PSK_MESSAGE.len() - 2];
+        let result = ClientKeyExchange::parse(bad, 0, KeyExchangeAlgorithm::ECDHE_PSK);
+        assert!(
+            result.is_err(),
+            "parser must reject ECDH public key shorter than advertised length"
+        );
     }
 }

@@ -945,3 +945,84 @@ fn dtls12_handshake_p384_certificate() {
     assert!(client_connected, "Client should connect with P-384 cert");
     assert!(server_connected, "Server should connect with P-384 cert");
 }
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_client_rejects_non_named_curve() {
+    //! Rewrite the ServerKeyExchange curve_type to explicit_prime; the client must
+    //! reject it as unsupported rather than fail later on the signature.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::{Error, SecurityError};
+
+    let config = dtls12_config();
+    let now = Instant::now();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let mut client = Dtls::new_12(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let mut server = Dtls::new_12(config, server_cert, now);
+    server.set_active(false);
+
+    let error = client_error_with_tampered_server(&mut client, &mut server, |datagram| {
+        if let Some(body) = server_key_exchange_body_mut(datagram) {
+            body[0] = 1; // curve_type: explicit_prime
+        }
+    });
+
+    assert!(
+        matches!(
+            error,
+            Some(Error::SecurityError(
+                SecurityError::UnsupportedKeyExchangeAlgorithm
+            ))
+        ),
+        "expected UnsupportedKeyExchangeAlgorithm, got {error:?}"
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_client_rejects_group_it_did_not_offer() {
+    //! The client offers only X25519; rewrite the ServerKeyExchange group to P-256,
+    //! which the provider supports but the client's kx_groups filter excludes. The
+    //! client must reject the group rather than fail later on the signature.
+
+    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl::{CryptoError, Error, NamedGroup};
+
+    let client_config = Arc::new(
+        Config::builder()
+            .kx_groups(&[NamedGroup::X25519])
+            .build()
+            .expect("build X25519-only client config"),
+    );
+    let now = Instant::now();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let mut client = Dtls::new_12(client_config, client_cert, now);
+    client.set_active(true);
+
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let mut server = Dtls::new_12(dtls12_config(), server_cert, now);
+    server.set_active(false);
+
+    let error = client_error_with_tampered_server(&mut client, &mut server, |datagram| {
+        if let Some(body) = server_key_exchange_body_mut(datagram) {
+            // named_group follows the one-byte curve_type
+            body[1..3].copy_from_slice(&NamedGroup::Secp256r1.as_u16().to_be_bytes());
+        }
+    });
+
+    assert!(
+        matches!(
+            error,
+            Some(Error::CryptoError(CryptoError::UnsupportedEcdheNamedGroup(
+                NamedGroup::Secp256r1
+            )))
+        ),
+        "expected UnsupportedEcdheNamedGroup(Secp256r1), got {error:?}"
+    );
+}

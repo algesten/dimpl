@@ -15,6 +15,7 @@ pub struct ServerKeyExchange {
 pub enum ServerKeyExchangeParams {
     Ecdh(EcdhParams),
     Psk(PskParams),
+    EcdhePsk(EcdhePskParams),
 }
 
 impl ServerKeyExchange {
@@ -32,6 +33,10 @@ impl ServerKeyExchange {
                 let (input, psk_params) = PskParams::parse(input, base_offset)?;
                 (input, ServerKeyExchangeParams::Psk(psk_params))
             }
+            KeyExchangeAlgorithm::ECDHE_PSK => {
+                let (input, params) = EcdhePskParams::parse(input, base_offset)?;
+                (input, ServerKeyExchangeParams::EcdhePsk(params))
+            }
             _ => return Err(Err::Failure(Error::new(input, ErrorKind::Tag))),
         };
 
@@ -44,13 +49,14 @@ impl ServerKeyExchange {
                 ecdh_params.serialize(buf, output, with_signature)
             }
             ServerKeyExchangeParams::Psk(psk_params) => psk_params.serialize(buf, output),
+            ServerKeyExchangeParams::EcdhePsk(params) => params.serialize(buf, output),
         }
     }
 
     pub fn signature(&self) -> Option<&DigitallySigned> {
         match &self.params {
             ServerKeyExchangeParams::Ecdh(ecdh_params) => ecdh_params.signature.as_ref(),
-            ServerKeyExchangeParams::Psk(_) => None,
+            ServerKeyExchangeParams::Psk(_) | ServerKeyExchangeParams::EcdhePsk(_) => None,
         }
     }
 }
@@ -115,6 +121,37 @@ impl EcdhParams {
         if with_signature && let Some(signed) = &self.signature {
             signed.serialize(buf, output);
         }
+    }
+}
+
+/// ECDHE_PSK server parameters (RFC 5489): the PSK identity hint, then the ECDH
+/// parameters, with no signature. The PSK authenticates the exchange through the
+/// pre-master secret, which combines the ECDH shared secret with the PSK.
+///
+/// Wire format: `uint16 hint_length + hint + curve_type + named_group + uint8 point_length + point`
+#[derive(Debug, PartialEq, Eq)]
+pub struct EcdhePskParams {
+    pub hint: PskParams,
+    pub ecdh: EcdhParams,
+}
+
+impl EcdhePskParams {
+    pub fn parse(input: &[u8], base_offset: usize) -> IResult<&[u8], EcdhePskParams> {
+        let original_input = input;
+        let (input, hint) = PskParams::parse(input, base_offset)?;
+        let ecdh_offset =
+            base_offset + (input.as_ptr() as usize - original_input.as_ptr() as usize);
+        let (input, ecdh) = EcdhParams::parse(input, ecdh_offset)?;
+        // ECDHE_PSK parameters are never signed.
+        if ecdh.signature.is_some() {
+            return Err(Err::Failure(Error::new(input, ErrorKind::Verify)));
+        }
+        Ok((input, EcdhePskParams { hint, ecdh }))
+    }
+
+    pub fn serialize(&self, buf: &[u8], output: &mut Buf) {
+        self.hint.serialize(buf, output);
+        self.ecdh.serialize(buf, output, false);
     }
 }
 
@@ -244,5 +281,63 @@ mod test {
             panic!("expected Psk variant");
         };
         assert!(psk.hint_range.is_empty());
+    }
+
+    // ECDHE_PSK ServerKeyExchange: hint, then unsigned ECDH params
+    const ECDHE_PSK_MESSAGE: &[u8] = &[
+        0x00, 0x04, // hint length = 4
+        b'h', b'i', b'n', b't', // hint
+        0x03, // curve_type
+        0x00, 0x1d, // named_group
+        0x04, // public_key length
+        0x01, 0x02, 0x03, 0x04, // public_key
+    ];
+
+    #[test]
+    fn ecdhe_psk_roundtrip() {
+        let (rest, parsed) =
+            ServerKeyExchange::parse(ECDHE_PSK_MESSAGE, 0, KeyExchangeAlgorithm::ECDHE_PSK)
+                .unwrap();
+        assert!(rest.is_empty());
+
+        let ServerKeyExchangeParams::EcdhePsk(p) = &parsed.params else {
+            panic!("expected EcdhePsk variant");
+        };
+        assert_eq!(p.hint.hint(ECDHE_PSK_MESSAGE), b"hint");
+        assert_eq!(p.ecdh.curve_type, CurveType::NamedCurve);
+        assert_eq!(p.ecdh.named_group, NamedGroup::X25519);
+        assert_eq!(
+            p.ecdh.public_key(ECDHE_PSK_MESSAGE),
+            &[0x01, 0x02, 0x03, 0x04]
+        );
+        assert!(
+            parsed.signature().is_none(),
+            "ECDHE_PSK SKE must have no signature"
+        );
+
+        let mut serialized = Buf::new();
+        parsed.serialize(ECDHE_PSK_MESSAGE, &mut serialized, true);
+        assert_eq!(&*serialized, ECDHE_PSK_MESSAGE);
+    }
+
+    #[test]
+    fn ecdhe_psk_rejects_oversized_public_key_length() {
+        // public_key length=4 but only 2 bytes follow — parser must fail
+        let bad = &ECDHE_PSK_MESSAGE[..ECDHE_PSK_MESSAGE.len() - 2];
+        let result = ServerKeyExchange::parse(bad, 0, KeyExchangeAlgorithm::ECDHE_PSK);
+        assert!(
+            result.is_err(),
+            "parser must reject ECDH public key shorter than advertised length"
+        );
+    }
+
+    #[test]
+    fn ecdhe_psk_rejects_signature() {
+        // ECDHE_PSK parameters are never signed, so trailing signature bytes are an error
+        let mut signed = Buf::new();
+        signed.extend_from_slice(ECDHE_PSK_MESSAGE);
+        signed.extend_from_slice(&[0x04, 0x03, 0x00, 0x01, 0xaa]);
+        let result = ServerKeyExchange::parse(&signed, 0, KeyExchangeAlgorithm::ECDHE_PSK);
+        assert!(result.is_err(), "parser must reject a signed ECDHE_PSK SKE");
     }
 }

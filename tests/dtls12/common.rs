@@ -231,3 +231,65 @@ pub fn setup_connected_12_pair(now: Instant) -> (Dtls, Dtls, Instant) {
     let now = complete_dtls12_handshake(&mut client, &mut server, now);
     (client, server, now)
 }
+
+/// ServerKeyExchange handshake type (RFC 5246).
+pub const SERVER_KEY_EXCHANGE: u8 = 12;
+
+fn read_u24(bytes: &[u8]) -> usize {
+    ((bytes[0] as usize) << 16) | ((bytes[1] as usize) << 8) | (bytes[2] as usize)
+}
+
+/// The body of an unfragmented ServerKeyExchange in `datagram`, to tamper with in flight.
+pub fn server_key_exchange_body_mut(datagram: &mut [u8]) -> Option<&mut [u8]> {
+    let mut i = 0usize;
+    while i + 13 <= datagram.len() {
+        let ctype = datagram[i];
+        let len = u16::from_be_bytes([datagram[i + 11], datagram[i + 12]]) as usize;
+        let rec_end = i + 13 + len;
+        if rec_end > datagram.len() {
+            return None;
+        }
+        if ctype == 22 {
+            let mut h = i + 13;
+            while h + 12 <= rec_end {
+                let msg_len = read_u24(&datagram[h + 1..h + 4]);
+                let frag_offset = read_u24(&datagram[h + 6..h + 9]);
+                let frag_len = read_u24(&datagram[h + 9..h + 12]);
+                let body = h + 12;
+                if body + frag_len > rec_end {
+                    break;
+                }
+                if datagram[h] == SERVER_KEY_EXCHANGE && frag_offset == 0 && frag_len == msg_len {
+                    return Some(&mut datagram[body..body + frag_len]);
+                }
+                h = body + frag_len;
+            }
+        }
+        i = rec_end;
+    }
+    None
+}
+
+/// Run a handshake, passing every server datagram through `tamper` before the client
+/// sees it. Returns the first error the client reports, or `None` if it reports none.
+pub fn client_error_with_tampered_server(
+    client: &mut Dtls,
+    server: &mut Dtls,
+    mut tamper: impl FnMut(&mut [u8]),
+) -> Option<dimpl::Error> {
+    let now = Instant::now();
+    for _ in 0..30 {
+        if let Err(e) = client.handle_timeout(now) {
+            return Some(e);
+        }
+        server.handle_timeout(now).expect("server timeout");
+        deliver_packets(&drain_outputs(client).packets, server);
+        for mut packet in drain_outputs(server).packets {
+            tamper(&mut packet);
+            if let Err(e) = client.handle_packet(&packet) {
+                return Some(e);
+            }
+        }
+    }
+    None
+}
