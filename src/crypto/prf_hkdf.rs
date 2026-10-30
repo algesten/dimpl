@@ -208,7 +208,7 @@ fn build_hkdf_label(
     Ok(info)
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "aws-lc-rs", feature = "rust-crypto")))]
 mod tests {
     use super::*;
 

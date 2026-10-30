@@ -153,12 +153,10 @@ use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgori
 use crate::{CertificateError, CryptoError};
 
 /// OID for the P-256 elliptic curve (secp256r1 / prime256v1).
-#[cfg(feature = "_crypto-common")]
 pub const OID_P256: spki::ObjectIdentifier =
     spki::ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
 
 /// OID for the P-384 elliptic curve (secp384r1).
-#[cfg(feature = "_crypto-common")]
 pub const OID_P384: spki::ObjectIdentifier = spki::ObjectIdentifier::new_unwrap("1.3.132.0.34");
 
 // ============================================================================
@@ -362,7 +360,6 @@ pub fn check_verify_scheme(
 ///
 /// Used by DTLS 1.3 to verify that the [`SignatureScheme`](crate::types::SignatureScheme)
 /// in `CertificateVerify` is consistent with the peer's certificate key.
-#[cfg(feature = "_crypto-common")]
 pub fn cert_named_group(cert_der: &[u8]) -> Result<NamedGroup, CertificateError> {
     use der::Decode;
     use spki::ObjectIdentifier;
@@ -626,12 +623,11 @@ impl CryptoProvider {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "rcgen"))]
 mod tests {
     use super::*;
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn cert_named_group_p256() {
         use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256};
 
@@ -644,7 +640,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn cert_named_group_p384() {
         use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P384_SHA384};
 
@@ -657,7 +652,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn cert_named_group_invalid_der() {
         let result = cert_named_group(&[0x00, 0x01, 0x02]);
         assert!(result.is_err());

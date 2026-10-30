@@ -50,6 +50,9 @@ jobs:
         run: echo "MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion | cut -d. -f1)" >> $GITHUB_ENV
       - name: Build
         run: cargo +${{steps.toolchain.outputs.name}} build --no-default-features --features "${{ matrix.feature }}"
+      - name: Test without a built-in provider
+        if: matrix.feature == ''
+        run: cargo +${{steps.toolchain.outputs.name}} test --no-default-features --lib scheme_curve_tests
       - name: Test
         if: matrix.feature != ''
         run: cargo +${{steps.toolchain.outputs.name}} test  --no-default-features --features "${{ matrix.feature }}"
