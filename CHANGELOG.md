@@ -1,6 +1,6 @@
 # Unreleased
 
-  * Enforce DTLS 1.3 certificate curve matching with custom crypto providers #209
+  * Enforce DTLS 1.3 certificate curve matching with custom crypto providers (breaking) #209
 
 # 0.9.0
 

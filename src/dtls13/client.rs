@@ -863,7 +863,7 @@ impl State {
                 crate::CertificateError::NoServerCertificateForVerification,
             ))?;
 
-        verify_scheme_curve(scheme, cert_der)?;
+        client.engine.verify_scheme_curve(scheme, cert_der)?;
 
         let (hash_alg, sig_alg) = signature_scheme_to_components(scheme)?;
 
@@ -1462,10 +1462,15 @@ pub(crate) fn signature_scheme_to_components(
 
 /// RFC 8446 §4.4.3: For ECDSA schemes, verify the curve in the [`SignatureScheme`]
 /// matches the certificate's public key curve.
-pub(crate) fn verify_scheme_curve(scheme: SignatureScheme, cert_der: &[u8]) -> Result<(), Error> {
+pub(crate) fn verify_scheme_curve(
+    verifier: &dyn crate::crypto::SignatureVerifier,
+    scheme: SignatureScheme,
+    cert_der: &[u8],
+) -> Result<(), Error> {
     if let Some(expected_group) = scheme.named_group() {
-        let cert_group =
-            crate::crypto::cert_named_group(cert_der).map_err(Error::CertificateError)?;
+        let cert_group = verifier
+            .cert_named_group(cert_der)
+            .map_err(Error::CertificateError)?;
         if expected_group != cert_group {
             return Err(Error::SecurityError(
                 crate::SecurityError::SignatureSchemeCertificateCurveMismatch {
@@ -1826,20 +1831,53 @@ mod tests {
 mod scheme_curve_tests {
     use super::*;
 
+    #[derive(Debug)]
+    struct TestVerifier;
+
+    impl crate::crypto::SignatureVerifier for TestVerifier {
+        #[cfg(not(feature = "_crypto-common"))]
+        fn cert_named_group(&self, cert_der: &[u8]) -> Result<NamedGroup, crate::CertificateError> {
+            if cert_der == include_bytes!("../crypto/validation/p256_cert.der") {
+                Ok(NamedGroup::Secp256r1)
+            } else if cert_der == include_bytes!("../crypto/validation/p384_cert.der") {
+                Ok(NamedGroup::Secp384r1)
+            } else {
+                Err(crate::CertificateError::ParseFailed)
+            }
+        }
+
+        fn verify_signature(
+            &self,
+            _: &[u8],
+            _: &[u8],
+            _: &[u8],
+            _: crate::crypto::HashAlgorithm,
+            _: crate::crypto::SignatureAlgorithm,
+        ) -> Result<(), crate::CryptoError> {
+            unreachable!()
+        }
+    }
+
     #[test]
     fn certificate_curve_must_match_ecdsa_scheme() {
         let p256 = include_bytes!("../crypto/validation/p256_cert.der");
         let p384 = include_bytes!("../crypto/validation/p384_cert.der");
-        assert!(verify_scheme_curve(SignatureScheme::ECDSA_SECP256R1_SHA256, p256).is_ok());
-        assert!(verify_scheme_curve(SignatureScheme::ECDSA_SECP384R1_SHA384, p384).is_ok());
+        assert!(
+            verify_scheme_curve(&TestVerifier, SignatureScheme::ECDSA_SECP256R1_SHA256, p256)
+                .is_ok()
+        );
+        assert!(
+            verify_scheme_curve(&TestVerifier, SignatureScheme::ECDSA_SECP384R1_SHA384, p384)
+                .is_ok()
+        );
         assert!(matches!(
-            verify_scheme_curve(SignatureScheme::ECDSA_SECP384R1_SHA384, p256),
+            verify_scheme_curve(&TestVerifier, SignatureScheme::ECDSA_SECP384R1_SHA384, p256),
             Err(Error::SecurityError(
                 crate::SecurityError::SignatureSchemeCertificateCurveMismatch { .. }
             ))
         ));
         assert!(matches!(
-            verify_scheme_curve(SignatureScheme::ECDSA_SECP256R1_SHA256, p384),
+            verify_scheme_curve(&TestVerifier, SignatureScheme::ECDSA_SECP256R1_SHA256, p384),
             Err(Error::SecurityError(
                 crate::SecurityError::SignatureSchemeCertificateCurveMismatch { .. }
             ))

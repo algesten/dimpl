@@ -153,10 +153,12 @@ use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgori
 use crate::{CertificateError, CryptoError};
 
 /// OID for the P-256 elliptic curve (secp256r1 / prime256v1).
+#[cfg(feature = "_crypto-common")]
 pub const OID_P256: spki::ObjectIdentifier =
     spki::ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
 
 /// OID for the P-384 elliptic curve (secp384r1).
+#[cfg(feature = "_crypto-common")]
 pub const OID_P384: spki::ObjectIdentifier = spki::ObjectIdentifier::new_unwrap("1.3.132.0.34");
 
 // ============================================================================
@@ -290,6 +292,21 @@ pub trait SupportedKxGroup: CryptoSafe {
 
 /// Signature verification against certificates.
 pub trait SignatureVerifier: CryptoSafe {
+    /// Extract the EC public key curve from a DER-encoded X.509 certificate.
+    ///
+    /// DTLS 1.3 requires this curve to match the CertificateVerify signature scheme.
+    /// Custom providers must implement this method when `_crypto-common` is disabled.
+    #[cfg(not(feature = "_crypto-common"))]
+    fn cert_named_group(&self, cert_der: &[u8]) -> Result<NamedGroup, CertificateError>;
+
+    /// Extract the EC public key curve from a DER-encoded X.509 certificate.
+    ///
+    /// DTLS 1.3 requires this curve to match the CertificateVerify signature scheme.
+    #[cfg(feature = "_crypto-common")]
+    fn cert_named_group(&self, cert_der: &[u8]) -> Result<NamedGroup, CertificateError> {
+        cert_named_group(cert_der)
+    }
+
     /// Verify a signature on data using a DER-encoded X.509 certificate.
     fn verify_signature(
         &self,
@@ -360,6 +377,7 @@ pub fn check_verify_scheme(
 ///
 /// Used by DTLS 1.3 to verify that the [`SignatureScheme`](crate::types::SignatureScheme)
 /// in `CertificateVerify` is consistent with the peer's certificate key.
+#[cfg(feature = "_crypto-common")]
 pub fn cert_named_group(cert_der: &[u8]) -> Result<NamedGroup, CertificateError> {
     use der::Decode;
     use spki::ObjectIdentifier;

@@ -2253,6 +2253,18 @@ impl Engine {
     // Signature Verification
     // =========================================================================
 
+    pub fn verify_scheme_curve(
+        &self,
+        scheme: crate::types::SignatureScheme,
+        cert_der: &[u8],
+    ) -> Result<(), Error> {
+        crate::dtls13::client::verify_scheme_curve(
+            self.config.crypto_provider().signature_verification,
+            scheme,
+            cert_der,
+        )
+    }
+
     pub fn verify_signature(
         &self,
         cert_der: &[u8],

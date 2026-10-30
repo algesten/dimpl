@@ -38,6 +38,7 @@ pub use provider::{
     KeyProvider, SecureRandom, SignatureVerifier, SigningKey, SupportedDtls12CipherSuite,
     SupportedDtls13CipherSuite, SupportedKxGroup, check_verify_scheme,
 };
+#[cfg(feature = "_crypto-common")]
 pub use provider::{OID_P256, OID_P384, cert_named_group};
 
 // Re-export shared types for provider trait implementations
