@@ -26,7 +26,7 @@ use crate::dtls13::message::KeyUpdateRequest;
 use crate::dtls13::message::MessageType;
 use crate::dtls13::message::Sequence;
 use crate::timer::{HandshakeTimers, Timeout, deadline};
-use crate::types::{HashAlgorithm, Random};
+use crate::types::{HashAlgorithm, Random, SignatureScheme};
 use crate::window::ReplayWindow;
 use crate::{Config, DtlsCertificate, Error, InternalError, Output, SeededRng};
 
@@ -2252,6 +2252,18 @@ impl Engine {
     // =========================================================================
     // Signature Verification
     // =========================================================================
+
+    pub fn verify_scheme_curve(
+        &self,
+        scheme: SignatureScheme,
+        cert_der: &[u8],
+    ) -> Result<(), Error> {
+        crate::dtls13::client::verify_scheme_curve(
+            self.config.crypto_provider().signature_verification,
+            scheme,
+            cert_der,
+        )
+    }
 
     pub fn verify_signature(
         &self,

@@ -39,8 +39,6 @@ use crate::dtls13::client::LocalEvent;
 use crate::dtls13::client::handshake_create_certificate;
 use crate::dtls13::client::handshake_create_certificate_verify;
 use crate::dtls13::client::signature_scheme_to_components;
-#[cfg(feature = "_crypto-common")]
-use crate::dtls13::client::verify_scheme_curve;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::Body;
 use crate::dtls13::message::CompressionMethod;
@@ -1060,8 +1058,7 @@ impl State {
                 crate::CertificateError::NoClientCertificateForVerification,
             ))?;
 
-        #[cfg(feature = "_crypto-common")]
-        verify_scheme_curve(scheme, cert_der)?;
+        server.engine.verify_scheme_curve(scheme, cert_der)?;
 
         let (hash_alg, sig_alg) = signature_scheme_to_components(scheme)?;
 
