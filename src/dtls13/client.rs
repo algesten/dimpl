@@ -28,7 +28,7 @@ use subtle::ConstantTimeEq;
 use crate::auto::HybridClientHello;
 use crate::buffer::Buf;
 use crate::buffer::ToBuf;
-use crate::crypto::{ActiveKeyExchange, SrtpProfile};
+use crate::crypto::{ActiveKeyExchange, SignatureVerifier, SrtpProfile};
 use crate::dtls13::Server;
 use crate::dtls13::engine::Engine;
 use crate::dtls13::message::Asn1Cert;
@@ -1463,7 +1463,7 @@ pub(crate) fn signature_scheme_to_components(
 /// RFC 8446 §4.4.3: For ECDSA schemes, verify the curve in the [`SignatureScheme`]
 /// matches the certificate's public key curve.
 pub(crate) fn verify_scheme_curve(
-    verifier: &dyn crate::crypto::SignatureVerifier,
+    verifier: &dyn SignatureVerifier,
     scheme: SignatureScheme,
     cert_der: &[u8],
 ) -> Result<(), Error> {
@@ -1834,7 +1834,7 @@ mod scheme_curve_tests {
     #[derive(Debug)]
     struct TestVerifier;
 
-    impl crate::crypto::SignatureVerifier for TestVerifier {
+    impl SignatureVerifier for TestVerifier {
         #[cfg(not(feature = "_crypto-common"))]
         fn cert_named_group(&self, cert_der: &[u8]) -> Result<NamedGroup, crate::CertificateError> {
             if cert_der == include_bytes!("../crypto/validation/p256_cert.der") {

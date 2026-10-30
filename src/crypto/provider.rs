@@ -641,11 +641,13 @@ impl CryptoProvider {
     }
 }
 
-#[cfg(all(test, feature = "rcgen"))]
+#[cfg(test)]
 mod tests {
+    #[cfg(feature = "rcgen")]
     use super::*;
 
     #[test]
+    #[cfg(feature = "rcgen")]
     fn cert_named_group_p256() {
         use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256};
 
@@ -658,6 +660,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "rcgen")]
     fn cert_named_group_p384() {
         use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P384_SHA384};
 
@@ -670,6 +673,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "rcgen")]
     fn cert_named_group_invalid_der() {
         let result = cert_named_group(&[0x00, 0x01, 0x02]);
         assert!(result.is_err());
