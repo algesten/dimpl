@@ -580,7 +580,7 @@ impl ConfigBuilder {
         }
 
         // When PSK is configured, at least one negotiable DTLS 1.2 suite must be
-        // a PSK suite. The only PSK suite we implement today is DTLS 1.2 (0xC0A8),
+        // a PSK suite. The PSK suites we implement are all DTLS 1.2,
         // so a surviving DTLS 1.3 suite is not a fallback: Dtls::new_12_psk only
         // speaks DTLS 1.2, and under AuthMode::Psk every non-PSK suite is rejected
         // by CryptoContext::is_cipher_suite_compatible.
@@ -590,37 +590,31 @@ impl ConfigBuilder {
             ));
         }
 
-        // Skip DTLS 1.2 kx-group validation only when the surviving DTLS 1.2
-        // suites are exclusively PSK — those don't negotiate an ECDHE group.
-        // Any cert-based DTLS 1.2 suite left in the filter still needs a
-        // compatible key exchange group, even when PSK is also configured.
-        let has_non_psk_dtls12 = dtls12_suites.iter().any(|cs| !cs.suite().is_psk());
+        // All ECDHE suites, cert or PSK authenticated, require a compatible key
+        // exchange group; plain PSK suites don't negotiate one. Every DTLS 1.3
+        // suite does.
+        let dtls12_needs_kx = dtls12_suites.iter().any(|cs| cs.suite().has_ecc());
+        let dtls13_needs_kx = dtls13_count > 0;
 
         // Validate kx_groups filter: each enabled version needs compatible groups
-        // (PSK-only DTLS 1.2 configs don't need key exchange groups)
+        // (plain-PSK-only DTLS 1.2 configs don't need key exchange groups)
         let filtered_kx = |kx: &&'static dyn SupportedKxGroup| -> bool {
             match &self.kx_groups {
                 Some(list) => list.contains(&kx.name()),
                 None => true,
             }
         };
-        if has_non_psk_dtls12 {
-            let dtls12_kx_count = crypto_provider
-                .supported_kx_groups()
-                .filter(&filtered_kx)
-                .count();
-            if dtls12_kx_count == 0 {
+        let kx_count = crypto_provider
+            .supported_kx_groups()
+            .filter(filtered_kx)
+            .count();
+        if kx_count == 0 {
+            if dtls12_needs_kx {
                 return Err(Error::ConfigError(
                     ConfigError::NoDtls12KeyExchangeGroupsAfterFiltering,
                 ));
             }
-        }
-        if dtls13_count > 0 {
-            let kx_count = crypto_provider
-                .supported_kx_groups()
-                .filter(filtered_kx)
-                .count();
-            if kx_count == 0 {
+            if dtls13_needs_kx {
                 return Err(Error::ConfigError(
                     ConfigError::NoDtls13KeyExchangeGroupsAfterFiltering,
                 ));
@@ -1059,6 +1053,30 @@ mod tests {
                 "expected error when a cert-based DTLS 1.2 suite is enabled \
                  without any kx groups, even alongside PSK"
             ),
+        }
+    }
+
+    #[test]
+    fn ecdhe_psk_only_with_empty_kx_groups_rejected() {
+        struct DummyResolver;
+        impl PskResolver for DummyResolver {
+            fn resolve(&self, _identity: &[u8]) -> Option<Vec<u8>> {
+                Some(b"key".to_vec())
+            }
+        }
+
+        // ECDHE_PSK authenticates with the PSK but still negotiates an ECDHE
+        // group, so a PSK-only filter that keeps it must have kx groups.
+        let result = Config::builder()
+            .with_psk_server(None, Arc::new(DummyResolver))
+            .dtls12_cipher_suites(&[Dtls12CipherSuite::ECDHE_PSK_CHACHA20_POLY1305_SHA256])
+            .dtls13_cipher_suites(&[])
+            .kx_groups(&[])
+            .build();
+        match result {
+            Err(Error::ConfigError(ConfigError::NoDtls12KeyExchangeGroupsAfterFiltering)) => {}
+            Err(other) => panic!("expected ConfigError, got: {other:?}"),
+            Ok(_) => panic!("expected error for ECDHE_PSK without any kx groups"),
         }
     }
 

@@ -409,6 +409,11 @@ impl State {
 
         trace!("Accepted ClientHello cookie; proceeding with handshake");
 
+        // Suites that do an ECDHE exchange are only usable with a group in common
+        // with the client (RFC 8422 §5.1); otherwise a later suite may still work.
+        let has_common_group =
+            negotiate_named_group(server.engine.config(), ch.supported_groups()).is_ok();
+
         // Client offered suites; we pick per client order intersecting allowed and server key compatibility
         let mut selected: Option<Dtls12CipherSuite> = None;
         for s in ch.cipher_suites.iter() {
@@ -417,7 +422,9 @@ impl State {
                 .engine
                 .crypto_context()
                 .is_cipher_suite_compatible(*s);
-            if is_allowed && is_compatible {
+            let needs_group = s.has_ecc();
+            let has_usable_kx = !needs_group || has_common_group;
+            if is_allowed && is_compatible && has_usable_kx {
                 selected = Some(*s);
                 break;
             }
@@ -535,8 +542,12 @@ impl State {
             crate::InvalidStateError::NoCipherSuiteSelected,
         ))?;
 
-        if cs.is_psk() {
-            return self.send_server_key_exchange_psk(server);
+        match cs.as_key_exchange_algorithm() {
+            KeyExchangeAlgorithm::ECDHE_PSK => {
+                return self.send_server_key_exchange_ecdhe_psk(server);
+            }
+            KeyExchangeAlgorithm::PSK => return self.send_server_key_exchange_psk(server),
+            _ => {}
         }
 
         let client_random = server.client_random.ok_or(Error::InvalidState(
@@ -549,23 +560,10 @@ impl State {
         // - client offers, and
         // - server-allowed DTLS 1.2 groups (provider + config filter)
         // Preference follows Config::kx_groups() order.
-        let allowed_named_groups: Vec<NamedGroup> = server
-            .engine
-            .config()
-            .kx_groups()
-            .map(|g| g.name())
-            .collect();
-        let selected_named_group = select_named_group(
+        let selected_named_group = negotiate_named_group(
+            server.engine.config(),
             server.client_supported_groups.as_ref(),
-            &allowed_named_groups,
-        )
-        .ok_or_else(|| {
-            if server.client_supported_groups.is_some() {
-                Error::SecurityError(crate::SecurityError::NoCommonKeyExchangeGroup)
-            } else {
-                Error::CryptoError(crate::CryptoError::NoDtls12KeyExchangeGroupsConfigured)
-            }
-        })?;
+        )?;
 
         // Select signature/hash for SKE by intersecting client's list
         // with our key type, preferring the key's native hash algorithm.
@@ -611,6 +609,44 @@ impl State {
         } else {
             Ok(Self::SendServerHelloDone)
         }
+    }
+
+    /// ECDHE_PSK ServerKeyExchange: the identity hint (empty if none is configured) and our
+    /// ECDH parameters. They are unsigned: the PSK is mixed into the pre-master secret, so a
+    /// peer without it cannot produce a valid Finished (RFC 5489).
+    fn send_server_key_exchange_ecdhe_psk(
+        self,
+        server: &mut Server,
+    ) -> Result<Self, InternalError> {
+        let named_group = negotiate_named_group(
+            server.engine.config(),
+            server.client_supported_groups.as_ref(),
+        )?;
+        let hint = server
+            .engine
+            .config()
+            .psk_identity_hint()
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
+
+        server
+            .engine
+            .create_handshake(MessageType::ServerKeyExchange, move |body, engine| {
+                PskParams::serialize_from_bytes(&hint, body);
+                let kx_buf = engine.pop_buffer();
+                let pubkey = engine
+                    .crypto_context_mut()
+                    .init_ecdh_server(named_group, kx_buf)
+                    .map_err(Error::CryptoError)?;
+                body.push(CurveType::NamedCurve.as_u8());
+                body.extend_from_slice(&named_group.as_u16().to_be_bytes());
+                body.push(pubkey.len() as u8);
+                body.extend_from_slice(pubkey);
+                Ok(())
+            })?;
+
+        // PSK never sends CertificateRequest
+        Ok(Self::SendServerHelloDone)
     }
 
     /// PSK ServerKeyExchange: send identity hint only (no ECDHE, no signature).
@@ -757,16 +793,30 @@ impl State {
         ))?;
 
         if suite.is_psk() {
-            // Extract PSK identity range before dropping handshake
-            let identity_range = match &ckx.exchange_keys {
-                ExchangeKeys::Psk(keys) => keys.identity_range.clone(),
-                _ => {
-                    return Err(Error::UnexpectedMessage(
-                        crate::UnexpectedMessageError::EcdheClientKeyExchangeInPskPath,
-                    )
-                    .into());
-                }
-            };
+            // Extract the PSK identity (and, for ECDHE_PSK, the client's public key) ranges
+            // before dropping handshake
+            let (identity_range, public_key_range) =
+                match (suite.as_key_exchange_algorithm(), &ckx.exchange_keys) {
+                    (KeyExchangeAlgorithm::PSK, ExchangeKeys::Psk(keys)) => {
+                        (keys.identity_range.clone(), None)
+                    }
+                    (KeyExchangeAlgorithm::ECDHE_PSK, ExchangeKeys::EcdhePsk(keys)) => (
+                        keys.identity.identity_range.clone(),
+                        Some(keys.ecdh.public_key_range.clone()),
+                    ),
+                    (KeyExchangeAlgorithm::ECDHE_PSK, _) => {
+                        return Err(Error::UnexpectedMessage(
+                            crate::UnexpectedMessageError::ClientKeyExchangeNotEcdhePsk,
+                        )
+                        .into());
+                    }
+                    _ => {
+                        return Err(Error::UnexpectedMessage(
+                            crate::UnexpectedMessageError::EcdheClientKeyExchangeInPskPath,
+                        )
+                        .into());
+                    }
+                };
 
             drop(maybe);
 
@@ -794,16 +844,29 @@ impl State {
 
             server.psk_valid = Some(psk_valid);
 
-            let crypto = server.engine.crypto_context_mut();
-            crypto.set_psk(psk);
-            crypto
-                .compute_psk_pre_master_secret()
-                .map_err(Error::CryptoError)?;
+            if let Some(range) = public_key_range {
+                let buf = server.engine.pop_buffer();
+                let client_pub = &server.defragment_buffer[range];
+                let crypto = server.engine.crypto_context_mut();
+                crypto
+                    .compute_shared_secret(client_pub, buf)
+                    .map_err(Error::CryptoError)?;
+                crypto.set_psk(psk);
+                crypto
+                    .compute_ecdhe_psk_pre_master_secret()
+                    .map_err(Error::CryptoError)?;
+            } else {
+                let crypto = server.engine.crypto_context_mut();
+                crypto.set_psk(psk);
+                crypto
+                    .compute_psk_pre_master_secret()
+                    .map_err(Error::CryptoError)?;
+            }
         } else {
             // Extract client's public key range before dropping handshake
             let public_key_range = match &ckx.exchange_keys {
                 ExchangeKeys::Ecdh(keys) => keys.public_key_range.clone(),
-                ExchangeKeys::Psk(_) => {
+                ExchangeKeys::Psk(_) | ExchangeKeys::EcdhePsk(_) => {
                     return Err(Error::UnexpectedMessage(
                         crate::UnexpectedMessageError::PskClientKeyExchangeInEcdhePath,
                     )
@@ -1344,6 +1407,21 @@ fn handshake_serialize_certificate_request(
     let cr = CertificateRequest::new(cert_types, selected, cert_auths);
     cr.serialize(&[], body);
     Ok(())
+}
+
+/// Pick the ECDHE group from the client's offer and the server's configured groups.
+fn negotiate_named_group(
+    config: &Config,
+    client_groups: Option<&NamedGroupVec>,
+) -> Result<NamedGroup, Error> {
+    let server_groups: Vec<NamedGroup> = config.kx_groups().map(|g| g.name()).collect();
+    select_named_group(client_groups, &server_groups).ok_or_else(|| {
+        if client_groups.is_some() {
+            Error::SecurityError(crate::SecurityError::NoCommonKeyExchangeGroup)
+        } else {
+            Error::CryptoError(crate::CryptoError::NoDtls12KeyExchangeGroupsConfigured)
+        }
+    })
 }
 
 fn select_named_group(

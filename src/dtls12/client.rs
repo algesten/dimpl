@@ -24,11 +24,12 @@ use crate::crypto::SrtpProfile;
 use crate::dtls12::Server;
 use crate::dtls12::context::AuthMode;
 use crate::dtls12::engine::Engine;
+use crate::dtls12::message::ProtocolVersion;
 use crate::dtls12::message::{Body, CipherSuiteVec, ClientHello, ClientKeyExchange};
-use crate::dtls12::message::{ClientPskKeys, ServerKeyExchangeParams};
-use crate::dtls12::message::{CompressionMethod, ContentType, Cookie};
+use crate::dtls12::message::{ClientEcdhePskKeys, ClientPskKeys, ServerKeyExchangeParams};
+use crate::dtls12::message::{CompressionMethod, ContentType, Cookie, CurveType};
 use crate::dtls12::message::{DigitallySigned, Dtls12CipherSuite};
-use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, ProtocolVersion};
+use crate::dtls12::message::{ExtensionType, KeyExchangeAlgorithm, MessageType, NamedGroup};
 use crate::dtls12::message::{Random, SessionId, SignatureAndHashAlgorithm};
 use crate::timer::HandshakeTimers;
 use crate::{Config, DtlsCertificate, Error, InternalError, KeyingMaterial, Output};
@@ -605,10 +606,10 @@ impl State {
             crate::InvalidStateError::NoCipherSuiteSelected,
         ))?;
 
-        if cipher_suite.is_psk() {
-            self.await_server_key_exchange_psk(client)
-        } else {
-            self.await_server_key_exchange_ecdhe(client)
+        match cipher_suite.as_key_exchange_algorithm() {
+            KeyExchangeAlgorithm::ECDHE_PSK => self.await_server_key_exchange_ecdhe_psk(client),
+            KeyExchangeAlgorithm::PSK => self.await_server_key_exchange_psk(client),
+            _ => self.await_server_key_exchange_ecdhe(client),
         }
     }
 
@@ -648,7 +649,7 @@ impl State {
                     ecdh.named_group,
                     ecdh.public_key_range.clone(),
                 ),
-                ServerKeyExchangeParams::Psk(_) => {
+                ServerKeyExchangeParams::Psk(_) | ServerKeyExchangeParams::EcdhePsk(_) => {
                     return Err(Error::UnexpectedMessage(
                         crate::UnexpectedMessageError::PskServerKeyExchangeInEcdhePath,
                     )
@@ -665,12 +666,22 @@ impl State {
             )
         };
 
+        // Only named curves are currently supported
+        if curve_type != CurveType::NamedCurve {
+            return Err(Error::SecurityError(
+                crate::SecurityError::UnsupportedKeyExchangeAlgorithm,
+            )
+            .into());
+        }
+
         // unwrap: is ok because we verify the order of the flight
         let client_random = client.random.unwrap();
         let server_random = client.server_random.unwrap();
 
         // Drop maybe to release the buffer borrow
         drop(maybe);
+
+        check_group_offered(client, named_group)?;
 
         // Now we can access the buffer to get the actual bytes
         let signature_bytes = &client.defragment_buffer[signature_range];
@@ -743,6 +754,69 @@ impl State {
             .map_err(Error::CryptoError)?;
 
         Ok(Self::AwaitCertificateRequest)
+    }
+
+    fn await_server_key_exchange_ecdhe_psk(
+        self,
+        client: &mut Client,
+    ) -> Result<Self, InternalError> {
+        let maybe = client.engine.next_handshake(
+            MessageType::ServerKeyExchange,
+            &mut client.defragment_buffer,
+        )?;
+
+        let Some(handshake) = maybe else {
+            return Ok(self);
+        };
+
+        let Body::ServerKeyExchange(ske) = &handshake.body else {
+            unreachable!()
+        };
+
+        // ECDHE_PSK ServerKeyExchange carries an identity hint and the server's ECDH
+        // parameters. They are unsigned, the PSK is mixed into the pre-master secret
+        // so a peer without it cannot produce a valid Finished.
+        let (hint_range, curve_type, named_group, public_key_range) = match &ske.params {
+            ServerKeyExchangeParams::EcdhePsk(p) => (
+                p.hint.hint_range.clone(),
+                p.ecdh.curve_type,
+                p.ecdh.named_group,
+                p.ecdh.public_key_range.clone(),
+            ),
+            _ => {
+                return Err(Error::UnexpectedMessage(
+                    crate::UnexpectedMessageError::ServerKeyExchangeNotEcdhePsk,
+                )
+                .into());
+            }
+        };
+
+        drop(handshake);
+
+        // Only named curves are currently supported
+        if curve_type != CurveType::NamedCurve {
+            return Err(Error::SecurityError(
+                crate::SecurityError::UnsupportedKeyExchangeAlgorithm,
+            )
+            .into());
+        }
+
+        check_group_offered(client, named_group)?;
+
+        trace!("ECDHE_PSK identity hint ({} bytes)", hint_range.len());
+        // Hint is informational only; we don't use it for PSK lookup currently
+
+        let public_key = &client.defragment_buffer[public_key_range];
+        let kx_buf = client.engine.pop_buffer();
+        let shared_secret = client.engine.pop_buffer();
+        client
+            .engine
+            .crypto_context_mut()
+            .process_ecdh_params(named_group, public_key, kx_buf, shared_secret)
+            .map_err(Error::CryptoError)?;
+
+        // PSK has no CertificateRequest
+        Ok(Self::AwaitServerHelloDone)
     }
 
     /// PSK ServerKeyExchange carries only an optional identity hint (no signature).
@@ -1279,6 +1353,22 @@ fn handshake_create_client_hello(
     Ok(())
 }
 
+/// Check that the server-chosen group is one the client was configured to offer.
+fn check_group_offered(client: &Client, group: NamedGroup) -> Result<(), Error> {
+    if client
+        .engine
+        .config()
+        .kx_groups()
+        .any(|g| g.name() == group)
+    {
+        Ok(())
+    } else {
+        Err(Error::CryptoError(
+            crate::CryptoError::UnsupportedEcdheNamedGroup(group),
+        ))
+    }
+}
+
 fn handshake_create_certificate(body: &mut Buf, engine: &mut Engine) -> Result<(), Error> {
     let crypto = engine.crypto_context();
     crypto.serialize_client_certificate(body);
@@ -1319,7 +1409,7 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
             trace!("Generated public key size: {} bytes", public_key.len());
             ClientKeyExchange::serialize_from_bytes(public_key, body);
         }
-        KeyExchangeAlgorithm::PSK => {
+        KeyExchangeAlgorithm::PSK | KeyExchangeAlgorithm::ECDHE_PSK => {
             let identity = engine
                 .config()
                 .psk_identity()
@@ -1337,11 +1427,21 @@ fn handshake_create_client_key_exchange(body: &mut Buf, engine: &mut Engine) -> 
             // Set the PSK and compute pre-master secret
             let crypto = engine.crypto_context_mut();
             crypto.set_psk(psk);
-            crypto
-                .compute_psk_pre_master_secret()
-                .map_err(Error::CryptoError)?;
-
-            ClientPskKeys::serialize_from_bytes(&identity, body);
+            if key_exchange_algorithm == KeyExchangeAlgorithm::ECDHE_PSK {
+                // The ServerKeyExchange already gave us the ECDH shared secret
+                crypto
+                    .compute_ecdhe_psk_pre_master_secret()
+                    .map_err(Error::CryptoError)?;
+                let public_key = crypto
+                    .maybe_init_key_exchange()
+                    .map_err(Error::CryptoError)?;
+                ClientEcdhePskKeys::serialize_from_bytes(&identity, public_key, body);
+            } else {
+                crypto
+                    .compute_psk_pre_master_secret()
+                    .map_err(Error::CryptoError)?;
+                ClientPskKeys::serialize_from_bytes(&identity, body);
+            }
         }
         _ => {
             return Err(Error::SecurityError(

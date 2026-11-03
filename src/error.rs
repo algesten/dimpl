@@ -79,6 +79,10 @@ pub enum UnexpectedMessageError {
     PskClientKeyExchangeInEcdhePath,
     /// An ECDHE `ClientKeyExchange` was received while processing a PSK suite.
     EcdheClientKeyExchangeInPskPath,
+    /// A non-ECDHE_PSK `ServerKeyExchange` was received while processing an ECDHE_PSK suite.
+    ServerKeyExchangeNotEcdhePsk,
+    /// A non-ECDHE_PSK `ClientKeyExchange` was received while processing an ECDHE_PSK suite.
+    ClientKeyExchangeNotEcdhePsk,
     /// A DTLS 1.3 `CertificateRequest` context was shorter than declared.
     CertificateRequestContextTruncated,
     /// A DTLS 1.3 `CertificateRequest` extension block was shorter than declared.
@@ -817,6 +821,12 @@ impl fmt::Display for UnexpectedMessageError {
             }
             Self::EcdheClientKeyExchangeInPskPath => {
                 write!(f, "ECDHE ClientKeyExchange in PSK path")
+            }
+            Self::ServerKeyExchangeNotEcdhePsk => {
+                write!(f, "expected an ECDHE_PSK ServerKeyExchange")
+            }
+            Self::ClientKeyExchangeNotEcdhePsk => {
+                write!(f, "expected an ECDHE_PSK ClientKeyExchange")
             }
             Self::CertificateRequestContextTruncated => {
                 write!(f, "CertificateRequest context truncated")
