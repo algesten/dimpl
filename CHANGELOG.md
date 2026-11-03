@@ -1,5 +1,7 @@
 # Unreleased
 
+  * Deny compiler warnings across CI feature configurations #210
+
 # 0.9.0
 
   * Update yanked crypto-bigint and remove unused cargo-deny licenses #206

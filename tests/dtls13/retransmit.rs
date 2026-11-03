@@ -8,7 +8,6 @@ use dimpl::{Config, Dtls};
 use crate::common::*;
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_client_retransmits_on_timeout() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -55,7 +54,6 @@ fn dtls13_client_retransmits_on_timeout() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_completes_after_packet_loss() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -125,7 +123,6 @@ fn dtls13_handshake_completes_after_packet_loss() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_completes_with_early_packet_loss() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -215,7 +212,6 @@ fn dtls13_handshake_completes_with_early_packet_loss() {
 /// Uses a deterministic drop pattern: drop packets only in specific rounds,
 /// ensuring retransmissions in later rounds get through.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handles_bidirectional_packet_loss() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -308,7 +304,6 @@ fn dtls13_handles_bidirectional_packet_loss() {
 
 /// Test random packet loss pattern (chaos test)
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_survives_random_packet_loss_pattern() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -392,7 +387,6 @@ fn dtls13_survives_random_packet_loss_pattern() {
 /// Test selective retransmit: verify that only unACKed records are retransmitted.
 /// This test carefully controls packet delivery to verify the actual retransmit behavior.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_selective_retransmit_only_missing_records() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -617,7 +611,6 @@ fn dtls13_selective_retransmit_only_missing_records() {
 /// Start a handshake but never deliver packets to the server.
 /// Record each timeout value and verify they increase monotonically.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_retransmit_exponential_backoff() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -705,7 +698,6 @@ fn dtls13_retransmit_exponential_backoff() {
 /// Test that when the server's ACK is lost, the client falls back to its
 /// retransmission timer and the handshake still completes.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_ack_loss_falls_back_to_timer() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -788,7 +780,6 @@ fn dtls13_ack_loss_falls_back_to_timer() {
 /// The default DTLS 1.3 config triggers HRR (via cookie). Drop packets during
 /// the HRR exchange and verify the handshake still completes via retransmission.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_retransmit_during_hrr_flow() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -873,7 +864,6 @@ fn dtls13_retransmit_during_hrr_flow() {
 /// Configure a 5-second handshake timeout, never deliver any packets,
 /// and verify the client eventually returns a timeout error.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_timeout_aborts() {
     use dimpl::certificate::generate_self_signed_certificate;
 

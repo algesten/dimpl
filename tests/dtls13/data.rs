@@ -8,7 +8,6 @@ use dimpl::{Dtls, Output};
 use crate::common::*;
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_application_data_exchange() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -96,7 +95,6 @@ fn dtls13_application_data_exchange() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_multiple_application_data_messages() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -172,7 +170,6 @@ fn dtls13_multiple_application_data_messages() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_bidirectional_data_exchange() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -250,7 +247,6 @@ fn dtls13_bidirectional_data_exchange() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_many_small_messages() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -318,7 +314,6 @@ fn dtls13_many_small_messages() {
 /// Test that application data queued before handshake completion is piggybacked
 /// with the Finished message in the same packet.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_piggybacks_app_data_with_finished() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -415,7 +410,6 @@ fn dtls13_piggybacks_app_data_with_finished() {
 
 /// Test that server can piggyback application data with its first response (Finished).
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_server_piggybacks_app_data_with_finished() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -522,7 +516,6 @@ fn dtls13_server_piggybacks_app_data_with_finished() {
 /// 5. Server retransmits the lost Certificate packet
 /// 6. Client completes handshake and decrypts the cached app data
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_caches_app_data_when_handshake_packet_lost() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -645,7 +638,6 @@ fn dtls13_caches_app_data_when_handshake_packet_lost() {
 /// With the default MTU of 1150, a 5000-byte message produces a single record
 /// in an oversized datagram. The receiver must decrypt and deliver the full payload.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_large_application_data() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -741,7 +733,6 @@ fn dtls13_large_application_data() {
 /// triggers an automatic KeyUpdate. Then sends 5 more messages and verifies
 /// all 15 are received, confirming data flows correctly on the new epoch keys.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_data_after_key_update() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -835,7 +826,6 @@ fn dtls13_data_after_key_update() {
 /// After handshake, sends application data without polling outputs until
 /// the transmit queue overflows. Verifies `Error::TransmitQueueFull` is returned.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_queue_overflow_tx() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -913,7 +903,6 @@ fn dtls13_queue_overflow_tx() {
 /// reading application data. Verifies `handle_packet` returns `ReceiveQueueFull`
 /// (no panic).
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_queue_overflow_rx() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;

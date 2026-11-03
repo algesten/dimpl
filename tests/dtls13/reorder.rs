@@ -8,7 +8,6 @@ use dimpl::Dtls;
 use crate::common::*;
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handles_duplicate_packets() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -69,7 +68,6 @@ fn dtls13_handles_duplicate_packets() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handles_out_of_order_packets() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -134,7 +132,6 @@ fn dtls13_handles_out_of_order_packets() {
 /// Test severely reordered packets - deliver packets in reverse order
 /// Uses deterministic reordering pattern with sufficient rounds for retransmissions.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handles_severely_reordered_packets() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -209,7 +206,6 @@ fn dtls13_handles_severely_reordered_packets() {
 /// Test delayed packets - hold packets for several rounds then deliver all at once
 /// Uses deterministic hold pattern with sufficient rounds for retransmissions.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handles_delayed_burst_delivery() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -296,7 +292,6 @@ fn dtls13_handles_delayed_burst_delivery() {
 /// Test interleaved old and new packets (simulating network path changes)
 /// Uses deterministic replay pattern with sufficient rounds for retransmissions.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handles_interleaved_old_and_new_packets() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -374,7 +369,6 @@ fn dtls13_handles_interleaved_old_and_new_packets() {
 /// each one. Then replay the very first packet. The replayed packet should be
 /// silently dropped because it falls outside the 64-packet replay window.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_replay_window_rejects_old_record() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -462,7 +456,6 @@ fn dtls13_replay_window_rejects_old_record() {
 /// deliver the exact same packet again. Only one copy of the data should be
 /// received by the server — the duplicate is rejected by the replay window.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_replay_window_rejects_duplicate_app_data() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -538,7 +531,6 @@ fn dtls13_replay_window_rejects_duplicate_app_data() {
 /// (e.g., deliver message 3 before message 2, but both within the 64-packet
 /// window). Both should be accepted and the data received.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_replay_window_accepts_within_range() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -630,7 +622,6 @@ fn dtls13_replay_window_accepts_within_range() {
 /// Deliver them in reverse order. All 10 messages should be received by the
 /// server since they are all within the 64-packet replay window.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_reorder_app_data_after_handshake() {
     use dimpl::certificate::generate_self_signed_certificate;
 

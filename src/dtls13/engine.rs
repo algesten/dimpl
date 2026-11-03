@@ -2674,14 +2674,12 @@ impl RecordHandler for Engine {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "rcgen"))]
 mod tests {
     use super::*;
 
-    #[cfg(feature = "rcgen")]
     use crate::certificate::generate_self_signed_certificate;
 
-    #[cfg(feature = "rcgen")]
     fn test_engine() -> Engine {
         let cert = generate_self_signed_certificate().expect("gen cert");
         let config = Arc::new(Config::builder().build().expect("build config"));
@@ -2689,7 +2687,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn timing_resend_queue_failure_is_fatal() {
         let now = Instant::now();
         let certificate = generate_self_signed_certificate().expect("certificate");
@@ -2824,7 +2821,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn premature_datagram_recycles_its_pooled_buffer() {
         let mut engine = test_engine();
         let packet = encrypted_application_data_record(1, b"buffered ciphertext");
@@ -2883,7 +2879,6 @@ mod tests {
     /// to exceed MAX_SEQUENCE_NUMBER (2^48 - 1). This test sets the counter
     /// to MAX and verifies that `create_plaintext_record` returns an error.
     #[test]
-    #[cfg(feature = "rcgen")]
     fn epoch_0_sequence_number_rejects_overflow() {
         let mut engine = test_engine();
 
@@ -2903,7 +2898,6 @@ mod tests {
     /// alongside the traffic secrets, eliminating the need for a separate
     /// `derive_handshake_secret` method.
     #[test]
-    #[cfg(feature = "rcgen")]
     fn derive_handshake_secrets_returns_handshake_secret() {
         let mut engine = test_engine();
         engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
@@ -2954,7 +2948,6 @@ mod tests {
     /// via `self.buffers_free.pop()`, reusing pooled allocations instead of
     /// creating a fresh `Buf::new()`.
     #[test]
-    #[cfg(feature = "rcgen")]
     fn derive_early_secret_uses_buffer_pool() {
         let mut engine = test_engine();
         engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
@@ -2977,7 +2970,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn ack_tracking_full_does_not_panic_on_handshake_replacement() {
         let mut engine = test_engine();
 
@@ -3020,7 +3012,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn ack_tracking_ignores_non_handshake_records_in_coalesced_datagram() {
         let mut engine = test_engine();
 
@@ -3047,7 +3038,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn malformed_ack_record_number_vector_is_ignored() {
         let mut engine = test_engine();
         let fragment = engine.pop_buffer();
@@ -3074,7 +3064,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "rcgen")]
     fn protected_test_engine() -> Engine {
         let mut engine = test_engine();
         engine.set_cipher_suite(Dtls13CipherSuite::AES_128_GCM_SHA256);
@@ -3094,7 +3083,6 @@ mod tests {
         engine
     }
 
-    #[cfg(feature = "rcgen")]
     fn engine_packets(engine: &mut Engine, now: Instant) -> Vec<Vec<u8>> {
         let mut packets = Vec::new();
         let mut buffer = [0; 2048];
@@ -3107,7 +3095,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "rcgen")]
     fn ack_for(records: &[(u64, u64)]) -> Vec<u8> {
         let mut ack = Vec::new();
         ack.extend_from_slice(&((records.len() * 16) as u16).to_be_bytes());
@@ -3119,7 +3106,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn ack_matches_mixed_transmissions_and_preserves_selective_retransmission() {
         let now = Instant::now();
         let mut engine = protected_test_engine();
@@ -3176,7 +3162,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn duplicate_key_update_does_not_ack_discarded_new_update() {
         let now = Instant::now();
         let mut sender = protected_test_engine();
@@ -3225,7 +3210,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "rcgen")]
     fn key_update_ack_after_retransmission(lost: bool) {
         let now = Instant::now();
         let mut sender = protected_test_engine();
@@ -3312,19 +3296,16 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn key_update_accepts_late_ack_for_original_transmission() {
         key_update_ack_after_retransmission(false);
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn key_update_recovers_after_lost_ack() {
         key_update_ack_after_retransmission(true);
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn exhausted_transmission_history_preserves_flight_and_accepts_old_ack() {
         let now = Instant::now();
         let mut engine = protected_test_engine();
@@ -3371,7 +3352,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn plaintext_and_ack_retransmissions_do_not_exhaust_history() {
         let now = Instant::now();
         let mut engine = protected_test_engine();

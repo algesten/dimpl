@@ -146,11 +146,13 @@ use std::fmt::Debug;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::OnceLock;
 
+#[cfg(feature = "_crypto-common")]
+use crate::CertificateError;
+use crate::CryptoError;
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
-use crate::{CertificateError, CryptoError};
 
 /// OID for the P-256 elliptic curve (secp256r1 / prime256v1).
 #[cfg(feature = "_crypto-common")]
@@ -626,12 +628,11 @@ impl CryptoProvider {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "rcgen"))]
 mod tests {
     use super::*;
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn cert_named_group_p256() {
         use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256};
 
@@ -644,7 +645,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn cert_named_group_p384() {
         use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P384_SHA384};
 
@@ -657,7 +657,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rcgen")]
     fn cert_named_group_invalid_der() {
         let result = cert_named_group(&[0x00, 0x01, 0x02]);
         assert!(result.is_err());

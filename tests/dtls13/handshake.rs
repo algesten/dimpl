@@ -8,7 +8,6 @@ use dimpl::{CertificateError, Config, Dtls, DtlsCertificate, Error, SrtpProfile}
 use crate::common::*;
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_empty_client_certificate_is_rejected_when_required() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -62,7 +61,6 @@ fn dtls13_empty_client_certificate_is_rejected_when_required() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_client_certificate_not_required() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -82,7 +80,6 @@ fn dtls13_client_certificate_not_required() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_basic_handshake() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -134,7 +131,6 @@ fn dtls13_basic_handshake() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_with_keying_material() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -202,7 +198,6 @@ fn dtls13_handshake_with_keying_material() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_peer_certificate_exchange() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -275,7 +270,6 @@ fn dtls13_peer_certificate_exchange() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_srtp_keying_material_correct_size() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -338,7 +332,6 @@ fn dtls13_srtp_keying_material_correct_size() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_hello_retry_request_flow() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -406,7 +399,6 @@ fn dtls13_hello_retry_request_flow() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_aes_256_gcm() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -488,7 +480,6 @@ fn dtls13_handshake_aes_256_gcm() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_chacha20_poly1305() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -571,7 +562,6 @@ fn dtls13_handshake_chacha20_poly1305() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_secp256r1_key_exchange() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -660,7 +650,6 @@ fn dtls13_handshake_secp256r1_key_exchange() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_x25519_key_exchange() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -726,7 +715,6 @@ fn dtls13_handshake_x25519_key_exchange() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_client_certificate_auth() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -804,7 +792,6 @@ fn dtls13_handshake_client_certificate_auth() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_timeout_expires() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -858,7 +845,6 @@ fn dtls13_handshake_timeout_expires() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_hrr_with_p256_then_x25519() {
     // Client offers P-256 key_share but server prefers X25519. Since the
     // client's key_share does not match the server's preferred group, the
@@ -990,7 +976,6 @@ fn dtls13_hrr_with_p256_then_x25519() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_hrr_handshake_completes_after_packet_loss() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -1154,7 +1139,6 @@ fn dtls13_hrr_handshake_completes_after_packet_loss() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_no_client_auth() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -1233,7 +1217,6 @@ fn dtls13_handshake_no_client_auth() {
 /// Verify the Finished flight is retransmitted on packet loss when client
 /// auth is NOT requested (regression test for flight_begin fix).
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_no_client_auth_retransmit_finished() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -1307,7 +1290,7 @@ fn dtls13_no_client_auth_retransmit_finished() {
 }
 
 #[test]
-#[cfg(all(feature = "rcgen", feature = "rust-crypto"))]
+#[cfg(feature = "rust-crypto")]
 fn dtls13_handshake_chacha20_poly1305_rust_crypto() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -1390,7 +1373,7 @@ fn dtls13_handshake_chacha20_poly1305_rust_crypto() {
 }
 
 #[test]
-#[cfg(all(feature = "rcgen", feature = "rust-crypto"))]
+#[cfg(feature = "rust-crypto")]
 fn dtls13_handshake_x25519_rust_crypto() {
     use dimpl::Config;
     use dimpl::certificate::generate_self_signed_certificate;
