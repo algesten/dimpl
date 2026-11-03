@@ -2674,7 +2674,7 @@ impl RecordHandler for Engine {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "rcgen"))]
 mod tests {
     use super::*;
 

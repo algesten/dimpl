@@ -146,11 +146,13 @@ use std::fmt::Debug;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::OnceLock;
 
+#[cfg(feature = "_crypto-common")]
+use crate::CertificateError;
+use crate::CryptoError;
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
-use crate::{CertificateError, CryptoError};
 
 /// OID for the P-256 elliptic curve (secp256r1 / prime256v1).
 #[cfg(feature = "_crypto-common")]
@@ -626,7 +628,7 @@ impl CryptoProvider {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "rcgen"))]
 mod tests {
     use super::*;
 

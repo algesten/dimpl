@@ -1,7 +1,9 @@
 //! DTLS 1.2 packet reordering, replay, and duplicate tests.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+#[cfg(feature = "rcgen")]
+use std::time::Duration;
+use std::time::Instant;
 
 use dimpl::Dtls;
 
