@@ -3,7 +3,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "rcgen")]
 use dimpl::certificate::generate_self_signed_certificate;
 use dimpl::{Config, Dtls};
 
@@ -121,7 +120,6 @@ fn has_ciphertext_record_len(packets: &[Vec<u8>], wanted: usize) -> bool {
     false
 }
 
-#[cfg(feature = "rcgen")]
 fn connected_pair(config: Arc<Config>) -> (Dtls, Dtls, Instant) {
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -174,7 +172,6 @@ fn quiesce_pair(client: &mut Dtls, server: &mut Dtls, now: Instant) {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn server_does_not_echo_client_legacy_session_id() {
     let _ = env_logger::try_init();
 
@@ -221,7 +218,6 @@ fn server_does_not_echo_client_legacy_session_id() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn server_rejects_non_empty_client_legacy_cookie() {
     let _ = env_logger::try_init();
 
@@ -257,7 +253,6 @@ fn server_rejects_non_empty_client_legacy_cookie() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn client_aborts_on_distinct_second_hello_retry_request() {
     let _ = env_logger::try_init();
 
@@ -297,7 +292,6 @@ fn client_aborts_on_distinct_second_hello_retry_request() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn application_data_waits_for_key_update_ack() {
     let _ = env_logger::try_init();
 
@@ -367,7 +361,6 @@ fn application_data_waits_for_key_update_ack() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn update_requested_is_ignored_while_key_update_in_flight() {
     let _ = env_logger::try_init();
 
@@ -449,7 +442,6 @@ fn update_requested_is_ignored_while_key_update_in_flight() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn server_retransmits_final_ack_for_retransmitted_client_final_flight() {
     let _ = env_logger::try_init();
 

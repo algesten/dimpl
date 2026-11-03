@@ -10,7 +10,6 @@ use crate::common::*;
 /// Test that KeyUpdate is triggered automatically when AEAD encryption limit is reached.
 /// Uses a low limit so the test can observe multiple transparent KeyUpdates.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_key_update_on_aead_limit() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -92,7 +91,6 @@ fn dtls13_key_update_on_aead_limit() {
 /// Sends 100 messages in each direction (client first, then server) to avoid
 /// simultaneous KeyUpdate contention.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_key_update_bidirectional_after_limit() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -205,7 +203,6 @@ fn dtls13_key_update_bidirectional_after_limit() {
 /// This verifies that auto-KeyUpdate is transparent to application data, even
 /// when packets arrive out of order during the key transition.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_key_update_old_epoch_packet_still_decrypted() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -348,7 +345,6 @@ fn dtls13_key_update_old_epoch_packet_still_decrypted() {
 /// AEAD limit, sending many messages should trigger 3+ KeyUpdates in sequence,
 /// and all messages must still be received.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_key_update_multiple_sequential() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -433,7 +429,6 @@ fn dtls13_key_update_multiple_sequential() {
 /// itself is lost and must be retransmitted via timeout. After recovery,
 /// subsequent data exchange must work normally.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_key_update_with_packet_loss() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -560,7 +555,6 @@ fn dtls13_key_update_with_packet_loss() {
 /// tests the key rotation machinery and epoch tracking under extreme churn,
 /// exercising many more KeyUpdate cycles than the limit=10 tests above.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_key_update_high_frequency() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -643,7 +637,6 @@ fn dtls13_key_update_high_frequency() {
 
 /// Losing the first ACK must not strand either peer's KeyUpdate.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_key_update_retransmission_is_acked_again() {
     use dimpl::certificate::generate_self_signed_certificate;
 

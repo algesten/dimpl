@@ -11,7 +11,6 @@ use dimpl::{Dtls, Error, Output};
 use crate::common::*;
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_to_dtls13_server() {
     //! An auto-sensing client should complete a full handshake against an
     //! explicit DTLS 1.3 server.
@@ -69,7 +68,6 @@ fn auto_client_to_dtls13_server() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_to_dtls13_server_keying_material() {
     //! Verify that an auto-client and DTLS 1.3 server derive identical
     //! SRTP keying material.
@@ -135,7 +133,6 @@ fn auto_client_to_dtls13_server_keying_material() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_to_auto_server() {
     //! Both sides use auto-sense. They should negotiate DTLS 1.3 (the
     //! hybrid CH includes supported_versions with DTLS 1.3 first).
@@ -194,7 +191,6 @@ fn auto_client_to_auto_server() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_to_dtls12_server() {
     //! An auto-sensing client against an explicit DTLS 1.2 server.
     //! The server sends HelloVerifyRequest, triggering the 1.2 fork.
@@ -253,7 +249,6 @@ fn auto_client_to_dtls12_server() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_to_dtls12_server_keying_material() {
     //! Verify that an auto-client and DTLS 1.2 server derive identical
     //! SRTP keying material after HVR-based version negotiation.
@@ -320,7 +315,6 @@ fn auto_client_to_dtls12_server_keying_material() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_to_dtls13_server_application_data() {
     //! After handshake, auto-client and DTLS 1.3 server can exchange
     //! application data in both directions.
@@ -403,7 +397,6 @@ fn auto_client_to_dtls13_server_application_data() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_to_dtls12_server_no_cookie() {
     //! An auto-sensing client against a DTLS 1.2 server that skips
     //! HelloVerifyRequest (use_server_cookie = false). The server sends
@@ -464,7 +457,6 @@ fn auto_client_to_dtls12_server_no_cookie() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_to_dtls13_server_no_cookie() {
     //! An auto-sensing client against a DTLS 1.3 server that skips
     //! HelloRetryRequest cookie exchange (use_server_cookie = false).
@@ -525,7 +517,6 @@ fn auto_client_to_dtls13_server_no_cookie() {
 /// Auto-sense client defers the hybrid ClientHello when the poll buffer
 /// is too small, and emits it on the next poll with a large enough buffer.
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_poll_output_undersized_buffer() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -564,7 +555,6 @@ fn auto_client_poll_output_undersized_buffer() {
 /// Auto-sense client returns an error when the server response cannot be
 /// identified as any known DTLS version.
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_rejects_unknown_version_response() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -598,7 +588,6 @@ fn auto_client_rejects_unknown_version_response() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_protocol_version_after_negotiating_dtls13() {
     //! After completing a handshake against a DTLS 1.3 server, the
     //! auto-sense client should report `Some(ProtocolVersion::DTLS1_3)`.
@@ -656,7 +645,6 @@ fn auto_client_protocol_version_after_negotiating_dtls13() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_client_protocol_version_after_negotiating_dtls12() {
     //! After completing a handshake against a DTLS 1.2 server, the
     //! auto-sense client should report `Some(ProtocolVersion::DTLS1_2)`.

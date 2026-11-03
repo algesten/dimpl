@@ -3,7 +3,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "rcgen")]
 use dimpl::certificate::generate_self_signed_certificate;
 use dimpl::{Config, Dtls, Output};
 
@@ -51,7 +50,6 @@ fn dtls13_ack_record_for_records(seq: u64, records: &[(u64, u64)]) -> Vec<u8> {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn oversized_application_data_reports_buffer_too_small() {
     let now = Instant::now();
     let (mut client, mut server, _now) = setup_connected_13_pair(now);
@@ -86,7 +84,6 @@ fn oversized_application_data_reports_buffer_too_small() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_malformed_datagram_is_discarded_without_processing_alerts() {
     let _ = env_logger::try_init();
 
@@ -109,7 +106,6 @@ fn dtls13_malformed_datagram_is_discarded_without_processing_alerts() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_too_many_control_records_are_discarded() {
     let _ = env_logger::try_init();
 
@@ -131,7 +127,6 @@ fn dtls13_too_many_control_records_are_discarded() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_discards_too_short_ciphertext_record() {
     let _ = env_logger::try_init();
 
@@ -181,7 +176,6 @@ fn dtls13_discards_too_short_ciphertext_record() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_discards_cid_bit_records() {
     let _ = env_logger::try_init();
 
@@ -223,7 +217,6 @@ fn dtls13_discards_cid_bit_records() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_discards_unauthenticated_ciphertext_without_length_field() {
     let _ = env_logger::try_init();
 
@@ -269,7 +262,6 @@ fn dtls13_discards_unauthenticated_ciphertext_without_length_field() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_recovers_from_corrupted_packet() {
     let _ = env_logger::try_init();
 
@@ -340,7 +332,6 @@ fn dtls13_recovers_from_corrupted_packet() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_close_notify_graceful_shutdown() {
     let _ = env_logger::try_init();
     let mut now = Instant::now();
@@ -368,7 +359,6 @@ fn dtls13_close_notify_graceful_shutdown() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_warning_user_canceled_alert_is_ignored() {
     let _ = env_logger::try_init();
 
@@ -416,7 +406,6 @@ fn dtls13_warning_user_canceled_alert_is_ignored() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_unknown_warning_level_alert_is_still_fatal() {
     let _ = env_logger::try_init();
 
@@ -478,7 +467,6 @@ fn drain_expected_app_data(endpoint: &mut Dtls, expected: usize) {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_client_close_after_queued_ack_sends_close_notify() {
     let _ = env_logger::try_init();
 
@@ -529,7 +517,6 @@ fn dtls13_client_close_after_queued_ack_sends_close_notify() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_server_close_after_queued_ack_sends_close_notify() {
     let _ = env_logger::try_init();
 
@@ -580,7 +567,6 @@ fn dtls13_server_close_after_queued_ack_sends_close_notify() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_discards_unknown_epoch_record() {
     let _ = env_logger::try_init();
 
@@ -632,7 +618,6 @@ fn dtls13_discards_unknown_epoch_record() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_discards_truncated_unified_header() {
     let _ = env_logger::try_init();
 
@@ -676,7 +661,6 @@ fn dtls13_discards_truncated_unified_header() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_discards_plaintext_after_handshake() {
     let _ = env_logger::try_init();
 
@@ -733,7 +717,6 @@ fn dtls13_discards_plaintext_after_handshake() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_post_encryption_plaintext_close_notify_is_ignored() {
     let _ = env_logger::try_init();
 
@@ -781,7 +764,6 @@ fn dtls13_post_encryption_plaintext_close_notify_is_ignored() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_post_encryption_plaintext_fatal_alert_is_ignored() {
     let _ = env_logger::try_init();
 
@@ -823,7 +805,6 @@ fn dtls13_post_encryption_plaintext_fatal_alert_is_ignored() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_post_encryption_plaintext_ack_does_not_stop_retransmit() {
     let _ = env_logger::try_init();
 
@@ -877,7 +858,6 @@ fn dtls13_post_encryption_plaintext_ack_does_not_stop_retransmit() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_duplicate_client_hello_still_triggers_retransmit_after_peer_encryption() {
     let _ = env_logger::try_init();
 
@@ -915,7 +895,6 @@ fn dtls13_duplicate_client_hello_still_triggers_retransmit_after_peer_encryption
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_alert_bad_certificate() {
     // NOTE: dimpl does not perform certificate chain/trust validation. The library
     // surfaces the peer's leaf certificate via Output::PeerCert and delegates all
@@ -1011,7 +990,6 @@ fn dtls13_alert_bad_certificate() {
 /// in the ClientHello signature_algorithms extension but could not be verified,
 /// causing handshake failures when a peer selected them.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_only_functional_signature_schemes_advertised() {
     let _ = env_logger::try_init();
 
@@ -1090,7 +1068,6 @@ fn dtls13_only_functional_signature_schemes_advertised() {
 /// would propagate as Err and abort parsing of the entire datagram, causing valid
 /// records after the bad one to be lost.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_bad_record_does_not_kill_datagram() {
     let _ = env_logger::try_init();
 
@@ -1156,7 +1133,6 @@ fn dtls13_bad_record_does_not_kill_datagram() {
 /// keys were still retained. This test verifies that a delayed old-epoch
 /// packet IS accepted and delivered as application data after a KeyUpdate.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_old_epoch_record_accepted_after_key_update() {
     let _ = env_logger::try_init();
 
@@ -1248,7 +1224,6 @@ fn dtls13_old_epoch_record_accepted_after_key_update() {
 /// the ClientHello size, reducing the server-to-client amplification
 /// factor in DTLS.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_client_hello_padded_to_mtu() {
     let _ = env_logger::try_init();
 
@@ -1286,7 +1261,6 @@ fn dtls13_client_hello_padded_to_mtu() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_mixed_datagram_during_handshake_bogus_first() {
     //! Test that during handshake, a mixed datagram with bogus plaintext
     //! ApplicationData first and valid handshake record second is handled
@@ -1346,7 +1320,6 @@ fn dtls13_mixed_datagram_during_handshake_bogus_first() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_mixed_datagram_plaintext_first_then_valid() {
     //! Post-handshake: a UDP datagram with bogus plaintext ApplicationData FIRST
     //! followed by a valid encrypted record is handled correctly: the bogus
@@ -1425,7 +1398,6 @@ fn dtls13_mixed_datagram_plaintext_first_then_valid() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_mixed_datagram_valid_first_then_bogus() {
     //! Post-handshake: a UDP datagram with a valid encrypted record FIRST
     //! followed by bogus plaintext ApplicationData is handled correctly: the
@@ -1497,7 +1469,6 @@ fn dtls13_mixed_datagram_valid_first_then_bogus() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_half_close_send_then_close() {
     //! After receiving close_notify, the write half remains open per RFC 8446 §6.1.
     //! The local side can send application data (half-close), and the data must
@@ -1551,7 +1522,6 @@ fn dtls13_half_close_send_then_close() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_close_during_handshake_emits_no_packets() {
     //! Call close() on the client while the handshake is in progress.
     //! Per `Dtls::close` API contract, close() during handshake silently
@@ -1606,7 +1576,6 @@ fn dtls13_close_during_handshake_emits_no_packets() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_app_data_delivered_before_close_notify() {
     //! When app data and close_notify arrive in the same batch, the app data
     //! must be delivered before CloseNotify.
@@ -1664,7 +1633,6 @@ fn dtls13_app_data_delivered_before_close_notify() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_close_notify_out_of_order_app_data_accepted() {
     //! Out-of-order app data packets (sequence < close_notify sequence) that
     //! arrive after close_notify must still be accepted and delivered.
@@ -1709,7 +1677,6 @@ fn dtls13_close_notify_out_of_order_app_data_accepted() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_half_closed_local_no_retransmit() {
     //! After close(), in-flight retransmissions (e.g. a pending KeyUpdate
     //! awaiting ACK) must be cancelled. Advancing time past retransmit
@@ -1787,7 +1754,6 @@ fn dtls13_half_closed_local_no_retransmit() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_half_closed_local_transitions_to_closed() {
     //! After client calls close() (HalfClosedLocal), receiving the peer's
     //! close_notify should transition to Closed and emit CloseNotify.
@@ -1854,7 +1820,6 @@ fn dtls13_half_closed_local_transitions_to_closed() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_close_state_matrix() {
     for client_closes_first in [true, false] {
         let (mut client, mut server, _) = setup_connected_13_pair(Instant::now());
@@ -1915,7 +1880,6 @@ fn dtls13_close_state_matrix() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_close_prohibits_further_sends() {
     //! After close(), the sender enters HalfClosedLocal and
     //! send_application_data() must return an error.
@@ -1953,7 +1917,6 @@ fn dtls13_close_prohibits_further_sends() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_half_closed_local_no_ack() {
     //! Per RFC 9147 §5.10 / RFC 8446 §6.1, after sending close_notify, no
     //! further messages (including ACKs) should be sent. This test verifies

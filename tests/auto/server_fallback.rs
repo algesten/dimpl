@@ -58,7 +58,6 @@ fn run_handshake(
 // ============================================================================
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_with_dtls13_client() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -86,7 +85,6 @@ fn auto_server_with_dtls13_client() {
 // ============================================================================
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_send_application_data_pending() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -113,7 +111,6 @@ fn auto_server_send_application_data_pending() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_protocol_version_pending() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -137,7 +134,6 @@ fn auto_server_protocol_version_pending() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_with_dtls12_client() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -165,7 +161,6 @@ fn auto_server_with_dtls12_client() {
 // ============================================================================
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_with_auto_client() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -194,7 +189,6 @@ fn auto_server_with_auto_client() {
 // ============================================================================
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_with_dtls12_client_no_cookie() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -223,7 +217,6 @@ fn auto_server_with_dtls12_client_no_cookie() {
 // ============================================================================
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_with_dtls13_client_no_cookie() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -252,7 +245,6 @@ fn auto_server_with_dtls13_client_no_cookie() {
 // ============================================================================
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_dtls12_fallback_application_data() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -307,7 +299,6 @@ fn auto_server_dtls12_fallback_application_data() {
 // ============================================================================
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_dtls13_application_data() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -362,7 +353,6 @@ fn auto_server_dtls13_application_data() {
 // ============================================================================
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_dtls12_fallback_keying_material() {
     use dimpl::SrtpProfile;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -423,7 +413,6 @@ fn auto_server_dtls12_fallback_keying_material() {
 // ============================================================================
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_dtls13_keying_material() {
     use dimpl::SrtpProfile;
     use dimpl::certificate::generate_self_signed_certificate;
@@ -484,7 +473,6 @@ fn auto_server_dtls13_keying_material() {
 // ============================================================================
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_set_active_creates_client_pending() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -513,7 +501,6 @@ fn auto_server_set_active_creates_client_pending() {
 
 /// DTLS 1.3 client with small MTU → fragmented ClientHello → auto server connects as 1.3.
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_with_fragmented_dtls13_client_hello() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -541,7 +528,6 @@ fn auto_server_with_fragmented_dtls13_client_hello() {
 
 /// DTLS 1.3 client with very small MTU (100 bytes) → heavily fragmented CH → auto server 1.3.
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_with_heavily_fragmented_dtls13_client_hello() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -568,7 +554,6 @@ fn auto_server_with_heavily_fragmented_dtls13_client_hello() {
 
 /// Both client and server with small MTU → fragmented CH → auto server 1.3 + data exchange.
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_fragmented_ch_application_data() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -607,7 +592,6 @@ fn auto_server_fragmented_ch_application_data() {
 
 /// Fragmented DTLS 1.3 ClientHello with no-cookie config → auto server 1.3.
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_fragmented_ch_no_cookie() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -641,7 +625,6 @@ fn auto_server_fragmented_ch_no_cookie() {
 /// certificate-auth Server12 and failed with "No mutually acceptable cipher
 /// suite".
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_psk_fallback_with_dtls12_psk_client() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -684,7 +667,6 @@ fn auto_server_psk_fallback_with_dtls12_psk_client() {
 
 /// Fragmented DTLS 1.3 ClientHello → keying material matches between client and auto server.
 #[test]
-#[cfg(feature = "rcgen")]
 fn auto_server_fragmented_ch_keying_material() {
     use dimpl::SrtpProfile;
     use dimpl::certificate::generate_self_signed_certificate;

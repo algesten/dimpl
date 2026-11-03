@@ -8,7 +8,6 @@ use dimpl::{Config, Dtls};
 use crate::common::*;
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_handshake_with_small_mtu() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -73,7 +72,6 @@ fn dtls13_handshake_with_small_mtu() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_large_application_data_fragmented() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -144,7 +142,6 @@ fn dtls13_large_application_data_fragmented() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_fragmentation_during_hrr() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -235,7 +232,6 @@ fn dtls13_fragmentation_during_hrr() {
 }
 
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_fragmented_handshake_with_packet_loss() {
     use dimpl::certificate::generate_self_signed_certificate;
 
@@ -364,7 +360,6 @@ fn dtls13_fragmented_handshake_with_packet_loss() {
 /// This test captures a fragmented ClientHello, modifies the second fragment
 /// to create a 10-byte overlap, and verifies the server completes the handshake.
 #[test]
-#[cfg(feature = "rcgen")]
 fn dtls13_overlapping_fragments_reassembled_successfully() {
     use dimpl::certificate::generate_self_signed_certificate;
 
