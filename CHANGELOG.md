@@ -1,6 +1,7 @@
 # Unreleased
 
   * Deny compiler warnings across CI feature configurations #210
+  * Wipe `DtlsCertificate` private key on drop (breaking: fields can no longer be moved out) #211
 
 # 0.9.0
 
