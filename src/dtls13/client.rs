@@ -706,7 +706,20 @@ impl State {
         };
 
         if let Some(profile) = ee.srtp_profiles().and_then(|profiles| profiles.first()) {
-            client.negotiated_srtp_profile = Some((*profile).into());
+            let profile = (*profile).into();
+            if !client
+                .engine
+                .config()
+                .srtp_profiles()
+                .unwrap_or(SrtpProfile::ALL)
+                .contains(&profile)
+            {
+                return Err(Error::SecurityError(
+                    crate::SecurityError::ServerSelectedDisallowedSrtpProfile(profile),
+                )
+                .into());
+            }
+            client.negotiated_srtp_profile = Some(profile);
         }
 
         client.engine.advance_peer_handshake_seq();
@@ -1267,7 +1280,7 @@ fn handshake_create_client_hello(
 
     // 5. use_srtp extension
     let srtp_start = ext_buf.len();
-    let use_srtp = UseSrtpExtension::default();
+    let use_srtp = UseSrtpExtension::from_config(engine.config());
     use_srtp.serialize(&mut ext_buf);
     let srtp_end = ext_buf.len();
     extensions.push(Extension {
@@ -1554,6 +1567,35 @@ mod tests {
         packet.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
         packet.extend_from_slice(body);
         packet
+    }
+
+    #[test]
+    fn server_cannot_select_an_unoffered_srtp_profile() {
+        let config = Config::builder()
+            .srtp_profiles(&[SrtpProfile::AES128_CM_SHA1_80])
+            .build()
+            .expect("client config");
+        let cert = generate_self_signed_certificate().expect("client certificate");
+        let engine = Engine::new(Arc::new(config), cert);
+        let mut client = Client::new_with_engine(engine, Instant::now());
+        client
+            .engine
+            .parse_packet(&epoch0_handshake_packet(
+                MessageType::EncryptedExtensions,
+                0,
+                &[0, 9, 0, 14, 0, 5, 0, 2, 0, 7, 0],
+            ))
+            .expect("queue EncryptedExtensions selecting AES-128-GCM");
+
+        let err = State::AwaitEncryptedExtensions
+            .await_encrypted_extensions(&mut client)
+            .expect_err("server must select an offered SRTP profile");
+        assert!(matches!(
+            err,
+            InternalError::Fatal(Error::SecurityError(
+                SecurityError::ServerSelectedDisallowedSrtpProfile(SrtpProfile::AEAD_AES_128_GCM)
+            ))
+        ));
     }
 
     #[test]

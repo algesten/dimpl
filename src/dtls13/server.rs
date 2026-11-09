@@ -713,17 +713,17 @@ impl State {
 
         server.shared_secret = Some(shared_secret);
 
-        // Select SRTP profile: first from client list that the server supports.
-        // Per RFC 5764 Section 4.1.1, the server MUST select a profile that
-        // both sides support.
+        // Select a shared SRTP profile in client preference order.
         if let Some(profiles) = client_srtp_profiles {
-            for profile_id in profiles {
-                let profile: SrtpProfile = (*profile_id).into();
-                if SrtpProfile::ALL.contains(&profile) {
-                    server.negotiated_srtp_profile = Some(profile);
-                    break;
-                }
-            }
+            let allowed = server
+                .engine
+                .config()
+                .srtp_profiles()
+                .unwrap_or(SrtpProfile::ALL);
+            server.negotiated_srtp_profile = profiles
+                .iter()
+                .map(|id| (*id).into())
+                .find(|profile| allowed.contains(profile));
         }
 
         // Store selected group and public key range for ServerHello

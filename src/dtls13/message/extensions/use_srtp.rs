@@ -1,5 +1,5 @@
-use crate::SrtpProfile;
 use crate::buffer::Buf;
+use crate::{Config, SrtpProfile};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
@@ -81,6 +81,16 @@ pub struct UseSrtpExtension {
 }
 
 impl UseSrtpExtension {
+    pub fn from_config(config: &Config) -> Self {
+        match config.srtp_profiles() {
+            Some(profiles) => Self::new(
+                profiles.iter().copied().map(Into::into).collect(),
+                ArrayVec::new(),
+            ),
+            None => Self::default(),
+        }
+    }
+
     pub fn new(profiles: ArrayVec<SrtpProfileId, 3>, mki: ArrayVec<u8, 255>) -> Self {
         UseSrtpExtension { profiles, mki }
     }

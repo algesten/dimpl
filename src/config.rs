@@ -7,7 +7,7 @@ use crate::crypto::{CryptoProvider, SupportedDtls12CipherSuite};
 use crate::crypto::{SupportedDtls13CipherSuite, SupportedKxGroup};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, NamedGroup};
-use crate::{ConfigError, Error};
+use crate::{ConfigError, Error, SrtpProfile};
 
 const MAX_TIMING_DURATION: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
 
@@ -77,6 +77,7 @@ pub struct Config {
     dtls12_cipher_suites: Option<Vec<Dtls12CipherSuite>>,
     dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
     kx_groups: Option<Vec<NamedGroup>>,
+    srtp_profiles: Option<Vec<SrtpProfile>>,
     psk: Option<Psk>,
 }
 
@@ -98,6 +99,7 @@ impl Config {
             dtls12_cipher_suites: None,
             dtls13_cipher_suites: None,
             kx_groups: None,
+            srtp_profiles: None,
             psk: None,
         }
     }
@@ -273,6 +275,13 @@ impl Config {
             })
     }
 
+    /// Explicitly configured SRTP profiles, in the supplied order.
+    ///
+    /// Returns `None` when the default list is used.
+    pub fn srtp_profiles(&self) -> Option<&[SrtpProfile]> {
+        self.srtp_profiles.as_deref()
+    }
+
     /// Allowed key exchange groups, filtered by the config's allow-list.
     ///
     /// Returns all provider-supported key exchange groups when no filter
@@ -305,6 +314,7 @@ pub struct ConfigBuilder {
     dtls12_cipher_suites: Option<Vec<Dtls12CipherSuite>>,
     dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
     kx_groups: Option<Vec<NamedGroup>>,
+    srtp_profiles: Option<Vec<SrtpProfile>>,
     psk: Option<Psk>,
 }
 
@@ -467,6 +477,30 @@ impl ConfigBuilder {
         self
     }
 
+    /// Replace the default SRTP profile list with the supplied list and order.
+    ///
+    /// Existing version-specific negotiation behavior is unchanged.
+    /// The list must be nonempty and contain no duplicates; otherwise
+    /// [`Self::build`] returns [`ConfigError::InvalidSrtpProfiles`].
+    ///
+    /// When unset, [`SrtpProfile::ALL`] is used.
+    ///
+    /// ```
+    /// use dimpl::{Config, SrtpProfile};
+    ///
+    /// let config = Config::builder()
+    ///     .srtp_profiles(&[
+    ///         SrtpProfile::AEAD_AES_256_GCM,
+    ///         SrtpProfile::AES128_CM_SHA1_80,
+    ///     ])
+    ///     .build()?;
+    /// # Ok::<(), dimpl::Error>(())
+    /// ```
+    pub fn srtp_profiles(mut self, profiles: &[SrtpProfile]) -> Self {
+        self.srtp_profiles = Some(profiles.to_vec());
+        self
+    }
+
     /// Restrict which key exchange groups are offered and accepted.
     ///
     /// Only groups present in both this list and the provider will be
@@ -517,6 +551,15 @@ impl ConfigBuilder {
         }
         if self.flight_start_rto.is_zero() || self.flight_start_rto > MAX_TIMING_DURATION {
             return Err(ConfigError::InvalidFlightStartRto.into());
+        }
+        if let Some(profiles) = &self.srtp_profiles
+            && (profiles.is_empty()
+                || profiles
+                    .iter()
+                    .enumerate()
+                    .any(|(i, profile)| profiles[..i].contains(profile)))
+        {
+            return Err(ConfigError::InvalidSrtpProfiles.into());
         }
 
         let crypto_provider = self
@@ -642,6 +685,7 @@ impl ConfigBuilder {
             dtls12_cipher_suites: self.dtls12_cipher_suites,
             dtls13_cipher_suites: self.dtls13_cipher_suites,
             kx_groups: self.kx_groups,
+            srtp_profiles: self.srtp_profiles,
             psk: self.psk,
         })
     }
@@ -692,6 +736,7 @@ impl fmt::Debug for Config {
             .field("dtls12_cipher_suites", &self.dtls12_cipher_suites)
             .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
             .field("kx_groups", &self.kx_groups)
+            .field("srtp_profiles", &self.srtp_profiles)
             .field("psk", &self.psk)
             .finish()
     }
@@ -717,6 +762,7 @@ impl fmt::Debug for ConfigBuilder {
             .field("dtls12_cipher_suites", &self.dtls12_cipher_suites)
             .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
             .field("kx_groups", &self.kx_groups)
+            .field("srtp_profiles", &self.srtp_profiles)
             .field("psk", &self.psk)
             .finish()
     }
@@ -725,6 +771,19 @@ impl fmt::Debug for ConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_srtp_profile_lists_are_rejected() {
+        for profiles in [
+            &[][..],
+            &[SrtpProfile::AEAD_AES_256_GCM, SrtpProfile::AEAD_AES_256_GCM][..],
+        ] {
+            assert!(matches!(
+                Config::builder().srtp_profiles(profiles).build(),
+                Err(Error::ConfigError(ConfigError::InvalidSrtpProfiles))
+            ));
+        }
+    }
 
     #[test]
     fn timing_defaults() {
