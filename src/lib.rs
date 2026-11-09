@@ -233,6 +233,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
+use zeroize::Zeroize;
+
 // Shared types used by both DTLS versions
 mod types;
 pub use types::{
@@ -294,6 +296,12 @@ impl fmt::Debug for DtlsCertificate {
             .field("certificate", &self.certificate.len())
             .field("private_key", &self.private_key.len())
             .finish()
+    }
+}
+
+impl Drop for DtlsCertificate {
+    fn drop(&mut self) {
+        self.private_key.zeroize();
     }
 }
 
@@ -1155,7 +1163,7 @@ mod test {
         let config = Arc::new(Config::default());
         let empty = DtlsCertificate {
             certificate: vec![],
-            private_key: cert.private_key,
+            private_key: cert.private_key.clone(),
         };
         let _ = Dtls::new_12(config, empty, Instant::now());
     }

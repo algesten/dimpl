@@ -617,14 +617,15 @@ mod tests {
 
     #[cfg(feature = "rcgen")]
     fn cert_auth_mode(config: &Config) -> AuthMode {
-        let cert = crate::certificate::generate_self_signed_certificate().expect("generate cert");
+        let mut cert =
+            crate::certificate::generate_self_signed_certificate().expect("generate cert");
         let private_key = config
             .crypto_provider()
             .key_provider
             .load_private_key(&cert.private_key)
             .expect("parse key");
         AuthMode::Certificate {
-            certificate: cert.certificate,
+            certificate: std::mem::take(&mut cert.certificate),
             private_key,
         }
     }

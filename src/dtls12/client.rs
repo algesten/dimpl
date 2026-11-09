@@ -132,7 +132,7 @@ impl Client {
     pub(crate) fn new_from_hybrid(
         hybrid: HybridClientHello,
         config: std::sync::Arc<Config>,
-        certificate: DtlsCertificate,
+        mut certificate: DtlsCertificate,
         now: Instant,
         timers: HandshakeTimers,
     ) -> Client {
@@ -150,7 +150,7 @@ impl Client {
             .load_private_key(&certificate.private_key)
             .expect("Failed to parse client private key");
         let auth = AuthMode::Certificate {
-            certificate: certificate.certificate,
+            certificate: std::mem::take(&mut certificate.certificate),
             private_key,
         };
         let mut engine = Engine::new(config, auth);

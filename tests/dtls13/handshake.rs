@@ -19,7 +19,7 @@ fn dtls13_empty_client_certificate_is_rejected_when_required() {
         Arc::clone(&config),
         DtlsCertificate {
             certificate: Vec::new(),
-            private_key: client_cert.private_key,
+            private_key: client_cert.private_key.clone(),
         },
         now,
     );

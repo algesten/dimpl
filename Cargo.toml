@@ -46,6 +46,7 @@ rand = "0.10"
 time = { version = "0.3", features = ["formatting"] }
 arrayvec = "0.7.6"
 subtle = "2.6"
+zeroize = "1.9"
 
 der = { version = "0.8", optional = true }
 pkcs8 = { version = "0.11", features = ["pem"], optional = true }

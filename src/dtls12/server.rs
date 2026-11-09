@@ -125,7 +125,11 @@ enum State {
 
 impl Server {
     /// Create a new DTLS server
-    pub fn new(config: Arc<Config>, certificate: crate::DtlsCertificate, now: Instant) -> Server {
+    pub fn new(
+        config: Arc<Config>,
+        mut certificate: crate::DtlsCertificate,
+        now: Instant,
+    ) -> Server {
         assert!(
             !certificate.certificate.is_empty(),
             "Server certificate cannot be empty"
@@ -140,7 +144,7 @@ impl Server {
             .load_private_key(&certificate.private_key)
             .expect("Failed to parse server private key");
         let auth = AuthMode::Certificate {
-            certificate: certificate.certificate,
+            certificate: std::mem::take(&mut certificate.certificate),
             private_key,
         };
         let engine = Engine::new(config, auth);
