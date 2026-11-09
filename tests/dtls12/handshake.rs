@@ -8,6 +8,64 @@ use dimpl::Dtls;
 use dimpl::{Config, SrtpProfile};
 
 use crate::common::*;
+#[cfg(feature = "rcgen")]
+use crate::shared::{SRTP_PROFILE_CASES, handshake_with_srtp};
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_configured_srtp_order_and_allowlist() {
+    for cookie in [false, true] {
+        for (client_profiles, server_profiles, _) in SRTP_PROFILE_CASES {
+            let (client, server) = handshake_with_srtp(
+                Dtls::new_12,
+                Dtls::new_12,
+                Some(&client_profiles),
+                Some(&server_profiles),
+                cookie,
+            );
+            let (client_key, client_profile) = client.keying_material.expect("client SRTP keys");
+            let (server_key, server_profile) = server.keying_material.expect("server SRTP keys");
+            assert_eq!(client_profile, server_profiles[0], "cookie={cookie}");
+            assert_eq!(server_profile, client_profile);
+            assert_eq!(client_key, server_key);
+            assert_eq!(client_key.len(), client_profile.keying_material_len());
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_configured_srtp_default_server_behavior() {
+    let (client, _) = handshake_with_srtp(
+        Dtls::new_12,
+        Dtls::new_12,
+        Some(&[
+            SrtpProfile::AEAD_AES_128_GCM,
+            SrtpProfile::AES128_CM_SHA1_80,
+        ]),
+        None,
+        true,
+    );
+    assert_eq!(
+        client.keying_material.expect("client SRTP keys").1,
+        SrtpProfile::AEAD_AES_128_GCM,
+        "unoffered profile 8 must not be selected",
+    );
+}
+
+#[test]
+#[cfg(feature = "rcgen")]
+fn dtls12_disjoint_srtp_profiles_complete_without_srtp_keys() {
+    let (client, server) = handshake_with_srtp(
+        Dtls::new_12,
+        Dtls::new_12,
+        Some(&[SrtpProfile::AES128_CM_SHA1_80]),
+        Some(&[SrtpProfile::AEAD_AES_256_GCM]),
+        true,
+    );
+    assert!(client.keying_material.is_none());
+    assert!(server.keying_material.is_none());
+}
 
 #[test]
 #[cfg(feature = "rcgen")]

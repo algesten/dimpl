@@ -6,6 +6,80 @@ use std::time::{Duration, Instant};
 use dimpl::{CertificateError, Config, Dtls, DtlsCertificate, Error, SrtpProfile};
 
 use crate::common::*;
+use crate::shared::{SRTP_PROFILE_CASES, handshake_with_srtp};
+
+#[test]
+fn dtls13_configured_srtp_order_and_allowlist() {
+    for cookie in [false, true] {
+        for (client_profiles, server_profiles, expected) in SRTP_PROFILE_CASES {
+            let (client, server) = handshake_with_srtp(
+                Dtls::new_13,
+                Dtls::new_13,
+                Some(&client_profiles),
+                Some(&server_profiles),
+                cookie,
+            );
+            let (client_key, client_profile) = client.keying_material.expect("client SRTP keys");
+            let (server_key, server_profile) = server.keying_material.expect("server SRTP keys");
+            assert_eq!(client_profile, expected, "cookie={cookie}");
+            assert_eq!(server_profile, client_profile);
+            assert_eq!(client_key, server_key);
+            assert_eq!(client_key.len(), client_profile.keying_material_len());
+        }
+    }
+}
+
+#[test]
+fn dtls13_configured_srtp_client_order_and_default_server_behavior() {
+    use SrtpProfile::{AEAD_AES_128_GCM, AEAD_AES_256_GCM, AES128_CM_SHA1_80};
+
+    for client_profiles in [
+        [AES128_CM_SHA1_80, AEAD_AES_128_GCM, AEAD_AES_256_GCM],
+        [AES128_CM_SHA1_80, AEAD_AES_256_GCM, AEAD_AES_128_GCM],
+        [AEAD_AES_128_GCM, AES128_CM_SHA1_80, AEAD_AES_256_GCM],
+        [AEAD_AES_128_GCM, AEAD_AES_256_GCM, AES128_CM_SHA1_80],
+        [AEAD_AES_256_GCM, AES128_CM_SHA1_80, AEAD_AES_128_GCM],
+        [AEAD_AES_256_GCM, AEAD_AES_128_GCM, AES128_CM_SHA1_80],
+    ] {
+        let (client, _) = handshake_with_srtp(
+            Dtls::new_13,
+            Dtls::new_13,
+            Some(&client_profiles),
+            None,
+            true,
+        );
+        assert_eq!(
+            client.keying_material.expect("client SRTP keys").1,
+            client_profiles[0],
+        );
+    }
+
+    let (client, _) = handshake_with_srtp(
+        Dtls::new_13,
+        Dtls::new_13,
+        Some(&[AEAD_AES_128_GCM, AES128_CM_SHA1_80]),
+        None,
+        true,
+    );
+    assert_eq!(
+        client.keying_material.expect("client SRTP keys").1,
+        AEAD_AES_128_GCM,
+        "unoffered profile 8 must not be selected",
+    );
+}
+
+#[test]
+fn dtls13_disjoint_srtp_profiles_complete_without_srtp_keys() {
+    let (client, server) = handshake_with_srtp(
+        Dtls::new_13,
+        Dtls::new_13,
+        Some(&[SrtpProfile::AES128_CM_SHA1_80]),
+        Some(&[SrtpProfile::AEAD_AES_256_GCM]),
+        true,
+    );
+    assert!(client.keying_material.is_none());
+    assert!(server.keying_material.is_none());
+}
 
 #[test]
 fn dtls13_empty_client_certificate_is_rejected_when_required() {

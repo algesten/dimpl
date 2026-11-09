@@ -6,9 +6,133 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Dtls, Error, Output};
+use dimpl::{Dtls, Error, Output, ProtocolVersion, SrtpProfile};
 
 use crate::common::*;
+use crate::shared::{Constructor, SRTP_PROFILE_CASES, handshake_with_srtp};
+
+const SRTP_MODES: [(&str, Constructor, Constructor, ProtocolVersion); 5] = [
+    (
+        "auto to 1.2",
+        Dtls::new_auto,
+        Dtls::new_12,
+        ProtocolVersion::DTLS1_2,
+    ),
+    (
+        "auto to 1.3",
+        Dtls::new_auto,
+        Dtls::new_13,
+        ProtocolVersion::DTLS1_3,
+    ),
+    (
+        "1.2 to auto",
+        Dtls::new_12,
+        Dtls::new_auto,
+        ProtocolVersion::DTLS1_2,
+    ),
+    (
+        "1.3 to auto",
+        Dtls::new_13,
+        Dtls::new_auto,
+        ProtocolVersion::DTLS1_3,
+    ),
+    (
+        "auto",
+        Dtls::new_auto,
+        Dtls::new_auto,
+        ProtocolVersion::DTLS1_3,
+    ),
+];
+
+#[test]
+fn auto_configured_srtp_version_specific_order_and_allowlist() {
+    for (name, client_new, server_new, version) in SRTP_MODES {
+        for cookie in [false, true] {
+            for (client_profiles, server_profiles, expected_dtls13) in SRTP_PROFILE_CASES {
+                let (client, server) = handshake_with_srtp(
+                    client_new,
+                    server_new,
+                    Some(&client_profiles),
+                    Some(&server_profiles),
+                    cookie,
+                );
+                let (client_key, client_profile) =
+                    client.keying_material.expect("client SRTP keys");
+                let (server_key, server_profile) =
+                    server.keying_material.expect("server SRTP keys");
+                let expected = if version == ProtocolVersion::DTLS1_2 {
+                    server_profiles[0]
+                } else {
+                    expected_dtls13
+                };
+                assert_eq!(client_profile, expected, "{name}, cookie={cookie}");
+                assert_eq!(server_profile, client_profile, "{name}");
+                assert_eq!(client_key, server_key, "{name}");
+                assert_eq!(
+                    client_key.len(),
+                    client_profile.keying_material_len(),
+                    "{name}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn auto_configured_srtp_client_order_and_default_server_behavior() {
+    use SrtpProfile::{AEAD_AES_128_GCM, AEAD_AES_256_GCM, AES128_CM_SHA1_80};
+
+    for client_profiles in [
+        [AES128_CM_SHA1_80, AEAD_AES_128_GCM, AEAD_AES_256_GCM],
+        [AES128_CM_SHA1_80, AEAD_AES_256_GCM, AEAD_AES_128_GCM],
+        [AEAD_AES_128_GCM, AES128_CM_SHA1_80, AEAD_AES_256_GCM],
+        [AEAD_AES_128_GCM, AEAD_AES_256_GCM, AES128_CM_SHA1_80],
+        [AEAD_AES_256_GCM, AES128_CM_SHA1_80, AEAD_AES_128_GCM],
+        [AEAD_AES_256_GCM, AEAD_AES_128_GCM, AES128_CM_SHA1_80],
+    ] {
+        let (client, _) = handshake_with_srtp(
+            Dtls::new_auto,
+            Dtls::new_13,
+            Some(&client_profiles),
+            None,
+            true,
+        );
+        assert_eq!(
+            client.keying_material.expect("client SRTP keys").1,
+            client_profiles[0],
+        );
+    }
+
+    for (name, client_new, server_new, _) in SRTP_MODES {
+        let (client, _) = handshake_with_srtp(
+            client_new,
+            server_new,
+            Some(&[AEAD_AES_128_GCM, AES128_CM_SHA1_80]),
+            None,
+            true,
+        );
+        assert_eq!(
+            client.keying_material.expect("client SRTP keys").1,
+            AEAD_AES_128_GCM,
+            "{name}: unoffered profile 8 must not be selected",
+        );
+    }
+}
+
+#[test]
+fn auto_disjoint_srtp_profiles_complete_without_srtp_keys() {
+    for (name, client_new, server_new, _) in SRTP_MODES {
+        let (client, server) = handshake_with_srtp(
+            client_new,
+            server_new,
+            Some(&[SrtpProfile::AES128_CM_SHA1_80]),
+            Some(&[SrtpProfile::AEAD_AES_256_GCM]),
+            true,
+        );
+        assert!(client.keying_material.is_none(), "{name}");
+        assert!(server.keying_material.is_none(), "{name}");
+    }
+}
 
 #[test]
 fn auto_client_to_dtls13_server() {
