@@ -13,3 +13,6 @@ mod ossl;
 mod psk;
 mod reorder;
 mod retransmit;
+#[cfg(feature = "rcgen")]
+#[path = "../common/mod.rs"]
+mod shared;

@@ -528,7 +528,20 @@ impl State {
             .srtp_profiles()
             .and_then(|profiles| profiles.first())
         {
-            client.negotiated_srtp_profile = Some((*profile).into());
+            let profile = (*profile).into();
+            if !client
+                .engine
+                .config()
+                .srtp_profiles()
+                .unwrap_or(SrtpProfile::ALL)
+                .contains(&profile)
+            {
+                return Err(Error::SecurityError(
+                    crate::SecurityError::ServerSelectedDisallowedSrtpProfile(profile),
+                )
+                .into());
+            }
+            client.negotiated_srtp_profile = Some(profile);
         }
 
         // Without extended master secret, in DTLS1.2 a security attack
@@ -1441,6 +1454,58 @@ mod tests {
         packet.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
         packet.extend_from_slice(body);
         packet
+    }
+
+    #[cfg(feature = "rcgen")]
+    #[test]
+    fn server_cannot_select_an_unoffered_srtp_profile() {
+        let config = Arc::new(
+            Config::builder()
+                .srtp_profiles(&[SrtpProfile::AES128_CM_SHA1_80])
+                .build()
+                .expect("client config"),
+        );
+        let cert =
+            crate::certificate::generate_self_signed_certificate().expect("client certificate");
+        let private_key = config
+            .crypto_provider()
+            .key_provider
+            .load_private_key(&cert.private_key)
+            .expect("client private key");
+        let engine = Engine::new(
+            config,
+            AuthMode::Certificate {
+                certificate: cert.certificate,
+                private_key,
+            },
+        );
+        let mut client = Client::new_with_engine(engine, Instant::now());
+        let mut body = vec![0xfe, 0xfd];
+        body.extend_from_slice(&[0; 32]);
+        body.push(0); // session_id
+        body.extend_from_slice(
+            &Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
+                .as_u16()
+                .to_be_bytes(),
+        );
+        body.push(0); // compression
+        body.extend_from_slice(&[0, 13, 0, 23, 0, 0, 0, 14, 0, 5, 0, 2, 0, 7, 0]);
+        client
+            .engine
+            .parse_packet(&epoch0_handshake_packet(MessageType::ServerHello, 0, &body))
+            .expect("queue ServerHello selecting AES-128-GCM");
+
+        let err = State::AwaitServerHello
+            .await_server_hello(&mut client)
+            .expect_err("server must select an offered SRTP profile");
+        assert!(matches!(
+            err,
+            InternalError::Fatal(Error::SecurityError(
+                crate::SecurityError::ServerSelectedDisallowedSrtpProfile(
+                    SrtpProfile::AEAD_AES_128_GCM
+                )
+            ))
+        ));
     }
 
     #[test]

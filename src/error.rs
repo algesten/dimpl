@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use crate::SrtpProfile;
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::CompressionMethod;
 use crate::types::Dtls13CipherSuite;
@@ -436,6 +437,8 @@ pub enum SecurityError {
     ServerSelectedDisallowedCipherSuite(Dtls12CipherSuite),
     /// The server selected a DTLS 1.3 cipher suite disallowed by configuration.
     ServerSelectedDisallowedDtls13CipherSuite(Dtls13CipherSuite),
+    /// The server selected an SRTP profile that the client did not offer.
+    ServerSelectedDisallowedSrtpProfile(SrtpProfile),
     /// DTLS 1.2 extended master secret was required but not negotiated.
     ExtendedMasterSecretNotNegotiated,
     /// No mutually acceptable cipher suite was found.
@@ -551,6 +554,8 @@ pub enum ConfigError {
     InvalidHandshakeTimeout,
     /// The initial flight RTO is zero or greater than 3650 days.
     InvalidFlightStartRto,
+    /// The SRTP profile list is empty or contains duplicates.
+    InvalidSrtpProfiles,
     /// Cipher-suite filtering removed every available suite.
     NoCipherSuitesAfterFiltering,
     /// A PSK resolver is configured but no PSK cipher suite remains enabled.
@@ -1128,6 +1133,9 @@ impl fmt::Display for SecurityError {
             Self::ServerSelectedDisallowedDtls13CipherSuite(suite) => {
                 write!(f, "server selected disallowed cipher suite: {suite:?}")
             }
+            Self::ServerSelectedDisallowedSrtpProfile(profile) => {
+                write!(f, "server selected disallowed SRTP profile: {profile}")
+            }
             Self::ExtendedMasterSecretNotNegotiated => {
                 write!(f, "extended master secret not negotiated")
             }
@@ -1243,6 +1251,12 @@ impl fmt::Display for ConfigError {
             }
             Self::InvalidFlightStartRto => {
                 write!(f, "flight_start_rto must be nonzero and at most 3650 days")
+            }
+            Self::InvalidSrtpProfiles => {
+                write!(
+                    f,
+                    "srtp_profiles must be nonempty and contain no duplicates"
+                )
             }
             Self::NoCipherSuitesAfterFiltering => write!(
                 f,

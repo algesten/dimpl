@@ -1039,6 +1039,69 @@ mod test {
     }
 
     #[test]
+    fn client_hello_preserves_configured_srtp_order() {
+        type Constructor = fn(Arc<Config>, DtlsCertificate, Instant) -> Dtls;
+
+        for profiles in [
+            &[
+                SrtpProfile::AES128_CM_SHA1_80,
+                SrtpProfile::AEAD_AES_256_GCM,
+            ][..],
+            &[SrtpProfile::AEAD_AES_128_GCM][..],
+        ] {
+            for (constructor, dtls12) in [
+                (Dtls::new_12 as Constructor, true),
+                (Dtls::new_13 as Constructor, false),
+                (Dtls::new_auto as Constructor, false),
+            ] {
+                let config = Config::builder()
+                    .srtp_profiles(profiles)
+                    .build()
+                    .expect("client config");
+                let cert = generate_self_signed_certificate().expect("client certificate");
+                let now = Instant::now();
+                let mut client = constructor(Arc::new(config), cert, now);
+                client.set_active(true);
+                client.handle_timeout(now).expect("start handshake");
+                let mut buffer = [0; 2048];
+                let mut packets = 0;
+                loop {
+                    match client.poll_output(&mut buffer) {
+                        Output::Packet(packet) => {
+                            assert_eq!(packet[13], 1, "expected ClientHello");
+                            let body = &packet[25..];
+                            let offered: Vec<SrtpProfile> = if dtls12 {
+                                dtls12::message::ClientHello::parse(body, 0)
+                                    .expect("parse DTLS 1.2 ClientHello")
+                                    .1
+                                    .srtp_profiles()
+                                    .expect("use_srtp extension")
+                                    .iter()
+                                    .map(|id| (*id).into())
+                                    .collect()
+                            } else {
+                                dtls13::message::ClientHello::parse_allow_unknown_suites(body, 0)
+                                    .expect("parse DTLS 1.3 or hybrid ClientHello")
+                                    .1
+                                    .srtp_profiles()
+                                    .expect("use_srtp extension")
+                                    .iter()
+                                    .map(|id| (*id).into())
+                                    .collect()
+                            };
+                            assert_eq!(offered, profiles);
+                            packets += 1;
+                        }
+                        Output::Timeout(_) => break,
+                        output => panic!("unexpected initial client output: {output:?}"),
+                    }
+                }
+                assert_eq!(packets, 1, "expected one unfragmented ClientHello");
+            }
+        }
+    }
+
+    #[test]
     fn test_auto_sense_client_sends_hybrid_ch() {
         let mut dtls = new_instance_auto();
         dtls.set_active(true);
