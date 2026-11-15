@@ -7,7 +7,7 @@ use crate::crypto::{CryptoProvider, SupportedDtls12CipherSuite};
 use crate::crypto::{SupportedDtls13CipherSuite, SupportedKxGroup};
 use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, NamedGroup};
-use crate::{ConfigError, Error, SrtpProfile};
+use crate::{ConfigError, Error, SecurityError, SrtpProfile};
 
 const MAX_TIMING_DURATION: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
 
@@ -282,6 +282,17 @@ impl Config {
         self.srtp_profiles.as_deref()
     }
 
+    pub(crate) fn effective_srtp_profiles(&self) -> &[SrtpProfile] {
+        self.srtp_profiles().unwrap_or(SrtpProfile::ALL)
+    }
+
+    pub(crate) fn validate_srtp_profile(&self, profile: SrtpProfile) -> Result<(), Error> {
+        if !self.effective_srtp_profiles().contains(&profile) {
+            return Err(SecurityError::ServerSelectedDisallowedSrtpProfile(profile).into());
+        }
+        Ok(())
+    }
+
     /// Allowed key exchange groups, filtered by the config's allow-list.
     ///
     /// Returns all provider-supported key exchange groups when no filter
@@ -479,7 +490,8 @@ impl ConfigBuilder {
 
     /// Replace the default SRTP profile list with the supplied list and order.
     ///
-    /// Existing version-specific negotiation behavior is unchanged.
+    /// Clients advertise this order; servers select their first shared profile
+    /// in this order for both DTLS 1.2 and 1.3.
     /// The list must be nonempty and contain no duplicates; otherwise
     /// [`Self::build`] returns [`ConfigError::InvalidSrtpProfiles`].
     ///

@@ -50,7 +50,7 @@ fn dtls13_configured_srtp_client_order_and_default_server_behavior() {
         );
         assert_eq!(
             client.keying_material.expect("client SRTP keys").1,
-            client_profiles[0],
+            AEAD_AES_256_GCM,
         );
     }
 

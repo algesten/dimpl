@@ -1,5 +1,5 @@
+use crate::SrtpProfile;
 use crate::buffer::Buf;
-use crate::{Config, SrtpProfile};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
 use nom::error::{Error, ErrorKind};
@@ -81,33 +81,15 @@ pub struct UseSrtpExtension {
 }
 
 impl UseSrtpExtension {
-    pub fn from_config(config: &Config) -> Self {
-        match config.srtp_profiles() {
-            Some(profiles) => Self::new(
-                profiles.iter().copied().map(Into::into).collect(),
-                ArrayVec::new(),
-            ),
-            None => Self::default(),
-        }
+    pub fn from_profiles(profiles: &[SrtpProfile]) -> Self {
+        Self::new(
+            profiles.iter().copied().map(Into::into).collect(),
+            ArrayVec::new(),
+        )
     }
 
     pub fn new(profiles: ArrayVec<SrtpProfileId, 3>, mki: ArrayVec<u8, 255>) -> Self {
         UseSrtpExtension { profiles, mki }
-    }
-
-    /// Create a default UseSrtpExtension with standard profiles
-    pub fn default() -> Self {
-        let mut profiles = ArrayVec::new();
-        // Add profiles in order of preference (most secure first)
-        profiles.push(SrtpProfileId::SRTP_AEAD_AES_256_GCM);
-        profiles.push(SrtpProfileId::SRTP_AEAD_AES_128_GCM);
-        profiles.push(SrtpProfileId::SRTP_AES128_CM_SHA1_80);
-
-        // MKI is typically empty as per RFC 5764
-        UseSrtpExtension {
-            profiles,
-            mki: ArrayVec::new(),
-        }
     }
 
     pub fn parse(input: &[u8]) -> IResult<&[u8], UseSrtpExtension> {
@@ -236,7 +218,7 @@ mod tests {
 
     #[test]
     fn capacity_matches_profile_count() {
-        let ext = UseSrtpExtension::default();
+        let ext = UseSrtpExtension::from_profiles(SrtpProfile::ALL);
         assert_eq!(
             ext.profiles.capacity(),
             SrtpProfileId::supported().len(),

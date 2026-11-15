@@ -528,20 +528,11 @@ impl State {
             .srtp_profiles()
             .and_then(|profiles| profiles.first())
         {
-            let profile = (*profile).into();
-            if !client
+            client
                 .engine
                 .config()
-                .srtp_profiles()
-                .unwrap_or(SrtpProfile::ALL)
-                .contains(&profile)
-            {
-                return Err(Error::SecurityError(
-                    crate::SecurityError::ServerSelectedDisallowedSrtpProfile(profile),
-                )
-                .into());
-            }
-            client.negotiated_srtp_profile = Some(profile);
+                .validate_srtp_profile((*profile).into())?;
+            client.negotiated_srtp_profile = Some((*profile).into());
         }
 
         // Without extended master secret, in DTLS1.2 a security attack

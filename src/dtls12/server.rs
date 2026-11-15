@@ -462,12 +462,7 @@ impl State {
         // Select a shared SRTP profile in the server's configured or default order.
         if let Some(profiles) = client_srtp_profiles {
             let mut selected_profile: Option<SrtpProfile> = None;
-            for &preferred in server
-                .engine
-                .config()
-                .srtp_profiles()
-                .unwrap_or(SrtpProfile::ALL)
-            {
+            for &preferred in server.engine.config().effective_srtp_profiles() {
                 if profiles.iter().any(|pid| preferred == (*pid).into()) {
                     selected_profile = Some(preferred);
                     break;

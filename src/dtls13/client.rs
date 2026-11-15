@@ -706,20 +706,11 @@ impl State {
         };
 
         if let Some(profile) = ee.srtp_profiles().and_then(|profiles| profiles.first()) {
-            let profile = (*profile).into();
-            if !client
+            client
                 .engine
                 .config()
-                .srtp_profiles()
-                .unwrap_or(SrtpProfile::ALL)
-                .contains(&profile)
-            {
-                return Err(Error::SecurityError(
-                    crate::SecurityError::ServerSelectedDisallowedSrtpProfile(profile),
-                )
-                .into());
-            }
-            client.negotiated_srtp_profile = Some(profile);
+                .validate_srtp_profile((*profile).into())?;
+            client.negotiated_srtp_profile = Some((*profile).into());
         }
 
         client.engine.advance_peer_handshake_seq();
@@ -1280,7 +1271,7 @@ fn handshake_create_client_hello(
 
     // 5. use_srtp extension
     let srtp_start = ext_buf.len();
-    let use_srtp = UseSrtpExtension::from_config(engine.config());
+    let use_srtp = UseSrtpExtension::from_profiles(engine.config().effective_srtp_profiles());
     use_srtp.serialize(&mut ext_buf);
     let srtp_end = ext_buf.len();
     extensions.push(Extension {

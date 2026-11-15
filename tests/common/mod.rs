@@ -17,17 +17,17 @@ pub const SRTP_PROFILE_CASES: [([SrtpProfile; 3], [SrtpProfile; 2], SrtpProfile)
         (
             [AEAD_AES_128_GCM, AEAD_AES_256_GCM, AES128_CM_SHA1_80],
             [AES128_CM_SHA1_80, AEAD_AES_256_GCM],
-            AEAD_AES_256_GCM,
+            AES128_CM_SHA1_80,
         ),
         (
             [AEAD_AES_128_GCM, AES128_CM_SHA1_80, AEAD_AES_256_GCM],
             [AEAD_AES_256_GCM, AES128_CM_SHA1_80],
-            AES128_CM_SHA1_80,
+            AEAD_AES_256_GCM,
         ),
         (
             [AEAD_AES_256_GCM, AES128_CM_SHA1_80, AEAD_AES_128_GCM],
             [AEAD_AES_128_GCM, AES128_CM_SHA1_80],
-            AES128_CM_SHA1_80,
+            AEAD_AES_128_GCM,
         ),
     ]
 };
