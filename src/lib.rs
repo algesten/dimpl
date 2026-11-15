@@ -35,6 +35,7 @@
 //!   - `ECDHE_ECDSA_CHACHA20_POLY1305_SHA256`
 //! - **PSK cipher suites (TLS 1.2 over DTLS)**
 //!   - `PSK_AES128_CCM_8`
+//!   - `ECDHE_PSK_CHACHA20_POLY1305_SHA256`
 //! - **Cipher suites (TLS 1.3 over DTLS)**
 //!   - `TLS_AES_128_GCM_SHA256`
 //!   - `TLS_AES_256_GCM_SHA384`
@@ -403,11 +404,7 @@ fn looks_like_client_hello(packet: &[u8]) -> bool {
     // half — anything below this cannot be a real CH.
     const MIN_CH_BODY: usize = 41;
     let is_unfragmented = frag_len == length;
-    if is_unfragmented && length < MIN_CH_BODY {
-        return false;
-    }
-
-    true
+    !(is_unfragmented && length < MIN_CH_BODY)
 }
 
 /// Peek at a buffered DTLS 1.2 ClientHello to decide whether the auto-sense
