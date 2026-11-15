@@ -404,11 +404,7 @@ fn looks_like_client_hello(packet: &[u8]) -> bool {
     // half — anything below this cannot be a real CH.
     const MIN_CH_BODY: usize = 41;
     let is_unfragmented = frag_len == length;
-    if is_unfragmented && length < MIN_CH_BODY {
-        return false;
-    }
-
-    true
+    !(is_unfragmented && length < MIN_CH_BODY)
 }
 
 /// Peek at a buffered DTLS 1.2 ClientHello to decide whether the auto-sense
