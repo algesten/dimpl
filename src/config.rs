@@ -564,14 +564,12 @@ impl ConfigBuilder {
         if self.flight_start_rto.is_zero() || self.flight_start_rto > MAX_TIMING_DURATION {
             return Err(ConfigError::InvalidFlightStartRto.into());
         }
-        if let Some(profiles) = &self.srtp_profiles
-            && (profiles.is_empty()
-                || profiles
-                    .iter()
-                    .enumerate()
-                    .any(|(i, profile)| profiles[..i].contains(profile)))
-        {
-            return Err(ConfigError::InvalidSrtpProfiles.into());
+        if let Some(profiles) = &self.srtp_profiles {
+            let is_empty = profiles.is_empty();
+            let has_duplicates = (0..profiles.len()).any(|i| profiles[..i].contains(&profiles[i]));
+            if is_empty || has_duplicates {
+                return Err(ConfigError::InvalidSrtpProfiles.into());
+            }
         }
 
         let crypto_provider = self
