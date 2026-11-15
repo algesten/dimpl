@@ -1,9 +1,7 @@
 # Unreleased
 
-  * Add PSK + ECDHE cipher suite `ECDHE_PSK_CHACHA20_POLY1305_SHA256` for DTLS 1.2 #207
-  * Skip ECDHE suites in the DTLS 1.2 server when the client shares no key exchange group #207
-  * Reject a DTLS 1.2 ServerKeyExchange with a non-named curve #207
-  * Reject a DTLS 1.2 ServerKeyExchange group the client did not offer #207
+  * Add ECDHE_PSK_CHACHA20_POLY1305_SHA256 for DTLS 1.2 #207
+  * Reject unsupported curves and unoffered groups in DTLS 1.2 key exchange #207
 
   * Deny compiler warnings across CI feature configurations #210
 
