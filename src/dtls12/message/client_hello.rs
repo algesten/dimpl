@@ -92,7 +92,7 @@ impl ClientHello {
         ranges.push((ExtensionType::SignatureAlgorithms, start_pos, buf.len()));
 
         // Add use_srtp extension for DTLS-SRTP support
-        let use_srtp = UseSrtpExtension::from_profiles(config.effective_srtp_profiles());
+        let use_srtp = UseSrtpExtension::new(config.effective_srtp_profiles().iter().copied(), []);
         let start_pos = buf.len();
         use_srtp.serialize(buf);
         ranges.push((ExtensionType::UseSrtp, start_pos, buf.len()));

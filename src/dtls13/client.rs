@@ -1271,7 +1271,10 @@ fn handshake_create_client_hello(
 
     // 5. use_srtp extension
     let srtp_start = ext_buf.len();
-    let use_srtp = UseSrtpExtension::from_profiles(engine.config().effective_srtp_profiles());
+    let use_srtp = UseSrtpExtension::new(
+        engine.config().effective_srtp_profiles().iter().copied(),
+        [],
+    );
     use_srtp.serialize(&mut ext_buf);
     let srtp_end = ext_buf.len();
     extensions.push(Extension {

@@ -1421,10 +1421,7 @@ fn handshake_create_encrypted_extensions(
     // use_srtp extension if negotiated
     if let Some(profile) = negotiated_srtp {
         let srtp_start = ext_buf.len();
-        let profile_id: crate::dtls13::message::SrtpProfileId = profile.into();
-        let mut profiles = ArrayVec::new();
-        profiles.push(profile_id);
-        let use_srtp = UseSrtpExtension::new(profiles, ArrayVec::new());
+        let use_srtp = UseSrtpExtension::new([profile], []);
         use_srtp.serialize(&mut ext_buf);
         let srtp_end = ext_buf.len();
         extensions.push(Extension {
