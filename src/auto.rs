@@ -158,7 +158,7 @@ impl HybridClientHello {
 
         // 5. use_srtp
         let start = ext_buf.len();
-        let use_srtp = UseSrtpExtension::default();
+        let use_srtp = UseSrtpExtension::new(config.effective_srtp_profiles().iter().copied(), []);
         use_srtp.serialize(&mut ext_buf);
         ext_entries.push((EXT_USE_SRTP, start, ext_buf.len()));
 

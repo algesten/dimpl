@@ -81,22 +81,13 @@ pub struct UseSrtpExtension {
 }
 
 impl UseSrtpExtension {
-    pub fn new(profiles: ArrayVec<SrtpProfileId, 3>, mki: ArrayVec<u8, 255>) -> Self {
-        UseSrtpExtension { profiles, mki }
-    }
-
-    /// Create a default UseSrtpExtension with standard profiles
-    pub fn default() -> Self {
-        let mut profiles = ArrayVec::new();
-        // Add profiles in order of preference (most secure first)
-        profiles.push(SrtpProfileId::SRTP_AEAD_AES_256_GCM);
-        profiles.push(SrtpProfileId::SRTP_AEAD_AES_128_GCM);
-        profiles.push(SrtpProfileId::SRTP_AES128_CM_SHA1_80);
-
-        // MKI is typically empty as per RFC 5764
+    pub fn new(
+        profiles: impl IntoIterator<Item = impl Into<SrtpProfileId>>,
+        mki: impl IntoIterator<Item = u8>,
+    ) -> Self {
         UseSrtpExtension {
-            profiles,
-            mki: ArrayVec::new(),
+            profiles: profiles.into_iter().map(Into::into).collect(),
+            mki: mki.into_iter().collect(),
         }
     }
 
@@ -175,17 +166,14 @@ mod tests {
 
     #[test]
     fn test_use_srtp_extension() {
-        let mut profiles = ArrayVec::new();
-        profiles.push(SrtpProfileId::SRTP_AEAD_AES_256_GCM);
-        profiles.push(SrtpProfileId::SRTP_AEAD_AES_128_GCM);
-        profiles.push(SrtpProfileId::SRTP_AES128_CM_SHA1_80);
+        let profiles = [
+            SrtpProfileId::SRTP_AEAD_AES_256_GCM,
+            SrtpProfileId::SRTP_AEAD_AES_128_GCM,
+            SrtpProfileId::SRTP_AES128_CM_SHA1_80,
+        ];
 
-        let mut mki = ArrayVec::new();
-        mki.push(1);
-        mki.push(2);
-        mki.push(3);
-
-        let ext = UseSrtpExtension::new(profiles, mki.clone());
+        let mki = [1, 2, 3];
+        let ext = UseSrtpExtension::new(profiles, mki);
 
         let mut serialized = Buf::new();
         ext.serialize(&mut serialized);
@@ -204,7 +192,7 @@ mod tests {
         let (_, parsed) = UseSrtpExtension::parse(&serialized).unwrap();
 
         assert_eq!(parsed.profiles.as_slice(), ext.profiles.as_slice());
-        assert_eq!(parsed.mki, mki);
+        assert_eq!(parsed.mki.as_slice(), &mki);
     }
 
     #[test]
@@ -226,7 +214,7 @@ mod tests {
 
     #[test]
     fn capacity_matches_profile_count() {
-        let ext = UseSrtpExtension::default();
+        let ext = UseSrtpExtension::new(SrtpProfile::ALL.iter().copied(), []);
         assert_eq!(
             ext.profiles.capacity(),
             SrtpProfileId::supported().len(),
