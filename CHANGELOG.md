@@ -2,7 +2,6 @@
 
   * Add ECDHE_PSK_CHACHA20_POLY1305_SHA256 for DTLS 1.2 #207
   * Reject unsupported curves and unoffered groups in DTLS 1.2 key exchange #207
-
   * Deny compiler warnings across CI feature configurations #210
 
 # 0.9.0
