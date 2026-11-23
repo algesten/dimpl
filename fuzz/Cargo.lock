@@ -320,6 +320,7 @@ dependencies = [
  "subtle",
  "time",
  "x509-cert",
+ "zeroize",
 ]
 
 [[package]]
