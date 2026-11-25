@@ -130,8 +130,8 @@ pub struct Server {
     /// Whether we sent a HelloRetryRequest.
     hello_retry: bool,
 
-    /// Cookie secret for HMAC-based DoS protection.
-    cookie_secret: [u8; 32],
+    /// Cookie secret for HMAC-based DoS protection, drawn when the first ClientHello is awaited.
+    cookie_secret: Option<[u8; 32]>,
 
     /// Whether we need to respond with our own KeyUpdate.
     pending_key_update_response: bool,
@@ -182,7 +182,6 @@ impl Server {
     }
 
     pub fn new_with_engine(mut engine: Engine, now: Instant, auto_mode: bool) -> Server {
-        let cookie_secret = engine.random_arr();
         let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
 
@@ -205,7 +204,7 @@ impl Server {
             server_hs_traffic_secret: None,
             client_auth_requested: false,
             hello_retry: false,
-            cookie_secret,
+            cookie_secret: None,
             pending_key_update_response: false,
             auto_mode,
             retained_hello: VecDeque::with_capacity(10),
@@ -316,7 +315,7 @@ impl Server {
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         self.last_now = now;
         if self.random.is_none() {
-            self.random = Some(self.engine.random());
+            self.random = Some(self.engine.random()?);
         }
         self.engine.handle_timeout(now)?;
         match self.make_progress() {
@@ -433,6 +432,8 @@ impl State {
     }
 
     fn await_client_hello(self, server: &mut Server) -> Result<Self, InternalError> {
+        let cookie_secret = server_cookie_secret(&mut server.cookie_secret, &mut server.engine)?;
+
         // Save transcript length so we can roll back if a stale ClientHello
         // arrives after HelloRetryRequest (no cookie → must discard).
         let transcript_len_before = server.engine.transcript.len();
@@ -567,7 +568,7 @@ impl State {
 
         if need_cookie {
             let expected_cookie = compute_cookie(
-                &server.cookie_secret,
+                &cookie_secret,
                 &client_random,
                 server.engine.config().crypto_provider().hmac_provider,
             );
@@ -620,7 +621,7 @@ impl State {
         } else if let Some(ref cookie_bytes) = client_cookie_data {
             // Validate if a cookie was provided even when not required
             let expected_cookie = compute_cookie(
-                &server.cookie_secret,
+                &cookie_secret,
                 &client_random,
                 server.engine.config().crypto_provider().hmac_provider,
             );
@@ -669,7 +670,7 @@ impl State {
                     .engine
                     .replace_transcript_with_message_hash(transcript_len);
                 let cookie_for_hrr = compute_cookie(
-                    &server.cookie_secret,
+                    &cookie_secret,
                     &client_random,
                     server.engine.config().crypto_provider().hmac_provider,
                 );
@@ -1274,6 +1275,19 @@ impl State {
 // =========================================================================
 // Helper Functions
 // =========================================================================
+
+/// The server's cookie secret: drawn from the engine's random source the first time, then kept.
+fn server_cookie_secret(
+    slot: &mut Option<[u8; 32]>,
+    engine: &mut Engine,
+) -> Result<[u8; 32], Error> {
+    if let Some(secret) = *slot {
+        return Ok(secret);
+    }
+    let secret = engine.random_arr()?;
+    *slot = Some(secret);
+    Ok(secret)
+}
 
 /// Compute a cookie for DoS protection using HMAC-SHA256.
 ///

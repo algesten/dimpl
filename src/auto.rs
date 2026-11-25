@@ -90,8 +90,8 @@ impl HybridClientHello {
     /// extensions (`ec_point_formats`, `extended_master_secret`,
     /// `renegotiation_info`).
     pub fn new(config: &Arc<Config>) -> Result<Self, Error> {
-        let mut rng = SeededRng::new(config.rng_seed());
-        let random = Random::new(&mut rng);
+        let mut rng = SeededRng::new(config.rng_seed(), config.crypto_provider().secure_random);
+        let random = Random::new(&mut rng)?;
 
         // Start ECDHE key exchange with the first supported group (filtered)
         let group = config.kx_groups().next().ok_or(Error::CryptoError(
@@ -336,7 +336,7 @@ impl ClientPending {
     ) -> Result<Self, Error> {
         let hybrid = HybridClientHello::new(&config)?;
         let wire_packet = hybrid.wire_packet();
-        let mut rng = SeededRng::new(config.rng_seed());
+        let mut rng = SeededRng::new(config.rng_seed(), config.crypto_provider().secure_random);
         let mut timers = HandshakeTimers::new(&config, &mut rng);
         timers.begin_flight(&mut rng);
         Ok(ClientPending {

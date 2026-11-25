@@ -1,6 +1,7 @@
 # Unreleased
 
   * Return `BufferTooSmall` for `PeerCert` when the poll buffer is too small #218
+  * Draw handshake randoms, cookie secrets, nonces and jitter from `secure_random` #219
   * Configure SRTP profiles with server preference order for DTLS 1.2/1.3 (breaking) #215
   * Add ECDHE_PSK_CHACHA20_POLY1305_SHA256 for DTLS 1.2 #207
   * Reject unsupported curves and unoffered groups in DTLS 1.2 key exchange #207

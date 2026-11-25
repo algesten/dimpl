@@ -200,7 +200,7 @@ enum PollOutput<'a> {
 
 impl Engine {
     pub fn new(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
-        let mut rng = SeededRng::new(config.rng_seed());
+        let mut rng = SeededRng::new(config.rng_seed(), config.crypto_provider().secure_random);
 
         let timers = HandshakeTimers::new(&config, &mut rng);
 
@@ -2326,11 +2326,11 @@ impl Engine {
         Ok((keying_material, profile))
     }
 
-    pub fn random(&mut self) -> Random {
+    pub fn random(&mut self) -> Result<Random, crate::CryptoError> {
         Random::new(&mut self.rng)
     }
 
-    pub fn random_arr<const N: usize>(&mut self) -> [u8; N] {
+    pub fn random_arr<const N: usize>(&mut self) -> Result<[u8; N], crate::CryptoError> {
         self.rng.random()
     }
 }
@@ -2363,7 +2363,7 @@ fn jittered_aead_threshold(limit: u64, rng: &mut SeededRng) -> u64 {
     if quarter == 0 {
         return limit;
     }
-    let offset: u64 = rng.random::<u64>() % (quarter + 1);
+    let offset: u64 = rng.jitter_u64() % (quarter + 1);
     limit - quarter + offset
 }
 

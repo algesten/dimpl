@@ -228,7 +228,7 @@ impl Client {
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         self.last_now = now;
         if self.random.is_none() {
-            self.random = Some(Random::new_with_time(now, &mut self.engine.rng));
+            self.random = Some(Random::new_with_time(now, &mut self.engine.rng)?);
         }
         self.engine.handle_timeout(now)?;
         match self.make_progress() {

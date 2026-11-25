@@ -4,7 +4,6 @@
 //! compute fingerprints, and format them for display.
 
 use aws_lc_rs::digest;
-use rand::random;
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, PKCS_ECDSA_P256_SHA256};
 use std::fmt;
 
@@ -64,7 +63,12 @@ pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, Certificate
     // of this process, but also across all certificates of other processes/machines!
     // See: https://github.com/versatica/mediasoup/issues/127#issuecomment-474460153
     // and https://github.com/algesten/str0m/issues/517
-    let serial_buf: [u8; 16] = random();
+    // Drawn from the aws-lc-rs provider's random source, like the key pair.
+    let mut serial_buf = [0u8; 16];
+    crate::crypto::aws_lc_rs::default_provider()
+        .secure_random
+        .fill(&mut serial_buf)
+        .map_err(|_| CertificateError::GenerationFailed)?;
     params.serial_number = Some(serial_buf.to_vec().into());
 
     // Build the certificate
