@@ -100,3 +100,43 @@ fn provider_random_failure_is_an_error() {
         }
     }
 }
+
+#[test]
+fn idle_server_does_not_require_cookie_randomness() {
+    #[derive(Debug)]
+    struct LimitedRandom {
+        successful_handshake_draws: AtomicUsize,
+        handshake_random_len: usize,
+    }
+
+    impl SecureRandom for LimitedRandom {
+        fn fill(&self, buf: &mut [u8]) -> Result<(), CryptoError> {
+            let is_jitter = matches!(buf.len(), 4 | 8);
+            let is_handshake_random = buf.len() == self.handshake_random_len
+                && self
+                    .successful_handshake_draws
+                    .fetch_add(1, Ordering::Relaxed)
+                    == 0;
+            if is_jitter || is_handshake_random {
+                return aws_lc_rs::default_provider().secure_random.fill(buf);
+            }
+            Err(CryptoError::OperationFailed(CryptoOperation::FillRandom))
+        }
+    }
+
+    static DTLS12: LimitedRandom = LimitedRandom {
+        successful_handshake_draws: AtomicUsize::new(0),
+        handshake_random_len: 28,
+    };
+    static DTLS13: LimitedRandom = LimitedRandom {
+        successful_handshake_draws: AtomicUsize::new(0),
+        handshake_random_len: 32,
+    };
+
+    for (version, source) in [(Version::Dtls12, &DTLS12), (Version::Dtls13, &DTLS13)] {
+        let mut server = endpoint(version, source, false);
+        server
+            .handle_timeout(Instant::now())
+            .expect("an idle server has no ClientHello to authenticate");
+    }
+}
