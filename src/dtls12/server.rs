@@ -385,31 +385,36 @@ impl State {
         // Stateless cookie: require 32-byte cookie matching HMAC(secret, client_random)
         let client_random = ch.random;
         let hmac_provider = server.engine.config().crypto_provider().hmac_provider;
-        if server.engine.config().use_server_cookie() {
-            let cookie_secret =
-                server_cookie_secret(&mut server.cookie_secret, &mut server.engine.rng)?;
-            if !verify_cookie(hmac_provider, &cookie_secret, client_random, ch.cookie) {
-                debug!("Invalid/missing cookie; sending HelloVerifyRequest");
-
-                let cookie = compute_cookie(hmac_provider, &cookie_secret, client_random)?;
-                // Start/restart flight timer for server Flight 2 (HelloVerifyRequest)
-                server.engine.flight_begin(2);
-                server.engine.create_handshake(
-                    MessageType::HelloVerifyRequest,
-                    |body, _engine| {
-                        // RFC 6347 4.2.1: The server_version field in the HelloVerifyRequest
-                        // message MUST be set to DTLS 1.0
-                        let hvr = HelloVerifyRequest::new(ProtocolVersion::DTLS1_0, cookie);
-                        hvr.serialize(body);
-                        Ok(())
-                    },
-                )?;
-
-                // The HelloVerifyRequest exchange is stateless per RFC 6347.
-                // Reset all handshake state so the next ClientHello (with cookie) is processed fresh.
-                server.engine.reset_server_for_hello_verify_request();
-                return Ok(self);
+        let retry_cookie = if server.engine.config().use_server_cookie() {
+            let secret = server_cookie_secret(&mut server.cookie_secret, &mut server.engine.rng)?;
+            if verify_cookie(hmac_provider, &secret, client_random, ch.cookie) {
+                None
+            } else {
+                Some(compute_cookie(hmac_provider, &secret, client_random)?)
             }
+        } else {
+            None
+        };
+
+        if let Some(cookie) = retry_cookie {
+            debug!("Invalid/missing cookie; sending HelloVerifyRequest");
+
+            // Start/restart flight timer for server Flight 2 (HelloVerifyRequest)
+            server.engine.flight_begin(2);
+            server
+                .engine
+                .create_handshake(MessageType::HelloVerifyRequest, |body, _engine| {
+                    // RFC 6347 4.2.1: The server_version field in the HelloVerifyRequest
+                    // message MUST be set to DTLS 1.0
+                    let hvr = HelloVerifyRequest::new(ProtocolVersion::DTLS1_0, cookie);
+                    hvr.serialize(body);
+                    Ok(())
+                })?;
+
+            // The HelloVerifyRequest exchange is stateless per RFC 6347.
+            // Reset all handshake state so the next ClientHello (with cookie) is processed fresh.
+            server.engine.reset_server_for_hello_verify_request();
+            return Ok(self);
         }
 
         trace!("Accepted ClientHello cookie; proceeding with handshake");
