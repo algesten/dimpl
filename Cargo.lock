@@ -588,6 +588,7 @@ dependencies = [
  "x25519-dalek",
  "x509-cert",
  "x509-parser",
+ "zeroize",
 ]
 
 [[package]]

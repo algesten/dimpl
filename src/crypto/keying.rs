@@ -1,13 +1,17 @@
 //! SRTP keying material types and profiles used by DTLS-SRTP.
 use std::ops::Deref;
 
+use zeroize::{ZeroizeOnDrop, Zeroizing};
+
 /// Keying material used as master key for SRTP.
-pub struct KeyingMaterial(Vec<u8>);
+///
+/// The bytes are zeroed when the value is dropped.
+pub struct KeyingMaterial(Zeroizing<Vec<u8>>);
 
 impl KeyingMaterial {
     /// Create a new wrapper for DTLS-SRTP keying material bytes.
     pub fn new(m: &[u8]) -> Self {
-        KeyingMaterial(m.to_vec())
+        KeyingMaterial(Zeroizing::new(m.to_vec()))
     }
 }
 
@@ -15,9 +19,11 @@ impl Deref for KeyingMaterial {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0.as_slice()
     }
 }
+
+impl ZeroizeOnDrop for KeyingMaterial {}
 
 impl std::fmt::Debug for KeyingMaterial {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -67,5 +73,19 @@ impl std::fmt::Display for SrtpProfile {
             SrtpProfile::AEAD_AES_128_GCM => write!(f, "SRTP_AEAD_AES_128_GCM"),
             SrtpProfile::AEAD_AES_256_GCM => write!(f, "SRTP_AEAD_AES_256_GCM"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keying_material_zeroizes_on_drop() {
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<KeyingMaterial>();
+
+        let km = KeyingMaterial::new(&[1, 2, 3]);
+        assert_eq!(&*km, &[1, 2, 3]);
     }
 }
