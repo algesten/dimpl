@@ -8,11 +8,16 @@
 //! When a seed is provided via [`Config::rng_seed`], those values come from a
 //! deterministic generator instead. This is useful for testing and debugging.
 
+use std::fmt;
+
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::CryptoError;
 use crate::crypto::SecureRandom;
+
+#[cfg(test)]
+use self::tests::Unused;
 
 /// The engine's random source: the crypto provider's [`SecureRandom`], or a
 /// deterministic generator when seeded.
@@ -75,12 +80,12 @@ impl SeededRng {
     /// A seeded source for tests that must never touch the provider.
     #[cfg(test)]
     pub fn seeded(seed: u64) -> Self {
-        Self::new(Some(seed), &tests::Unused)
+        Self::new(Some(seed), &Unused)
     }
 }
 
-impl std::fmt::Debug for SeededRng {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for SeededRng {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let is_seeded = self.seeded.is_some();
         f.debug_struct("SeededRng")
             .field("seeded", &is_seeded)

@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use dimpl::certificate::generate_self_signed_certificate;
-use dimpl::crypto::{CryptoProvider, SecureRandom, aws_lc_rs};
+use dimpl::crypto::aws_lc_rs::default_provider;
+use dimpl::crypto::{CryptoProvider, SecureRandom};
 use dimpl::{Config, CryptoError, CryptoOperation, Dtls};
 
 /// Counts the bytes drawn from it, filling them from the aws-lc-rs source.
@@ -15,7 +16,7 @@ struct Counting(AtomicUsize);
 impl SecureRandom for Counting {
     fn fill(&self, buf: &mut [u8]) -> Result<(), CryptoError> {
         self.0.fetch_add(buf.len(), Ordering::Relaxed);
-        aws_lc_rs::default_provider().secure_random.fill(buf)
+        default_provider().secure_random.fill(buf)
     }
 }
 
@@ -38,7 +39,7 @@ enum Version {
 fn config(secure_random: &'static dyn SecureRandom) -> Arc<Config> {
     let provider = CryptoProvider {
         secure_random,
-        ..aws_lc_rs::default_provider()
+        ..default_provider()
     };
     Arc::new(
         Config::builder()
@@ -118,7 +119,7 @@ fn idle_server_does_not_require_cookie_randomness() {
                     .fetch_add(1, Ordering::Relaxed)
                     == 0;
             if is_jitter || is_handshake_random {
-                return aws_lc_rs::default_provider().secure_random.fill(buf);
+                return default_provider().secure_random.fill(buf);
             }
             Err(CryptoError::OperationFailed(CryptoOperation::FillRandom))
         }

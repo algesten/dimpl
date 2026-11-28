@@ -984,7 +984,7 @@ impl Engine {
 
         if self.sequence_epoch_0.sequence_number >= MAX_SEQUENCE_NUMBER {
             return Err(Error::CryptoError(
-                crate::CryptoError::Epoch0SequenceNumberExhausted,
+                CryptoError::Epoch0SequenceNumberExhausted,
             ));
         }
         self.sequence_epoch_0.sequence_number += 1;
@@ -1061,9 +1061,9 @@ impl Engine {
         };
 
         let Some(keys) = keys else {
-            return Err(Error::CryptoError(
-                crate::CryptoError::SendKeysNotAvailable { epoch },
-            ));
+            return Err(Error::CryptoError(CryptoError::SendKeysNotAvailable {
+                epoch,
+            }));
         };
 
         // Construct the nonce: iv XOR padded_seq
@@ -1141,21 +1141,21 @@ impl Engine {
         if epoch == 2 {
             if self.hs_send_seq >= MAX_SEQUENCE_NUMBER {
                 return Err(Error::CryptoError(
-                    crate::CryptoError::SendSequenceNumberExhausted { epoch },
+                    CryptoError::SendSequenceNumberExhausted { epoch },
                 ));
             }
             self.hs_send_seq += 1;
         } else if self.prev_app_send_keys.is_some() && epoch == self.prev_app_send_epoch {
             if self.prev_app_send_seq >= MAX_SEQUENCE_NUMBER {
                 return Err(Error::CryptoError(
-                    crate::CryptoError::SendSequenceNumberExhausted { epoch },
+                    CryptoError::SendSequenceNumberExhausted { epoch },
                 ));
             }
             self.prev_app_send_seq += 1;
         } else {
             if self.app_send_seq >= MAX_SEQUENCE_NUMBER {
                 return Err(Error::CryptoError(
-                    crate::CryptoError::SendSequenceNumberExhausted { epoch },
+                    CryptoError::SendSequenceNumberExhausted { epoch },
                 ));
             }
             self.app_send_seq += 1;
@@ -2284,7 +2284,7 @@ impl Engine {
             .exporter_master_secret
             .as_ref()
             .ok_or(Error::CryptoError(
-                crate::CryptoError::ExporterMasterSecretNotDerived,
+                CryptoError::ExporterMasterSecretNotDerived,
             ))?;
 
         let total_len = profile.keying_material_len();
@@ -2633,9 +2633,9 @@ impl RecordHandler for Engine {
         };
 
         let Some(keys) = keys else {
-            return Err(Error::CryptoError(
-                crate::CryptoError::RecvKeysNotAvailable { epoch: seq.epoch },
-            ));
+            return Err(Error::CryptoError(CryptoError::RecvKeysNotAvailable {
+                epoch: seq.epoch,
+            }));
         };
 
         // Construct nonce: iv XOR padded_seq

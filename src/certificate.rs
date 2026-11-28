@@ -3,9 +3,13 @@
 //! This module provides helpers to generate self-signed certificates suitable for DTLS,
 //! compute fingerprints, and format them for display.
 
+use std::fmt;
+
 use aws_lc_rs::digest;
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, PKCS_ECDSA_P256_SHA256};
-use std::fmt;
+use time::{Duration, OffsetDateTime};
+
+use crate::crypto::aws_lc_rs::default_provider;
 
 /// Certificate utility error types
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,8 +58,8 @@ pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, Certificate
     params.is_ca = IsCa::NoCa;
 
     // Set validity period (1 year)
-    let not_before = time::OffsetDateTime::now_utc();
-    let not_after = not_before + time::Duration::days(365);
+    let not_before = OffsetDateTime::now_utc();
+    let not_after = not_before + Duration::days(365);
     params.not_before = not_before;
     params.not_after = not_after;
 
@@ -65,7 +69,7 @@ pub fn generate_self_signed_certificate() -> Result<DtlsCertificate, Certificate
     // and https://github.com/algesten/str0m/issues/517
     // Drawn from the aws-lc-rs provider's random source, like the key pair.
     let mut serial_buf = [0u8; 16];
-    crate::crypto::aws_lc_rs::default_provider()
+    default_provider()
         .secure_random
         .fill(&mut serial_buf)
         .map_err(|_| CertificateError::GenerationFailed)?;
