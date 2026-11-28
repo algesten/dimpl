@@ -50,6 +50,97 @@ fn dtls13_ack_record_for_records(seq: u64, records: &[(u64, u64)]) -> Vec<u8> {
 }
 
 #[test]
+fn peer_cert_reports_buffer_too_small_and_is_retained() {
+    let _ = env_logger::try_init();
+
+    let client_cert = generate_self_signed_certificate().expect("gen client cert");
+    let server_cert = generate_self_signed_certificate().expect("gen server cert");
+    let server_cert_der = server_cert.certificate.clone();
+    let cert_needed = server_cert_der.len();
+
+    let config = dtls13_config();
+    let mut now = Instant::now();
+
+    let mut client = Dtls::new_13(Arc::clone(&config), client_cert, now);
+    client.set_active(true);
+
+    let mut server = Dtls::new_13(config, server_cert, now);
+    server.set_active(false);
+
+    let mut large = vec![0u8; 8192];
+    let mut saw_buffer_too_small = false;
+    let mut peer_cert: Option<Vec<u8>> = None;
+
+    for _ in 0..40 {
+        client.handle_timeout(now).expect("client timeout");
+        server.handle_timeout(now).expect("server timeout");
+
+        deliver_packets(&collect_packets(&mut client), &mut server);
+        deliver_packets(&collect_packets(&mut server), &mut client);
+
+        // Probe with an undersized buffer. Packet outputs may also report
+        // BufferTooSmall; only the peer-certificate size is the case under test.
+        if !saw_buffer_too_small {
+            loop {
+                let mut tiny = [0u8; 8];
+                match client.poll_output(&mut tiny) {
+                    Output::BufferTooSmall { needed } if needed == cert_needed => {
+                        saw_buffer_too_small = true;
+                        match client.poll_output(&mut large) {
+                            Output::PeerCert(cert) => peer_cert = Some(cert.to_vec()),
+                            output => panic!("expected retained PeerCert, got {output:?}"),
+                        }
+                        break;
+                    }
+                    Output::BufferTooSmall { needed } => {
+                        let mut mid = vec![0u8; needed];
+                        match client.poll_output(&mut mid) {
+                            Output::Packet(p) => {
+                                server.handle_packet(p).expect("server handle");
+                            }
+                            Output::PeerCert(cert) => peer_cert = Some(cert.to_vec()),
+                            Output::Connected => {}
+                            Output::Timeout(_) => break,
+                            other => panic!("unexpected after BufferTooSmall({needed}): {other:?}"),
+                        }
+                    }
+                    Output::PeerCert(cert) => {
+                        peer_cert = Some(cert.to_vec());
+                        break;
+                    }
+                    Output::Packet(p) => {
+                        server.handle_packet(p).expect("server handle");
+                    }
+                    Output::Connected => {}
+                    Output::Timeout(_) => break,
+                    _ => {}
+                }
+            }
+        }
+
+        let drained = drain_outputs(&mut client);
+        if let Some(cert) = drained.peer_cert {
+            peer_cert = Some(cert);
+        }
+        deliver_packets(&drained.packets, &mut server);
+
+        if peer_cert.is_some() && saw_buffer_too_small {
+            break;
+        }
+        now += Duration::from_millis(10);
+    }
+
+    assert!(
+        saw_buffer_too_small,
+        "undersized poll buffer should yield BufferTooSmall for PeerCert"
+    );
+    assert_eq!(
+        peer_cert.expect("PeerCert should be retained"),
+        server_cert_der
+    );
+}
+
+#[test]
 fn oversized_application_data_reports_buffer_too_small() {
     let now = Instant::now();
     let (mut client, mut server, _now) = setup_connected_13_pair(now);

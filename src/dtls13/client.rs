@@ -256,7 +256,13 @@ impl Client {
             return Output::Timeout(self.last_now);
         }
         if let Some(event) = self.local_events.pop_front() {
-            return event.into_output(buf, &self.server_certificates);
+            match event.into_output(buf, &self.server_certificates) {
+                Ok(output) => return output,
+                Err((event, needed)) => {
+                    self.local_events.push_front(event);
+                    return Output::BufferTooSmall { needed };
+                }
+            }
         }
         self.engine.poll_output(buf, self.last_now)
     }
@@ -1493,20 +1499,23 @@ pub(crate) fn verify_scheme_curve(scheme: SignatureScheme, cert_der: &[u8]) -> R
 // =========================================================================
 
 impl LocalEvent {
-    pub fn into_output<'a>(self, buf: &'a mut [u8], peer_certs: &[Buf]) -> Output<'a> {
+    pub fn into_output<'a>(
+        self,
+        buf: &'a mut [u8],
+        peer_certs: &[Buf],
+    ) -> Result<Output<'a>, (Self, usize)> {
         match self {
             LocalEvent::PeerCert => {
                 let l = peer_certs[0].len();
-                assert!(
-                    l <= buf.len(),
-                    "Output buffer too small for peer certificate"
-                );
+                if l > buf.len() {
+                    return Err((self, l));
+                }
                 buf[..l].copy_from_slice(&peer_certs[0]);
-                Output::PeerCert(&buf[..l])
+                Ok(Output::PeerCert(&buf[..l]))
             }
-            LocalEvent::Connected => Output::Connected,
+            LocalEvent::Connected => Ok(Output::Connected),
             LocalEvent::KeyingMaterial(m, profile) => {
-                Output::KeyingMaterial(KeyingMaterial::new(&m), profile)
+                Ok(Output::KeyingMaterial(KeyingMaterial::new(&m), profile))
             }
         }
     }
