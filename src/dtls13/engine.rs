@@ -28,7 +28,7 @@ use crate::dtls13::message::Sequence;
 use crate::timer::{HandshakeTimers, Timeout, deadline};
 use crate::types::{HashAlgorithm, Random};
 use crate::window::ReplayWindow;
-use crate::{Config, DtlsCertificate, Error, InternalError, Output, SeededRng};
+use crate::{Config, CryptoError, DtlsCertificate, Error, InternalError, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
@@ -200,7 +200,7 @@ enum PollOutput<'a> {
 
 impl Engine {
     pub fn new(config: Arc<Config>, certificate: DtlsCertificate) -> Self {
-        let mut rng = SeededRng::new(config.rng_seed());
+        let mut rng = SeededRng::new(config.rng_seed(), config.crypto_provider().secure_random);
 
         let timers = HandshakeTimers::new(&config, &mut rng);
 
@@ -984,7 +984,7 @@ impl Engine {
 
         if self.sequence_epoch_0.sequence_number >= MAX_SEQUENCE_NUMBER {
             return Err(Error::CryptoError(
-                crate::CryptoError::Epoch0SequenceNumberExhausted,
+                CryptoError::Epoch0SequenceNumberExhausted,
             ));
         }
         self.sequence_epoch_0.sequence_number += 1;
@@ -1061,9 +1061,9 @@ impl Engine {
         };
 
         let Some(keys) = keys else {
-            return Err(Error::CryptoError(
-                crate::CryptoError::SendKeysNotAvailable { epoch },
-            ));
+            return Err(Error::CryptoError(CryptoError::SendKeysNotAvailable {
+                epoch,
+            }));
         };
 
         // Construct the nonce: iv XOR padded_seq
@@ -1141,21 +1141,21 @@ impl Engine {
         if epoch == 2 {
             if self.hs_send_seq >= MAX_SEQUENCE_NUMBER {
                 return Err(Error::CryptoError(
-                    crate::CryptoError::SendSequenceNumberExhausted { epoch },
+                    CryptoError::SendSequenceNumberExhausted { epoch },
                 ));
             }
             self.hs_send_seq += 1;
         } else if self.prev_app_send_keys.is_some() && epoch == self.prev_app_send_epoch {
             if self.prev_app_send_seq >= MAX_SEQUENCE_NUMBER {
                 return Err(Error::CryptoError(
-                    crate::CryptoError::SendSequenceNumberExhausted { epoch },
+                    CryptoError::SendSequenceNumberExhausted { epoch },
                 ));
             }
             self.prev_app_send_seq += 1;
         } else {
             if self.app_send_seq >= MAX_SEQUENCE_NUMBER {
                 return Err(Error::CryptoError(
-                    crate::CryptoError::SendSequenceNumberExhausted { epoch },
+                    CryptoError::SendSequenceNumberExhausted { epoch },
                 ));
             }
             self.app_send_seq += 1;
@@ -2284,7 +2284,7 @@ impl Engine {
             .exporter_master_secret
             .as_ref()
             .ok_or(Error::CryptoError(
-                crate::CryptoError::ExporterMasterSecretNotDerived,
+                CryptoError::ExporterMasterSecretNotDerived,
             ))?;
 
         let total_len = profile.keying_material_len();
@@ -2326,12 +2326,16 @@ impl Engine {
         Ok((keying_material, profile))
     }
 
-    pub fn random(&mut self) -> Random {
+    pub fn random(&mut self) -> Result<Random, CryptoError> {
         Random::new(&mut self.rng)
     }
 
-    pub fn random_arr<const N: usize>(&mut self) -> [u8; N] {
+    pub fn random_arr<const N: usize>(&mut self) -> Result<[u8; N], CryptoError> {
         self.rng.random()
+    }
+
+    pub fn seeded_random_arr<const N: usize>(&mut self) -> Option<[u8; N]> {
+        self.rng.seeded_bytes()
     }
 }
 
@@ -2363,7 +2367,7 @@ fn jittered_aead_threshold(limit: u64, rng: &mut SeededRng) -> u64 {
     if quarter == 0 {
         return limit;
     }
-    let offset: u64 = rng.random::<u64>() % (quarter + 1);
+    let offset: u64 = rng.jitter_u64() % (quarter + 1);
     limit - quarter + offset
 }
 
@@ -2629,9 +2633,9 @@ impl RecordHandler for Engine {
         };
 
         let Some(keys) = keys else {
-            return Err(Error::CryptoError(
-                crate::CryptoError::RecvKeysNotAvailable { epoch: seq.epoch },
-            ));
+            return Err(Error::CryptoError(CryptoError::RecvKeysNotAvailable {
+                epoch: seq.epoch,
+            }));
         };
 
         // Construct nonce: iv XOR padded_seq

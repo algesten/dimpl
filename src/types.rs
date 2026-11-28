@@ -12,9 +12,9 @@ use nom::IResult;
 use nom::bytes::complete::take;
 use nom::number::complete::{be_u8, be_u16};
 
-use crate::SeededRng;
 use crate::buffer::Buf;
 use crate::time_tricks::InstantExt;
+use crate::{CryptoError, SeededRng};
 
 pub type NamedGroupVec = ArrayVec<NamedGroup, { NamedGroup::supported().len() }>;
 
@@ -38,25 +38,25 @@ pub struct Random {
 
 impl Random {
     /// All-random (DTLS 1.3 / hybrid style).
-    pub fn new(rng: &mut SeededRng) -> Self {
-        Self {
-            bytes: rng.random(),
-        }
+    pub fn new(rng: &mut SeededRng) -> Result<Self, CryptoError> {
+        Ok(Self {
+            bytes: rng.random()?,
+        })
     }
 
     /// Timestamp in first 4 bytes (DTLS 1.2 style).
-    pub fn new_with_time(now: Instant, rng: &mut SeededRng) -> Self {
+    pub fn new_with_time(now: Instant, rng: &mut SeededRng) -> Result<Self, CryptoError> {
         let gmt_duration = now.to_unix_duration();
         // This is valid until year 2106, at which point I will be beyond caring.
         let gmt_unix_time = gmt_duration.as_secs() as u32;
 
-        let random_bytes: [u8; 28] = rng.random();
+        let random_bytes: [u8; 28] = rng.random()?;
 
         let mut bytes = [0u8; 32];
         bytes[..4].copy_from_slice(&gmt_unix_time.to_be_bytes());
         bytes[4..].copy_from_slice(&random_bytes);
 
-        Self { bytes }
+        Ok(Self { bytes })
     }
 
     /// Parse a 32-byte `Random` from wire format.

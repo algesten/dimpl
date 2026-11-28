@@ -36,7 +36,7 @@ use crate::dtls12::message::{MessageType, NamedGroup, NamedGroupVec, ProtocolVer
 use crate::dtls12::message::{ServerHello, SessionId, SignatureAlgorithm};
 use crate::dtls12::message::{SignatureAndHashAlgorithmVec, SrtpProfileId};
 use crate::timer::Timeout;
-use crate::{Config, Error, InternalError, Output};
+use crate::{Config, Error, InternalError, Output, SeededRng};
 
 /// Length of the random dummy PSK used when identity resolution fails.
 /// Fixed so handshake timing does not leak the failure, and long enough
@@ -58,8 +58,8 @@ pub struct Server {
     /// SessionId we provide to the client (unused/resumption not implemented).
     session_id: Option<SessionId>,
 
-    /// Cookie secret for HMAC, generated per-server instance
-    cookie_secret: [u8; 32],
+    /// Cookie secret for HMAC, drawn per-server instance
+    cookie_secret: Option<[u8; 32]>,
 
     /// Storage for extension data
     extension_data: Buf,
@@ -156,8 +156,9 @@ impl Server {
 
     pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Server {
         engine.set_client(false);
+        // Preserve the seeded sequence while deferring provider draws until needed.
+        let cookie_secret = engine.rng.seeded_bytes();
 
-        let cookie_secret: [u8; 32] = engine.rng.random();
         let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
 
@@ -237,7 +238,7 @@ impl Server {
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         self.last_now = now;
         if self.random.is_none() {
-            self.random = Some(Random::new_with_time(now, &mut self.engine.rng));
+            self.random = Some(Random::new_with_time(now, &mut self.engine.rng)?);
         }
         self.engine.handle_timeout(now)?;
         match self.make_progress() {
@@ -384,18 +385,20 @@ impl State {
         // Stateless cookie: require 32-byte cookie matching HMAC(secret, client_random)
         let client_random = ch.random;
         let hmac_provider = server.engine.config().crypto_provider().hmac_provider;
-        let need_cookie = server.engine.config().use_server_cookie();
-        let cookie_valid = !need_cookie
-            || verify_cookie(
-                hmac_provider,
-                &server.cookie_secret,
-                client_random,
-                ch.cookie,
-            );
-        if !cookie_valid {
+        let retry_cookie = if server.engine.config().use_server_cookie() {
+            let secret = server_cookie_secret(&mut server.cookie_secret, &mut server.engine.rng)?;
+            if verify_cookie(hmac_provider, &secret, client_random, ch.cookie) {
+                None
+            } else {
+                Some(compute_cookie(hmac_provider, &secret, client_random)?)
+            }
+        } else {
+            None
+        };
+
+        if let Some(cookie) = retry_cookie {
             debug!("Invalid/missing cookie; sending HelloVerifyRequest");
 
-            let cookie = compute_cookie(hmac_provider, &server.cookie_secret, client_random)?;
             // Start/restart flight timer for server Flight 2 (HelloVerifyRequest)
             server.engine.flight_begin(2);
             server
@@ -1201,6 +1204,19 @@ impl State {
     }
 }
 
+/// The server's cookie secret: drawn from the random source the first time, then kept.
+fn server_cookie_secret(
+    slot: &mut Option<[u8; 32]>,
+    rng: &mut SeededRng,
+) -> Result<[u8; 32], Error> {
+    if let Some(secret) = *slot {
+        return Ok(secret);
+    }
+    let secret = rng.random()?;
+    *slot = Some(secret);
+    Ok(secret)
+}
+
 fn compute_cookie(
     hmac_provider: &dyn crate::crypto::HmacProvider,
     secret: &[u8],
@@ -1486,10 +1502,11 @@ fn resolve_psk(server: &mut Server, identity_range: Range<usize>) -> Result<Vec<
 
     server.psk_valid = Some(resolved.is_some());
 
-    Ok(resolved.unwrap_or_else(|| {
-        let dummy: [u8; DUMMY_PSK_LEN] = server.engine.rng.random();
-        dummy.to_vec()
-    }))
+    if let Some(psk) = resolved {
+        return Ok(psk);
+    }
+    let dummy: [u8; DUMMY_PSK_LEN] = server.engine.rng.random()?;
+    Ok(dummy.to_vec())
 }
 
 #[cfg(test)]

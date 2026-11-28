@@ -184,6 +184,7 @@ impl Config {
     /// When set, most non-cryptographic randomness (backoff jitter, TLS random bytes,
     /// AEAD nonces, cookie secrets) will be deterministic based on this seed.
     /// This is useful for testing and reproducibility.
+    /// Without a seed, these values come from the crypto provider's `secure_random`.
     ///
     /// Note: Cryptographic operations (key exchange, signatures) always use
     /// secure system randomness regardless of this setting.
@@ -448,6 +449,7 @@ impl ConfigBuilder {
     /// AEAD nonces, cookie secrets) will be deterministic based on this seed.
     ///
     /// This is useful for testing and reproducibility.
+    /// Without a seed, these values come from the crypto provider's `secure_random`.
     ///
     /// Note: Cryptographic operations (key exchange, signatures) always use
     /// secure system randomness regardless of this setting.

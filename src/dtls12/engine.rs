@@ -127,7 +127,7 @@ enum PollOutput<'a> {
 
 impl Engine {
     pub fn new(config: Arc<Config>, auth: AuthMode) -> Self {
-        let mut rng = SeededRng::new(config.rng_seed());
+        let mut rng = SeededRng::new(config.rng_seed(), config.crypto_provider().secure_random);
 
         let timers = HandshakeTimers::new(&config, &mut rng);
 
@@ -857,7 +857,7 @@ impl Engine {
             let nonce = match explicit_nonce_len {
                 0 => Nonce::xor(iv.as_12_bytes(), seq64),
                 DTLSRecord::EXPLICIT_NONCE_LEN => {
-                    explicit_nonce = self.rng.random();
+                    explicit_nonce = self.rng.random()?;
                     Nonce::new(iv, &explicit_nonce)
                 }
                 _ => {

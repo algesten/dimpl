@@ -157,7 +157,7 @@ impl ExponentialBackoff {
     }
 
     fn jitter(rng: &mut SeededRng) -> f32 {
-        rng.random::<f32>() * JITTER_RANGE - (JITTER_RANGE / 2.0)
+        rng.jitter_unit_f32() * JITTER_RANGE - (JITTER_RANGE / 2.0)
     }
 
     pub fn attempt(&mut self, rng: &mut SeededRng) {
@@ -198,7 +198,7 @@ mod test {
             .flight_retries(retries)
             .build()
             .expect("valid timing config");
-        let mut rng = SeededRng::new(Some(42));
+        let mut rng = SeededRng::seeded(42);
         (HandshakeTimers::new(&config, &mut rng), rng)
     }
 
@@ -393,7 +393,7 @@ mod test {
 
     #[test]
     fn proportional_jitter() {
-        let mut rng = SeededRng::new(Some(42));
+        let mut rng = SeededRng::seeded(42);
         for rto in [
             Duration::from_nanos(4),
             Duration::from_micros(100),
@@ -413,7 +413,7 @@ mod test {
 
     #[test]
     fn smallest_rto_stays_positive() {
-        let mut rng = SeededRng::new(Some(42));
+        let mut rng = SeededRng::seeded(42);
         let mut exp = ExponentialBackoff::new(Duration::from_nanos(1), 1, &mut rng);
         for jitter in [-0.25, 0.0, 0.25] {
             exp.jitter = jitter;
@@ -423,7 +423,7 @@ mod test {
 
     #[test]
     fn overflow_saturates() {
-        let mut rng = SeededRng::new(Some(42));
+        let mut rng = SeededRng::seeded(42);
         let mut exp = ExponentialBackoff::new(Duration::MAX, usize::MAX, &mut rng);
         exp.jitter = 0.25;
         assert_eq!(exp.rto(), Duration::MAX);
@@ -437,7 +437,7 @@ mod test {
 
     #[test]
     fn zero_retries_and_reset() {
-        let mut rng = SeededRng::new(Some(42));
+        let mut rng = SeededRng::seeded(42);
         let start = Duration::from_millis(20);
         let mut exp = ExponentialBackoff::new(start, 0, &mut rng);
         let initial = exp.rto();
@@ -460,8 +460,8 @@ mod test {
 
     #[test]
     fn seeded_jitter_is_repeatable_and_bounded() {
-        let mut first_rng = SeededRng::new(Some(42));
-        let mut second_rng = SeededRng::new(Some(42));
+        let mut first_rng = SeededRng::seeded(42);
+        let mut second_rng = SeededRng::seeded(42);
         let mut first = ExponentialBackoff::new(Duration::from_millis(20), 10, &mut first_rng);
         let mut second = ExponentialBackoff::new(Duration::from_millis(20), 10, &mut second_rng);
         for _ in 0..10 {
@@ -476,7 +476,7 @@ mod test {
 
     #[test]
     fn attempts() {
-        let mut rng = SeededRng::new(Some(42));
+        let mut rng = SeededRng::seeded(42);
         let mut exp = ExponentialBackoff::new(Duration::from_secs(1), 5, &mut rng);
 
         let n1 = dbg!(exp.rto().as_millis());
