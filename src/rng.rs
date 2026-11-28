@@ -33,12 +33,17 @@ impl SeededRng {
 
     /// `N` random bytes. A failure of the provider's source is returned.
     pub fn random<const N: usize>(&mut self) -> Result<[u8; N], CryptoError> {
-        if let Some(rng) = self.seeded.as_mut() {
-            return Ok(rng.random());
+        if let Some(bytes) = self.seeded_bytes() {
+            return Ok(bytes);
         }
         let mut out = [0; N];
         self.source.fill(&mut out)?;
         Ok(out)
+    }
+
+    /// Draw only from the deterministic generator, when configured.
+    pub fn seeded_bytes<const N: usize>(&mut self) -> Option<[u8; N]> {
+        self.seeded.as_mut().map(|rng| rng.random())
     }
 
     /// A random `u64` for jitter.

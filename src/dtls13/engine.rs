@@ -2333,6 +2333,10 @@ impl Engine {
     pub fn random_arr<const N: usize>(&mut self) -> Result<[u8; N], crate::CryptoError> {
         self.rng.random()
     }
+
+    pub fn seeded_random_arr<const N: usize>(&mut self) -> Option<[u8; N]> {
+        self.rng.seeded_bytes()
+    }
 }
 
 impl Entry {

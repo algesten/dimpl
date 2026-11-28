@@ -58,7 +58,7 @@ pub struct Server {
     /// SessionId we provide to the client (unused/resumption not implemented).
     session_id: Option<SessionId>,
 
-    /// Cookie secret for HMAC, drawn per-server instance when the first ClientHello is awaited
+    /// Cookie secret for HMAC, drawn per-server instance
     cookie_secret: Option<[u8; 32]>,
 
     /// Storage for extension data
@@ -156,6 +156,8 @@ impl Server {
 
     pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Server {
         engine.set_client(false);
+        // Preserve the seeded sequence while deferring provider draws until needed.
+        let cookie_secret = engine.rng.seeded_bytes();
 
         let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
@@ -165,7 +167,7 @@ impl Server {
             engine,
             random: None,
             session_id: None,
-            cookie_secret: None,
+            cookie_secret,
             extension_data,
             negotiated_srtp_profile: None,
             client_supported_groups: None,
@@ -343,9 +345,6 @@ impl State {
     }
 
     fn await_client_hello(self, server: &mut Server) -> Result<Self, InternalError> {
-        let cookie_secret =
-            server_cookie_secret(&mut server.cookie_secret, &mut server.engine.rng)?;
-
         let maybe = server
             .engine
             .next_handshake(MessageType::ClientHello, &mut server.defragment_buffer)?;
@@ -386,29 +385,31 @@ impl State {
         // Stateless cookie: require 32-byte cookie matching HMAC(secret, client_random)
         let client_random = ch.random;
         let hmac_provider = server.engine.config().crypto_provider().hmac_provider;
-        let need_cookie = server.engine.config().use_server_cookie();
-        let cookie_valid =
-            !need_cookie || verify_cookie(hmac_provider, &cookie_secret, client_random, ch.cookie);
-        if !cookie_valid {
-            debug!("Invalid/missing cookie; sending HelloVerifyRequest");
+        if server.engine.config().use_server_cookie() {
+            let cookie_secret =
+                server_cookie_secret(&mut server.cookie_secret, &mut server.engine.rng)?;
+            if !verify_cookie(hmac_provider, &cookie_secret, client_random, ch.cookie) {
+                debug!("Invalid/missing cookie; sending HelloVerifyRequest");
 
-            let cookie = compute_cookie(hmac_provider, &cookie_secret, client_random)?;
-            // Start/restart flight timer for server Flight 2 (HelloVerifyRequest)
-            server.engine.flight_begin(2);
-            server
-                .engine
-                .create_handshake(MessageType::HelloVerifyRequest, |body, _engine| {
-                    // RFC 6347 4.2.1: The server_version field in the HelloVerifyRequest
-                    // message MUST be set to DTLS 1.0
-                    let hvr = HelloVerifyRequest::new(ProtocolVersion::DTLS1_0, cookie);
-                    hvr.serialize(body);
-                    Ok(())
-                })?;
+                let cookie = compute_cookie(hmac_provider, &cookie_secret, client_random)?;
+                // Start/restart flight timer for server Flight 2 (HelloVerifyRequest)
+                server.engine.flight_begin(2);
+                server.engine.create_handshake(
+                    MessageType::HelloVerifyRequest,
+                    |body, _engine| {
+                        // RFC 6347 4.2.1: The server_version field in the HelloVerifyRequest
+                        // message MUST be set to DTLS 1.0
+                        let hvr = HelloVerifyRequest::new(ProtocolVersion::DTLS1_0, cookie);
+                        hvr.serialize(body);
+                        Ok(())
+                    },
+                )?;
 
-            // The HelloVerifyRequest exchange is stateless per RFC 6347.
-            // Reset all handshake state so the next ClientHello (with cookie) is processed fresh.
-            server.engine.reset_server_for_hello_verify_request();
-            return Ok(self);
+                // The HelloVerifyRequest exchange is stateless per RFC 6347.
+                // Reset all handshake state so the next ClientHello (with cookie) is processed fresh.
+                server.engine.reset_server_for_hello_verify_request();
+                return Ok(self);
+            }
         }
 
         trace!("Accepted ClientHello cookie; proceeding with handshake");

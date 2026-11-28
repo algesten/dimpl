@@ -130,7 +130,7 @@ pub struct Server {
     /// Whether we sent a HelloRetryRequest.
     hello_retry: bool,
 
-    /// Cookie secret for HMAC-based DoS protection, drawn when the first ClientHello is awaited.
+    /// Cookie secret for HMAC-based DoS protection.
     cookie_secret: Option<[u8; 32]>,
 
     /// Whether we need to respond with our own KeyUpdate.
@@ -182,6 +182,8 @@ impl Server {
     }
 
     pub fn new_with_engine(mut engine: Engine, now: Instant, auto_mode: bool) -> Server {
+        // Preserve the seeded sequence while deferring provider draws until needed.
+        let cookie_secret = engine.seeded_random_arr();
         let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
 
@@ -204,7 +206,7 @@ impl Server {
             server_hs_traffic_secret: None,
             client_auth_requested: false,
             hello_retry: false,
-            cookie_secret: None,
+            cookie_secret,
             pending_key_update_response: false,
             auto_mode,
             retained_hello: VecDeque::with_capacity(10),
@@ -432,8 +434,6 @@ impl State {
     }
 
     fn await_client_hello(self, server: &mut Server) -> Result<Self, InternalError> {
-        let cookie_secret = server_cookie_secret(&mut server.cookie_secret, &mut server.engine)?;
-
         // Save transcript length so we can roll back if a stale ClientHello
         // arrives after HelloRetryRequest (no cookie → must discard).
         let transcript_len_before = server.engine.transcript.len();
@@ -567,6 +567,8 @@ impl State {
         };
 
         if need_cookie {
+            let cookie_secret =
+                server_cookie_secret(&mut server.cookie_secret, &mut server.engine)?;
             let expected_cookie = compute_cookie(
                 &cookie_secret,
                 &client_random,
@@ -620,6 +622,8 @@ impl State {
             }
         } else if let Some(ref cookie_bytes) = client_cookie_data {
             // Validate if a cookie was provided even when not required
+            let cookie_secret =
+                server_cookie_secret(&mut server.cookie_secret, &mut server.engine)?;
             let expected_cookie = compute_cookie(
                 &cookie_secret,
                 &client_random,
@@ -669,6 +673,8 @@ impl State {
                 server
                     .engine
                     .replace_transcript_with_message_hash(transcript_len);
+                let cookie_secret =
+                    server_cookie_secret(&mut server.cookie_secret, &mut server.engine)?;
                 let cookie_for_hrr = compute_cookie(
                     &cookie_secret,
                     &client_random,
