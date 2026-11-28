@@ -1514,10 +1514,9 @@ impl LocalEvent {
                 Ok(Output::PeerCert(&buf[..l]))
             }
             LocalEvent::Connected => Ok(Output::Connected),
-            LocalEvent::KeyingMaterial(m, profile) => Ok(Output::KeyingMaterial(
-                KeyingMaterial::new(&m),
-                profile,
-            )),
+            LocalEvent::KeyingMaterial(m, profile) => {
+                Ok(Output::KeyingMaterial(KeyingMaterial::new(&m), profile))
+            }
         }
     }
 }
