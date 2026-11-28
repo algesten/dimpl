@@ -96,7 +96,7 @@ fn peer_cert_reports_buffer_too_small_and_is_retained() {
                         let mut mid = vec![0u8; needed];
                         match client.poll_output(&mut mid) {
                             Output::Packet(p) => {
-                                server.handle_packet(&p).expect("server handle");
+                                server.handle_packet(p).expect("server handle");
                             }
                             Output::PeerCert(cert) => peer_cert = Some(cert.to_vec()),
                             Output::Connected => {}
@@ -109,7 +109,7 @@ fn peer_cert_reports_buffer_too_small_and_is_retained() {
                         break;
                     }
                     Output::Packet(p) => {
-                        server.handle_packet(&p).expect("server handle");
+                        server.handle_packet(p).expect("server handle");
                     }
                     Output::Connected => {}
                     Output::Timeout(_) => break,
