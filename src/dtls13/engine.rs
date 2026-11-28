@@ -28,7 +28,7 @@ use crate::dtls13::message::Sequence;
 use crate::timer::{HandshakeTimers, Timeout, deadline};
 use crate::types::{HashAlgorithm, Random};
 use crate::window::ReplayWindow;
-use crate::{Config, DtlsCertificate, Error, InternalError, Output, SeededRng};
+use crate::{Config, CryptoError, DtlsCertificate, Error, InternalError, Output, SeededRng};
 
 const MAX_DEFRAGMENT_PACKETS: usize = 50;
 
@@ -2326,11 +2326,11 @@ impl Engine {
         Ok((keying_material, profile))
     }
 
-    pub fn random(&mut self) -> Result<Random, crate::CryptoError> {
+    pub fn random(&mut self) -> Result<Random, CryptoError> {
         Random::new(&mut self.rng)
     }
 
-    pub fn random_arr<const N: usize>(&mut self) -> Result<[u8; N], crate::CryptoError> {
+    pub fn random_arr<const N: usize>(&mut self) -> Result<[u8; N], CryptoError> {
         self.rng.random()
     }
 
